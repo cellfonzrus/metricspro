@@ -197,7 +197,8 @@ Primary code homes:
 | COMMCALC-55 | **A successful login is recognised by evidence, never by a guessed vocabulary** | The owner signed in to the carrier owners portal himself and sent the screenshot: the signed-in shell, greeting him by his e-mail address, offering "Multi-Door Owner Portal", "Commissions" and "Boost Activations" — and the sweep still reported "The sign-in page went away and we did not recognise what replaced it", with three carrier feeds frozen on a login that worked. §COMMCALC-52 was right to delete the old test (the vendor's name in the document title — a carrier name in code) and wrong to replace it with six house words: that is the platform guessing at a vocabulary it does not own, the same shape as a report defaulting to one tenant's POS labels. |
 | COMMCALC-56 | **A control is verified from the control, not from a field beside it** | With the login fixed (§COMMCALC-55), two of the three carrier feeds came back by themselves — MI/ATU daily, and the payment detail back-filled October to the 31st unaided. The comprehensive comp report stayed empty for a different reason: the sweep SET the "Summarize by" dropdown and then proved it by reading `input[name="DateIntervalOption"]`, the portal's own form plumbing under a name this platform does not own. That input is no longer on the page, so a settable filter read as unsettable on every tick, and one sentence ("hidden field = None") covered three different states an operator needed told apart. |
 | COMMCALC-57 | **A tile counts the list it prints, over the metrics the tenant declared** | "Need to organize the daily action plan to a more presentable way, it is right now a long report, collapse it per store, give our standard filters for store rep market date range, which metrics needs to be improved / all/ family plan etc. Make it tiled with focused metrics - cells on the all line metrics and it shows who needs improvement and so forth with the details at the bottom, the tiles should be switched between kpi / stores / sales reps" — a report nobody could read at a glance. The tempting build gives each tile a summed figure (a second fold of a number the server already folded) and a built-in metric list (one tenant's POS words answering for every tenant, §COMMCALC-49.10's class). What may a tile's headline figure BE, whose words name the metrics, and what does a tile over a feed that landed nothing have to say? |
-| COMMCALC-58 | **A figure the feed sends that nothing reads is not a figure this platform has** | "Use those other 21 columns and make them a part of the kpi reporting also filtered by the kpi and out regular filters and send option". The sweep's own diagnostic had been naming 21 arriving-but-unread store columns every day for weeks, and one of them was the new spelling of a column that had been landing empty since the source renamed it. Reading one meant editing FOUR lists, and the last of them — a hand-typed array in the page — decided what a person could see, so a column could be declared, landed and invisible. |
+| COMMCALC-58 | **A control is found by what it answers to, not by how it looks** | §COMMCALC-56 made the comp report's failure specific, and it then said, on every run, that no "Summarize by" dropdown offering Daily was on the filter panel. The owner photographed that panel on 2026-11-10: the control was there, offering Daily / Weekly / Monthly, re-skinned to the SEARCHABLE jqWidgets flavour (its popup carries a "Looking for" box). The scan knew one styling class, `.jqx-dropdownlist-state-normal`, so a present control read as ABSENT — and "not found" is indistinguishable from "not there" while only the second is actionable. One home now finds a picker by offering each candidate every declared widget API and keeping whichever answers; both callers in the file read it, and a failure lists what the panel DOES offer. |
+| COMMCALC-59 | **A figure the feed sends that nothing reads is not a figure this platform has** | "Use those other 21 columns and make them a part of the kpi reporting also filtered by the kpi and out regular filters and send option". The sweep's own diagnostic had been naming 21 arriving-but-unread store columns every day for weeks, and one of them was the new spelling of a column that had been landing empty since the source renamed it. Reading one meant editing FOUR lists, and the last of them — a hand-typed array in the page — decided what a person could see, so a column could be declared, landed and invisible. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -26341,6 +26342,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-56 | commcalc |
 | COMMCALC-57 | commcalc |
 | COMMCALC-58 | commcalc |
+| COMMCALC-59 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -44660,6 +44662,123 @@ The comp report's own 14-day refresh window still does not reach 7 October, so t
 one widening by hand once the leg is pulling.
 
 
+## §COMMCALC-58. A CONTROL IS FOUND BY WHAT IT ANSWERS TO, NOT BY HOW IT LOOKS (owner photograph 2026-11-10)
+
+### COMMCALC-58.1 HOW IT WAS FOUND
+
+§COMMCALC-56 shipped on 2026-11-09 and made this leg's failure say which of three things had gone
+wrong. From then on every run said the same one:
+
+    could not set the report's daily date filter — no 'Summarize by' dropdown offering Daily was
+    found on the report's filter panel (no matching control); the report returns an empty workbook
+    without it
+
+That was specific enough to be worth one photograph. The owner opened the Comprehensive Compensation
+Report in the owners portal on 2026-11-10 and sent the filter panel: **"Summarize by" was there**,
+and opening it offered **Daily / Weekly / Monthly**. Its popup carried a **"Looking for"** search
+box — the signature of the SEARCHABLE jqWidgets flavour, which wears a different class and answers
+to a different API from the plain list.
+
+The portal had not removed anything. We had stopped being able to see it.
+
+### COMMCALC-58.2 THE DEFECT
+
+`epay_sweep` scanned for exactly one styling class:
+
+```js
+document.querySelectorAll('.jqx-dropdownlist-state-normal')
+```
+
+Two separate narrownesses in one line:
+
+* **the family** — `jqx-dropdownlist` is one of several jqWidgets picker families, and the control
+  had been re-skinned to another;
+* **the state** — `-state-normal` is a MOMENT in a widget's life (normal / hover / focus), not its
+  identity, so even the right family drops out of the scan while a pointer rests on it.
+
+### COMMCALC-58.3 THE CLASS, not the instance
+
+**A scan keyed on appearance goes blind the day appearance changes, and it goes blind silently.**
+"Not found" and "not there" are the same sentence, and only the second is something an operator can
+act on. The honest answer is to ask the page what the control ANSWERS TO: offer every candidate each
+widget API we know, and whichever one returns a list of items is what that control really is.
+
+**And the sibling proves it is a class.** Two functions in this file scanned for the same control
+family with near-identical code — `_set_daily_range` for "Summarize by" and `_set_report_month` for
+the month list. One had a click-the-control fallback behind it and the other did not, so when the
+portal re-skinned a control only the comp leg went dark. That is the duplicate the index rules
+forbid, with one copy fixed and the other not.
+
+### COMMCALC-58.4 THE FIX — one home, two declarations
+
+`pick_jqx_item(page, wants)` in `commcalc/epay_sweep.py` is the ONE home for "drive this page's
+jqWidgets picker to one of these labels". Both callers dereference it; neither has a scan of its own.
+
+| declared once | what it is |
+|---|---|
+| `JQX_PICKER_SELECTORS` | where a picker may BE — family-level, and **never** a `-state-` suffix |
+| `JQX_PICKER_WIDGETS` | how a found picker is DRIVEN — `jqxDropDownList`, `jqxComboBox` |
+
+A candidate is offered each family's own API in turn; the one that answers is what the control is,
+and a control answering to none of them is left untouched. Labels are matched on **meaning** —
+case, spacing and punctuation stripped from both sides, in `_same_label` — because the portal writes
+`June- 26` where the caller thinks `June 2026`.
+
+The verification rule of §COMMCALC-56 is unchanged and carried through: `ok` is never true without
+the widget's own `getSelectedItem()` answer, and the form field beside it remains corroboration,
+read separately.
+
+### COMMCALC-58.5 WHAT THE OPERATOR IS TOLD
+
+The whole cost of this defect was a sentence naming only what the panel did **not** have. The scan
+now returns `offered` (every label the page's pickers actually carry) and `pickers` (how many
+controls answered an API at all), and the failure reads:
+
+    no 'Summarize by' picker offering Daily was found on the report's filter panel (the panel has 1
+    picker(s), none offering it; the panel's pickers offer: Hourly, Weekly); the report returns an
+    empty workbook without it
+
+"No picker at all" and "pickers, none offering it" are deliberately different sentences: they need
+opposite fixes — rebuild the leg, or widen the scan — and they read identically without it.
+
+### COMMCALC-58.6 WHERE THE REGRESSION LIVES — it is EXECUTED
+
+The defect was in a string of browser JavaScript that no test ran, which is why it shipped and why a
+Python test cannot catch the next one. `backend/prove_jqx_picker.mjs` reads the REAL scan out of
+`epay_sweep.py` — never a copy, which would diverge — and runs it under node against a fake DOM
+shaped like the photograph: a `jqxComboBox` wearing `jqx-combobox-state-normal`, offering Daily /
+Weekly / Monthly, beside a second combobox that must not move.
+
+Its fake DOM **throws on any selector shape it has not been taught**. A scan that grows a new shape
+therefore fails loudly in CI instead of silently matching nothing in production — which is the exact
+failure being locked out. Wired into `carrier-vocab-guard.yml` beside the silent-zero lock.
+
+### COMMCALC-58.7 EVERY TENANT (owner directive 2026-10-30)
+
+Neither the shared routine nor either caller takes an org, **and none of them can** — pinned as
+source in §H20. A control's required value is a property of the REPORT, not of a tenant; an org
+argument appearing here is how a per-tenant divergence would start.
+
+### COMMCALC-58.8 TESTS AND THE LOCK
+
+* `backend/prove_jqx_picker.mjs` — 19 executed checks, §A–§G. **Failed before the fix** (the one
+  home did not exist), passes after.
+* `backend/tests/unit/test_jqx_picker_is_found_by_what_it_answers_to.py` — 18 unit tests on the
+  Python half: the shape the wrapper guarantees, both callers dereferencing it, matching on meaning,
+  and the every-tenant pin.
+* `backend/harness_empty_pull_verdict.py` **§H — 20 checks** (96 in the file). Fails the build if a
+  selector is keyed on a widget state, if either declaration stops being the whole declared set, if
+  the scan grows its own copy of the class names or names one widget's method directly, if a second
+  scan appears, if either caller stops dereferencing the one home, if the failure stops naming what
+  the panel offers, if the label comparison goes back to `==`, or if the executed proof stops
+  reading the real source.
+
+### COMMCALC-58.9 WHAT THIS DOES NOT FIX
+
+Whether the comp report now PULLS is a statement about the portal, and it is settled by the next
+23:30-local run, not by this change. If the panel's own options have also moved, the new wording
+names them.
+
 ## §CORE-32. A GUARD THAT READS SOURCE CODE MUST BE TOLD F-STRINGS EXIST — one home for "the strings of a Python source" (found 2026-11-04)
 
 Found while clearing a red harness the owner asked about: `harness_carrier_vocab_guard.py` — the
@@ -45688,12 +45807,12 @@ The DLAR gross adds / activations / upgrades columns are still empty, so the KPI
 **not measured** here rather than zero — that is this change reporting the defect, not repairing it.
 The feed itself is the portal-download thread's work.
 
-## §COMMCALC-58. A FIGURE THE FEED SENDS THAT NOTHING READS IS NOT A FIGURE THIS PLATFORM HAS — one home for which store-DLAR column is which metric (owner ask 2026-11-10)
+## §COMMCALC-59. A FIGURE THE FEED SENDS THAT NOTHING READS IS NOT A FIGURE THIS PLATFORM HAS — one home for which store-DLAR column is which metric (owner ask 2026-11-10)
 
 Owner, verbatim: *"Use those other 21 columns and make them a part of the kpi reporting also filtered
 by the kpi and out regular filters and send option"*.
 
-### COMMCALC-58.1 WHAT WAS ACTUALLY WRONG
+### COMMCALC-59.1 WHAT WAS ACTUALLY WRONG
 
 Not the columns. Measured on the live 2026-11-10 12:00 UTC DLAR sweep (28 stores, house org, read
 from `core.job_run.detail.evidence.fields.dlar.unconsumed`): the carrier portal was sending **21
@@ -45723,7 +45842,7 @@ Five places, one fact — and the LAST of them decided what a person could actua
 could be declared, landed in the table, and invisible. That is why 21 figures sat unread for weeks
 while the feed itself named them nightly.
 
-### COMMCALC-58.2 THE CLASS, not the instance
+### COMMCALC-59.2 THE CLASS, not the instance
 
 The instance is "trade-in counts are not on the KPI page". The class is **a fact with one meaning and
 five homes, the furthest of which gates what a person can see.** It has cost this platform a month of
@@ -45734,7 +45853,7 @@ So the fix is not 21 columns. It is ONE home for *which store-DLAR column is whi
 from the two declarations that already exist and copying neither, with every reader dereferencing it
 and a lock that fails the build if one stops.
 
-### COMMCALC-58.3 THE ONE HOME
+### COMMCALC-59.3 THE ONE HOME
 
 `backend/app/modules/commcalc/dlar_metric_catalog.py` — PURE, stdlib only, no DB.
 
@@ -45759,7 +45878,7 @@ kpi_failing.STORE_KPI_COLUMNS ─┘
 It names no carrier, tenant or product (RULE TWO): the only proper nouns are the SOURCE's own field
 spellings, which is what a feed mapping is made of.
 
-### COMMCALC-58.4 WHAT WAS NOT GUESSED
+### COMMCALC-59.4 WHAT WAS NOT GUESSED
 
 `activations_total` appeared in the same run in which `gross_activation_quantity` stopped arriving,
 so it is the likely successor to `gross_adds`. It is landed **under its own name** and is NOT declared
@@ -45771,7 +45890,7 @@ visible side by side and the answer is one declared spelling away.
 SPELLING on the existing column and not a second column. A second column for one fact is the
 divergence §19.18 forbids.
 
-### COMMCALC-58.5 Surfaces
+### COMMCALC-59.5 Surfaces
 
 - `GET /api/v1/commcalc/dlar-store/{period}` — unchanged shape, now returning every catalogued
   column plus `market` (stamped through the canonical union resolver, §13a — CANONICAL).
@@ -45782,7 +45901,7 @@ divergence §19.18 forbids.
 - `commcalc.raw_dlar_store` gains 20 columns by **migration 1116** (additive, nullable, no default,
   no backfill, no money column; the table's `service_role` grant restated).
 
-### COMMCALC-58.6 EVERY TENANT (project rule 2026-10-30)
+### COMMCALC-59.6 EVERY TENANT (project rule 2026-10-30)
 
 The catalog is a statement about the feed's SHAPE and is byte-identical for every org — it is not a
 tenant vocabulary and carries no tenant's words, so the §COMMCALC-49.10 trap (a house default that is
@@ -45792,7 +45911,7 @@ carrier KPI rows. Nothing is being measured at store grain here — these figure
 zero."* Proved by `test_one_tenants_rows_never_reach_another_tenants_read` and
 `test_a_tenant_with_no_store_dlar_is_told_so_rather_than_shown_zeros`.
 
-### COMMCALC-58.7 Locked
+### COMMCALC-59.7 Locked
 
 `backend/harness_dlar_metric_catalog.py` — 35 checks, DB-free, run by the lock-harness job of
 `.github/workflows/carrier-vocab-guard.yml`. It fails the build on: a declared column the catalog
@@ -45812,7 +45931,7 @@ checks went red for the right reason. The fixture now carries the newly declared
 values the 2026-11-10 run shows the portal sending; the pin's subject is "a complete record is quiet",
 not the September bytes.
 
-### COMMCALC-58.8 NOT done here
+### COMMCALC-59.8 NOT done here
 
 - Migration 1116 is written and **surfaced for owner approval, not applied**. Until it runs, the 20
   figures read as unavailable-with-a-reason; nothing shows a zero.
@@ -45824,7 +45943,7 @@ not the September bytes.
   (`prepaid_activations`, `postpaid_activations`, `upgrades` at store grain) remain absent. They are
   REPORTED by the feed's own diagnostic, never filled in by code.
 
-### COMMCALC-58.9 Cross-references
+### COMMCALC-59.9 Cross-references
 
 §COMMCALC-16 (a portal field that stopped arriving names itself — the diagnostic that found these
 21) · §COMMCALC-40 (a computed verdict must be the stored one) · §19.28 (which column carries which

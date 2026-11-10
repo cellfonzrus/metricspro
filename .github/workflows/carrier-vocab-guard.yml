@@ -1111,7 +1111,7 @@ on:
       # this job exists to catch. The router is named because it is where the label is passed.
       # index §COMMCALC-47 — WHERE A CLICK ON THE LIVE SCREEN LANDS. The lock names itself and its
       # home, and live_login because that is where the arithmetic must NOT come back.
-      # index §COMMCALC-58 — WHAT A PAGE IS TELLING US INSTEAD OF SHOWING A FORM. The lock names
+      # index §COMMCALC-59 — WHAT A PAGE IS TELLING US INSTEAD OF SHOWING A FORM. The lock names
       # itself, the one vocabulary, and the two drivers whose hardcoded phrase tuples it replaced:
       # a second list reappearing in either is exactly what this job exists to catch.
       - "backend/harness_portal_page_verdict.py"
@@ -1415,6 +1415,7 @@ on:
       - "backend/harness_browser_sweep_kinds.py"
       - "backend/harness_feed_watchdog.py"
       - "backend/harness_empty_pull_verdict.py"
+      - "backend/prove_jqx_picker.mjs"
       - "backend/harness_feed_day_grain.py"
       - "backend/harness_sales_recon_basis.py"
       - "backend/harness_period_one_spelling.py"
@@ -2104,7 +2105,7 @@ jobs:
       - name: Run the supplier-invoice lock (ONE column-vocabulary mechanism so neither feed grows its own normalizer; a blank charge is None and never 0.00; the natural key equals the migration's unique index; the distributor-only sibling is named not hidden - index COMMCALC-38)
         working-directory: backend
         run: python3 harness_supplier_invoice_feed.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the page-verdict lock (a page that REFUSES us is not a login form that renders unexpectedly; one configurable vocabulary for refusal / challenge / throttle, three kinds because the remedies differ, and the portal's own words lead the operator message - index COMMCALC-58)
+      - name: Run the page-verdict lock (a page that REFUSES us is not a login form that renders unexpectedly; one configurable vocabulary for refusal / challenge / throttle, three kinds because the remedies differ, and the portal's own words lead the operator message - index COMMCALC-59)
         working-directory: backend
         run: python3 harness_portal_page_verdict.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the login-outcome lock (a login outcome is read off what the page is DOING - is the form still on screen, what does it SAY - never off page.content(); six outcomes each carrying the one remedy that applies, and only a real rejection sends anybody to re-type a password - index COMMCALC-52)
@@ -2168,7 +2169,7 @@ jobs:
       - name: Run the portal-cell proof (a figure the portal did not send lands absent and never as a zero, for a count as much as for a rate; a renamed source field is named by the feed itself with the fields it IS sending beside it; a healthy run stays quiet; the declared field maps are byte-identical to the hand-written normalizers — owner report 2026-10-16, index §COMMCALC-16)
         working-directory: backend
         run: python3 harness_portal_cell.py | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the store-metric catalog lock (which store-DLAR column is which metric has ONE home and every reader dereferences it; a column the sweep declares can be named; the scored set is the pay engine's own; a renamed source field is a SPELLING and never a second column; an unapplied column says so rather than reading as zero — owner 2026-11-10, index §COMMCALC-58)
+      - name: Run the store-metric catalog lock (which store-DLAR column is which metric has ONE home and every reader dereferences it; a column the sweep declares can be named; the scored set is the pay engine's own; a renamed source field is a SPELLING and never a second column; an unapplied column says so rather than reading as zero — owner 2026-11-10, index §COMMCALC-59)
         working-directory: backend
         run: python3 harness_dlar_metric_catalog.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the port-out fraud proof (a port-in that ports out inside the window; the three dating bases; a port-out BEFORE our sale is a recycled number and is never flagged; a port-out in an earlier month is not lost to the latest snapshot; the headline prints what it could not decide; the accessory floor is an attribution, not a trigger; the lookup is the retention report's own derivation — owner 2026-09-28, index §19.32)
@@ -3496,6 +3497,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with: { python-version: "3.11" }
+      - uses: actions/setup-node@v4
       - name: Install the backend's dependencies
         run: pip install -r backend/requirements.txt
       - name: Run the tenant-day lock (a feed window's day comes from the ORG's zone, never the container's clock - the comp report's 23:30-local slot is 03:30 UTC the NEXT day, so every run asked the portal for a day that had not begun where the portal lives; `tz` is required at every window-building caller - index COMMCALC-53)
@@ -3506,6 +3508,10 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_empty_pull_verdict.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the jqx picker proof (the REAL page scan, read out of epay_sweep.py, against a panel shaped like the owner's 2026-11-10 photograph - a control is found by what it answers to, not by one styling class, and a selector shape the fake DOM has not been taught fails loudly here instead of silently matching nothing in production - index COMMCALC-59)
+        working-directory: backend
+        shell: bash
+        run: node prove_jqx_picker.mjs | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the feed day-grain lock (a feed row's month is its OWN day's month, never the period someone picked; one home for the data-date map, dereferenced by the upload and the sweep; all-or-nothing stamping; every declared feed is day-keyed or declared period-grain with a reason — owner 2026-10-05, index §19.44)
         working-directory: backend
         shell: bash

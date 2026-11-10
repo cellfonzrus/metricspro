@@ -1,4 +1,4 @@
-"""Integration: the store-DLAR KPI read and its catalog, through the REAL app (index §COMMCALC-58).
+"""Integration: the store-DLAR KPI read and its catalog, through the REAL app (index §COMMCALC-59).
 
 Real routing, real middleware, the real endpoint bodies, over the in-memory database double, with
 conftest blocking every outbound socket. There is no staging Supabase, so "integration" here means

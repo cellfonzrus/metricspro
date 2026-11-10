@@ -1563,7 +1563,7 @@ _all_routes = _flatten_routes(real_app.routes)
 # `.eq("org_id", <the acting membership's org>)` — never the request's `org_id` parameter — so
 # another tenant's roles, people or recipients are unreachable, pinned by the three-tenant cross-org
 # negative in backend/tests/integration/test_fix_guide_endpoint.py (§D).
-# Re-pinned 1840 -> 1841 on 2026-11-10 (§COMMCALC-58, the store-DLAR metric catalog). Verified the
+# Re-pinned 1840 -> 1841 on 2026-11-10 (§COMMCALC-59, the store-DLAR metric catalog). Verified the
 # house way, NOT by arithmetic: `git diff origin/main...HEAD -- backend/ | grep -E '^[+-].*@router\.'`
 # printed exactly ONE added decorator and NONE removed (the only other hit is that decorator quoted
 # inside harness_dlar_metric_catalog.py §C3, which asserts the route has not been un-wired) —

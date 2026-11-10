@@ -1,4 +1,4 @@
-"""WHICH STORE-DLAR COLUMN IS WHICH METRIC — ONE HOME (index §COMMCALC-58).
+"""WHICH STORE-DLAR COLUMN IS WHICH METRIC — ONE HOME (index §COMMCALC-59).
 
 WHY THIS MODULE EXISTS. On 2026-11-10 the owner asked for the 21 columns the carrier portal sends at
 store grain that nothing read to become part of KPI reporting, filterable by KPI alongside the

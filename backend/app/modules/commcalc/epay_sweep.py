@@ -35,6 +35,7 @@ WAF-protected, so Railway's datacenter IP must be allowed to reach it; if a run 
 from datetime import datetime, timedelta, timezone
 from app.modules.commcalc import feed_period as _feed_period  # THE feed-row month + per-day stamp (one home, pure)
 from app.modules.notify import report_filters as _report_filters  # THE tenant's-today home (pure leaf; see feed_today)
+from app.modules.account.store_identity import squash_key as _squash_key  # THE spelling fold (pure leaf; folds accents, case and punctuation — see _same_label)
 
 try:
     from app.modules.commcalc import url_guard as _url_guard      # SSRF guard (finding C4)
@@ -675,36 +676,18 @@ def _set_report_month(page, month_name, year):
     yy = str(year)[-2:]
     variants = [label, f"{month_name}-{year}", f"{month_name} - {year}",
                 f"{month_name}- {yy}", f"{month_name}-{yy}", f"{month_name} {yy}", month_name]
-    try:
-        # 0) The widget's own API, matching BOTH the month and the year — the portal's real
-        #    spelling is "June- 26", so compare on normalised text rather than an exact literal.
-        picked = page.evaluate(
-            """([month, year, yy]) => {
-                 const $ = window.jQuery || window.$;
-                 if (!$) return null;
-                 const norm = s => String(s||'').toLowerCase().replace(/[^a-z0-9]/g, '');
-                 const want = [norm(month + year), norm(month + yy)];
-                 let hit = null;
-                 document.querySelectorAll('.jqx-dropdownlist-state-normal').forEach(host => {
-                   if (hit) return;
-                   try {
-                     const items = ($(host).jqxDropDownList('getItems') || []);
-                     const m = items.find(it => want.indexOf(norm(it.label)) >= 0);
-                     if (m) {
-                       $(host).jqxDropDownList('selectItem', m.label);
-                       const s = $(host).jqxDropDownList('getSelectedItem');
-                       hit = s ? s.label : m.label;
-                     }
-                   } catch (e) {}
-                 });
-                 return hit;
-               }""",
-            [month_name, str(year), yy])
-        if picked:
-            page.wait_for_timeout(800)
-            return True
-    except Exception:
-        pass
+    # 0) THE ONE HOME for driving a jqWidgets picker (§COMMCALC-58). This had its own scan until
+    #    2026-11-10 — near-identical to the one in `_set_daily_range`, and the two drifted: this one
+    #    had a click-the-control fallback behind it and that one did not, so when the portal
+    #    re-skinned "Summarize by" only the comp leg went blind. Two scans answering one question is
+    #    the duplicate the house forbids; there is now one, and both callers read it.
+    #    The portal's real spelling is "June- 26", so pass both shapes and let the shared routine
+    #    match on meaning.
+    picked = pick_jqx_item(page, [f"{month_name} {year}", f"{month_name} {yy}"])
+    if picked.get("ok"):
+        page.wait_for_timeout(800)
+        return True
+
     try:
         # 1) Native <select> month picker — the cleanest case.
         for sel in page.query_selector_all("select"):
@@ -760,32 +743,83 @@ def _set_report_month(page, month_name, year):
 # rather than by typing into a masked input (typing '04/15/2026' into a widget whose formatString is
 # 'M/d/yyyy' produced 12/15/2026 — the mask reinterpreted it).
 #
-# WHAT IT RETURNS, and the distinction that matters (§COMMCALC-56): `hit.selected` is THE WIDGET'S
-# OWN ANSWER — what the thing we set says it is set to — and that is the verification. `hidden` is a
-# SECOND reading, off `input[name="DateIntervalOption"]`, which is the portal's own form plumbing
-# under a name this platform does not own. `hidden: null` means that input is not on the page; the
-# empty string means it is there and carries no value yet. The caller treats those as absence, not
-# as disagreement — see `_set_daily_range`.
-_SET_INTERVAL_JS = """
-(want) => {
+# HOW A PICKER IS FOUND (§COMMCALC-58). Until 2026-11-10 this file scanned for exactly one
+# styling class, `.jqx-dropdownlist-state-normal`. The owner photographed the comp report's filter
+# panel on 2026-11-10: "Summarize by" was right there offering Daily / Weekly / Monthly, while every
+# run reported no such control — the portal had re-skinned that one control to the SEARCHABLE
+# jqWidgets flavour (its popup carries a "Looking for" box), which wears a different class and
+# answers to a different API. A scan keyed on one skin reports a re-skinned control as ABSENT, and
+# absence is the one answer an operator cannot act on.
+#
+# So a picker is found by asking the page WHAT IT ANSWERS TO, not by naming how it looks:
+#   * the candidate selectors are family-level and stated once, below — never a `-state-` suffix,
+#     which is a MOMENT in a widget's life (normal / hover / focus) and not its identity;
+#   * each candidate is then offered every declared widget API in turn, and whichever one answers
+#     with a list of items is what that control actually is.
+#
+#: Where a jqWidgets picker might BE on the page. Family-level on purpose; adding a flavour is one
+#: line here, and `prove_jqx_picker.mjs` runs the real scan against a fake DOM that THROWS on a
+#: selector shape it has not been taught, so a new shape cannot ship unproven.
+JQX_PICKER_SELECTORS = (
+    '[class*="jqx-dropdownlist"]',
+    '[class*="jqx-combobox"]',
+    '[role="combobox"]',
+    '[role="listbox"]',
+)
+#: How a found picker is DRIVEN. Tried in order through each widget's own API; the one that answers
+#: is the control's real family. A picker answering to none of these is left untouched.
+JQX_PICKER_WIDGETS = ("jqxDropDownList", "jqxComboBox")
+
+_PICK_JQX_ITEM_JS = """
+([wants, selectors, widgets]) => {
   const $ = window.jQuery || window.$;
-  if (!$) return {ok:false, why:'no jQuery'};
-  let hit = null;
-  document.querySelectorAll('.jqx-dropdownlist-state-normal').forEach(host => {
-    if (hit) return;
-    try {
-      const items = ($(host).jqxDropDownList('getItems') || []).map(i => i.label);
-      if (items.indexOf(want) >= 0) {
-        $(host).jqxDropDownList('selectItem', want);
-        const s = $(host).jqxDropDownList('getSelectedItem');
-        hit = {id: host.id, selected: s ? s.label : null};
-      }
-    } catch (e) {}
+  if (!$) return {ok:false, why:'no jQuery on the page', offered:[], pickers:0, hit:null};
+  const norm = s => String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const want = wants.map(norm).filter(w => w.length > 0);
+  const hosts = [];
+  document.querySelectorAll(selectors.join(',')).forEach(h => {
+    if (hosts.indexOf(h) < 0) hosts.push(h);
   });
-  const h = document.querySelector('input[name="DateIntervalOption"]');
-  return {ok: !!hit, hit, hidden: h ? h.value : null};
+  const offered = [];
+  let hit = null, pickers = 0;
+  hosts.forEach(host => {
+    widgets.forEach(w => {
+      if (hit) return;
+      let items = null;
+      // Ask through this family's own API. A control that is not of this family throws, and that
+      // is the ANSWER, not an error: it tells us what this element is not.
+      try { items = $(host)[w]('getItems'); } catch (e) { return; }
+      if (!items || !items.length) return;
+      pickers += 1;
+      const labels = items.map(i => (i && i.label != null) ? String(i.label) : '');
+      labels.forEach(l => { if (l && offered.indexOf(l) < 0) offered.push(l); });
+      const m = labels.find(l => want.indexOf(norm(l)) >= 0);
+      if (!m) return;
+      try { $(host)[w]('selectItem', m); } catch (e) { return; }
+      let s = null;
+      try { s = $(host)[w]('getSelectedItem'); } catch (e) {}
+      hit = {id: host.id || null, widget: w,
+             selected: (s && s.label != null) ? String(s.label) : null};
+    });
+  });
+  return {ok: !!hit, hit, offered, pickers,
+          why: hit ? null
+                   : (pickers ? 'the panel has ' + pickers + ' picker(s), none offering it'
+                              : 'no picker was found on the panel at all')};
 }
 """
+
+#: The form field that CORROBORATES the "Summarize by" set, when the portal still renders it. A name
+#: this platform does not own, which is exactly why it is corroboration and not the verification
+#: (§COMMCALC-56). Read on its own, because a reading we rely on and a reading we merely consult
+#: should not come back entangled in one answer.
+_READ_FORM_FIELD_JS = """
+(name) => {
+  const el = document.querySelector('input[name="' + name + '"]');
+  return el ? el.value : null;
+}
+"""
+
 
 _SET_DATES_JS = """
 ([beginIso, endIso]) => {
@@ -808,6 +842,60 @@ _SET_DATES_JS = """
   return {ok: b === beginIso && e === endIso, begin: b, end: e};
 }
 """
+
+
+def pick_jqx_item(page, wants):
+    """THE ONE HOME for "drive this page's jqWidgets picker to one of these labels" (§COMMCALC-58).
+
+    `wants` is every acceptable spelling of the one value we want. Matching is on MEANING — case,
+    spacing and punctuation are stripped from both sides — because the portal writes "June- 26"
+    where the caller thinks "June 2026", and wrote "Daily" in a control it later re-skinned.
+
+    Returns a dict, always, with these keys:
+
+      ok        a picker offering one of `wants` was found AND driven to it
+      selected  the WIDGET'S OWN answer afterwards — what the thing we set says it is set to.
+                This is the verification; anything read elsewhere on the page is corroboration
+                (§COMMCALC-56).
+      widget    which declared family answered, so a change of flavour is visible in the log
+      offered   every label the page's pickers actually carry. On a failure this is the whole
+                point: an operator reads what the panel DOES offer instead of being told only
+                that it does not offer what we asked for.
+      pickers   how many controls answered a declared API at all. It separates "the panel has no
+                picker we can drive" from "it has pickers and none of them offers this", which
+                need opposite fixes and read identically without it.
+      why       the sentence for a failure, None on success.
+
+    Both callers in this file dereference THIS — `_set_daily_range` for "Summarize by" and
+    `_set_report_month` for the month list. They had their own near-identical scans until
+    2026-11-10, one of which had been widened and the other not, which is why one of them went
+    blind when the portal re-skinned a control. Locked in `harness_empty_pull_verdict.py` §H.
+    """
+    try:
+        raw = page.evaluate(_PICK_JQX_ITEM_JS,
+                            [list(wants), list(JQX_PICKER_SELECTORS), list(JQX_PICKER_WIDGETS)])
+    except Exception as e:
+        return {"ok": False, "selected": None, "widget": None, "offered": [], "pickers": 0,
+                "why": f"the page could not be asked ({type(e).__name__}: {e})"}
+    raw = raw if isinstance(raw, dict) else {}
+    hit = raw.get("hit") if isinstance(raw.get("hit"), dict) else {}
+    return {"ok": bool(raw.get("ok")) and (hit or {}).get("selected") is not None,
+            "selected": (hit or {}).get("selected"),
+            "widget": (hit or {}).get("widget"),
+            "offered": list(raw.get("offered") or []),
+            "pickers": int(raw.get("pickers") or 0),
+            "why": raw.get("why")}
+
+
+def _same_label(a, b):
+    """Two labels meaning the same thing. The portal's own spelling is not ours to predict.
+
+    Dereferences `account.store_identity.squash_key` — THE spelling fold — rather than carrying a
+    sixth copy of `"".join(... if ch.isalnum())`. That shape looks right and is not: `str.isalnum()`
+    is TRUE for accented letters, so a private copy silently fails to fold them (measured
+    2026-10-10, and locked since). A carrier portal is exactly where an accented label turns up.
+    """
+    return _squash_key(a) == _squash_key(b)
 
 
 #: What the "Summarize by" control must be set to for this report to return rows at all.
@@ -849,32 +937,40 @@ def _set_daily_range(page, begin_iso, end_iso):
     types what it is given and adds no day of its own — an off-by-one corrected in two places is an
     off-by-one applied twice.
     """
-    try:
-        iv = page.evaluate(_SET_INTERVAL_JS, DAILY_INTERVAL)
-    except Exception as e:
-        return False, f"could not set 'Summarize by' ({type(e).__name__}: {e})", False
-    iv = iv if isinstance(iv, dict) else {}
-    selected = ((iv.get("hit") or {}) if isinstance(iv.get("hit"), dict) else {}).get("selected")
-    hidden = iv.get("hidden")
+    iv = pick_jqx_item(page, [DAILY_INTERVAL])
+    selected = iv.get("selected")
 
-    # (a) nothing on the page offers the value — the panel is not the one we think it is.
+    # (a) nothing on the page offers the value. SAY WHAT THE PANEL DOES OFFER (§COMMCALC-58): on
+    #     2026-11-10 this sentence sent the owner to photograph a panel that was carrying the
+    #     control all along, under a skin the scan did not know. A failure that lists the real
+    #     options answers that question without him.
     if not iv.get("ok") or selected is None:
-        return False, (f"no 'Summarize by' dropdown offering {DAILY_INTERVAL} was found on the "
-                       f"report's filter panel ({iv.get('why') or 'no matching control'}); the "
-                       f"report returns an empty workbook without it"), False
+        offered = ", ".join(iv["offered"]) if iv.get("offered") else "nothing"
+        return False, (f"no 'Summarize by' picker offering {DAILY_INTERVAL} was found on the "
+                       f"report's filter panel ({iv.get('why') or 'no matching control'}; the "
+                       f"panel's pickers offer: {offered}); the report returns an empty workbook "
+                       f"without it"), False
     # (b) the thing we set says it is set to something else. The widget's own answer, so fatal.
-    if str(selected).strip() != DAILY_INTERVAL:
+    #     Compared on meaning, not spelling: the portal's own label is not ours to predict, and a
+    #     control reading "daily " must not be failed as if it read "Weekly".
+    if not _same_label(selected, DAILY_INTERVAL):
         return False, (f"'Summarize by' would not take {DAILY_INTERVAL} — the control reads "
                        f"{str(selected).strip()!r}; the report returns an empty workbook "
                        f"without it"), False
+    try:
+        hidden = page.evaluate(_READ_FORM_FIELD_JS, _INTERVAL_FIELD)
+    except Exception:
+        # A reading we merely CONSULT cannot fail the run on being unreadable. Absence is absence;
+        # the dates step below is what catches a page that has actually died.
+        hidden = None
     # (c) the form field contradicts the widget. Also fatal: two readings that disagree mean the
     #     page has not accepted the value, whichever of them is right.
-    if hidden not in (None, "") and str(hidden).strip() != DAILY_INTERVAL:
+    if hidden not in (None, "") and not _same_label(hidden, DAILY_INTERVAL):
         return False, (f"'Summarize by' reads {DAILY_INTERVAL} on the control but the form's "
                        f"{_INTERVAL_FIELD} field says {str(hidden).strip()!r} — the page has not "
                        f"taken the value"), False
 
-    confirmed = str(hidden or "").strip() == DAILY_INTERVAL
+    confirmed = _same_label(hidden, DAILY_INTERVAL) if hidden not in (None, "") else False
     page.wait_for_timeout(600)
     try:
         dr = page.evaluate(_SET_DATES_JS, [begin_iso, end_iso])

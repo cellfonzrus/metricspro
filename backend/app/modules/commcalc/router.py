@@ -18042,7 +18042,7 @@ def get_dlar_store_kpis(period: str, authorization: str = Header(default=""), or
     match on period_month/period_year (parsed from either spelling) rather than the raw string,
     which previously returned [] on a format mismatch.
 
-    WHICH COLUMNS (index §COMMCALC-58, owner 2026-11-10). The column list is NOT spelled here. It is
+    WHICH COLUMNS (index §COMMCALC-59, owner 2026-11-10). The column list is NOT spelled here. It is
     `dlar_metric_catalog.select_columns()` — derived from the sweep's own field declaration — so a
     column the feed lands reaches this report the moment it is declared, instead of needing this
     literal, the sibling literal in `_cr_resolve_kpi_metrics`, and a hand-typed array in the page
@@ -18077,7 +18077,7 @@ def get_dlar_store_kpis(period: str, authorization: str = Header(default=""), or
 
 @router.get("/dlar-store-catalog")
 def get_dlar_store_catalog(authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """WHAT THE STORE KPI REPORT CAN SHOW — the catalog, as it is true of THIS database (§COMMCALC-58).
+    """WHAT THE STORE KPI REPORT CAN SHOW — the catalog, as it is true of THIS database (§COMMCALC-59).
 
     Owner 2026-11-10: the 21 columns the carrier portal sends that nothing read become part of KPI
     reporting, "filtered by the kpi and out regular filters and send option". A picker needs to know
@@ -44283,7 +44283,7 @@ def _cr_resolve_targets_actuals(client, org_id, period, ctx):
 def _cr_resolve_kpi_metrics(client, org_id, period, ctx):
     """Store KPI metrics — the SAME raw_dlar_store read `get_dlar_store_kpis` serves.
 
-    THE COLUMN LIST IS DEREFERENCED, NOT RESTATED (§COMMCALC-58). This function used to carry a
+    THE COLUMN LIST IS DEREFERENCED, NOT RESTATED (§COMMCALC-59). This function used to carry a
     byte-identical copy of the other reader's `select(...)` literal, which is the sibling half of the
     defect that left 21 arriving columns unread: fixing one reader and not the other is the same
     defect wearing a hat. Optional columns are probed for the same reason they are there — migration
