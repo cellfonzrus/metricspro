@@ -28,11 +28,11 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `module-graph-guard.yml` | 2 | `pull_request`, `push`, `workflow_dispatch` |
 | `org-scope-guard.yml` | 18 | `pull_request`, `push`, `workflow_dispatch` |
 | `security.yml` | 14 | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
-| `tests.yml` | 13 | `pull_request`, `push`, `workflow_dispatch` |
+| `tests.yml` | 14 | `pull_request`, `push`, `workflow_dispatch` |
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 609 gates
+## Gated — 610 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -457,6 +457,7 @@ the Runs on column is how you can tell.
 | `harness_plan_scoped_activation_source.py` | `tests.yml` | Proof harnesses, group 2 of 4 (`harness-suite-2`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_plan_sources_lock.py` | `carrier-vocab-guard.yml` | Customer master proof (DB-free, the real functions) (`customer-master-proof`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_plan_workflow_lock.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_portal_backfill.py` | `tests.yml` | One home for the span a pull owes (lock) (`portal-backfill-lock`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_portal_cell.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_portal_page_verdict.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_portal_report_pull.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
