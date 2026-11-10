@@ -490,7 +490,7 @@ check("H8 the wrapper always returns every key its callers unpack",
                             "ready", "empty", "looked", "why"})(
           ES.pick_jqx_item(_DeadPage(), ["x"])))
 
-# ── COMMCALC-60 — PRESENT BUT NOT READY IS NOT ABSENT ────────────────────────────────────────────
+# ── COMMCALC-61 — PRESENT BUT NOT READY IS NOT ABSENT ────────────────────────────────────────────
 # Measured 2026-11-10 16:30, the first run on COMMCALC-58's wording: the panel reported ONE picker
 # and it was the dealer list. The filter control was on the page and had not populated, and an
 # empty control was skipped entirely — so a control we were looking straight at read as missing.

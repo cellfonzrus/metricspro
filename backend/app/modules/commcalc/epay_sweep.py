@@ -793,7 +793,7 @@ _PICK_JQX_ITEM_JS = """
     }
     if (family === null) return;              // not a picker we know how to drive
     pickers += 1;
-    // A PICKER THAT EXISTS BUT CARRIES NOTHING IS NOT ABSENT, IT IS NOT READY (COMMCALC-60).
+    // A PICKER THAT EXISTS BUT CARRIES NOTHING IS NOT ABSENT, IT IS NOT READY (COMMCALC-61).
     // These panels build in stages - the account list arrives first and the filter controls fill
     // in after - so a scan that skips an empty control reports a control it is looking straight
     // at as missing. Counted separately, and the caller waits on it.
@@ -864,7 +864,7 @@ _SET_DATES_JS = """
 
 #: How long to let a filter panel finish filling itself in, and in how many looks. These portal
 #: pages build in STAGES — on 2026-11-10 the 16:30 run found exactly one picker on the panel and it
-#: was the dealer list, because the filter controls had not populated yet (index §COMMCALC-60).
+#: was the dealer list, because the filter controls had not populated yet (index §COMMCALC-61).
 #: Bounded on purpose: waiting cannot turn a control that is absent into one that is present, so
 #: after this budget the scan reports what it saw, and says that it waited.
 PICKER_SETTLE_MS = 1500
@@ -878,7 +878,7 @@ def pick_jqx_item(page, wants, *, looks=PICKER_LOOKS, settle_ms=PICKER_SETTLE_MS
     spacing and punctuation are stripped from both sides — because the portal writes "June- 26"
     where the caller thinks "June 2026", and wrote "Daily" in a control it later re-skinned.
 
-    IT WAITS FOR THE PANEL (§COMMCALC-60), and only while waiting can still help: when no candidate
+    IT WAITS FOR THE PANEL (§COMMCALC-61), and only while waiting can still help: when no candidate
     element exists yet, or when one does but has not loaded its options. Once a picker is READY and
     simply does not offer the value, another look cannot change that, so it returns at once rather
     than spending the budget proving the same thing four times.

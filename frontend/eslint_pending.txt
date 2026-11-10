@@ -205,7 +205,7 @@
 8	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/integrations/page.tsx
 14	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/item-mapping/page.tsx
 40	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/kpi-failing/page.tsx
-22	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/kpi/page.tsx
+21	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/kpi/page.tsx
 13	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/ma-class-wiring/page.tsx
 28	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/ma-commission/page.tsx
 20	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/ma-handsets/page.tsx

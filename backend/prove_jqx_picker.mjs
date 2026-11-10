@@ -212,7 +212,7 @@ console.log("§G  the month picker's shape (the sibling caller) goes through the
   ok("G1 'June- 26' is reached from 'June 26'", r.ok === true && hosts[0].selected === "June- 26");
 }
 
-console.log("§H  a picker that exists but has not filled in is NOT absent (COMMCALC-60)");
+console.log("§H  a picker that exists but has not filled in is NOT absent (COMMCALC-61)");
 {
   // THE LIVE SHAPE, 2026-11-10 16:30, read off production: the dealer list had loaded and the
   // filter control had not, so the ONLY picker carrying anything was the account selector - and

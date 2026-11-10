@@ -206,7 +206,7 @@ def test_neither_home_learns_which_tenant_it_is_acting_for():
         assert "org" not in inspect.signature(fn).parameters
 
 
-# ── a picker that exists but has not filled in is NOT absent (§COMMCALC-60) ──────────────────────
+# ── a picker that exists but has not filled in is NOT absent (§COMMCALC-61) ──────────────────────
 
 def _panel(candidates=1, pickers=1, ready=0, empty=1, offered=(), selected=None, why=None):
     return {"ok": bool(selected),
