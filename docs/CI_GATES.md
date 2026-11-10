@@ -32,7 +32,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 610 gates
+## Gated — 611 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
