@@ -202,7 +202,8 @@ Primary code homes:
 | COMMCALC-60 | **A figure the feed sends that nothing reads is not a figure this platform has** | "Use those other 21 columns and make them a part of the kpi reporting also filtered by the kpi and out regular filters and send option". The sweep's own diagnostic had been naming 21 arriving-but-unread store columns every day for weeks, and one of them was the new spelling of a column that had been landing empty since the source renamed it. Reading one meant editing FOUR lists, and the last of them — a hand-typed array in the page — decided what a person could see, so a column could be declared, landed and invisible. |
 | COMMCALC-61 | **A control that is present but not filled in is not absent** | The first run on §COMMCALC-58's new wording (2026-11-10 16:30) reported that the panel had ONE picker, none offering Daily — and listed the dealer/account names. The filter controls had not populated yet, and the scan shipped that morning SKIPPED a picker whose `getItems` came back empty, so a control the page had already built was neither counted nor mentioned: present-but-not-ready was folded into absent. Absent, not-yet-ready and present-but-not-offering are three facts needing three opposite fixes; the scan now counts `candidates`/`pickers`/`ready`/`empty` and says which of the three it saw, and waits up to 4 looks × 1.5s while the panel is still building (never on a ready picker, never on a success), reporting how long it waited. The honest-zero ladder is untouched. |
 | COMMCALC-62 | **The wait follows progress, and no one control may drown the report** | §COMMCALC-61's first tick (2026-11-10 18:30) reported "3 picker(s) with options, none offering it (and 10 still empty) (looked 4 times over 4.5s)" — so the panel carries THIRTEEN controls, not the one reported at 16:30, and ten were still unfilled when the guessed 4-look budget expired: the budget decided the answer rather than measuring it. Worse, `offered` merged every label on the panel and one control is the ~480-account dealer selector, so it filled the sentence and the 600-char recorder elided the two other loaded controls — which is why the panel's real shape took three rounds to see. The wait now follows PROGRESS (`PICKER_PATIENCE` stalls, `PICKER_DEADLINE_MS` ceiling; `PICKER_LOOKS` deleted) and says when a panel stopped filling; each control reports its own identity, real size and a bounded sample through the new one home `describe_panel`. Honest zero untouched. |
-| COMMCALC-63 | **A thing inside a thing is not a second control, and a generated id is not a name** | §COMMCALC-62's first tick (2026-11-10 19:30) named the panel's controls and the names were jqWidgets' own internal pieces with the hashes REPEATING (`listBoxContent…0206f1e1` beside `innerListBox…0206f1e1` beside `jqxWidget0206f1e1`) — one control counted three or four times through its own scaffolding, because those nested divs carry the same `jqx-*` classes and ARIA roles as their host. So the panel never had thirteen controls, and worse, an inner piece can never carry items, so `empty > 0` was permanently true and every tick burnt its whole `PICKER_DEADLINE_MS` budget waiting on scaffolding before reporting a stall. Only the OUTERMOST match is now a control, and each one is named by the caption printed beside it (new one homes `control_name` + `GENERATED_ID_RE`, new `labelOf` in the scan) rather than by a per-page-load id that is comparable across no ticks. The browser proof's fake DOM became a real tree, without which it could not express this defect at all. |
+| COMMCALC-63 | **One frame's cost is a declared, measured budget** | "the browser imn browser is not smooth it still very laggy" — the third cause of the same complaint and the only one that is arithmetic rather than scheduling (§COMMCALC-27 input, §COMMCALC-28 poll cadence both still hold). The live view pays one round trip per frame and the frame was 1366x900 at JPEG quality 55 = 154 KB, ~90 KB gzipped, so at a 250ms round trip plus a 300ms gap it delivered 1.8 frames a second. Measured, not guessed: 1024x674 at quality 40 is 72 KB (~40 KB on the wire), 2.8x the frames for the same bandwidth, and the gap came down to 150ms with it. Shrinking the stream provably moves no click because `live_frame.frame_geometry` reads the frame's METADATA (§COMMCALC-47), never the image's pixel size. A measurement also DISPROVED the announced plan: gzip erases the base64 tax, so serving the JPEG as bytes is 99-103% of today's wire bytes — that code was reverted rather than shipped. Still owed: one long-lived connection instead of a round trip per frame. |
+| COMMCALC-64 | **A thing inside a thing is not a second control, and a generated id is not a name** | §COMMCALC-62's first tick (2026-11-10 19:30) named the panel's controls and the names were jqWidgets' own internal pieces with the hashes REPEATING (`listBoxContent…0206f1e1` beside `innerListBox…0206f1e1` beside `jqxWidget0206f1e1`) — one control counted three or four times through its own scaffolding, because those nested divs carry the same `jqx-*` classes and ARIA roles as their host. So the panel never had thirteen controls, and worse, an inner piece can never carry items, so `empty > 0` was permanently true and every tick burnt its whole `PICKER_DEADLINE_MS` budget waiting on scaffolding before reporting a stall. Only the OUTERMOST match is now a control, and each one is named by the caption printed beside it (new one homes `control_name` + `GENERATED_ID_RE`, new `labelOf` in the scan) rather than by a per-page-load id that is comparable across no ticks. The browser proof's fake DOM became a real tree, without which it could not express this defect at all. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -26352,6 +26353,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-61 | commcalc |
 | COMMCALC-62 | commcalc |
 | COMMCALC-63 | commcalc |
+| COMMCALC-64 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -46180,9 +46182,112 @@ Cross-references: §COMMCALC-61 (counting the empty control, which produced this
 honest-zero ladder) · §19.18 (one fact, one home, dereferenced — never copied).
 
 
-## §COMMCALC-63. A THING INSIDE A THING IS NOT A SECOND CONTROL — and a generated id is not a name (measured 2026-11-10)
 
-### COMMCALC-63.1 HOW IT WAS FOUND
+## §COMMCALC-63. ONE FRAME'S COST IS A DECLARED, MEASURED BUDGET — the third cause of "the live view is laggy" (owner report 2026-11-10)
+
+Owner, verbatim, three weeks after the first two causes shipped: *"the browser imn browser is not
+smooth it still very laggy"*.
+
+### COMMCALC-63.1 WHY THIS IS A THIRD CAUSE AND NOT A RELAPSE
+
+The first two causes were about SCHEDULING and both still hold:
+
+- **§COMMCALC-27** — the operator's input was serviced behind a frame tick and charged for the
+  previous click's ~750ms verification. Fixed; `operator_input_pending` is still the one home.
+- **§COMMCALC-28** — the page polled frames on a fixed-rate `setInterval`, so polls overlapped
+  permanently. Fixed; `pollFrames` is still the one issuer and still times its gap from the moment a
+  response SETTLES.
+
+What was left is ARITHMETIC, and no amount of scheduling fixes it. The view pays **one HTTP round
+trip per frame**, and the frame it carried was 1366×900 at JPEG quality 55. Measured on a real
+Chromium screencast of a dense portal report page (a filter bar plus a 40×9 grid), median of the
+frames a scroll produces:
+
+| stream settings | JPEG | shipped (base64-in-JSON) | gzipped on the wire |
+|---|---|---|---|
+| quality 55 @ 1366×900 | 154 KB | 205 KB | ~90 KB |
+| quality 40 @ 1366×900 | 126 KB | — | — |
+| quality 55 @ 1100×724 | 96 KB | — | — |
+| **quality 40 @ 1024×674** | **72 KB** | 96 KB | **~40 KB** |
+| quality 30 @ 1024×674 | 61 KB | — | — |
+
+Delivered frames per second is `1000 / (gap + round trip)`. At a 250ms round trip the old 300ms gap
+gave **1.8 frames a second** at ~350 KB/s of sustained download. That is the lag the owner can see.
+
+> **THE CLASS, not the instance: a stream's picture size and quality are a BUDGET, and a budget is
+> declared, measured and locked — never a literal left at whatever the first implementation typed.**
+
+### COMMCALC-63.2 A MEASUREMENT THAT DISPROVED THE PLAN, recorded so nobody repeats it
+
+The first plan was to stop shipping the JPEG as base64 inside JSON and serve it as bytes, announced
+as a ~25% saving. **It was measured and it is not one.** `main.py` installs
+`GZipMiddleware(minimum_size=1024)`, and gzip erases the base64 tax almost exactly: a 73 KB frame
+gzips to **41 KB as raw bytes** and to **39 KB as base64-in-JSON** — binary is 99–103% of today's
+wire bytes. The already-written binary endpoint was **reverted rather than shipped**.
+
+A second assumption died the same way: gzip is not wasted CPU on a JPEG here. It takes that 73 KB
+frame to 41 KB for **2.2 ms** of CPU, so it stays on.
+
+### COMMCALC-63.3 WHAT CHANGED
+
+- `live_login._SCREENCAST_QUALITY` 55 → **40**, `_SCREENCAST_MAX_W` 1366 → **1024**,
+  `_SCREENCAST_MAX_H` 900 → **674**, with the measurement table above recorded at the declaration.
+  1024×674 at quality 40 is **2.8× the frames for the same bandwidth**.
+- `email-imports/page.tsx`: `LIVE_FRAME_GAP_MS` 300 → **150**, `LIVE_FRAME_NUDGE_MS` 120 → **90**.
+  Safe to shorten only because §COMMCALC-28's scheduler times the gap from the moment a response
+  settles, so a slow hop still stretches the cadence instead of stacking polls — and because the
+  frames are now under half the bytes, the shorter gap asks no more of the connection than the
+  longer one did. ~1.8 → ~2.5 delivered frames a second at the same round trip.
+
+### COMMCALC-63.4 THE ONE THING THIS MUST NOT DO — and why it cannot
+
+Shrinking the streamed picture must not move the operator's click. It cannot, and that is a design
+fact rather than luck: **`live_frame.frame_geometry` (§COMMCALC-47) derives the page's geometry from
+the frame's own METADATA** — `deviceWidth` / `deviceHeight` in DIP of the visible page, divided by
+`pageScaleFactor` — and the image's pixel size is not an input to the translation at all.
+`live_frame` carries no copy of the stream budget, so the two cannot drift.
+
+**THE TRAP, locked against:** `live_frame.FALLBACK_VIEWPORT` is the **context's** window
+(`vidapay_sweep._new_context`, 1366×900), used only when a frame carries no metadata. Aligning it
+with the new screencast cap would move every no-metadata click. The cap also keeps the context's
+aspect ratio (1024/674 = 1.519 vs 1366/900 = 1.518), so Chrome adds no letterbox strip.
+
+### COMMCALC-63.5 EVERY TENANT
+
+The budget is a POLICY — a rate and a size — not a tenant's vocabulary, so a house constant is the
+right home and the §COMMCALC-49.10 trap does not apply: nothing here names a tenant, a carrier or a
+portal, and every live login on every tenant gets the same stream.
+
+### COMMCALC-63.6 LOCKED
+
+`backend/harness_live_input_latency.py` **§L — 184 checks in the file now**, DB-free and
+browser-free, already wired into the `carrier-vocab-guard` workflow. §L fails the build if the
+quality or either cap leaves the measured budget in either direction (too expensive is the defect,
+too cheap is unreadable), if the cap stops matching the context's aspect ratio, if
+`FALLBACK_VIEWPORT` is aligned with the cap, if the screencast call stops dereferencing the
+constants, if a second copy of the budget appears in `live_frame`, if the page's gap leaves the
+budget the smaller frame paid for, or if either declaration stops recording that the numbers were
+measured. Armed negative controls assert the pre-change values go red.
+
+### COMMCALC-63.7 WHAT THIS DOES NOT FIX, stated plainly
+
+The view still pays **one round trip per frame**. The expensive half of the fix is not paying it at
+all — pushing frames down one long-lived connection with today's polling kept as an automatic
+fallback. That is not in this section, and the blocker is known and named:
+`main._proxy_browser_work` buffers whole responses (`r.content`) and would need
+`client.stream(...)` + a `StreamingResponse`.
+
+Also not measured from here: this container cannot reach `api.metricspro.tech` or
+`app.metricspro.tech`, so the arithmetic is certain but whether it is the WHOLE remaining lag is the
+owner's to report after the deploy.
+
+Cross-references: §COMMCALC-27 (the operator's input leads the tick) · §COMMCALC-28 (a poll's
+cadence is the gap between its RESPONSES) · §COMMCALC-31 (detection yields to the operator) ·
+§COMMCALC-47 (where a click on the streamed image lands — the geometry's one home) · §19.18 (one
+fact, one home, dereferenced — never copied).
+## §COMMCALC-64. A THING INSIDE A THING IS NOT A SECOND CONTROL — and a generated id is not a name (measured 2026-11-10)
+
+### COMMCALC-64.1 HOW IT WAS FOUND
 
 §COMMCALC-62 deployed and the 19:30 tick finally named the panel's controls, one by one:
 
@@ -46195,7 +46300,7 @@ The names settled it in one reading. `innerListBox…`, `listBoxContent…` and 
 are **jqWidgets' own internal pieces of a dropdown**, and the hashes **repeat**: `0206f1e1` appears
 twice, `349f357e` twice. We were counting one control several times, through its own scaffolding.
 
-### COMMCALC-63.2 THE TWO DEFECTS
+### COMMCALC-64.2 THE TWO DEFECTS
 
 **(a) One control, counted many times.** `JQX_PICKER_SELECTORS` matches on class and ARIA role, and
 jqWidgets builds a dropdown out of nested divs that carry **the same `jqx-*` classes and roles as
@@ -46213,7 +46318,7 @@ name in that sentence was useless to the operator and **not comparable between t
 thing a per-control report exists to allow. What identifies a control to a person is the caption
 printed beside it on screen, and only the browser can see that.
 
-### COMMCALC-63.3 THE RULES
+### COMMCALC-64.3 THE RULES
 
 **Only the outermost match is a control.** A matched element that is contained by another matched
 element is a part of that control, not a control.
@@ -46223,7 +46328,7 @@ beside it, then its id *if the id is a real one*, then nothing — and nothing i
 *"an unnamed jqxComboBox"*, never papered over with a generated id. A name that changes every page
 load is worse than no name, because it looks like information.
 
-### COMMCALC-63.4 WHAT CHANGED
+### COMMCALC-64.4 WHAT CHANGED
 
 * `_PICK_JQX_ITEM_JS` collects every match into `matched`, then keeps
   `matched.filter(h => !matched.some(o => o !== h && o.contains(h)))` — the outermost only. The
@@ -46236,14 +46341,14 @@ load is worse than no name, because it looks like information.
 * **New one home** `GENERATED_ID_RE = re.compile(r"jqxWidget[0-9a-f]{6,}", re.I)` — the single
   declaration of "this is a per-page-load id, not a name".
 
-### COMMCALC-63.5 WHAT STAYED
+### COMMCALC-64.5 WHAT STAYED
 
 The honest zero, and the progress-aware wait. This change does not make the wait longer or shorter;
 it stops the wait being held open by elements that could never satisfy it. A control that is
 genuinely still filling in is still waited on, and a `0` row pull is still refused as evidence under
 the §COMMCALC-56 ladder.
 
-### COMMCALC-63.6 TESTS AND THE LOCK
+### COMMCALC-64.6 TESTS AND THE LOCK
 
 * `backend/tests/unit/test_jqx_picker_is_found_by_what_it_answers_to.py` — **5 new units** (36 in
   the file): the on-screen caption is what the operator is shown; a generated id is not a name; a
@@ -46263,7 +46368,7 @@ the §COMMCALC-56 ladder.
   generated id can be reported as a name, if the caption stops being read from the page — **or if
   the browser proof's fake page goes back to being a flat list**.
 
-### COMMCALC-63.7 WHAT THIS DOES NOT FIX
+### COMMCALC-64.7 WHAT THIS DOES NOT FIX
 
 Whether "Summarize by" is on that panel is **still not settled**, and this is the change that makes
 it answerable: the next tick names three or four real controls by their printed captions, with each

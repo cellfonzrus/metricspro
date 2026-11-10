@@ -38,6 +38,11 @@ WHAT THIS PROVES
       too, through one home `detect_due`, with a BOUNDED deferral so a captcha is still noticed.
   §K  "what is this session doing right now" has ONE home (`_note_act` / `activity`), every surface
       dereferences it, and it moves even when no new frame arrives.
+  §L  ONE FRAME'S COST is a declared, measured budget (index §COMMCALC-63) — the third cause of the
+      same complaint, and the only one that is arithmetic rather than scheduling: the picture size
+      and JPEG quality are pinned against the measurement recorded beside them, the cap keeps the
+      context's aspect ratio, and shrinking the stream provably moves no click because the geometry
+      comes from the frame's METADATA (§COMMCALC-47), never from the image's pixel size.
   §H  the FRONTEND half of the same question: the page batches keystrokes instead of awaiting one
       request per character, and every event — typed text, clicks, named keys, scroll — goes out on
       one ordered chain, so a flushed password can never land behind the Enter that submits it.
@@ -614,6 +619,119 @@ ok("activity: r.activity" in TSX, "the frame poll keeps the activity the backend
 ok("liveState?.activity?.doing &&" in TSX,
    "the line renders only when the backend sent a step — never a fabricated 'working…'")
 ok("frame_age_s" in TSX, "the frame age is shown, so a frozen picture is visible as frozen")
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# §L  ONE FRAME'S COST IS A DECLARED BUDGET (index §COMMCALC-63)
+#
+# Owner, 2026-11-10, three weeks after the input path and the poll cadence were both fixed: *"the
+# browser imn browser is not smooth it still very laggy"*. He was right a third time, and this cause
+# is neither of the first two. The remaining lag is ARITHMETIC: the view pays one HTTP round trip per
+# frame, and what it carries was 1366x900 at JPEG quality 55 — measured at 154 KB, ~90 KB gzipped on
+# the wire. At a 250ms round trip plus a 300ms gap that is 1.8 frames a second. No amount of
+# scheduling fixes a frame that costs more than the gap it is sent in.
+#
+# THE CLASS, not the instance: *a stream's picture size and quality are a BUDGET, and a budget is
+# declared, measured and locked — never a literal left at whatever the first implementation typed.*
+# The numbers below are pinned against the measurement recorded beside them in `live_login.py`, so a
+# later change that quietly puts the cost back has to argue with a failing build.
+#
+# The one thing shrinking the stream must NOT do is move the operator's click. It cannot, and that is
+# a design fact rather than luck: `live_frame.frame_geometry` derives the page's geometry from the
+# frame's own METADATA (§COMMCALC-47) and never from the image's pixel size, and the no-metadata
+# fallback is the CONTEXT's viewport, which this change does not touch. Both are asserted here, so
+# "helpfully" aligning the fallback with the new cap fails the build instead of the owner's clicks.
+print("\n— L. one frame's cost is a declared budget, and shrinking it moves no click —")
+
+from app.modules.commcalc import live_frame as lf    # noqa: E402  (the geometry's one home, §COMMCALC-47)
+
+# The two cadences the page declares, re-read here under their own names so §I's locals cannot drift.
+_g_ms = int(re.search(r"const\s+LIVE_FRAME_GAP_MS\s*=\s*(\d+)", TSX).group(1))
+_n_ms = int(re.search(r"const\s+LIVE_FRAME_NUDGE_MS\s*=\s*(\d+)", TSX).group(1))
+
+_q = getattr(ll, "_SCREENCAST_QUALITY", None)
+_w = getattr(ll, "_SCREENCAST_MAX_W", None)
+_h = getattr(ll, "_SCREENCAST_MAX_H", None)
+for nm, v in (("_SCREENCAST_QUALITY", _q), ("_SCREENCAST_MAX_W", _w), ("_SCREENCAST_MAX_H", _h)):
+    ok(isinstance(v, int) and not isinstance(v, bool), "%s is a declared integer" % nm, v)
+
+# The budget, pinned in both directions — too expensive is the defect, too cheap is unreadable.
+ok(isinstance(_q, int) and _q <= 45,
+   "JPEG quality is within the measured budget (<= 45; it was 55 = 154 KB a frame)", _q)
+ok(isinstance(_q, int) and _q >= 25,
+   "and not so low the operator cannot read the portal's own text (>= 25)", _q)
+ok(isinstance(_w, int) and _w <= 1100,
+   "the streamed picture is capped at the measured width (<= 1100; it was 1366)", _w)
+ok(isinstance(_w, int) and _w >= 900,
+   "and stays wide enough that a portal's filter bar is not cut off (>= 900)", _w)
+ok(isinstance(_h, int) and _h <= 760, "the height cap came down with it (<= 760; it was 900)", _h)
+ok(isinstance(_h, int) and _h >= 600, "and is still a usable page height (>= 600)", _h)
+
+# L: the cap must keep the CONTEXT's aspect ratio, or Chrome letterboxes the frame and every click
+# below or right of the picture lands on the strip instead of the page.
+_vp = io.open(os.path.join("app", "modules", "commcalc", "vidapay_sweep.py"), encoding="utf-8").read()
+_m = re.search(r'viewport=\{"width":\s*(\d+),\s*"height":\s*(\d+)\}', _vp)
+ok(_m is not None, "the context's viewport is found in vidapay_sweep")
+if _m and _w and _h:
+    _vw, _vh = int(_m.group(1)), int(_m.group(2))
+    ok(abs((_w / float(_h)) - (_vw / float(_vh))) < 0.01,
+       "the screencast cap keeps the context's aspect ratio (no letterbox strip)",
+       "%dx%d vs %dx%d" % (_w, _h, _vw, _vh))
+    # L: THE TRAP. The no-metadata fallback is the CONTEXT's window, NOT the screencast cap. Aligning
+    # them would move every click on a frame that carried no metadata.
+    ok(lf.FALLBACK_VIEWPORT == {"width": _vw, "height": _vh},
+       "live_frame.FALLBACK_VIEWPORT is the CONTEXT's viewport, not the screencast cap",
+       lf.FALLBACK_VIEWPORT)
+    ok(lf.FALLBACK_VIEWPORT != {"width": _w, "height": _h},
+       "and is not the streamed picture's size, which would move every no-metadata click")
+
+# L: the constants are DEREFERENCED where the screencast starts — no second copy of the budget.
+# The docstring names the CDP method too, so anchor on the CALL, not the first mention.
+_call_at = SRC.index('cdp.send("Page.startScreencast"')
+_start = SRC[_call_at:_call_at + 400]
+for nm in ("_SCREENCAST_QUALITY", "_SCREENCAST_MAX_W", "_SCREENCAST_MAX_H"):
+    ok(nm in _start, "startScreencast reads %s rather than a literal" % nm)
+ok(re.search(r'"quality":\s*\d', _start) is None, "no literal quality sits beside the constant")
+ok(re.search(r'"maxWidth":\s*\d', _start) is None, "no literal width sits beside the constant")
+ok(SRC.count("_SCREENCAST_QUALITY") == 2,
+   "the quality has ONE home and ONE caller", SRC.count("_SCREENCAST_QUALITY"))
+
+# L: the measurement is recorded next to the budget, so the next change can argue with evidence.
+_decl = SRC[max(0, SRC.index("_SCREENCAST_QUALITY") - 2000):SRC.index("_SCREENCAST_QUALITY")]
+ok("MEASURED" in _decl, "the declaration records that the numbers were measured, not guessed")
+ok("frame_geometry" in _decl,
+   "and records WHY shrinking the stream is safe for input (the geometry comes from metadata)")
+
+# L: the behaviour that makes it safe — a click is translated from the frame's metadata, and the
+# JPEG's size is not an input to the translation at all.
+_md = {"deviceWidth": 1366.0, "deviceHeight": 900.0, "pageScaleFactor": 1.0, "offsetTop": 0.0}
+_g = lf.frame_geometry(_md, {"width": 1366, "height": 900})
+eq(_g["source"], "frame", "a frame with metadata is believed over the viewport")
+eq((_g["width"], _g["height"]), (1366.0, 900.0),
+   "the geometry is the page's CSS size, whatever size the JPEG was scaled to")
+# The SAME page streamed at the new cap sends the SAME metadata, so the click is unchanged.
+eq(lf.click_point(0.5, 0.5, _g), lf.click_point(0.5, 0.5, lf.frame_geometry(_md, {"width": _w, "height": _h})),
+   "shrinking the stream moves no click — the metadata decides, not the picture size")
+ok("quality" not in lf.frame_geometry.__doc__ and "maxWidth" not in (lf.click_point.__doc__ or ""),
+   "neither translator knows anything about the stream's size or quality")
+_lf_src = io.open(os.path.join("app", "modules", "commcalc", "live_frame.py"), encoding="utf-8").read()
+ok("_SCREENCAST" not in _lf_src,
+   "live_frame carries no copy of the stream budget, so the two cannot drift")
+
+# L: the page's end of the budget — the gap came down WITH the frame size, never on its own.
+ok(0 < _g_ms <= 200,
+   "the idle poll gap is inside the budget the smaller frame paid for (<= 200ms)", _g_ms)
+ok(0 < _n_ms <= _g_ms, "and the post-input nudge is still no slower than it", (_n_ms, _g_ms))
+_gap_decl = TSX[max(0, TSX.index("const LIVE_FRAME_GAP_MS") - 1600):TSX.index("const LIVE_FRAME_GAP_MS")]
+ok("MEASURED" in _gap_decl,
+   "the page records the measurement the shorter gap rests on, not a preference")
+
+# L: armed controls — the pre-change budget must FAIL these checks, or they are not checks.
+ok(not (55 <= 45), "control: the old quality 55 is caught")
+ok(not (1366 <= 1100), "control: the old 1366px cap is caught")
+ok(not (300 <= 200), "control: the old 300ms gap is caught")
+ok(not ({"width": 1024, "height": 674} == {"width": 1366, "height": 900}),
+   "control: a fallback viewport aligned with the screencast cap is caught")
 
 
 print("\n%d passed, %d failed" % (PASS, FAIL))

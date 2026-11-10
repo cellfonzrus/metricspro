@@ -783,7 +783,7 @@ _PICK_JQX_ITEM_JS = """
   document.querySelectorAll(selectors.join(',')).forEach(h => {
     if (matched.indexOf(h) < 0) matched.push(h);
   });
-  // A THING INSIDE A THING IS NOT A SECOND CONTROL (COMMCALC-63). jqWidgets builds a dropdown out
+  // A THING INSIDE A THING IS NOT A SECOND CONTROL (COMMCALC-64). jqWidgets builds a dropdown out
   // of nested divs that carry the same jqx-* classes and ARIA roles as its host, so the selectors
   // match the host AND its innerListBox AND its dropDownButtonContent - one control counted three
   // times. Worse, those inner parts can never carry items, so `empty > 0` never cleared and the
@@ -1019,7 +1019,7 @@ def pick_jqx_item(page, wants, *, settle_ms=PICKER_SETTLE_MS):
     return out
 
 
-#: A jqWidgets-GENERATED element id, which is not a name (index §COMMCALC-63). The portal's panel
+#: A jqWidgets-GENERATED element id, which is not a name (index §COMMCALC-64). The portal's panel
 #: reports ids like `innerListBoxjqxWidgetaa329b45`, `listBoxContentjqxWidget0206f1e1` and
 #: `dropDownButtonContentjqxWidget349f357e`: the widget library mints them per page load, so such an
 #: id tells an operator nothing AND cannot be compared between two ticks of the same sweep. A

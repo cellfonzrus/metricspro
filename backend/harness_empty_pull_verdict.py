@@ -576,7 +576,7 @@ check("H36 …and the control we are hunting is named even while it is empty",
       "SummarizeBy: empty" in ES.describe_panel({"panel": [
           {"id": "SummarizeBy", "widget": "jqxComboBox", "options": 0, "sample": []}]}))
 
-# ── COMMCALC-63 — A THING INSIDE A THING IS NOT A SECOND CONTROL ────────────────────────────────
+# ── COMMCALC-64 — A THING INSIDE A THING IS NOT A SECOND CONTROL ────────────────────────────────
 # Measured 2026-11-10 19:30 on COMMCALC-62's code. The per-control report finally named them, and
 # the names were jqWidgets' own internal pieces with the hashes REPEATING — `listBoxContent…0206f1e1`
 # beside `innerListBox…0206f1e1` beside `jqxWidget0206f1e1`. One control counted three times through
@@ -662,7 +662,7 @@ check("H19 …and its fake DOM refuses a selector shape it has not been taught",
       "silently matching nothing is the failure being locked out")
 check("H43 the browser proof's fake page is a real TREE, not a flat list",
       "contains(other)" in _proof_src and "previousElementSibling" in _proof_src
-      and "children" in _proof_src and "COMMCALC-63" in _proof_src,
+      and "children" in _proof_src and "COMMCALC-64" in _proof_src,
       "a fake with no nesting cannot express this defect, so a proof on it is not a proof")
 
 

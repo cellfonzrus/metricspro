@@ -66,8 +66,23 @@ const LIVE_TYPE_FLUSH_MS = 70
 // overlap and never recover: each one in flight carries a stale `since`, so each is answered with a
 // FULL frame of the same paint, and they occupy the browser's per-origin connection budget that the
 // operator's own input needs. One response, then the next request.
-const LIVE_FRAME_GAP_MS = 300    // steady cadence while the operator is idle
-const LIVE_FRAME_NUDGE_MS = 120  // right after an input, when the result is about to appear
+//
+// THE GAP IS A FRAME BUDGET, NOT A TASTE (owner, 2026-11-10: "the browser in browser is not smooth
+// it still very laggy"). What one frame costs was MEASURED on a real Chromium screencast of a dense
+// report page, gzipped as the API serves it:
+//
+//     quality 55 @ 1366x900   90 KB on the wire      (what the stream used to send)
+//     quality 40 @ 1024x674   40 KB on the wire      (what it sends now)
+//
+// Delivered frames per second is `1000 / (gap + round trip)`. At a 250ms round trip the old 300ms
+// gap gave 1.8/s; at 150ms it gives 2.5/s, and the frames are less than half the bytes, so the
+// shorter gap asks no more of the connection than the longer one did. It is safe to shorten because
+// the scheduler below times the gap from the moment a response SETTLES, never on a fixed timer, so a
+// slow hop still stretches the cadence instead of stacking overlapping polls (§COMMCALC-28).
+//
+// This is the cheap half of the fix. The expensive half is not paying a round trip per frame at all.
+const LIVE_FRAME_GAP_MS = 150    // steady cadence while the operator is idle
+const LIVE_FRAME_NUDGE_MS = 90   // right after an input, when the result is about to appear
 
 const providerOf = (host: string) =>
   Object.keys(PROVIDERS).find(k => PROVIDERS[k].imap_host && PROVIDERS[k].imap_host === (host || '')) || 'custom'

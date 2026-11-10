@@ -50,7 +50,7 @@ const SAMPLE = pyInt("PICKER_SAMPLE");
 
 // ── a fake page ──────────────────────────────────────────────────────────────────────────────────
 // A REAL TREE, not a flat list. jqWidgets builds ONE control out of nested divs that carry the same
-// `jqx-*` classes and ARIA roles as their host (§COMMCALC-63), and a fake with no parent/child
+// `jqx-*` classes and ARIA roles as their host (§COMMCALC-64), and a fake with no parent/child
 // relationship cannot express that at all — a proof that cannot express the defect is not a proof.
 // The nodes also carry the text and attributes a caption is read from, because "what is this
 // control called" is answered from the page and nowhere else.
@@ -384,7 +384,7 @@ console.log("§I  no one control may drown the report (COMMCALC-62)");
   ok("I11 …and the panel report comes back alongside the hit", r.panel.length === 2);
 }
 
-console.log("§J  a thing inside a thing is not a second control (COMMCALC-63)");
+console.log("§J  a thing inside a thing is not a second control (COMMCALC-64)");
 {
   // THE LIVE SHAPE, 2026-11-10 19:30, read off production on the §COMMCALC-62 code:
   //
