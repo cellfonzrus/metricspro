@@ -211,9 +211,31 @@ _TERMINAL_TTL = 15 * 60       # keep a finished session's final state this long,
 _POST_AUTH_IDLE_SECONDS = 15 * 60  # keep the authenticated browser open this long for a reuse-the-session pull
 
 # Low-latency frame streaming.
-_SCREENCAST_QUALITY = 55       # JPEG quality for the CDP screencast (viewport-sized)
-_SCREENCAST_MAX_W = 1366
-_SCREENCAST_MAX_H = 900
+# ── WHAT ONE FRAME COSTS (owner report 2026-11-10: "the browser in browser is not smooth it still
+# very laggy") ───────────────────────────────────────────────────────────────────────────────────
+# MEASURED, not guessed — a real Chromium screencast at these settings against a dense portal report
+# page (a filter bar plus a 40x9 grid), median of the frames a scroll produces:
+#
+#     quality 55 @ 1366x900   154 KB jpeg  ->  205 KB shipped as base64-in-JSON   (what this was)
+#     quality 40 @ 1366x900   126 KB
+#     quality 55 @ 1100x724    96 KB
+#     quality 40 @ 1024x674    72 KB       ->   72 KB shipped as bytes  = 35% of the old bytes
+#     quality 30 @ 1024x674    61 KB
+#
+# One round trip per frame plus the 300ms gap between responses put the delivered rate at about
+# 1.8 frames/second at a 250ms round trip, at ~350 KB/s. That is the lag: not the input path
+# (§COMMCALC-27 fixed that), not the pump cadence — the frame budget.
+#
+# 1024x674 at quality 40 is 2.8x the frames for the same bandwidth. It is SAFE for input because a
+# click is a fraction of the image and `live_frame.frame_geometry` translates it through Chrome's own
+# frame METADATA (deviceWidth/deviceHeight in CSS px of the visible page), never through the JPEG's
+# pixel size — so shrinking the stream moves no click (§COMMCALC-47).
+#
+# These are a POLICY (a rate, a size), not a tenant's vocabulary, so a house constant is the right
+# home and RULE TWO is satisfied: nothing here names a tenant, a carrier or a portal.
+_SCREENCAST_QUALITY = 40       # JPEG quality for the CDP screencast
+_SCREENCAST_MAX_W = 1024
+_SCREENCAST_MAX_H = 674
 _FRAME_PUMP_MS = 80            # CDP mode: pump the event loop this often so screencast frames dispatch (~12/s)
 _FALLBACK_PUMP_MS = 300        # no-CDP mode: tightened screenshot loop (~3.3/s vs the old ~0.67/s)
 _FRAME_GUARANTEE_S = 1.5       # even in CDP mode, force a screenshot if no frame advanced this long (never freeze)

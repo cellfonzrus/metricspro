@@ -202,6 +202,7 @@ Primary code homes:
 | COMMCALC-60 | **A figure the feed sends that nothing reads is not a figure this platform has** | "Use those other 21 columns and make them a part of the kpi reporting also filtered by the kpi and out regular filters and send option". The sweep's own diagnostic had been naming 21 arriving-but-unread store columns every day for weeks, and one of them was the new spelling of a column that had been landing empty since the source renamed it. Reading one meant editing FOUR lists, and the last of them — a hand-typed array in the page — decided what a person could see, so a column could be declared, landed and invisible. |
 | COMMCALC-61 | **A control that is present but not filled in is not absent** | The first run on §COMMCALC-58's new wording (2026-11-10 16:30) reported that the panel had ONE picker, none offering Daily — and listed the dealer/account names. The filter controls had not populated yet, and the scan shipped that morning SKIPPED a picker whose `getItems` came back empty, so a control the page had already built was neither counted nor mentioned: present-but-not-ready was folded into absent. Absent, not-yet-ready and present-but-not-offering are three facts needing three opposite fixes; the scan now counts `candidates`/`pickers`/`ready`/`empty` and says which of the three it saw, and waits up to 4 looks × 1.5s while the panel is still building (never on a ready picker, never on a success), reporting how long it waited. The honest-zero ladder is untouched. |
 | COMMCALC-62 | **The wait follows progress, and no one control may drown the report** | §COMMCALC-61's first tick (2026-11-10 18:30) reported "3 picker(s) with options, none offering it (and 10 still empty) (looked 4 times over 4.5s)" — so the panel carries THIRTEEN controls, not the one reported at 16:30, and ten were still unfilled when the guessed 4-look budget expired: the budget decided the answer rather than measuring it. Worse, `offered` merged every label on the panel and one control is the ~480-account dealer selector, so it filled the sentence and the 600-char recorder elided the two other loaded controls — which is why the panel's real shape took three rounds to see. The wait now follows PROGRESS (`PICKER_PATIENCE` stalls, `PICKER_DEADLINE_MS` ceiling; `PICKER_LOOKS` deleted) and says when a panel stopped filling; each control reports its own identity, real size and a bounded sample through the new one home `describe_panel`. Honest zero untouched. |
+| COMMCALC-63 | **One frame's cost is a declared, measured budget** | "the browser imn browser is not smooth it still very laggy" — the third cause of the same complaint and the only one that is arithmetic rather than scheduling (§COMMCALC-27 input, §COMMCALC-28 poll cadence both still hold). The live view pays one round trip per frame and the frame was 1366x900 at JPEG quality 55 = 154 KB, ~90 KB gzipped, so at a 250ms round trip plus a 300ms gap it delivered 1.8 frames a second. Measured, not guessed: 1024x674 at quality 40 is 72 KB (~40 KB on the wire), 2.8x the frames for the same bandwidth, and the gap came down to 150ms with it. Shrinking the stream provably moves no click because `live_frame.frame_geometry` reads the frame's METADATA (§COMMCALC-47), never the image's pixel size. A measurement also DISPROVED the announced plan: gzip erases the base64 tax, so serving the JPEG as bytes is 99-103% of today's wire bytes — that code was reverted rather than shipped. Still owed: one long-lived connection instead of a round trip per frame. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -26350,6 +26351,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-60 | commcalc |
 | COMMCALC-61 | commcalc |
 | COMMCALC-62 | commcalc |
+| COMMCALC-63 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -46137,6 +46139,109 @@ Cross-references: §COMMCALC-61 (counting the empty control, which produced this
 honest-zero ladder) · §19.18 (one fact, one home, dereferenced — never copied).
 
 
+
+## §COMMCALC-63. ONE FRAME'S COST IS A DECLARED, MEASURED BUDGET — the third cause of "the live view is laggy" (owner report 2026-11-10)
+
+Owner, verbatim, three weeks after the first two causes shipped: *"the browser imn browser is not
+smooth it still very laggy"*.
+
+### COMMCALC-63.1 WHY THIS IS A THIRD CAUSE AND NOT A RELAPSE
+
+The first two causes were about SCHEDULING and both still hold:
+
+- **§COMMCALC-27** — the operator's input was serviced behind a frame tick and charged for the
+  previous click's ~750ms verification. Fixed; `operator_input_pending` is still the one home.
+- **§COMMCALC-28** — the page polled frames on a fixed-rate `setInterval`, so polls overlapped
+  permanently. Fixed; `pollFrames` is still the one issuer and still times its gap from the moment a
+  response SETTLES.
+
+What was left is ARITHMETIC, and no amount of scheduling fixes it. The view pays **one HTTP round
+trip per frame**, and the frame it carried was 1366×900 at JPEG quality 55. Measured on a real
+Chromium screencast of a dense portal report page (a filter bar plus a 40×9 grid), median of the
+frames a scroll produces:
+
+| stream settings | JPEG | shipped (base64-in-JSON) | gzipped on the wire |
+|---|---|---|---|
+| quality 55 @ 1366×900 | 154 KB | 205 KB | ~90 KB |
+| quality 40 @ 1366×900 | 126 KB | — | — |
+| quality 55 @ 1100×724 | 96 KB | — | — |
+| **quality 40 @ 1024×674** | **72 KB** | 96 KB | **~40 KB** |
+| quality 30 @ 1024×674 | 61 KB | — | — |
+
+Delivered frames per second is `1000 / (gap + round trip)`. At a 250ms round trip the old 300ms gap
+gave **1.8 frames a second** at ~350 KB/s of sustained download. That is the lag the owner can see.
+
+> **THE CLASS, not the instance: a stream's picture size and quality are a BUDGET, and a budget is
+> declared, measured and locked — never a literal left at whatever the first implementation typed.**
+
+### COMMCALC-63.2 A MEASUREMENT THAT DISPROVED THE PLAN, recorded so nobody repeats it
+
+The first plan was to stop shipping the JPEG as base64 inside JSON and serve it as bytes, announced
+as a ~25% saving. **It was measured and it is not one.** `main.py` installs
+`GZipMiddleware(minimum_size=1024)`, and gzip erases the base64 tax almost exactly: a 73 KB frame
+gzips to **41 KB as raw bytes** and to **39 KB as base64-in-JSON** — binary is 99–103% of today's
+wire bytes. The already-written binary endpoint was **reverted rather than shipped**.
+
+A second assumption died the same way: gzip is not wasted CPU on a JPEG here. It takes that 73 KB
+frame to 41 KB for **2.2 ms** of CPU, so it stays on.
+
+### COMMCALC-63.3 WHAT CHANGED
+
+- `live_login._SCREENCAST_QUALITY` 55 → **40**, `_SCREENCAST_MAX_W` 1366 → **1024**,
+  `_SCREENCAST_MAX_H` 900 → **674**, with the measurement table above recorded at the declaration.
+  1024×674 at quality 40 is **2.8× the frames for the same bandwidth**.
+- `email-imports/page.tsx`: `LIVE_FRAME_GAP_MS` 300 → **150**, `LIVE_FRAME_NUDGE_MS` 120 → **90**.
+  Safe to shorten only because §COMMCALC-28's scheduler times the gap from the moment a response
+  settles, so a slow hop still stretches the cadence instead of stacking polls — and because the
+  frames are now under half the bytes, the shorter gap asks no more of the connection than the
+  longer one did. ~1.8 → ~2.5 delivered frames a second at the same round trip.
+
+### COMMCALC-63.4 THE ONE THING THIS MUST NOT DO — and why it cannot
+
+Shrinking the streamed picture must not move the operator's click. It cannot, and that is a design
+fact rather than luck: **`live_frame.frame_geometry` (§COMMCALC-47) derives the page's geometry from
+the frame's own METADATA** — `deviceWidth` / `deviceHeight` in DIP of the visible page, divided by
+`pageScaleFactor` — and the image's pixel size is not an input to the translation at all.
+`live_frame` carries no copy of the stream budget, so the two cannot drift.
+
+**THE TRAP, locked against:** `live_frame.FALLBACK_VIEWPORT` is the **context's** window
+(`vidapay_sweep._new_context`, 1366×900), used only when a frame carries no metadata. Aligning it
+with the new screencast cap would move every no-metadata click. The cap also keeps the context's
+aspect ratio (1024/674 = 1.519 vs 1366/900 = 1.518), so Chrome adds no letterbox strip.
+
+### COMMCALC-63.5 EVERY TENANT
+
+The budget is a POLICY — a rate and a size — not a tenant's vocabulary, so a house constant is the
+right home and the §COMMCALC-49.10 trap does not apply: nothing here names a tenant, a carrier or a
+portal, and every live login on every tenant gets the same stream.
+
+### COMMCALC-63.6 LOCKED
+
+`backend/harness_live_input_latency.py` **§L — 184 checks in the file now**, DB-free and
+browser-free, already wired into the `carrier-vocab-guard` workflow. §L fails the build if the
+quality or either cap leaves the measured budget in either direction (too expensive is the defect,
+too cheap is unreadable), if the cap stops matching the context's aspect ratio, if
+`FALLBACK_VIEWPORT` is aligned with the cap, if the screencast call stops dereferencing the
+constants, if a second copy of the budget appears in `live_frame`, if the page's gap leaves the
+budget the smaller frame paid for, or if either declaration stops recording that the numbers were
+measured. Armed negative controls assert the pre-change values go red.
+
+### COMMCALC-63.7 WHAT THIS DOES NOT FIX, stated plainly
+
+The view still pays **one round trip per frame**. The expensive half of the fix is not paying it at
+all — pushing frames down one long-lived connection with today's polling kept as an automatic
+fallback. That is not in this section, and the blocker is known and named:
+`main._proxy_browser_work` buffers whole responses (`r.content`) and would need
+`client.stream(...)` + a `StreamingResponse`.
+
+Also not measured from here: this container cannot reach `api.metricspro.tech` or
+`app.metricspro.tech`, so the arithmetic is certain but whether it is the WHOLE remaining lag is the
+owner's to report after the deploy.
+
+Cross-references: §COMMCALC-27 (the operator's input leads the tick) · §COMMCALC-28 (a poll's
+cadence is the gap between its RESPONSES) · §COMMCALC-31 (detection yields to the operator) ·
+§COMMCALC-47 (where a click on the streamed image lands — the geometry's one home) · §19.18 (one
+fact, one home, dereferenced — never copied).
 ## §COMMCALC-60. A FIGURE THE FEED SENDS THAT NOTHING READS IS NOT A FIGURE THIS PLATFORM HAS — one home for which store-DLAR column is which metric (owner ask 2026-11-10)
 
 Owner, verbatim: *"Use those other 21 columns and make them a part of the kpi reporting also filtered
