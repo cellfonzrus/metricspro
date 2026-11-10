@@ -62,6 +62,7 @@ ADAPTER_MODULES = (
     "app.modules.commcalc.merchant_portal_sweep",     # card settlement + funding (mig 955)
     "app.modules.commcalc.pos_report_sweep",          # the POS report of declared categories (mig 1078)
     "app.modules.commcalc.supplier_invoice_sweep",    # what a supplier billed us (§COMMCALC-36)
+    "app.modules.commcalc.processor_backoffice_sweep",  # a processor's per-store back office (§COMMCALC-59)
 )
 
 REQUIRED = ("connector_keys", "portal_descriptor", "report_specs", "ingest_report")
@@ -69,6 +70,16 @@ REQUIRED = ("connector_keys", "portal_descriptor", "report_specs", "ingest_repor
 
 class PortalPullError(Exception):
     """A named, operator-actionable portal failure. Never carries a credential."""
+
+
+def _backfill():
+    """The backfill one home, or None. Imported lazily because it dereferences THIS module's ceiling —
+    a module-level import either way would be a cycle, and a copy of that ceiling would be a drift."""
+    try:
+        from app.modules.commcalc import portal_backfill as bf
+        return bf
+    except Exception:
+        return None
 
 
 def _vp():
@@ -736,7 +747,18 @@ def pull_reports_on_page(client, org_id, src_row, page, should_stop=None):
     if not specs:
         return {"ok": False, "delivered": False, "rows_ingested": 0,
                 "error": ("No reports are enabled for this portal source. " + setup_hint(mod, src_row)).strip()}
+    # THE WINDOW THIS PULL COVERS. The recent window is still the default and still the clamp; a
+    # source that DECLARED where its history starts is handed the oldest span it still owes instead
+    # (`portal_backfill`, index §COMMCALC-59 — one home, imported here because the window is computed
+    # in exactly one place and a second place to widen a pull is the duplicate defect). Guarded: with
+    # nothing declared, no backlog table, or nothing owed, this is byte-identical to before.
     d_from, d_to = date_range(src_row, proc)
+    bf, is_backfill = _backfill(), False
+    if bf is not None:
+        try:
+            d_from, d_to, is_backfill = bf.window_for(client, org_id, src_row, (d_from, d_to))
+        except Exception:
+            d_from, d_to = date_range(src_row, proc)
     results, total, unreachable = [], 0, []
     with tempfile.TemporaryDirectory() as tmp:
         for spec in specs:
@@ -751,7 +773,22 @@ def pull_reports_on_page(client, org_id, src_row, page, should_stop=None):
                 unreachable.append(spec["label"])
             results.append(res)
             total += res.get("rows_ingested") or 0
-    return summarize(results, total, d_from, d_to, unreachable)
+    out = summarize(results, total, d_from, d_to, unreachable)
+    # RECORD WHAT HAPPENED TO A HISTORY WINDOW, so the next run asks for the next one and a window
+    # that failed is retried rather than skipped. The state is DERIVED from this very answer, never
+    # asserted beside it. Best-effort: a backlog that cannot be written must not fail landed rows.
+    if bf is not None:
+        try:
+            if is_backfill:
+                out["backfill"] = bf.record(client, org_id, src_row.get("id"), (d_from, d_to), out)
+            prog = bf.progress_for(client, org_id, src_row)
+            if prog:
+                out["backfill_progress"] = prog
+                if prog.get("note"):
+                    out["status"] = (out.get("status") or "") + " " + prog["note"]
+        except Exception:
+            pass
+    return out
 
 
 def specs_for(src_row, proc=None):

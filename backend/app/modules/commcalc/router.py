@@ -41108,7 +41108,12 @@ _SOURCE_FIELDS = ["distributor_id", "carrier_id", "processor", "label", "portal_
                   # totp_secret is WRITE-ONLY: it is accepted here but lives in _SOURCE_SECRETS, so it
                   # is stripped from every read (has_totp + an opaque mask is all the UI ever sees).
                   "settlement_role", "portal_reports", "portal_calibration", "portal_window_days",
-                  "session_warn_hours", "totp_secret"]
+                  "session_warn_hours", "totp_secret",
+                  # A login can belong to a STORE, and a pull can owe HISTORY (mig 1116, owner
+                  # 2026-11-10, index §COMMCALC-59). store_code is what places every row pulled
+                  # through a per-store login; history_from / history_chunk_days are the declaration
+                  # `portal_backfill` reads. All three are config, per login — RULE TWO.
+                  "store_code", "history_from", "history_chunk_days"]
 # Columns that never leave the backend (credentials + serialized browser sessions).
 _SOURCE_SECRETS = ("password", "session_state", "pending_state",
                    # The optional authenticator-app (TOTP) shared secret (mig 955). Same posture as the
@@ -41233,6 +41238,29 @@ async def _supplier_invoice_scraper(org_id, src_row):
 from app.modules.commcalc.supplier_invoice_sweep import (  # noqa: E402
     CONNECTOR as _SUPPLIER_INVOICE_CONNECTOR)
 _SOURCE_SCRAPERS[_SUPPLIER_INVOICE_CONNECTOR] = _supplier_invoice_scraper
+
+
+async def _processor_backoffice_scraper(org_id, src_row):
+    """_SOURCE_SCRAPERS handler for a PAYMENT PROCESSOR'S PER-STORE BACK OFFICE (owner 2026-11-10):
+    the processor issues one login per store, and every report it publishes is pulled per store for
+    the processor reconciliation — from the date the login's history is declared to start, and daily
+    after that.
+
+    Same durable-session posture as every other portal here: a human satisfies the portal's second
+    factor ONCE on the live-login screencast, the authenticated storage_state is persisted, and this
+    scheduled pull rides it; a rejected session raises VidaPayAuthError, which run_data_source turns
+    into an actionable needs_2fa prompt rather than a hard error. The portal's address, its report
+    list, each report's filters and landing target, this login's STORE and where its history starts
+    are all declared on the source row (index §COMMCALC-59)."""
+    from app.modules.commcalc import processor_backoffice_sweep as pbs
+    from fastapi.concurrency import run_in_threadpool
+    return await run_in_threadpool(pbs.run_backoffice_sweep, sb(), org_id, dict(src_row or {}))
+
+
+# Named ONCE, by its module — never re-spelled here (index §COMMCALC-59).
+from app.modules.commcalc.processor_backoffice_sweep import (  # noqa: E402
+    CONNECTOR as _PROCESSOR_BACKOFFICE_CONNECTOR)
+_SOURCE_SCRAPERS[_PROCESSOR_BACKOFFICE_CONNECTOR] = _processor_backoffice_scraper
 
 
 def _strip_source_pw(row, policy_rows=None, scope_ctx=None):
@@ -41686,6 +41714,9 @@ class SaveDataSourceIn(LaxModel):
     oob_code_regex: Any = None
     oob_code_length: Any = None
     oob_max_age_seconds: Any = None
+    store_code: Any = None
+    history_from: Any = None
+    history_chunk_days: Any = None
 
 
 @router.put("/data-sources")
@@ -41718,6 +41749,10 @@ def save_data_source(body: SaveDataSourceIn, org_id: str = ORG_ID, authorization
             row["oob_max_age_seconds"] = 300
     if "oob_enabled" in row:
         row["oob_enabled"] = bool(row.get("oob_enabled"))
+    # The store this login belongs to and where its history starts (mig 1116). Cleaned by their ONE
+    # home: a cleared date field arrives as "" and a DATE column answers that with a 500.
+    from app.modules.commcalc import portal_backfill as _bfill
+    row.update(_bfill.clean_declaration(row))
     # SSRF GUARD (finding C4, 2026-08-06). The line that used to live here —
     #     row["portal_url"] = pu if "://" in pu else "https://" + pu.lstrip("/")
     # — only ever ADDED a missing scheme (Playwright rejects a bare host with "Cannot navigate to
@@ -41736,15 +41771,38 @@ def save_data_source(body: SaveDataSourceIn, org_id: str = ORG_ID, authorization
             except _url_guard.UnsafeUrlError as e:
                 raise HTTPException(400, e.message)
     client = sb()
+    # A SAVE MUST NOT FAIL BECAUSE THE DATABASE IS BEHIND THE CODE. `_SOURCE_FIELDS` has grown with
+    # every additive migration since 083 and the form posts every field this build knows, so ONE
+    # column whose migration has not been applied yet makes PostgREST refuse the WHOLE row
+    # (PGRST204) — editing ANY login, for EVERY tenant, would break between a merge and its
+    # migration. That is the §PAYABLES-01 class ("the code is ahead of the production schema"), and
+    # its column arithmetic is DEREFERENCED from that one home rather than copied here. What could
+    # not be stored is NAMED back to the caller, never dropped in silence: a declaration that did not
+    # land must not read as a declaration the operator never made (owner 2026-10-30).
+    from app.modules.payables import write_shape as _ws
+    unstorable = _ws.missing_columns(row, _ws.live_columns(client, "data_source"))
+    for _col in unstorable:
+        row.pop(_col, None)
+
+    def _saved(sid):
+        out = {"ok": True, "id": sid}
+        if unstorable:
+            out["unstorable"] = unstorable
+            out["note"] = (
+                "Saved, but %d setting(s) could not be stored because the database is behind the "
+                "code: %s. Apply the migration that adds those columns, then save again."
+                % (len(unstorable), ", ".join(unstorable)))
+        return out
+
     try:
         if body.id:
             client.schema("commcalc").table("data_source").update(_psec.seal_row("data_source", row))\
                 .eq("id", body.id).eq("org_id", org_id).execute()
-            return {"ok": True, "id": body.id}
+            return _saved(body.id)
         row["org_id"] = org_id
         r = client.schema("commcalc").table("data_source").insert(
             _psec.seal_row("data_source", row)).execute()
-        return {"ok": True, "id": (r.data or [{}])[0].get("id")}
+        return _saved((r.data or [{}])[0].get("id"))
     except Exception as e:
         raise HTTPException(400, f"Could not save — is migration 083 applied? {e}")
 

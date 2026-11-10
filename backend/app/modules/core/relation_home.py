@@ -212,6 +212,7 @@ SCHEMA_OF = {
     "po_vendor": "commcalc",
     "portal_block_marker": "commcalc",
     "portal_metric_day": "commcalc",
+    "portal_pull_backlog": "commcalc",
     "pos_builtin_daily_sales": "commcalc",
     "pos_builtin_sales": "commcalc",
     "pos_profile": "commcalc",

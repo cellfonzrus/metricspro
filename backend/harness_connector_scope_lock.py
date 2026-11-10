@@ -322,6 +322,9 @@ DISPATCHED_KEYS = frozenset({
                            #   — the first feed to ship its door in the SAME change as its dispatcher,
                            #   which is what this ratchet exists to make the cheap path)
     "supply_vendor",       # = supply.portal.SUPPLY_PROCESSOR (§36 / §51, registered 2026-10-15)
+    "processor_backoffice",  # = processor_backoffice_sweep.CONNECTOR (§COMMCALC-59, registered
+                           #   2026-11-10 — a processor's back office with ONE LOGIN PER STORE; door
+                           #   (mig 1117) and dispatcher in the same PR)
     "total_access", "vidapay",      # the master-agent portal under both its names
 })
 
