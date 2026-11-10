@@ -212,6 +212,56 @@ console.log("§G  the month picker's shape (the sibling caller) goes through the
   ok("G1 'June- 26' is reached from 'June 26'", r.ok === true && hosts[0].selected === "June- 26");
 }
 
+console.log("§H  a picker that exists but has not filled in is NOT absent (COMMCALC-61)");
+{
+  // THE LIVE SHAPE, 2026-11-10 16:30, read off production: the dealer list had loaded and the
+  // filter control had not, so the ONLY picker carrying anything was the account selector - and
+  // the empty one was skipped entirely, so the operator was told the panel had one control.
+  const hosts = [
+    new FakeHost({
+      id: "DealerList", cls: "jqx-combobox jqx-combobox-state-normal", widget: "jqxComboBox",
+      items: ["474517 - Passaic wireless 2022 LLC(230)", "498001 - Aureon Wireless Inc."],
+      selected: null,
+    }),
+    new FakeHost({
+      id: "SummarizeBy", cls: "jqx-combobox jqx-combobox-state-normal", widget: "jqxComboBox",
+      items: [],                                   // present on the page, not yet populated
+      selected: null,
+    }),
+  ];
+  const r = run(hosts, ["Daily"]);
+  ok("H1 the empty control is COUNTED as a picker", r.pickers === 2, JSON.stringify(r));
+  ok("H2 …and reported as not ready rather than skipped", r.ready === 1 && r.empty === 1);
+  ok("H3 the candidates the selectors matched are reported too", r.candidates === 2);
+  ok("H4 the sentence says one is still empty", /still empty/.test(r.why || ""), r.why);
+  ok("H5 and it is NOT the 'no picker at all' sentence", !/no picker/.test(r.why || ""));
+}
+{
+  // Every picker still empty: the page was read before it finished building. Its own sentence,
+  // because the fix is to wait, not to widen the scan.
+  const hosts = [new FakeHost({
+    id: "SummarizeBy", cls: "jqx-combobox-state-normal", widget: "jqxComboBox",
+    items: [], selected: null,
+  })];
+  const r = run(hosts, ["Daily"]);
+  ok("H6 a wholly unfilled panel says it was read too early",
+     r.ok === false && /finished filling/.test(r.why || ""), r.why);
+  ok("H7 …and that is a third sentence, distinct from the other two",
+     !/none offering it/.test(r.why || "") && !/no picker was found/.test(r.why || ""));
+}
+{
+  // The empty control must not poison a panel where the value IS available.
+  const hosts = [
+    new FakeHost({id: "Empty", cls: "jqx-combobox-state-normal", widget: "jqxComboBox",
+                  items: [], selected: null}),
+    new FakeHost({id: "SummarizeBy", cls: "jqx-combobox-state-normal", widget: "jqxComboBox",
+                  items: ["Daily", "Weekly"], selected: null}),
+  ];
+  const r = run(hosts, ["Daily"]);
+  ok("H8 a ready picker is still driven with an empty one beside it",
+     r.ok === true && hosts[1].selected === "Daily");
+}
+
 console.log("");
 if (failed) { console.log(`${failed} check(s) FAILED`); process.exit(1); }
 console.log("all checks OK");
