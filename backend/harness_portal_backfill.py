@@ -1,4 +1,4 @@
-"""Proof + LOCK: a portal pull owes HISTORY in ONE home, and a login's STORE is one fact (index §COMMCALC-57).
+"""Proof + LOCK: a portal pull owes HISTORY in ONE home, and a login's STORE is one fact (index §COMMCALC-67).
 
 WHAT THIS PROVES. The pure rules of `commcalc/portal_backfill.py` — chunking a declared history into
 windows, which windows are still owed, which are stuck, and the outcome word derived from what the

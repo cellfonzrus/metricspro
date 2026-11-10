@@ -33295,7 +33295,7 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     catalog = _target_catalog(client, org_id)
     tlines_by_store = _target_lines_by_store(_target_lines(client, org_id, cperiod))
     declared_by_store = (_declared_by_store_day_for_targets(
-        client, org_id, start, end - _timedelta(days=1), catalog) if catalog else {{}})
+        client, org_id, start, end - _timedelta(days=1), catalog) if catalog else {})
 
     out = []
     for s in roster:
@@ -38165,7 +38165,7 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
     catalog = _target_catalog(client, org_id)
     tlines_by_store = _target_lines_by_store(_target_lines(client, org_id, period))
     declared_by_store = (_declared_by_store_day_for_targets(
-        client, org_id, start, end - _timedelta(days=1), catalog) if catalog else {{}})
+        client, org_id, start, end - _timedelta(days=1), catalog) if catalog else {})
 
     for s in stores:
         code = str(s.get('store_code', '') or '').strip()
@@ -41040,7 +41040,7 @@ _SOURCE_FIELDS = ["distributor_id", "carrier_id", "processor", "label", "portal_
                   "settlement_role", "portal_reports", "portal_calibration", "portal_window_days",
                   "session_warn_hours", "totp_secret",
                   # A login can belong to a STORE, and a pull can owe HISTORY (mig 1116, owner
-                  # 2026-11-10, index §COMMCALC-57). store_code is what places every row pulled
+                  # 2026-11-10, index §COMMCALC-67). store_code is what places every row pulled
                   # through a per-store login; history_from / history_chunk_days are the declaration
                   # `portal_backfill` reads. All three are config, per login — RULE TWO.
                   "store_code", "history_from", "history_chunk_days"]
@@ -41181,13 +41181,13 @@ async def _processor_backoffice_scraper(org_id, src_row):
     scheduled pull rides it; a rejected session raises VidaPayAuthError, which run_data_source turns
     into an actionable needs_2fa prompt rather than a hard error. The portal's address, its report
     list, each report's filters and landing target, this login's STORE and where its history starts
-    are all declared on the source row (index §COMMCALC-57)."""
+    are all declared on the source row (index §COMMCALC-67)."""
     from app.modules.commcalc import processor_backoffice_sweep as pbs
     from fastapi.concurrency import run_in_threadpool
     return await run_in_threadpool(pbs.run_backoffice_sweep, sb(), org_id, dict(src_row or {}))
 
 
-# Named ONCE, by its module — never re-spelled here (index §COMMCALC-57).
+# Named ONCE, by its module — never re-spelled here (index §COMMCALC-67).
 from app.modules.commcalc.processor_backoffice_sweep import (  # noqa: E402
     CONNECTOR as _PROCESSOR_BACKOFFICE_CONNECTOR)
 _SOURCE_SCRAPERS[_PROCESSOR_BACKOFFICE_CONNECTOR] = _processor_backoffice_scraper

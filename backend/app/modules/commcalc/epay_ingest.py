@@ -117,7 +117,7 @@ def resolve_stores(rows, terminal_to_store, login_store_code=None):
     Returns the set of terminal_ids that could NOT be resolved (need a store mapping).
 
     `login_store_code` is THE STORE WHOSE OWN LOGIN THESE ROWS WERE PULLED THROUGH (added 2026-11-10 for
-    the per-store back-office feed, index §COMMCALC-57). A row pulled through a store's login belongs to
+    the per-store back-office feed, index §COMMCALC-67). A row pulled through a store's login belongs to
     that store, which is a fact the terminal registry cannot state and this function previously had no way
     to be told. The DECLARED registry still wins where it has an answer — a login is what answers when it
     has none. Callers that pull through a company-wide login pass nothing and are unchanged."""

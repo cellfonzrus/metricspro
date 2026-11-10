@@ -113,6 +113,21 @@ jobs:
         working-directory: mobile
         run: npm run test
 
+  action-plan-tiles-lock:
+    # The design lock for the Daily Action Plan's tiles (index §COMMCALC-57): ONE grouping of the
+    # verdicts the endpoint already reached, over the vocabulary the TENANT declared, with
+    # "not measured" surviving into the tile and into the mailed copy. Wired here on the day the
+    # harness was written — a harness no workflow runs is a file, not a gate.
+    name: One tile fold, the tenant's own metrics (lock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: harness_action_plan_tiles
+        working-directory: backend
+        run: python harness_action_plan_tiles.py
+
   punch-geofence-lock:
     # The design-fix lock for the punch geofence (index §STOREOPS-14): one distance calculation, one
     # store pin, one column home, and a punch that is flagged rather than refused. Wired here on the
@@ -144,7 +159,7 @@ jobs:
         run: python harness_geo_retention_lock.py
 
   portal-backfill-lock:
-    # The design-fix lock for the portal pull backlog (index §COMMCALC-57): one home for which span a
+    # The design-fix lock for the portal pull backlog (index §COMMCALC-67): one home for which span a
     # login still owes, one window ceiling dereferenced from the pull loop, one natural key matching
     # migration 1116, and one fact for "a row pulled through a store's login belongs to that store".
     # Wired on the day the harness was written — a harness no workflow runs is a file, not a gate.

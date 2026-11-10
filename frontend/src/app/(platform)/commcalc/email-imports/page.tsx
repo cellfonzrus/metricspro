@@ -1215,7 +1215,7 @@ export default function EmailImportsPage() {
                 <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="https://…" value={srcDraft.portal_url || ''} onChange={e => setSrcDraft({ ...srcDraft, portal_url: e.target.value })} /></label>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Account ID<br />
                 <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="Processor Account ID" value={srcDraft.account_id || ''} onChange={e => setSrcDraft({ ...srcDraft, account_id: e.target.value })} /></label>
-              {/* A LOGIN CAN BELONG TO A STORE, AND CAN BE ASKED FOR HISTORY (index §COMMCALC-57,
+              {/* A LOGIN CAN BELONG TO A STORE, AND CAN BE ASKED FOR HISTORY (index §COMMCALC-67,
                   mig 1116). Both are per-login config: a portal that issues one login per store makes
                   the login itself the store attribution, and a login that declares where its history
                   starts is caught up one window at a time by the daily pull. Blank = today's
