@@ -52,6 +52,9 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 
 from app.core.database import get_supabase
+# ONE HOME EACH for the two halves of "our schema is behind the feed" (index §4b.1 / §19.19).
+from app.core import column_tolerant as _ct
+from app.modules.commcalc.safe_replace import safe_replace as _safe_replace
 
 BUSINESS_TZ = ZoneInfo("America/New_York")   # house-wide default when a tenant hasn't set its own
 FEED_KEY = "pos_internal_daily_sales"
@@ -243,38 +246,55 @@ def _fetch_sale_rows(org_id: str, utc_start: str, utc_end: str):
     return out
 
 
-def _drop_absent_columns(table: str, payloads: list, columns=("tax",)):
+def _drop_absent_columns(table: str, payloads: list, columns=None):
     """Remove keys the target table does not have yet, so the sync degrades instead of failing.
 
-    The owner applies migrations by hand, so this module can ship BEFORE mig 991 adds `tax` to the
-    pos_builtin_* stream tables. Without this probe, the first sync after deploy would raise on an
-    unknown column — and `_replace_period` deletes the period before it inserts, so the failure mode
-    would be a WIPED period, not a no-op. One cheap select per column decides it; the column is
-    reported as skipped rather than silently dropped."""
+    DEREFERENCED, NOT RE-IMPLEMENTED (2026-11-10). This used to carry its own per-column probe and a
+    hard-coded list of the one column it knew about (`("tax",)`), which is the §19.18 copy: the same
+    question — "which columns does this table actually have" — answered privately beside the one
+    home that answers it for every reader (`core.column_tolerant`). It now asks that home, and it
+    asks about EVERY key the payload carries rather than one remembered column, because the column
+    this module cannot write next is by definition the one nobody has thought of yet.
+
+    `columns` narrows the probe when a caller wants it; left alone, every key in the payload is
+    probed. The WARN and the `(payloads, missing)` shape are unchanged, so no caller moves.
+
+    The comment this replaces said the quiet part out loud — *"`_replace_period` deletes the period
+    before it inserts, so the failure mode would be a WIPED period, not a no-op"* — and then worked
+    around that ordering for one column instead of fixing it. On 2026-11-10 the same ordering, in
+    the store-DLAR sweep, cost a month of carrier data. `_replace_period` is wired to
+    `safe_replace` below, so the ordering is fixed for every column, thought of or not.
+    """
     if not payloads:
         return payloads, []
-    missing = []
-    for col in columns:
-        if not any(col in p for p in payloads):
-            continue
-        try:
-            sb().schema("commcalc").table(table).select(col).limit(1).execute()
-        except Exception:
-            missing.append(col)
-    if not missing:
-        return payloads, []
-    print(f"WARN {table} is missing column(s) {missing} — syncing without them (run mig 991?)")
-    return [{k: v for k, v in p.items() if k not in missing} for p in payloads], missing
+    keys = list(columns) if columns else sorted({k for p in payloads for k in (p or {})})
+    present = _ct.writable_columns(
+        lambda: sb().schema("commcalc").table(table),
+        lambda q: q.eq("org_id", (payloads[0] or {}).get("org_id")),
+        keys)
+    out, missing = _ct.drop_absent(payloads, present)
+    if missing:
+        print(f"WARN {table} is missing column(s) {missing} — syncing without them "
+              f"(a migration is pending)")
+    return out, missing
 
 
 def _replace_period(table: str, org_id: str, period_label: str, payloads: list):
-    """Delete-by-period + insert on ONE table. Callers guarantee payloads is non-empty
-    (the empty-abort guard lives in sync_period)."""
-    client = sb()
-    client.schema("commcalc").table(table).delete() \
-        .eq("org_id", org_id).eq("period", period_label).execute()
-    for chunk in _chunked(payloads, 500):
-        client.schema("commcalc").table(table).insert(chunk).execute()
+    """Replace ONE table's rows for (org, period). Callers guarantee payloads is non-empty (the
+    empty-abort guard lives in sync_period).
+
+    NO EXISTING ROW IS REMOVED UNTIL THE REPLACEMENT HAS LANDED (index §19.19). This was
+    delete-then-insert, and `_drop_absent_columns` above existed only to stop one known column from
+    reaching that delete — a guard around the symptom. A failed insert now leaves the period exactly
+    as it was, for ANY reason the insert can fail: an unknown column, a type mismatch, a dropped
+    connection. `safe_replace` raises `ReplaceFailed` carrying whether the previous load survived."""
+    res = _safe_replace(
+        sb(), table, list(payloads),
+        (lambda q, _o=org_id, _p=period_label: q.eq("org_id", _o).eq("period", _p)),
+        schema="commcalc", label=f"pos_feed {table} {period_label}")
+    if res.get("warning"):
+        print(f"WARN safe_replace({table}): {res['warning']}")
+    return res
 
 
 def _ensure_registrations(org_id: str):

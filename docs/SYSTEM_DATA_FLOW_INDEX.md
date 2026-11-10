@@ -202,6 +202,7 @@ Primary code homes:
 | COMMCALC-60 | **A figure the feed sends that nothing reads is not a figure this platform has** | "Use those other 21 columns and make them a part of the kpi reporting also filtered by the kpi and out regular filters and send option". The sweep's own diagnostic had been naming 21 arriving-but-unread store columns every day for weeks, and one of them was the new spelling of a column that had been landing empty since the source renamed it. Reading one meant editing FOUR lists, and the last of them — a hand-typed array in the page — decided what a person could see, so a column could be declared, landed and invisible. |
 | COMMCALC-61 | **A control that is present but not filled in is not absent** | The first run on §COMMCALC-58's new wording (2026-11-10 16:30) reported that the panel had ONE picker, none offering Daily — and listed the dealer/account names. The filter controls had not populated yet, and the scan shipped that morning SKIPPED a picker whose `getItems` came back empty, so a control the page had already built was neither counted nor mentioned: present-but-not-ready was folded into absent. Absent, not-yet-ready and present-but-not-offering are three facts needing three opposite fixes; the scan now counts `candidates`/`pickers`/`ready`/`empty` and says which of the three it saw, and waits up to 4 looks × 1.5s while the panel is still building (never on a ready picker, never on a success), reporting how long it waited. The honest-zero ladder is untouched. |
 | COMMCALC-62 | **The wait follows progress, and no one control may drown the report** | §COMMCALC-61's first tick (2026-11-10 18:30) reported "3 picker(s) with options, none offering it (and 10 still empty) (looked 4 times over 4.5s)" — so the panel carries THIRTEEN controls, not the one reported at 16:30, and ten were still unfilled when the guessed 4-look budget expired: the budget decided the answer rather than measuring it. Worse, `offered` merged every label on the panel and one control is the ~480-account dealer selector, so it filled the sentence and the 600-char recorder elided the two other loaded controls — which is why the panel's real shape took three rounds to see. The wait now follows PROGRESS (`PICKER_PATIENCE` stalls, `PICKER_DEADLINE_MS` ceiling; `PICKER_LOOKS` deleted) and says when a panel stopped filling; each control reports its own identity, real size and a bounded sample through the new one home `describe_panel`. Honest zero untouched. |
+| COMMCALC-63 | **A period is never emptied by a column the schema does not have yet** | The store-DLAR sweep was taught 20 columns the portal had been sending for weeks (§COMMCALC-60); the hand-applied migration that creates them had not run; PostgREST refused the whole insert — and the sweep deletes the period before it inserts, so November's 28 store rows were gone. Both halves already had an answer somewhere in this repo and neither was wired to this caller: `core.column_tolerant` had governed READS since 2026-09-22, and `safe_replace` was written in August 2026 for this exact delete-then-insert failure. A registry nobody reads is not a fix (§19.18), and the file that worked around the ordering privately for one column said so in its own docstring. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -26350,6 +26351,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-60 | commcalc |
 | COMMCALC-61 | commcalc |
 | COMMCALC-62 | commcalc |
+| COMMCALC-63 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -46136,6 +46138,140 @@ Cross-references: §COMMCALC-61 (counting the empty control, which produced this
 §COMMCALC-58 (the one home `pick_jqx_item`) · §COMMCALC-56 (verified from the control; the
 honest-zero ladder) · §19.18 (one fact, one home, dereferenced — never copied).
 
+
+## §COMMCALC-63. A PERIOD IS NEVER EMPTIED BY A COLUMN THE SCHEMA DOES NOT HAVE YET (regression 2026-11-10)
+
+### COMMCALC-63.1 WHAT ACTUALLY HAPPENED, with the clock
+
+§COMMCALC-60 declared the 20 store columns the carrier portal had been sending that nothing read.
+The migration that CREATES those columns (`1118`) is applied by hand, as every migration here is,
+and had not been applied when the code deployed.
+
+```
+2026-11-10 12:00:33 UTC  sweep succeeded — wrote November 2026's 28 raw_dlar_store rows
+2026-11-10 17:16    UTC  §COMMCALC-60 merged and deployed
+2026-11-10 18:30:44 UTC  sweep FAILED —
+                         PGRST204: Could not find the 'activations_total' column of
+                                   'raw_dlar_store' in the schema cache
+```
+
+The write was `delete(period)` then `insert(rows)`. The delete committed. The insert never landed.
+November's store grain went to **zero rows**, under a red status that named a column rather than the
+loss. The rep grain survived only because the store table is written first and the exception stopped
+the run before it reached the rep table — luck, not design.
+
+Recoverable, and recovered: the DLAR is month-to-date cumulative and re-pulled every tick, so the
+next successful sweep re-lands the month in full. The *defect* is not recoverable by waiting.
+
+### COMMCALC-63.2 THE CLASS, not the instance
+
+Two general facts were wrong, and **both already had an answer in this repository that this caller
+did not read** — which §19.18 names as not a fix at all:
+
+| the fact | the one home | written | wired to this sweep |
+|---|---|---|---|
+| which columns this table HAS | `app/core/column_tolerant.py` | 2026-09-22 (§4b.1) | **no** — reads only |
+| no row is removed until the replacement lands | `commcalc/safe_replace.py` | 2026-08-09 (§19.19) | **no** |
+
+`safe_replace` was written for this exact failure: the April 2026 comp upload mapped fine, the
+insert died on row 0, and the month was left with zero rows — *"every retry of a bad file destroyed
+the month again"*, in its own docstring. Fifteen months later a sibling of that path did the same
+thing to a different month because it had never been connected.
+
+The column rule was worse than unwired. `pos/commcalc_feed.py` carried a **private copy** of it —
+its own per-column probe over one hard-coded column name — and its docstring stated the trap
+verbatim: *"`_replace_period` deletes the period before it inserts, so the failure mode would be a
+WIPED period, not a no-op."* It guarded the symptom for the one column somebody had thought of and
+left the ordering alone.
+
+### COMMCALC-63.3 THE RULE NOW, both halves
+
+- **COLUMN.** `column_tolerant.writable_columns(table, scope, columns)` answers which of those
+  columns the table has, **before anything is written** — one `select("*")` when the scope has a row
+  (its keys ARE the columns, NULLs included), the per-column probe when it does not, the same two
+  strategies `read_row` already chose between. `drop_absent(rows, present)` strips what is missing
+  and **returns the names**. Never raises: an unreadable table has no columns, so a caller drops
+  everything and says so rather than destroying what is stored.
+- **DELETE.** The replace goes through `safe_replace`, which inserts first and retires the previous
+  load only once the whole replacement has landed. A failed insert of any kind — unknown column,
+  type mismatch, dropped connection — is a **no-op**.
+- **ORDER.** Probe, then write. A caller that probes after it has deleted has learned nothing in
+  time, and the lock asserts the two in that order in the source.
+
+Two things the rule deliberately does NOT do. A dropped key is **never written back as `NULL`**:
+NULL means "the source did not send this", and using it for "our schema is behind" would make an
+unapplied migration indistinguishable from a figure the portal never published — the
+§COMMCALC-49.10 class of plausible-looking answer. And a missing column never refuses the columns
+that DO exist, because refusing them all is how one unapplied migration hides every arriving figure.
+
+### COMMCALC-63.4 WHAT A PERSON IS TOLD
+
+A run that could not land a declared column is **`partial`, never `ok`** (`dlar_sweep.status_verdict`
+dereferences the same `columns_not_yet_in_table` evidence the status line reads), and the sentence
+names the remedy:
+
+> ⚠ FIGURES ARRIVED THAT THIS DATABASE HAS NO COLUMN FOR (apply the pending migration; the rest of
+> the row landed): raw_dlar_store: activations_total, byod_total, …
+
+`evidence.columns_not_yet_in_table` is the machine-readable half, absent when nothing was dropped so
+"nothing dropped" cannot read as "not measured". `evidence.replace_warnings` carries the different
+failure in which the new rows landed but the old ones could not be retired — duplicates, not loss,
+and it must not colour as loss.
+
+### COMMCALC-63.5 CALLERS FIXED, AND THE ONES NOT FIXED HERE
+
+**Fixed:** `commcalc/dlar_sweep.py` (the regression; both halves) and `pos/commcalc_feed.py`
+(`_replace_period` wired to `safe_replace`, and its private column probe deleted in favour of the
+one home). `commcalc/epay_sweep.py` and the upload path in `commcalc/router.py` were already on
+`safe_replace`.
+
+**NOT fixed here, stated rather than carried silently** — three feeds still replace a scope
+delete-first. Each is the same class; none is in the path of the 2026-11-10 regression, and changing
+four sweeps in the push that repairs a data-loss incident is how the next one happens:
+
+| file | the scope it empties first |
+|---|---|
+| `commcalc/vip_sweep.py` | invoice-id chunks, then inserts two tables |
+| `commcalc/b2b_sweep.py` | `(as_of_date, source)`, then inserts |
+| `commcalc/report_pull.py` | a date window, then inserts |
+
+§E7 of the lock **pins all three** and fails the build if one grows a `safe_replace` call without
+the lock being extended to prove the new path — a half-wired sibling is how §19.18 recurs.
+
+The ~90 other `delete()`-then-`insert()` sites in the tree are **excused by kind**: they replace a
+config row, a mapping, a layout or a derived set (`flags`, `discrepancy_results`, a tile layout),
+all of which are re-entered by hand in seconds or re-derived by a recalculation. The invariant this
+section is about protects data **nobody can retype**: a feed's own rows.
+
+### COMMCALC-63.6 EVERY TENANT (project rule 2026-10-30)
+
+Nothing here is per-tenant and nothing carries a tenant's words. The probe is scoped by `org_id`
+because an unscoped probe is still a read of another tenant's row existence, and the replace scope
+must carry `org_id` — `safe_replace` does not add tenancy for its caller. A tenant whose feed has
+never landed takes the per-column probe path and gets a real answer, rather than "this table has no
+columns", which would drop every figure for exactly the orgs a new feed is being switched on for.
+
+### COMMCALC-63.7 Locked
+
+`backend/harness_write_tolerant_period_replace.py` (40 checks, DB-free) and
+`backend/tests/unit/test_write_tolerant_columns.py` (11). The harness **reproduces the 18:30 wipe**
+and asserts the 28 rows survive it. It fails the build when: the sweep stops importing or calling
+either home; the period write block regains a `.delete()` or a direct `.insert(` (the shipped
+defect, kept as an armed negative control); the probe moves after the write; the evidence stops
+naming the dropped columns; a dropped column stops making the run `partial`; the POS feed's private
+probe or its hard-coded column list returns; or one of the three named siblings quietly changes.
+
+`backend/harness_fakedb.py` gained the refusal that makes all of this provable: **an insert naming a
+column the table does not have raises `PGRST204`**, the whole batch, as PostgREST does. It already
+modelled `42703` on a select. A defect a double cannot reproduce is one the next change restores.
+
+### COMMCALC-63.8 Cross-references
+
+§4b.1 (any-subset column reads — the read side of this rule) · §19.19 (`safe_replace`, the delete
+half) · §19.18 (one fact, one home, dereferenced — the shape of this whole defect) · §19.21 (a
+sweep's status is not a record of what it did) · §COMMCALC-60 (the change that declared the columns)
+· §COMMCALC-49.10 (a plausible-looking zero is the class that hides) · §6l (`auto_calc`, which now
+fires on what `safe_replace` reports saved).
 
 ## §COMMCALC-60. A FIGURE THE FEED SENDS THAT NOTHING READS IS NOT A FIGURE THIS PLATFORM HAS — one home for which store-DLAR column is which metric (owner ask 2026-11-10)
 

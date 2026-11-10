@@ -117,6 +117,18 @@ class Query:
                 raise PgError("simulated mid-insert failure (connection reset)")
             out = []
             for row in batch:
+                # THE OTHER REAL CHECK (added 2026-11-10 after it cost a month of carrier data).
+                # PostgREST refuses the WHOLE insert when a payload names a column the table does
+                # not have — `PGRST204: Could not find the 'x' column of 't' in the schema cache` —
+                # and it is the whole batch, not the offending key, that is rejected. The sweep had
+                # already committed its delete when this fired on 2026-11-10, so November's store
+                # rows were gone. A fake that accepted the unknown key could not reproduce that, and
+                # a defect a harness cannot reproduce is one the next change restores.
+                for c in row:
+                    if c not in self.t.cols and c not in ("id", "created_at"):
+                        raise PgError(
+                            '{\'message\': "Could not find the \'%s\' column of \'%s\' in the '
+                            'schema cache", \'code\': \'PGRST204\'}' % (c, self.t.name))
                 # THE REAL CHECK: integer columns reject a float that carries a fraction part,
                 # and PostgREST serialises Python 1.0 as 1.0 — the live 22P02.
                 for c, typ in self.t.cols.items():
