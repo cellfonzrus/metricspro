@@ -17,6 +17,7 @@
 // /admin/roles and /admin/business-types. The platform's report rule applies to reports.
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '@/lib/client'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 
 type Row = {
   kind: string; key: string; label: string
@@ -32,6 +33,23 @@ type Board = {
   tenants: Tenant[]
   org?: string; posture?: string; rows?: Row[]; summary?: Summary
 }
+
+// Click-a-header sorting through the ONE hook (owner directive 2026-08-10). Both readers are at
+// module scope so the memo does not recompute on every render.
+const tenantCell = (t: Tenant, f: string): string | number | boolean =>
+  f === 'name' ? t.name
+  : f === 'posture' ? t.posture
+  : f === 'on' ? (t.summary?.on ?? -1)
+  : f === 'off' ? (t.summary?.off ?? -1)
+  : f === 'decided' ? (t.summary?.decided ?? -1)
+  : ''
+const rowCell = (r: Row, f: string): string | number | boolean =>
+  f === 'label' ? r.label
+  : f === 'allowed' ? r.allowed
+  : f === 'basis' ? r.basis
+  : f === 'by_rule' ? r.by_rule
+  : f === 'grant' ? (r.grant === null ? '' : (r.grant ? 'granted' : 'gated off'))
+  : ''
 
 const emsg = (e: unknown) => (e as Error)?.message || String(e)
 
@@ -86,6 +104,10 @@ export default function TenantGatesPage() {
   const shown = detail && detail.org === org ? detail : null
   const rows = shown?.rows || []
   const posture = shown?.posture
+  // Sorted ONCE over every row, then sliced per kind: a filter keeps the sorted order, and a hook
+  // cannot live inside the per-kind map.
+  const ts = useTableSort(board?.tenants || [], tenantCell)
+  const rs = useTableSort(rows, rowCell)
 
   return (
     <div style={{ maxWidth: 1180 }}>
@@ -114,11 +136,15 @@ export default function TenantGatesPage() {
       <div className="card" style={{ padding: 0, overflowX: 'auto', marginBottom: 18 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead><tr style={{ textAlign: 'left', color: 'var(--text3)' }}>
-            <th style={th}>Company</th><th style={th}>Posture</th>
-            <th style={thR}>On</th><th style={thR}>Off</th><th style={thR}>Decided</th><th style={th} />
+            <SortableTh field="name" sort={ts.sort} onSort={ts.toggle} style={th}>Company</SortableTh>
+            <SortableTh field="posture" sort={ts.sort} onSort={ts.toggle} style={th}>Posture</SortableTh>
+            <SortableTh field="on" sort={ts.sort} onSort={ts.toggle} style={thR}>On</SortableTh>
+            <SortableTh field="off" sort={ts.sort} onSort={ts.toggle} style={thR}>Off</SortableTh>
+            <SortableTh field="decided" sort={ts.sort} onSort={ts.toggle} style={thR}>Decided</SortableTh>
+            <th style={th} />
           </tr></thead>
           <tbody>
-            {(board?.tenants || []).map(t => (
+            {ts.sorted.map(t => (
               <tr key={t.org_id} style={{ borderTop: '1px solid var(--border)' }}>
                 <td style={td}>
                   <b>{t.name}</b>
@@ -158,7 +184,7 @@ export default function TenantGatesPage() {
             surface says so in those words rather than reporting that nothing was declared.
           </p>}
           {(shown.kinds || []).map(kind => {
-            const kr = rows.filter(r => r.kind === kind)
+            const kr = rs.sorted.filter(r => r.kind === kind)
             if (!kr.length) return null
             return (
               <div key={kind} className="card" style={{ padding: 0, overflowX: 'auto', marginBottom: 14 }}>
@@ -170,8 +196,11 @@ export default function TenantGatesPage() {
                 </div>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead><tr style={{ textAlign: 'left', color: 'var(--text3)' }}>
-                    <th style={th}>Thing</th><th style={th}>Offered?</th><th style={th}>Why</th>
-                    <th style={th}>Platform rule</th><th style={th}>Decision</th>
+                    <SortableTh field="label" sort={rs.sort} onSort={rs.toggle} style={th}>Thing</SortableTh>
+                    <SortableTh field="allowed" sort={rs.sort} onSort={rs.toggle} style={th}>Offered?</SortableTh>
+                    <SortableTh field="basis" sort={rs.sort} onSort={rs.toggle} style={th}>Why</SortableTh>
+                    <SortableTh field="by_rule" sort={rs.sort} onSort={rs.toggle} style={th}>Platform rule</SortableTh>
+                    <SortableTh field="grant" sort={rs.sort} onSort={rs.toggle} style={th}>Decision</SortableTh>
                   </tr></thead>
                   <tbody>
                     {kr.map(r => (
