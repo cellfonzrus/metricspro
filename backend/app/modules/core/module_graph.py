@@ -612,11 +612,11 @@ FACTS: dict[str, dict] = {
             # the same cold restore, which is the whole point of the extraction: a new portal feed is
             # four functions, not a copied sweep
             'app/modules/commcalc/supplier_invoice_sweep.py': ('prp',),
-            # the FOURTH adapter (§COMMCALC-58) — a processor's back office with ONE LOGIN PER STORE.
+            # the FOURTH adapter (§COMMCALC-59) — a processor's back office with ONE LOGIN PER STORE.
             # Same four functions, same cold restore: the ask that would once have been a second pull
             # loop (per-store logins AND a year of history) is an adapter plus `portal_backfill`.
             'app/modules/commcalc/processor_backoffice_sweep.py': ('prp',),
-            # the backfill (§COMMCALC-58) DEREFERENCES this loop's MAX_WINDOW_DAYS rather than keeping
+            # the backfill (§COMMCALC-59) DEREFERENCES this loop's MAX_WINDOW_DAYS rather than keeping
             # a second copy of the ceiling — a wider window is still this module's decision, and the
             # loop asks it for the span a login still owes in the ONE place a window is computed
             'app/modules/commcalc/portal_backfill.py': ('prp',),
@@ -656,7 +656,7 @@ FACTS: dict[str, dict] = {
         "callers": {
             'app/modules/commcalc/pos_report_feed.py': ('rc',),
             'app/modules/commcalc/supplier_invoice_feed.py': ('rc',),
-            # the per-store back-office feed (§COMMCALC-58) reads the processor's transaction columns
+            # the per-store back-office feed (§COMMCALC-59) reads the processor's transaction columns
             # through this same rule, so a portal that prints 'Trans ID' lands under one matcher
             'app/modules/commcalc/processor_backoffice_sweep.py': ('rc',),
             # the calibration capture (COMMCALC-39) compares a control's printed LABEL against the
@@ -856,7 +856,7 @@ FACTS: dict[str, dict] = {
                     'here, not copied here. EXCUSED SIBLING, pinned shrink-only: router.py\'s '
                     'MAILBOX sweep says "login rejected" for an IMAP [AUTHENTICATIONFAILED], which '
                     'is a protocol answer with no page to misread. '
-                    '§COMMCALC-58 then fixed a defect in THIS home, which was the half of '
+                    '§COMMCALC-59 then fixed a defect in THIS home, which was the half of '
                     'the above that replaced one guess with another: deleting "the vendor\'s name '
                     'is in the title" was right, and replacing it with six house words was the same '
                     'shape — a DEFAULT that is really somebody\'s vocabulary. The owner signed '
@@ -873,7 +873,7 @@ FACTS: dict[str, dict] = {
                     'through the loader the other three kinds already use, with the house words '
                     'DEREFERENCED from here rather than copied there.',
         "homes": ('app/modules/commcalc/login_outcome.py',),
-        "index": ('COMMCALC-52', 'COMMCALC-58'),
+        "index": ('COMMCALC-52', 'COMMCALC-59'),
         "locks": ('harness_login_outcome.py', 'harness_signed_in_evidence.py'),
         # SNAPSHOT — written BY HAND (§50). All three portal drivers dereference it for the NAME and
         # for the operator sentence; each still reads its own page its own way, because what the
@@ -884,7 +884,7 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/epay_sweep.py': ('_lo',),
             # the one marker table's module, for ONE fact only: the house signed-in words, which it
             # DEREFERENCES as the seeds behind the signed_in kind rather than keeping a copy of them
-            # (§COMMCALC-58.4). It takes no verdict and reads no page.
+            # (§COMMCALC-59.4). It takes no verdict and reads no page.
             'app/modules/commcalc/portal_backoff.py': ('_lo',),
             # the browserless driver: same question, visible_from_html / form_in_html
             'app/modules/commcalc/dlar_sweep.py': ('_lo',),
@@ -1866,6 +1866,12 @@ FACTS: dict[str, dict] = {
             # spellings matched no option at all. Rows and options are now both STAMPED with this
             # home's key, and the comparison is made on that.
             'app/modules/payables/router.py': ('_sid',),
+            # COMMCALC-59 (2026-11-10) - the carrier portal's PICKER LABELS. `_same_label` folds
+            # two option labels before comparing them, so the portal's own spelling of a filter
+            # value ("Daily", "daily ", "June- 26") cannot read as a different value. It rides
+            # this fold rather than carrying a sixth alnum-only copy, which would not fold an
+            # accent - and a carrier portal is exactly where an accented label turns up.
+            'app/modules/commcalc/epay_sweep.py': ('_squash_key',),
         },
     },
     'carrier_dollar_component': {

@@ -1,5 +1,5 @@
 -- 1116_portal_pull_backlog.sql
--- Index §COMMCALC-58. Additive, idempotent. ONE NEW TABLE + THREE NEW COLUMNS on an existing one.
+-- Index §COMMCALC-59. Additive, idempotent. ONE NEW TABLE + THREE NEW COLUMNS on an existing one.
 -- NO MONEY MOVES: nothing here reads or writes a rate, plan, payout, commission or P&L row, no
 -- schedule is registered, no credential is touched, and no feed starts pulling.
 --
@@ -84,11 +84,11 @@ alter table commcalc.data_source
   add column if not exists history_chunk_days int;
 
 comment on column commcalc.data_source.store_code is
-  'Index §COMMCALC-58. The store whose own login this row is, for a portal that issues one login per store. NULL = a company-wide login (every pre-2026-11 login). Read by commcalc/processor_backoffice_sweep.py and passed to epay_ingest.resolve_stores as the answer for a terminal the declared merchant registry cannot place; the registry still wins where it has one.';
+  'Index §COMMCALC-59. The store whose own login this row is, for a portal that issues one login per store. NULL = a company-wide login (every pre-2026-11 login). Read by commcalc/processor_backoffice_sweep.py and passed to epay_ingest.resolve_stores as the answer for a terminal the declared merchant registry cannot place; the registry still wins where it has one.';
 comment on column commcalc.data_source.history_from is
-  'Index §COMMCALC-58. The date this login''s report history should start from, once. NULL = owes no history (default). Read ONLY by commcalc/portal_backfill.py.';
+  'Index §COMMCALC-59. The date this login''s report history should start from, once. NULL = owes no history (default). Read ONLY by commcalc/portal_backfill.py.';
 comment on column commcalc.data_source.history_chunk_days is
-  'Index §COMMCALC-58. How many days one backfill window covers for this login. NULL = portal_backfill.DEFAULT_CHUNK_DAYS; clamped in code to portal_report_pull.MAX_WINDOW_DAYS.';
+  'Index §COMMCALC-59. How many days one backfill window covers for this login. NULL = portal_backfill.DEFAULT_CHUNK_DAYS; clamped in code to portal_report_pull.MAX_WINDOW_DAYS.';
 
 -- ── 2. which spans has this login already answered ──────────────────────────────────────────────
 create table if not exists commcalc.portal_pull_backlog (
@@ -126,7 +126,7 @@ create index if not exists portal_pull_backlog_owed_idx
 grant select, insert, update, delete on commcalc.portal_pull_backlog to service_role;
 
 comment on table commcalc.portal_pull_backlog is
-  'Index §COMMCALC-58. One row per (org, portal login, report set, date span): which spans of a login''s declared history have been ANSWERED, and what happened. Written and read only by commcalc/portal_backfill.py, which hands the one pull loop the oldest span still owed and otherwise leaves the daily recent window exactly as it was. Not a feed and not evidence: core.job_run holds what a run did, this holds only what is still owed.';
+  'Index §COMMCALC-59. One row per (org, portal login, report set, date span): which spans of a login''s declared history have been ANSWERED, and what happened. Written and read only by commcalc/portal_backfill.py, which hands the one pull loop the oldest span still owed and otherwise leaves the daily recent window exactly as it was. Not a feed and not evidence: core.job_run holds what a run did, this holds only what is still owed.';
 
 notify pgrst, 'reload schema';
 select '1116 complete — a portal login can now belong to a store and be asked for history; nothing is turned on and no feed pulls until a tenant declares its own login' as status;

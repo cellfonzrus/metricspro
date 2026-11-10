@@ -1,7 +1,7 @@
 -- 1117_connector_registry_processor_backoffice.sql
 -- THE PER-STORE BACK-OFFICE CONNECTOR GETS ITS DOOR, IN THE SAME CHANGE THAT MAKES IT DISPATCHABLE.
 --
--- Index §COMMCALC-58. Additive, idempotent, ONE ROW. Not money-touching and it turns nothing on.
+-- Index §COMMCALC-59. Additive, idempotent, ONE ROW. Not money-touching and it turns nothing on.
 --
 -- WHY THIS FILE EXISTS. `commcalc.connector_registry` (mig 1014) is what fills the processor picker on
 -- the portal-login form, what gives the Connectors page its cards, and what `_connector_label` reads
@@ -38,7 +38,7 @@
 
 INSERT INTO commcalc.connector_registry (org_id, key, aliases, label, host, kind, applies_to_pos, applies_to_carrier,
   defined_by, sort_order, notes) VALUES
-  ('00000000-0000-0000-0000-000000000001', 'processor_backoffice', '{}', 'Payment processor back office (per-store logins)', NULL, 'portal', '{}', '{}', 'house', 160, 'A payment processor''s back office that issues ONE LOGIN PER STORE, pulled per store for the processor reconciliation (index §COMMCALC-58). The address, the report list, each report''s filters and landing target, the login''s own store and the date its history starts are declared per tenant on its own login row. Sibling of the company-wide owner-portal kind (''epay''), which is one login for the whole tenant and a different report family.')
+  ('00000000-0000-0000-0000-000000000001', 'processor_backoffice', '{}', 'Payment processor back office (per-store logins)', NULL, 'portal', '{}', '{}', 'house', 160, 'A payment processor''s back office that issues ONE LOGIN PER STORE, pulled per store for the processor reconciliation (index §COMMCALC-59). The address, the report list, each report''s filters and landing target, the login''s own store and the date its history starts are declared per tenant on its own login row. Sibling of the company-wide owner-portal kind (''epay''), which is one login for the whole tenant and a different report family.')
 -- DO NOTHING, not DO UPDATE, for the reason mig 1014's own seed states: a re-run must never overwrite
 -- a scope an operator has since narrowed or widened. Still idempotent — a second run inserts nothing.
 ON CONFLICT (org_id, key) DO NOTHING;

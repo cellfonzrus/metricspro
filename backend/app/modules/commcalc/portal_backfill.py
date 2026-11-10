@@ -1,6 +1,6 @@
 """THE ONE HOME for "which span of days does this portal source still owe, and which has it answered".
 
-THE CLASS THIS MODULE IS THE ONE HOME FOR (index §COMMCALC-58)
+THE CLASS THIS MODULE IS THE ONE HOME FOR (index §COMMCALC-59)
 ---------------------------------------------------------------
 `portal_report_pull.date_range` answers exactly one question: the last N days, ending yesterday,
 clamped to `MAX_WINDOW_DAYS` because a daily pull that re-fetches months is how a portal starts
