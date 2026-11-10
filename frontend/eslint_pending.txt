@@ -243,7 +243,6 @@
 3	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/store-match/page.tsx
 4	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/target-fields/page.tsx
 20	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/targets/accessories/page.tsx
-7	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/targets/action-plan/page.tsx
 18	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/targets/my/_components/AreaTargets.tsx
 21	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/targets/my/page.tsx
 33	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/targets/page.tsx
@@ -535,7 +534,6 @@
 1	react-hooks/exhaustive-deps	src/app/(platform)/commcalc/sales-report/page.tsx
 1	react-hooks/exhaustive-deps	src/app/(platform)/commcalc/schematic/page.tsx
 1	react-hooks/exhaustive-deps	src/app/(platform)/commcalc/settings/page.tsx
-1	react-hooks/exhaustive-deps	src/app/(platform)/commcalc/targets/action-plan/page.tsx
 2	react-hooks/exhaustive-deps	src/app/(platform)/commcalc/targets/my/page.tsx
 3	react-hooks/exhaustive-deps	src/app/(platform)/commcalc/targets/page.tsx
 1	react-hooks/exhaustive-deps	src/app/(platform)/commcalc/targets/settings/page.tsx
@@ -567,7 +565,6 @@
 1	react-hooks/immutability	src/app/(platform)/commcalc/asset/oninv-3way-recon/page.tsx
 1	react-hooks/immutability	src/app/(platform)/commcalc/asset/owed-weekly/page.tsx
 1	react-hooks/immutability	src/app/(platform)/commcalc/column-mapping/page.tsx
-1	react-hooks/immutability	src/app/(platform)/commcalc/targets/action-plan/page.tsx
 1	react-hooks/immutability	src/app/(platform)/commcalc/targets/my/page.tsx
 3	react-hooks/immutability	src/app/(platform)/commcalc/targets/page.tsx
 1	react-hooks/immutability	src/app/(platform)/commcalc/whatif/page.tsx

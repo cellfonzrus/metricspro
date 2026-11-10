@@ -33295,7 +33295,7 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     catalog = _target_catalog(client, org_id)
     tlines_by_store = _target_lines_by_store(_target_lines(client, org_id, cperiod))
     declared_by_store = (_declared_by_store_day_for_targets(
-        client, org_id, start, end - _timedelta(days=1), catalog) if catalog else {{}})
+        client, org_id, start, end - _timedelta(days=1), catalog) if catalog else {})
 
     out = []
     for s in roster:
@@ -38165,7 +38165,7 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
     catalog = _target_catalog(client, org_id)
     tlines_by_store = _target_lines_by_store(_target_lines(client, org_id, period))
     declared_by_store = (_declared_by_store_day_for_targets(
-        client, org_id, start, end - _timedelta(days=1), catalog) if catalog else {{}})
+        client, org_id, start, end - _timedelta(days=1), catalog) if catalog else {})
 
     for s in stores:
         code = str(s.get('store_code', '') or '').strip()
