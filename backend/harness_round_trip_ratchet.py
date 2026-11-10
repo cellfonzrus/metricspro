@@ -75,7 +75,6 @@ PINNED = {
     "app/modules/hr/router.py": 1,
     "app/modules/notify/router.py": 1,
     "app/modules/pos/catalog_suggest.py": 2,
-    "app/modules/pos/commcalc_feed.py": 2,
     "app/modules/pos/inventory_integrity_router.py": 2,
     "app/modules/pos/receipt_import.py": 1,
     "app/modules/pos/router.py": 1,
