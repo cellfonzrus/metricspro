@@ -5654,6 +5654,22 @@ router.include_router(_operator_api.router)
 router.include_router(_operator_api.public_router)
 
 
+# ── SUPER-ADMIN TENANT GATES (owner 2026-11-10, index §CORE-37) ─────────────────────────────────
+# "have an agent asses and create a dashboard for the super admin whereby these things can be gated
+# out for the respective tenants right from the get go".
+#
+# Mounted here for the same reason as the sub-routers above: main.py (SHARED) needs no change and the
+# sub-router's own "/tenant-gates" prefix resolves to /api/v1/core/tenant-gates/*. It imports
+# core.router only LAZILY (inside `_gate`), so there is no cycle.
+#
+# IT ADDS NO SECOND GATE: every endpoint calls `_require_super_admin` above. It also takes an
+# explicit `org` rather than the middleware-rewritten `org_id`, because it is cross-tenant BY DESIGN
+# and a tenant admin switching their active org must not be able to reach another tenant's gates.
+from app.modules.core import tenant_gates_api as _tenant_gates_api   # noqa: E402
+
+router.include_router(_tenant_gates_api.router)
+
+
 # ── In-app DATA assistant (index §52) ───────────────────────────────────────────────────────────
 # Mounted at the bottom like the other core sub-APIs. The assistant answers questions about THIS
 # tenant's own data by running the platform's own reports as the signed-in user — the semantic layer

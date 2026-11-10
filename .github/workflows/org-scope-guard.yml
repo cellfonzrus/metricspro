@@ -352,6 +352,35 @@ jobs:
         working-directory: frontend/scratchpad
         run: node prove_hub_gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
+  tenant-gates:
+    # §CORE-41 — INHERITANCE IS NOT A DECISION: WHAT EACH TENANT IS OFFERED.
+    # Owner 2026-11-10: "why is vidapay connector showing in boost ? we need to get these things under
+    # control before we roll out for outside customers". One carrier's connector reached a tenant that
+    # declares another, because the surface listing those connector-keyed rows never asked the
+    # registry — and underneath it, entitlement was all-access by default, so a NEW tenant arrived
+    # holding every module. The LOCK is static on purpose: a caller that simply stops passing the
+    # tenant's posture compiles, renders and ships, and puts that tenant silently back on `inherit`.
+    # The PROOF runs the truth table, the degrade direction and all three mechanisms DB-free; the
+    # integration tests run the real app over two tenants with different declared carriers.
+    name: What each tenant is offered
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the tenant-gate lock (stdlib only, no deps)
+        working-directory: backend
+        run: python3 harness_feature_gate_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Install backend deps for the proof
+        working-directory: backend
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run the tenant-gate proof (the truth table, the degrade direction, all three mechanisms)
+        working-directory: backend
+        run: python3 harness_feature_gate.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the tenant-gate integration tests (the real app, two tenants, different carriers)
+        working-directory: backend
+        run: python3 -m pytest tests/integration/test_tenant_gates_endpoint.py -q | tee -a "$GITHUB_STEP_SUMMARY"
+
   employee-reach:
     # §CORE-33 — WHAT AN INDIVIDUAL CONTRIBUTOR MAY REACH IS ONE DECLARATION, AND THE API ENFORCES IT.
     # Owner 2026-11-04: a rep on one tenant reached the Hours Adjustment screen and 32 other manager

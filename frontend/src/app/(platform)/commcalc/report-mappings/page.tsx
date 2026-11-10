@@ -15,6 +15,10 @@ const th: React.CSSProperties = { textAlign: 'left', padding: '6px 8px', fontSiz
 const inp: React.CSSProperties = { width: '100%', padding: '5px 7px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)' }
 
 type MapRow = { src: string; col: string; type: string }
+/** One mapping the connector registry withholds from this company — the shape GET /report-pull-map
+ *  attaches as `withheld[]` (router._report_pull_map, from report_pull.withheld_processors). */
+type Withheld = { report_key: string; display_name?: string | null; processor?: string | null
+  connector?: string | null; why?: string | null; miss?: string | null }
 
 function toRows(column_map: any): MapRow[] {
   return Object.entries(column_map || {}).map(([src, v]: any) =>
@@ -34,12 +38,16 @@ export default function ReportMappingsPage() {
   const [ready, setReady] = useState(true)
   const [msg, setMsg] = useState('')
   const [edit, setEdit] = useState<Record<string, any>>({})   // report_key -> draft
+  // What the CONNECTOR REGISTRY withholds from this company, named rather than silently dropped
+  // (owner 2026-11-10): an admin must be able to see that the platform holds rows it is not offering
+  // here, and why. The verdict and the words are the backend's; this page only renders them.
+  const [withheld, setWithheld] = useState<Withheld[]>([])
 
   async function load() {
     setMsg('')
     try {
       const r: any = await api('/api/v1/commcalc/report-pull-map')
-      setReports(r.reports || []); setReady(r.ready !== false)
+      setReports(r.reports || []); setReady(r.ready !== false); setWithheld(r.withheld || [])
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
   useEffect(() => { load() }, [])
@@ -65,7 +73,9 @@ export default function ReportMappingsPage() {
       await api('/api/v1/commcalc/report-pull-map', {
         method: 'PUT', body: JSON.stringify({
           report_key: rep.report_key, display_name: d.display_name, target_table: d.target_table,
-          export_pref: d.export_pref, enabled: d.enabled, processor: rep.processor || 'vidapay',
+          // The row's OWN processor. No fallback literal: a vendor slug defaulted here is how one
+          // carrier's connector came to be written onto another company's row (RULE TWO).
+          export_pref: d.export_pref, enabled: d.enabled, processor: rep.processor || '',
           column_map: fromRows(d.rows), param_spec,
         }),
       })
@@ -89,8 +99,11 @@ export default function ReportMappingsPage() {
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🗺️ Report-pull mapping</h1>
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          How the automated VidaPay / T-CETRA report pull maps each portal report to a database table and each
-          source column to a destination column — <b>configuration, not code</b>. Editing a report that shows
+          How each automated portal report pull maps a portal report to a database table and each
+          source column to a destination column — <b>configuration, not code</b>. Only the connectors this
+          company is offered appear: a report whose connector the registry withholds is listed under
+          &ldquo;not offered to this company&rdquo; below rather than shown as if it would run (owner
+          2026-11-10). Editing a report that shows
           <span style={{ background: 'var(--c-bg-eef2ff)', color: 'var(--c-fg-3730a3)', padding: '0 6px', borderRadius: 6, fontSize: 12, margin: '0 4px' }}>default</span>
           creates a tenant override; the house default stays intact. The pull itself runs on a schedule and from
           <b> ▶ Pull now</b> on each portal login in <a href="/commcalc/email-imports#portal-logins" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Data Imports</a> —
@@ -186,6 +199,28 @@ export default function ReportMappingsPage() {
         )
       })}
       {reports.length === 0 && <div className="card" style={{ padding: 16, fontSize: 13, color: 'var(--text3)' }}>No report mappings — click <b>↻ Reseed defaults</b>.</div>}
+
+      {withheld.length > 0 && (
+        <div className="card" style={{ padding: 14, marginTop: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>
+            Not offered to this company ({withheld.length})
+          </div>
+          <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 8px' }}>
+            The platform holds these mappings, but the connector each one belongs to is not this
+            company&apos;s. They are listed so nothing is hidden silently; a platform super admin changes
+            what a company is offered under <b>Admin → Tenant Gates</b>.
+          </p>
+          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5 }}>
+            {withheld.map((w: Withheld) => (
+              <li key={w.report_key} style={{ marginBottom: 3 }}>
+                <b>{w.display_name || w.report_key}</b>
+                {w.connector ? <> — {w.connector}</> : null}
+                {w.why ? <span style={{ color: 'var(--text3)' }}> · {w.why}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   )
 }

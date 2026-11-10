@@ -76,7 +76,8 @@ CAP_PREFIX = "connector:"                    # ui_label_override scope 'cap' nam
 KINDS = ("portal", "mailbox", "ftp", "google_sa")
 _COLS = ("key", "aliases", "label", "host", "kind", "applies_to_pos", "applies_to_carrier", "defined_by",
          "sort_order", "is_active")
-NEUTRAL_LABEL = "reports portal"             # copy's fallback when no registry row names the connector
+NEUTRAL_LABEL = "reports portal"
+MISS_NOT_GRANTED = "not_granted"      # the axis `scope` reports when the TENANT'S GATE withheld it             # copy's fallback when no registry row names the connector
 
 
 def _c(**kw):
@@ -197,18 +198,23 @@ def resolve(rows, connector):
 
 
 # ── THE PREDICATE — report_kinds', called, not copied ─────────────────────────────────────────────
-def visible(rows, declaration, caps=None, org_id=None):
+def visible(rows, declaration, caps=None, org_id=None, posture=None):
     """The connectors this tenant is shown, with provenance: `report_kinds.visible_kinds` over the
-    merged rows with the `connector:` cap namespace. THE rule every connector surface dereferences."""
-    return _rk.visible_kinds(rows, declaration, caps, org_id, None, cap_prefix=CAP_PREFIX)
+    merged rows with the `connector:` cap namespace. THE rule every connector surface dereferences.
+
+    `posture` (mig 1119) is the tenant's own gating posture, passed STRAIGHT THROUGH to the shared
+    predicate — the gate's truth table lives in `core/feature_gate` and is not re-derived here.
+    `None` = `inherit` = exactly what this function answered before the gate existed."""
+    return _rk.visible_kinds(rows, declaration, caps, org_id, None, cap_prefix=CAP_PREFIX,
+                             posture=posture)
 
 
-def hidden(rows, declaration, caps=None):
+def hidden(rows, declaration, caps=None, posture=None):
     """The connectors withheld, and why — `report_kinds.hidden_kinds` with the `connector:` namespace."""
-    return _rk.hidden_kinds(rows, declaration, caps, cap_prefix=CAP_PREFIX)
+    return _rk.hidden_kinds(rows, declaration, caps, cap_prefix=CAP_PREFIX, posture=posture)
 
 
-def scope(rows, declaration, connector, caps=None, org_id=None):
+def scope(rows, declaration, connector, caps=None, org_id=None, posture=None):
     """WHAT EVERY CONNECTOR SURFACE ASKS about one slug: does it apply to this tenant, and what is it
     called. PURE.
 
@@ -223,18 +229,35 @@ def scope(rows, declaration, connector, caps=None, org_id=None):
                 "kind": None, "why": "not in the connector registry — a tenant-defined connector is never withheld",
                 "miss": None, "provenance": None}
     base = {"registered": True, "key": row["key"], "label": row["label"], "host": row.get("host"), "kind": row.get("kind")}
-    for v in visible(rows, declaration, caps, org_id):
+    for v in visible(rows, declaration, caps, org_id, posture):
         if v["key"] == row["key"]:
             return {**base, "applies": True, "why": "", "miss": None, "provenance": v.get("provenance")}
-    why = next((h["why"] for h in hidden(rows, declaration, caps) if h["key"] == row["key"]), "not visible")
+    why = next((h["why"] for h in hidden(rows, declaration, caps, posture) if h["key"] == row["key"]), "not visible")
     # WHICH axis the declaration misses — so a surface can pick the POS sentence (the neutral line) or
     # the carrier one without parsing `why`. 'override' = hidden by the super-admin cap.
     # each axis through THE predicate (report_kinds.applies) with the other axis blanked — no second
     # intersection is written here
     pos_miss = not _rk.applies({"applies_to_pos": row["applies_to_pos"], "applies_to_carrier": []}, declaration or {})
     car_miss = not _rk.applies({"applies_to_pos": [], "applies_to_carrier": row["applies_to_carrier"]}, declaration or {})
-    miss = "both" if (pos_miss and car_miss) else ("pos" if pos_miss else ("carrier" if car_miss else "override"))
+    # MISS_NOT_GRANTED = the TENANT is gated and this connector was never granted it; the declaration
+    # had no part in it, so a surface must not print the POS sentence and send somebody off to fix a
+    # declaration that was never the reason. Deliberately NOT spelled with the posture's own word:
+    # this is an AXIS, not a posture, and one word meaning both is how the two drift apart.
+    miss = ("both" if (pos_miss and car_miss)
+            else ("pos" if pos_miss else ("carrier" if car_miss else "override")))
+    if not (pos_miss or car_miss) and _gated_refusal(why):
+        miss = MISS_NOT_GRANTED
     return {**base, "applies": False, "why": why, "miss": miss, "provenance": None}
+
+
+def _gated_refusal(why):
+    """Does this refusal come from the TENANT'S POSTURE rather than its declaration? Asked of the
+    gate's own vocabulary, never by matching words spelled here."""
+    try:
+        from app.modules.core import feature_gate as _fg
+    except Exception:
+        return False
+    return _rk._s(why) in (_fg.BASIS_GATED_DEFAULT, _fg.BASIS_DENY)
 
 
 def label_of(row_or_scope, fallback=NEUTRAL_LABEL):
@@ -262,6 +285,11 @@ def not_applicable_copy(sc, pos, pos_declared):
     """The sentence a surface that drives ONE connector prints when the registry withholds it — the
     neutral line when the DECLARED POS is what it misses (the owner's case), else the carrier /
     override reason from the registry. Frontend twin: lib/connectors.ts connectorNotApplicableCopy."""
+    if (sc or {}).get("miss") == MISS_NOT_GRANTED:
+        # The tenant is gated and this connector was never granted. Say THAT: a declaration sentence
+        # here sends somebody to change a POS term that had nothing to do with the refusal.
+        return ("This connector is not switched on for this tenant. A platform super admin turns it on "
+                "under Admin \u2192 Tenant Gates.")
     if (sc or {}).get("miss") in ("pos", "both"):
         return neutral_line(pos, pos_declared)
     why = _rk._s((sc or {}).get("why")) or "it is not offered to this tenant"
@@ -270,16 +298,19 @@ def not_applicable_copy(sc, pos, pos_declared):
 
 
 # ── payload ───────────────────────────────────────────────────────────────────────────────────────
-def payload(rows, ready, declaration, caps, org_id, pos=None, pos_declared=False):
+def payload(rows, ready, declaration, caps, org_id, pos=None, pos_declared=False, posture=None):
     """The GET /commcalc/connector-registry body — everything a connector surface needs, computed ONCE."""
-    vis = visible(rows, declaration, caps, org_id)
+    vis = visible(rows, declaration, caps, org_id, posture)
     public = [{k: r.get(k) for k in _COLS + ("provenance", "provenance_text", "defined_by_org")} for r in vis]
     caps_conn = {k: v for k, v in (caps or {}).items() if str(k).startswith(CAP_PREFIX)}
     return {
         "registry_ready": ready, "migration": MIGRATION,
         "declaration": declaration,
         "connectors": public,
-        "hidden": hidden(rows, declaration, caps),
+        "hidden": hidden(rows, declaration, caps, posture),
+        # The tenant's gating posture, so a surface can say "gated" rather than "nothing applies" —
+        # the gate's own word, never a boolean a page re-interprets.
+        "posture": _posture_word(posture),
         "caps": caps_conn,
         "all_keys": [{"key": r["key"], "aliases": r["aliases"], "label": r["label"], "kind": r["kind"],
                       "applies_to_pos": r["applies_to_pos"], "applies_to_carrier": r["applies_to_carrier"]}
@@ -303,19 +334,26 @@ def load_registry(client, org_id):
 
 
 def load_caps(client, org_id):
-    """This org's `connector:` cap overrides (ui_label_override scope 'cap' — the SAME rows GET
-    /nav-config and `_intake_caps` read; only this registry's namespace is kept). Org-scoped."""
-    caps = {}
+    """This org's `connector:` cap overrides, in the `{cap_key: True/False}` form the predicate reads.
+    DEREFERENCED, not read again: `core/feature_gate.load_grants` is the one reader of the grant rows
+    (`ui_label_override` scope 'cap'), so a super admin's decision cannot mean one thing here and
+    another on the gating dashboard. Degrades to {} — never to a refusal."""
     try:
-        for r in (client.schema("commcalc").table("ui_label_override").select("key,label")
-                  .eq("org_id", org_id).eq("scope", "cap").execute().data) or []:
-            k = str(r.get("key") or "")
-            if k.startswith(CAP_PREFIX):
-                v = str(r.get("label") or "").lower()
-                caps[k] = True if v == "show" else (False if v == "hide" else None)
+        from app.modules.core import feature_gate as _fg
+        grants = _fg.load_grants(client, org_id, _fg.KIND_CONNECTOR)
     except Exception:
-        caps = {}
-    return caps
+        return {}
+    return {CAP_PREFIX + k: v for k, v in grants.items()}
+
+
+def _posture_word(posture):
+    """The posture as the GATE names it (`inherit` for anything unknown) — dereferenced, not spelled,
+    so a page reads the same word the backend decided on."""
+    try:
+        from app.modules.core import feature_gate as _fg
+    except Exception:
+        return None
+    return _fg.posture(posture)
 
 
 def scope_context(client, org_id):
@@ -329,7 +367,18 @@ def scope_context(client, org_id):
         decl = _rk.tenant_declaration(client, org_id)
     except Exception:
         decl = {"pos": [], "carriers": [], "reasons": ["declaration could not be read"]}
-    return {"rows": rows, "ready": ready, "declaration": decl, "caps": load_caps(client, org_id), "org_id": str(org_id)}
+    return {"rows": rows, "ready": ready, "declaration": decl, "caps": load_caps(client, org_id),
+            "org_id": str(org_id), "posture": load_posture(client, org_id)}
+
+
+def load_posture(client, org_id):
+    """This tenant's gating posture — READ from `core/feature_gate`, the one home for that column.
+    A copy of the read here is the second copy CLAUDE.md forbids."""
+    try:
+        from app.modules.core import feature_gate as _fg
+        return _fg.load_posture(client, org_id)
+    except Exception:
+        return None
 
 
 def scope_for(ctx, connector):
@@ -337,7 +386,8 @@ def scope_for(ctx, connector):
     if not isinstance(ctx, dict) or not ctx.get("rows"):
         return {"applies": True, "registered": False, "key": slug(connector) or None, "label": None, "host": None,
                 "kind": None, "why": "no connector-scope context", "miss": None, "provenance": None}
-    return scope(ctx["rows"], ctx.get("declaration") or {}, connector, ctx.get("caps"), ctx.get("org_id"))
+    return scope(ctx["rows"], ctx.get("declaration") or {}, connector, ctx.get("caps"), ctx.get("org_id"),
+                 ctx.get("posture"))
 
 
 def scope_of(client, org_id, connector):

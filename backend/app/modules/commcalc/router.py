@@ -21298,10 +21298,13 @@ def set_nav_label(body: NavLabelIn, org_id: str = ORG_ID,
     # The tenant's BUSINESS TYPE (mig 1020/1024, index §35) is the same kind of gate: 'vertical:<href>' (a page)
     # and 'closing:<input>' (a closing-form input) — re-showing what the business type hides is the platform's
     # call; hiding more, or resetting to follow the business type, stays the tenant's own.
-    if scope == 'cap' and label.lower() == 'show' and not gc["super_admin"] \
-            and (key.startswith('carrier:') or key.startswith('pos:') or key.startswith(_report_kinds.CAP_PREFIX)
-                 or key.startswith('vertical:') or key.startswith('closing:')):
-        raise HTTPException(403, "Turning a carrier-, POS- or business-type-gated option back on is reserved for "
+    # THE list of namespaces whose widening is the platform's call is DEREFERENCED, not enumerated
+    # here (owner 2026-11-10, found by §CORE-41's security pass): this test used to spell the
+    # prefixes, and the spelling had already fallen behind `connector:`. A gate namespace missing
+    # from it is a tenant granting itself what its own configuration withheld.
+    from app.modules.core import feature_gate as _feature_gate
+    if not gc["super_admin"] and _feature_gate.widening_is_platform_only(scope, key, label):
+        raise HTTPException(403, "Turning a gated option back on is reserved for "
                                  "a platform super-admin. You can still hide it, or reset it to follow your "
                                  "settings. Ask the platform team to re-grant it.")
     client = sb()
@@ -41994,23 +41997,52 @@ _RPM_FIELDS = ["report_key", "display_name", "target_table", "column_map", "para
 def list_report_pull_map(processor: str = "", org_id: str = ORG_ID):
     """The effective report-pull specs for this tenant (house defaults + this org's overrides). Each row
     carries `inherited` (true = showing the house default, editing creates an override) so the admin page
-    shows exactly what will run and lets it be edited. Degrades to the Python defaults pre-migration 207."""
+    shows exactly what will run and lets it be edited. Degrades to the Python defaults pre-migration 207.
+
+    CONNECTOR-SCOPED since 2026-11-10 (owner: "why is vidapay connector showing in boost"). These rows
+    are connector-keyed on `processor`, and the registry's answer is applied at `resolve_report_specs`'
+    own home, so this endpoint, the sweep driver and every other caller get the same set. What was
+    withheld is REPORTED here (`withheld`), never dropped silently: an admin must be able to see that
+    the platform has rows it is not offering this tenant, and why."""
     require_org(org_id)
     from app.modules.commcalc import report_pull as rp
     proc = (processor or None)
+    client = sb()
     try:
-        specs = rp.resolve_report_specs(sb(), org_id, processor=proc, only_enabled=False)
+        specs = rp.resolve_report_specs(client, org_id, processor=proc, only_enabled=False, scoped=True)
         ready = True
     except Exception:
         specs = [{**s, "org_id": org_id} for s in rp.default_specs(proc)]
         ready = False
+    withheld = []
+    try:
+        unscoped = rp.resolve_report_specs(client, org_id, processor=proc, only_enabled=False, scoped=False)
+        shown = {s.get("report_key") for s in specs}
+        sctx = _connector_scope_ctx(client, org_id)
+        for s in unscoped:
+            if s.get("report_key") in shown:
+                continue
+            sc = _connector_scope(sctx, s.get("processor")) or {}
+            withheld.append({"report_key": s.get("report_key"), "display_name": s.get("display_name"),
+                             "processor": s.get("processor"), "connector": sc.get("label"),
+                             "why": sc.get("why"), "miss": sc.get("miss")})
+    except Exception:
+        withheld = []
     out = []
+    sctx2 = None
+    try:
+        sctx2 = _connector_scope_ctx(client, org_id)
+    except Exception:
+        sctx2 = None
     for s in specs:
         s = dict(s)
         s["inherited"] = str(s.get("org_id")) != str(org_id)
         s.pop("_inherited", None)
+        # The connector's own LABEL, so the page names it instead of spelling a vendor (RULE TWO).
+        s["connector_label"] = (_connector_scope(sctx2, s.get("processor")).get("label")
+                                if sctx2 else None)
         out.append(s)
-    return {"ready": ready, "reports": out, "house_org": rp.HOUSE_ORG,
+    return {"ready": ready, "reports": out, "house_org": rp.HOUSE_ORG, "withheld": withheld,
             "targets_note": "raw_ma_marketplace_orders is a view over raw_ma_fulfillment (mod-asset)"}
 
 
@@ -42100,7 +42132,9 @@ def _ma_effective_spec(org_id, report_key):
     default, else the Python default). Returns the spec dict or None if the report_key is unknown."""
     from app.modules.commcalc import report_pull as rp
     try:
-        specs = rp.resolve_report_specs(sb(), org_id, processor=None, only_enabled=False)
+        # scoped=False: a column map is the report's SHAPE, not an offer. Whether the tenant may
+        # PULL it is the sweep driver's question and is asked there.
+        specs = rp.resolve_report_specs(sb(), org_id, processor=None, only_enabled=False, scoped=False)
     except Exception:
         specs = [{**s, "org_id": org_id} for s in rp.default_specs(None)]
     for s in specs:
@@ -42112,7 +42146,10 @@ def _ma_effective_spec(org_id, report_key):
 def _ma_all_specs(org_id):
     from app.modules.commcalc import report_pull as rp
     try:
-        return [dict(s) for s in rp.resolve_report_specs(sb(), org_id, processor=None, only_enabled=True)]
+        # scoped=False: this is the MANUAL upload catalog. The connector registry answers which
+        # AUTOMATED connector a tenant is offered; a hand-uploaded file is not that question.
+        return [dict(s) for s in rp.resolve_report_specs(sb(), org_id, processor=None,
+                                                         only_enabled=True, scoped=False)]
     except Exception:
         return [{**s, "org_id": org_id} for s in rp.default_specs(None)]
 

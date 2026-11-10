@@ -256,26 +256,93 @@ def ingest_report_rows(client, org_id, target_table, mapped, *, source_id=None,
 
 
 # ── config resolution (org override wins over the house default; graceful fallback to defaults) ──
-def default_specs(processor="vidapay"):
-    """The canonical default report_pull_map rows (also mirrored into migration 207's seed)."""
-    procs = ("vidapay", "total_access")
+# THE CONNECTOR PREDICATE IS ASKED HERE (owner 2026-11-10, index §CORE-37). These rows are
+# CONNECTOR-KEYED — `processor` is the same slug `data_source.processor` and the connector registry
+# (mig 1014) dispatch on — and until this date they were listed to every tenant with no connector
+# predicate at all. That is what the owner saw: "why is vidapay connector showing in boost".
+#
+# THE CLASS, fixed here rather than on the page that happened to show it: a surface listing
+# connector-keyed config rows must run them through the registry, exactly as every connector surface
+# does. Asking it at THIS one home means the admin page, the sweep driver, the column-mapping seed
+# and the two other list endpoints all inherit the answer — a filter added on the page would have
+# been the fifth place to forget it.
+def connector_family(client, org_id, processor):
+    """The slugs that name the SAME connector as `processor` — its registry `key` plus its `aliases`.
+    DEREFERENCED from the connector registry, never spelled here: this function used to be a literal
+    pair of vendor slugs in code, which is the RULE TWO violation that let one carrier's reports read
+    as every tenant's. An unregistered processor is its own family of one."""
+    s = str(processor or "").strip().lower()
+    if not s:
+        return ()
+    try:
+        from app.modules.commcalc import connector_registry as _cr
+        rows, _ready = _cr.load_registry(client, org_id)
+        row = _cr.resolve(rows, s)
+    except Exception:
+        row = None
+    if not row:
+        return (s,)
+    return tuple(dict.fromkeys([row["key"], *(row.get("aliases") or []), s]))
+
+
+def default_specs(processor="vidapay", family=None):
+    """The canonical default report_pull_map rows (also mirrored into migration 207's seed).
+
+    `family` = the slugs that name the connector (from `connector_family`). Absent, the house
+    default's own processor spellings stand, so an un-migrated / offline caller behaves as before."""
+    procs = tuple(family) if family else ("vidapay", "total_access")
     return [dict(s) for s in DEFAULT_REPORT_SPECS
             if (processor is None or (s.get("processor") in procs))]
 
 
-def resolve_report_specs(client, org_id, processor="vidapay", only_enabled=True):
+def withheld_processors(client, org_id, rows):
+    """The `processor` slugs on these rows that the CONNECTOR REGISTRY does not offer this tenant —
+    asked once per distinct slug, through `connector_registry.scope_of`'s own context so the
+    declaration, the super-admin grants and the tenant's gating posture are all the registry's
+    answer and none of them is re-derived here. Degrades to EMPTY (withhold nothing) on any failure:
+    a lookup that breaks must never hide a tenant's own configuration from it."""
+    slugs = {str(r.get("processor") or "").strip().lower() for r in (rows or [])}
+    slugs.discard("")
+    if not slugs:
+        return set()
+    try:
+        from app.modules.commcalc import connector_registry as _cr
+        ctx = _cr.scope_context(client, org_id)
+        # A registry that could not be READ is not a registry that said no. `ready` is false when the
+        # table is absent or unreadable and the mirror answered instead, and a mirror-derived verdict
+        # must never hide a tenant's own configuration from it — the same degrade direction the
+        # posture takes (feature_gate: unknown resolves to `inherit`, never to a refusal).
+        if not ctx.get("ready"):
+            return set()
+        return {s for s in slugs if not _cr.scope_for(ctx, s).get("applies", True)}
+    except Exception:
+        return set()
+
+
+def resolve_report_specs(client, org_id, processor="vidapay", only_enabled=True, *, scoped):
     """Effective specs for this org: the org's own override row for a report_key wins, else the house
     default row, else (table/seed absent) the Python DEFAULT_REPORT_SPECS. Filtered to the processor
-    family and (optionally) enabled rows."""
+    family, to the connectors the registry OFFERS THIS TENANT (`scoped`, owner 2026-11-10) and
+    (optionally) enabled rows.
+
+    `scoped` is REQUIRED, with no default, because the two questions this home answers are different
+    ones and a caller that has not asked must not be able to answer (CLAUDE.md: the vocabulary rule,
+    applied to a verdict). `scoped=True` asks "what may this tenant PULL" — the pull driver and the
+    admin surface. `scoped=False` asks "what is this report's SHAPE", which is the question a column
+    map or an upload catalog is asking, and it is also how the super-admin dashboard sees the rows a
+    tenant is NOT offered. Making it a keyword with no default means a new pull caller that forgets
+    the gate fails at import of its own test, never leaks quietly."""
     rows = []
     try:
         rows = (client.schema("commcalc").table("report_pull_map").select("*")
                 .in_("org_id", [HOUSE_ORG, org_id]).execute().data) or []
     except Exception:
         rows = []
+    family = connector_family(client, org_id, processor) if processor is not None else ()
     if not rows:
-        rows = [{**s, "org_id": org_id, "_inherited": False} for s in default_specs(processor)]
-    procs = ("vidapay", "total_access")
+        rows = [{**s, "org_id": org_id, "_inherited": False}
+                for s in default_specs(processor, family=family)]
+    procs = family or ("vidapay", "total_access")
     by_key = {}
     for r in dict_rows(rows):
         if r.get("processor") and r.get("processor") not in procs and processor is not None:
@@ -290,6 +357,13 @@ def resolve_report_specs(client, org_id, processor="vidapay", only_enabled=True)
         elif is_override and str(cur.get("org_id")) != str(org_id):
             by_key[k] = r
     specs = list(by_key.values())
+    if scoped:
+        # A report whose CONNECTOR this tenant is not offered is not this tenant's report, however
+        # the row got here (house default, seed, or its own override).
+        hide = withheld_processors(client, org_id, specs)
+        if hide:
+            specs = [s for s in specs
+                     if str(s.get("processor") or "").strip().lower() not in hide]
     if only_enabled:
         specs = [s for s in specs if s.get("enabled", True)]
     specs.sort(key=lambda s: (s.get("sort_order") or 0, s.get("report_key") or ""))

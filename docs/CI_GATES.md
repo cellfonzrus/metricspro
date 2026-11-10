@@ -26,13 +26,13 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `mobile-ota-diagnose.yml` | 1 | `workflow_dispatch` |
 | `mobile-ota-update.yml` | 1 | `push`, `workflow_dispatch` |
 | `module-graph-guard.yml` | 2 | `pull_request`, `push`, `workflow_dispatch` |
-| `org-scope-guard.yml` | 18 | `pull_request`, `push`, `workflow_dispatch` |
+| `org-scope-guard.yml` | 19 | `pull_request`, `push`, `workflow_dispatch` |
 | `security.yml` | 14 | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
 | `tests.yml` | 15 | `pull_request`, `push`, `workflow_dispatch` |
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 613 gates
+## Gated — 615 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -264,6 +264,8 @@ the Runs on column is how you can tell.
 | `harness_face_retention.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_failure_triage.py` | `tests.yml` | Proof harnesses, group 4 of 4 (`harness-suite-4`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_fakedb.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_feature_gate.py` | `org-scope-guard.yml` | What each tenant is offered (`tenant-gates`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_feature_gate_lock.py` | `org-scope-guard.yml` | What each tenant is offered (`tenant-gates`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_feed_day_grain.py` | `carrier-vocab-guard.yml` | A feed window asks for the tenant's own day (one home, required at every caller) (`feed-window-tenant-day`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_feed_gap_days.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_feed_read_lock.py` | `org-scope-guard.yml` | A paged read is a read of the data (`feed-read-lock`) | `pull_request`, `push`, `workflow_dispatch` |
@@ -654,6 +656,7 @@ the Runs on column is how you can tell.
 | `npm:test` | `tests.yml` | Mobile unit tests (`mobile-tests`) | `pull_request`, `push`, `workflow_dispatch` |
 | `npm:test:proofs` | `tests.yml` | Frontend proofs (shrink-only register) (`frontend-proofs`) | `pull_request`, `push`, `workflow_dispatch` |
 | `npm:typecheck` | `carrier-vocab-guard.yml` | Frontend type check (tsc --noEmit over the whole frontend) (`frontend-typecheck`) | `pull_request`, `push`, `workflow_dispatch` |
+| `pytest` | `org-scope-guard.yml` | What each tenant is offered (`tenant-gates`) | `pull_request`, `push`, `workflow_dispatch` |
 | `pytest` | `org-scope-guard.yml` | The employee's reach (`employee-reach`) | `pull_request`, `push`, `workflow_dispatch` |
 | `pytest:integration` | `tests.yml` | Backend integration tests (`backend-integration`) | `pull_request`, `push`, `workflow_dispatch` |
 | `pytest:unit` | `tests.yml` | Backend unit tests (`backend-unit`) | `pull_request`, `push`, `workflow_dispatch` |

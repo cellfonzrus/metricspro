@@ -304,12 +304,25 @@ _i = _CC.index("def set_nav_label(")
 _setlab = _CC[_i:_i + 2600]
 check("I1 the write path checks for super-admin before re-granting",
       'not gc["super_admin"]' in _setlab and "403" in _setlab)
+# The three conditions moved into ONE home on 2026-11-10 (§CORE-41,
+# core/feature_gate.widening_is_platform_only) because the inline enumeration here had omitted
+# `connector:` and would have omitted `module:` — a tenant admin could have re-granted itself a module
+# its plan or gating posture excluded. The rules are unchanged and now wider, so each is pinned where
+# it lives, plus this writer dereferencing it. A writer that stops asking still fails I1b.
+_FG = re.sub(r"(?m)^\s*#.*$", "", read(os.path.join(HERE, "app", "modules", "core", "feature_gate.py")))
+_widen = _FG[_FG.index("def widening_is_platform_only("):][:900]
+check("I1b the write path asks that ONE home rather than carrying its own list",
+      "_feature_gate.widening_is_platform_only(scope, key, label)" in _setlab)
 check("I2 …only in the capability scope, so a plain RENAME is untouched",
-      "scope == 'cap'" in _setlab)
-check("I3 …only when WIDENING — 'show' is named, and hide/auto are not gated",
-      "'show'" in _setlab and "'hide'" not in _setlab.split("super_admin")[-1][:400])
+      "!= CAP_SCOPE:" in _widen and "return False" in _widen and 'CAP_SCOPE = "cap"' in _FG)
+check("I3 …only when WIDENING — the label is judged by grant_state, and hide/auto are not gated",
+      "grant_state(label) is not True" in _widen and 'GRANT_ON = "show"' in _FG
+      and "GRANT_OFF" not in _widen,
+      "a `== 'show'` test would let 'yes'/'on'/'1'/true walk past the refusal")
 check("I4 …and it covers BOTH gates, carrier and POS",
-      "'carrier:'" in _setlab and "'pos:'" in _setlab)
+      bool(re.search(r'PLATFORM_WIDEN_PREFIXES = [\s\S]{0,300}?"carrier:"', _FG))
+      and bool(re.search(r'PLATFORM_WIDEN_PREFIXES = [\s\S]{0,300}?"pos:"', _FG))
+      and "PLATFORM_WIDEN_PREFIXES" in _widen)
 check("I5 the refusal tells the reader what they CAN still do, rather than only saying no",
       "hide it" in _setlab and "reset" in _setlab)
 

@@ -257,9 +257,13 @@ BACKEND_RULES = [
      ["connector_scope=None", '"connector_scope": connector_scope', "connector_scope=_connector_scope_ctx(client, org)"]),
     ("core/control_box_api.py", "the control box passes the context and filters its portal evidence",
      ["connector_scope=_connector_scope_ctx(client, org_id)", '(r.get("connector_scope") or {}).get("applies", True)']),
-    ("commcalc/connector_registry.py", "the registry's visibility DEREFERENCES report_kinds.visible_kinds / hidden_kinds / applies",
-     ["_rk.visible_kinds(rows, declaration, caps, org_id, None, cap_prefix=CAP_PREFIX)",
-      "_rk.hidden_kinds(rows, declaration, caps, cap_prefix=CAP_PREFIX)", "_rk.applies("]),
+    # The POSTURE argument (mig 1119, owner 2026-11-10) is part of the pinned signature on purpose: a
+    # caller that drops it silently puts the tenant back on `inherit`, which is the un-wiring this
+    # lock exists to catch. `core/feature_gate` owns the truth table; this registry only passes it on.
+    ("commcalc/connector_registry.py", "the registry's visibility DEREFERENCES report_kinds.visible_kinds / hidden_kinds / applies, and passes the tenant's POSTURE straight through",
+     ["_rk.visible_kinds(rows, declaration, caps, org_id, None, cap_prefix=CAP_PREFIX,\n                             posture=posture)",
+      "_rk.hidden_kinds(rows, declaration, caps, cap_prefix=CAP_PREFIX, posture=posture)",
+      "_rk.applies(", '"posture": load_posture(client, org_id)']),
     ("commcalc/b2b_sweep.py", "the stub's copy reads the registry row (label / host), never a vendor",
      ["def not_implemented_message(connector)", "def login(session, user, pw, connector=None)"]),
     ("commcalc/vidapay_sweep.py", "the b2bsoft login family takes the registry label",

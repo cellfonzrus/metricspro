@@ -1283,6 +1283,12 @@ export const NAV: NavGroup[] = [
     { href: '/admin/tenants', label: 'Companies (Tenants)', icon: '🏢', module: 'admin', tileOnly: true, tile: 'Companies & Onboarding' },
     { href: '/operator/tenants', label: 'Tenant List & Sign-in', icon: '🛰️', module: 'admin', tileOnly: true, tile: 'Companies & Onboarding' },
     { href: '/admin/business-types', label: 'Business Types', icon: '🧭', module: 'admin', tileOnly: true, tile: 'Companies & Onboarding' },
+    // Tenant Gates (owner 2026-11-10, index §CORE-37) — WHAT EACH COMPANY IS OFFERED: modules,
+    // connectors and report kinds, with a posture per company and a new company starting gated. The
+    // backend gate is _require_super_admin on every endpoint; module 'admin' keeps it off every
+    // tenant menu, and it carries NO `scopes`, the same shape as its siblings here, so it adds no
+    // new permission surface and needs no SEED_VERSION bump.
+    { href: '/admin/tenant-gates', label: 'Tenant Gates', icon: '🚪', module: 'admin', tileOnly: true, tile: 'Companies & Onboarding' },
     // Carrier Documents (index §39) — THE per-carrier list of documents a new tenant uploads at setup (house rows of the
     // report-kind registry). Platform-only page: its only home is this toolbox.
     { href: '/admin/carrier-documents', label: 'Carrier Documents', icon: '📑', module: 'admin', tileOnly: true, tile: 'Companies & Onboarding' },
@@ -1320,6 +1326,9 @@ export const NAV: NavGroup[] = [
     // Business Types (index §35) — the platform super-admin edits what each kind of business sees (pages, modules,
     // closing-form inputs). The backend gate is _require_super_admin; module 'admin' keeps it off every tenant menu.
     { href: '/admin/business-types', label: 'Business Types', icon: '🧭', module: 'admin', platformOnly: true },
+    // Tenant Gates (owner 2026-11-10) — the per-company gate board. platformOnly for the same reason
+    // as /admin/business-types above: a tenant admin has no business reaching another tenant's gates.
+    { href: '/admin/tenant-gates', label: 'Tenant Gates', icon: '🚪', module: 'admin', platformOnly: true },
     { href: '/admin/tenant-settings', label: 'Pay Period & Work-Week', icon: '📅', module: 'admin' },
     { href: '/admin/billing', label: 'Billing (Tenants)', icon: '💳', module: 'admin', platformOnly: true },
     // Pricing & Free Trial (mig 908) — where the PUBLIC price list and the trial length are set.
