@@ -1855,6 +1855,12 @@ FACTS: dict[str, dict] = {
             # spellings matched no option at all. Rows and options are now both STAMPED with this
             # home's key, and the comparison is made on that.
             'app/modules/payables/router.py': ('_sid',),
+            # COMMCALC-57 (2026-11-10) - the carrier portal's PICKER LABELS. `_same_label` folds
+            # two option labels before comparing them, so the portal's own spelling of a filter
+            # value ("Daily", "daily ", "June- 26") cannot read as a different value. It rides
+            # this fold rather than carrying a sixth alnum-only copy, which would not fold an
+            # accent - and a carrier portal is exactly where an accented label turns up.
+            'app/modules/commcalc/epay_sweep.py': ('_squash_key',),
         },
     },
     'carrier_dollar_component': {

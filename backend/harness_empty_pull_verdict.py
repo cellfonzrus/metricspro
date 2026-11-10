@@ -492,10 +492,13 @@ check("H13 the failure the operator reads names the panel's real options",
 
 # MATCHING ON MEANING. The portal writes "June- 26" and re-spells its own labels; a comparison on
 # punctuation fails a control that took the value.
-check("H14 labels are compared on meaning, in one place",
+check("H14 labels are compared on meaning, in one place, through THE spelling fold",
       EPAY.count("def _same_label(") == 1
-      and "isalnum" in fsrc(ES._same_label)
-      and ES._same_label("Daily", " daily: ") and not ES._same_label("Daily", "Weekly"))
+      and "_squash_key(" in fexec(ES._same_label)
+      and "isalnum" not in fexec(ES._same_label)
+      and ES._same_label("Daily", " daily: ") and not ES._same_label("Daily", "Weekly")
+      and ES._same_label("Caf\u00e9", "Cafe"),
+      "a private alnum fold does NOT fold accents - str.isalnum() is true for them (2026-10-10)")
 check("H15 the setter compares the control's answer that way, not by ==",
       "_same_label(selected, DAILY_INTERVAL)" in fexec(ES._set_daily_range)
       and 'str(selected).strip() != DAILY_INTERVAL' not in EPAY)

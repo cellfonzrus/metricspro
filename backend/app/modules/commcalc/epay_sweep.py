@@ -35,6 +35,7 @@ WAF-protected, so Railway's datacenter IP must be allowed to reach it; if a run 
 from datetime import datetime, timedelta, timezone
 from app.modules.commcalc import feed_period as _feed_period  # THE feed-row month + per-day stamp (one home, pure)
 from app.modules.notify import report_filters as _report_filters  # THE tenant's-today home (pure leaf; see feed_today)
+from app.modules.account.store_identity import squash_key as _squash_key  # THE spelling fold (pure leaf; folds accents, case and punctuation — see _same_label)
 
 try:
     from app.modules.commcalc import url_guard as _url_guard      # SSRF guard (finding C4)
@@ -887,9 +888,14 @@ def pick_jqx_item(page, wants):
 
 
 def _same_label(a, b):
-    """Two labels meaning the same thing. The portal's own spelling is not ours to predict."""
-    keep = lambda t: "".join(c for c in str(t or "").lower() if c.isalnum())
-    return keep(a) == keep(b)
+    """Two labels meaning the same thing. The portal's own spelling is not ours to predict.
+
+    Dereferences `account.store_identity.squash_key` — THE spelling fold — rather than carrying a
+    sixth copy of `"".join(... if ch.isalnum())`. That shape looks right and is not: `str.isalnum()`
+    is TRUE for accented letters, so a private copy silently fails to fold them (measured
+    2026-10-10, and locked since). A carrier portal is exactly where an accented label turns up.
+    """
+    return _squash_key(a) == _squash_key(b)
 
 
 #: What the "Summarize by" control must be set to for this report to return rows at all.
