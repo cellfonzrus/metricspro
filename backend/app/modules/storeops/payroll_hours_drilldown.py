@@ -87,14 +87,21 @@ WHAT GETS NO PANEL HERE, AND WHICH RULING SAYS SO
   · **A FIGURE OVER ROWS NONE OF WHICH WERE COUNTED**, and a zero over them: refused by the one
     home's own `served_tiles` rule, dereferenced here and not copied.
 
-TWO LIVE DEFECTS — REPORTED, REPRODUCED, NOT REPAIRED, NO FIGURE MOVED
+ONE LIVE DEFECT LEFT — REPORTED, REPRODUCED, NOT REPAIRED (the first was FIXED, see below)
 ─────────────────────────────────────────────────────────────────────
- 1. **`storeops.manual_hours` NEVER REACHES THIS REPORT'S FIGURE.** 569 hand-entered correction rows
-    exist (37 house, 532 Luxelink) and `GET /storeops/payroll` deliberately does not read that table
-    (§14y records it; the router says so in its own comment). So a correction a manager typed on the
-    Time Clock screen is invisible to the Payroll Report, and this family therefore NEVER names that
-    relation: naming it would be a provenance claim about a read that did not happen. The panel names
-    what answered, and this docstring names what did not.
+ 1. **FIXED 2026-11-11 (§STOREOPS-07).** This read "`storeops.manual_hours` NEVER REACHES THIS
+    REPORT'S FIGURE" for four months, and it was the defect the owner reported: *"i just fixed the
+    hours in ny logistics , went in to check it still shows the old hours"*. By then there were
+    **616** correction rows (51 house, 565 LuxeLink; ±4,441h gross), eight of them typed in the ten
+    days before the report, and `GET /storeops/payroll` read none of them — on NY LOGISTICS, which
+    holds punches and not one shift row in its pay period, there was nothing a manager could type
+    that would move the figure at all.
+    `GET /storeops/payroll` now folds a correction through
+    `payroll_hours_basis.corrections_by_day`, so the relation IS named: a corrected day resolves
+    `clocked_corrected`, which `BASIS_RELATIONS` below already maps. A correction that is
+    legitimately NOT folded — the org declared `count_manual_hours = false`, or the day falls before
+    its `corrections_effective_from` — carries the one home's own sentence for why, so an uncounted
+    correction is never a blank. The provenance claim is now about a read that DID happen.
  2. **A MANAGER'S CORRECTION IS INDISTINGUISHABLE FROM THE SCHEDULE IT WAS TYPED OVER.** On this
     read a `clocked_corrected` day is a `shifts.actual_hours` edit — the same relation a
     `schedule_opt_in` day comes out of — so the two bases name ONE table and are told apart only by

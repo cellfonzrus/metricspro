@@ -76,7 +76,11 @@ from app.modules.storeops import payroll_hours_basis as _hb
 #: THE COLUMN LISTS, spelled ONCE. They are the superset of what `clock_variance_api._load` read and
 #: what `build_evidence` documents it takes, so neither caller narrows the other's evidence.
 PUNCH_SELECT = "employee_id,work_date,hours,clock_in,clock_out,store_code,auto_clocked_out"
-MANUAL_SELECT = "employee_id,work_date,hours,reason"
+#: `id` IS IN THE LIST because the actual-hours drill-down reaches its corrections through this read
+#: (§STOREOPS-07) and renders each row by its own id — both to key the payroll-change-log "edited"
+#: lookup and to let a reader delete the right one. A read that cannot name the row it returned
+#: forces its caller to go and fetch the row again, which is how a second read of one fact starts.
+MANUAL_SELECT = "id,employee_id,work_date,hours,reason"
 
 #: The tables this module is the one reader of, on the pay path. Named so the lock can assert that
 #: no other pay-path module reads them for a period.

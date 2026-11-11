@@ -182,6 +182,12 @@ class FakeQuery:
     def order(self, k, desc=False):
         self._order = (k, desc); return self
 
+    def range(self, a, b):
+        # `payroll_evidence._range_rows` pages with `.range(0, 49999)` — the ONE read every pay path
+        # now uses (§STOREOPS-07). Without this the read raised AttributeError, reported a blocker
+        # and applied nothing, so this double silently exercised the DEGRADED path only.
+        return self
+
     def limit(self, n):
         self._limit = n; return self
 
@@ -286,7 +292,8 @@ class FakeClient:
 
 fake = FakeClient()
 
-import app.modules.storeops.router as R  # noqa: E402
+import app.modules.storeops.router as R
+from app.modules.storeops import payroll_hours_basis as _hb_mod  # noqa: E402
 import app.modules.core.router as core_router  # noqa: E402
 
 
@@ -759,27 +766,61 @@ fake.seed("storeops", "employees", [
      "pay_rate": 22.0, "is_active": True},
 ])
 
-# The REPORT row (GET /payroll) — the ground truth this drill-down claims to reconcile to. Confirms
-# by construction (not just by reading the source) that /payroll really doesn't see manual_hours:
-# if it did, this row's actual_hours would be 10.5 (8 + 2.5), not 8.
+# G1-G5 REWRITTEN 2026-11-11 (§STOREOPS-07). They used to assert that `/payroll` never reads
+# `storeops.manual_hours` and that this panel therefore shows a correction `counted: false` and
+# leaves it out of the reconciling total. That was honest reporting of a real defect for four
+# months, and it IS the defect the owner reported: 616 hand-typed corrections, none of them
+# reaching any figure. Both now fold the correction, so what this section proves is the thing that
+# actually matters and always did — **the panel and the row it explains agree**.
+#
+# THE REGRESSION THIS SECTION CAUGHT, worth keeping in mind: the first cut of the fix gave the
+# drill-down its own `manual_hours` query while `/payroll` used `payroll_evidence.read_pay_evidence`.
+# This double had no `.range()`, so the one read failed and applied nothing while the panel's own
+# query succeeded — the panel said 10.5 h about a row that said 8.0. Two reads of one fact disagree
+# the first time either of them fails. The panel now goes through the one read too.
 report_rows = R.get_payroll(start="2026-07-06", end="2026-07-06", authorization=AUTH, org_id=ORG)
 priya_report = next(r for r in report_rows if r["employee_id"] == "E45")
-check("G1 CONTROL: /payroll's own actual_hours is 8.0 — confirms it never reads manual_hours "
-      "(would be 10.5 if it did)", priya_report["actual_hours"] == 8.0, priya_report)
+check("G1 /payroll FOLDS the hand-typed correction into its figure (8.0 + 2.5 = 10.5)",
+      priya_report["actual_hours"] == 10.5, priya_report)
+check("G1b …and names the correction as the basis, so the figure is not unexplained",
+      priya_report.get("hours_by_basis", {}).get("clocked_corrected") == 10.5
+      and priya_report.get("hours_corrected") == 2.5, priya_report)
 
 detail_with_manual = R.payroll_actual_hours_detail(employee_id="E45", start="2026-07-06", end="2026-07-06",
                                                      authorization=AUTH, org_id=ORG)
-check("G2 drill-down total_actual_hours STILL equals the report row's 8.0 (NOT 10.5) — the manual "
-      "hours entry is excluded from the reconciling total, matching /payroll exactly",
-      detail_with_manual["total_actual_hours"] == priya_report["actual_hours"] == 8.0, detail_with_manual)
-check("G3 the manual entry IS shown (transparency) but marked counted:false",
+check("G2 the drill-down total EQUALS the report row it explains — 10.5 on both sides",
+      detail_with_manual["total_actual_hours"] == priya_report["actual_hours"] == 10.5,
+      detail_with_manual)
+check("G3 the manual entry is shown AND marked counted:true, with no reason-not-to beside it",
       len(detail_with_manual["days"][0]["manual"]) == 1
-      and detail_with_manual["days"][0]["manual"][0]["counted"] is False
+      and detail_with_manual["days"][0]["manual"][0]["counted"] is True
+      and detail_with_manual["days"][0]["manual"][0]["not_counted_reason"] is None
       and detail_with_manual["days"][0]["manual"][0]["hours"] == 2.5, detail_with_manual["days"])
-check("G4 the excluded amount is surfaced separately (total_manual_hours_not_in_payroll == 2.5), "
-      "not silently dropped", detail_with_manual["total_manual_hours_not_in_payroll"] == 2.5, detail_with_manual)
-check("G5 the day is still marked 'edited' (a real correction happened, worth flagging) even though "
-      "it's excluded from the total", detail_with_manual["days"][0]["edited"] is True, detail_with_manual["days"])
+check("G4 nothing is left OUT of the total any more, so the excluded tally is 0.0",
+      detail_with_manual["total_manual_hours_not_in_payroll"] == 0.0, detail_with_manual)
+check("G5 the day is still marked 'edited' — a real correction happened and is worth flagging",
+      detail_with_manual["days"][0]["edited"] is True, detail_with_manual["days"])
+# G6 AN UNCOUNTED CORRECTION STILL CARRIES ITS REASON. An org that declared `count_manual_hours =
+# false` (or a day before its corrections floor) gets the uncorrected figure on BOTH surfaces, and
+# the panel says why rather than printing a bare `false` — which is what the old behaviour did to
+# every one of the 616 rows.
+fake.store[("storeops", "payroll_hours_basis_config")] = [
+    {"org_id": ORG, "hours_basis_mode": "schedule_fallback", "count_manual_hours": False},
+]
+_hb_mod.invalidate_config()
+_off_report = next(r for r in R.get_payroll(start="2026-07-06", end="2026-07-06", authorization=AUTH,
+                                            org_id=ORG) if r["employee_id"] == "E45")
+_off_detail = R.payroll_actual_hours_detail(employee_id="E45", start="2026-07-06", end="2026-07-06",
+                                             authorization=AUTH, org_id=ORG)
+check("G6 an org that declared count_manual_hours FALSE gets 8.0 on BOTH surfaces",
+      (_off_report["actual_hours"], _off_detail["total_actual_hours"]) == (8.0, 8.0),
+      (_off_report, _off_detail))
+check("G6b …and the uncounted correction carries the one home's own reason, never a bare false",
+      _off_detail["days"][0]["manual"][0]["counted"] is False
+      and bool(_off_detail["days"][0]["manual"][0]["not_counted_reason"]),
+      _off_detail["days"][0]["manual"])
+fake.store[("storeops", "payroll_hours_basis_config")] = []
+_hb_mod.invalidate_config()
 
 print(f"[Section G] {len(PASS)} passed, {len(FAIL)} failed so far")
 

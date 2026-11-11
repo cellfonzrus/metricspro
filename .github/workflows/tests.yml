@@ -1316,6 +1316,14 @@ jobs:
         working-directory: backend
         if: always()   # a red harness must not hide the 60 after it
         run: python3 harness_payroll_row_merge.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_hours_correction_reaches_figure
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_hours_correction_reaches_figure.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_hours_correction_wiring
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_hours_correction_wiring.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: harness_people_attention
         working-directory: backend
         if: always()   # a red harness must not hide the 60 after it

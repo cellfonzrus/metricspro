@@ -59,6 +59,9 @@ from app.modules.storeops import salary_expense as _salexp
 # THE ONE HOME for "which hours is this employee paid for on this day, and on what basis" (§14y),
 # and the clock-report variance / Monday ask / Tuesday gate it feeds (§14z).
 from app.modules.storeops import payroll_hours_basis as _hours_basis
+#: THE ONE READ of a period's punches and hand-typed corrections (index §14y). The pay path
+#: dereferences it rather than growing a second `manual_hours` query of its own — §STOREOPS-07.
+from app.modules.storeops import payroll_evidence as _payroll_evidence
 # THE ONE punch/correction read on the pay path, and the interlock that gates paying from it (§14y).
 from app.modules.storeops import payroll_evidence as _payevid
 from app.modules.storeops import clock_variance as _clockvar
@@ -782,26 +785,31 @@ def reconcile_timeoff_duplicates(authorization: str = Header(default=""), org_id
                     fixed.append(x["id"])
     return {"ok": True, "reconciled": len(fixed), "ids": fixed}
 
-# ── P0 payroll performance (mig 407, 2026-07-22): Postgres-side month aggregation ───────────────
-# /payroll + /payroll-by-store used to pull EVERY month shift row (select *) plus up to 20,000
-# timelog rows over PostgREST into Python and aggregate there — seconds of transfer for kiosk-heavy
-# tenants (luxelink: kiosk punches with no formal schedule ride the timelog-fallback path).
-# storeops.payroll_month_rows() (migration 407) computes per-(employee_id, store_code) aggregates
-# in Postgres with the exact row-level semantics of the legacy loops (actual==0 → scheduled
-# fallback, closed-punch-only timelog, the no-double-count shift-day rule), so the handlers merge
-# a handful of group rows instead. If the RPC is missing (mig 407 not yet run) or fails in ANY
-# way, both handlers fall back to the legacy Python aggregation unchanged — an un-run migration
-# never breaks payroll (AGENT_CONTRACT §5). Equivalence proof (money-adjacent):
-# backend/harness_payroll_rpc_equivalence.py asserts BYTE-IDENTICAL output between the two paths.
+# ── P0 payroll performance (mig 407, 2026-07-22) — RETIRED FROM THE PAY PATH 2026-11-11 ─────────
+# /payroll + /payroll-by-store used to try `storeops.payroll_month_rows()` (migrations 407/913/914),
+# a Postgres-side per-(employee, store) aggregation, and fall back to the Python loops only when the
+# RPC was missing. It was a genuine transfer win and it answered a question it could not see the
+# facts for: the SQL decided `correction > closed punch > schedule` with no access to
+# `storeops.manual_hours` or to `storeops.payroll_hours_basis_config`. So on every call that named
+# a month or a range — every call this report makes — the tenant's declaration and all 616
+# hand-typed corrections were out of the figure (owner report 2026-11-11, §STOREOPS-07).
+#
+# THE RPC IS NOT CALLED FROM THE PAY PATH ANY MORE. The question needs per-(person, day) evidence
+# and a config row, and an aggregate can carry neither, so there is ONE derivation: the Python path,
+# dereferencing `payroll_hours_basis` the way the other four pay surfaces already do.
+# `harness_hours_correction_reaches_figure.py` §E1 fails the build if a second one returns.
+#
+# THE COST, STATED: a kiosk-heavy tenant's call reads its own shift rows plus up to 20,000 timelog
+# rows again. For a PAY PERIOD (a week or a fortnight — what this report is actually asked for) that
+# is hundreds of rows, not thousands; the RPC was written when the report was month-wide and
+# basis-free. A correct figure that takes longer beats a fast figure that ignores a correction.
 # ── Arbitrary pay-period ranges (2026-07-25, owner: "need time range to create payroll for the
 # employees universally") ───────────────────────────────────────────────────────────────────────
 # /payroll + /payroll-by-store originally only understood `month` ('YYYY-MM'). Real payroll runs on
-# biweekly/semimonthly/custom periods that don't line up with calendar months. storeops.payroll_month_rows
-# (mig 407) already takes arbitrary (p_lo, p_hi) dates with no month assumption baked into its SQL — it
-# was named for its ORIGINAL caller, not its actual bound semantics — so an explicit start/end range reuses
-# the SAME RPC/legacy paths with NO new migration. `month` stays supported byte-identically (still the
-# only param the harness's month-mode assertions ever pass); start/end are additive and take precedence
-# when both are given, so a caller can never end up with an ambiguous half-range.
+# biweekly/semimonthly/custom periods that don't line up with calendar months, so an explicit
+# start/end range is taken with no month assumption and NO new migration. `month` stays supported
+# byte-identically; start/end are additive and take precedence when both are given, so a caller can
+# never end up with an ambiguous half-range.
 # ── Salary pay-basis (owner directive 2026-07-27, migrations 416/417) ───────────────────────────────
 # See payroll_salary.py's module docstring for the full design. These two helpers are the ONLY I/O
 # this feature needs beyond widening an existing `employees` SELECT: reading the tenant's own
@@ -874,29 +882,6 @@ def _resolve_range(month, start, end):
         y, m = int(parts[0]), int(parts[1])
         return f"{month}-01", (f"{y + 1}-01-01" if m == 12 else f"{y}-{m + 1:02d}-01")
     return None, None
-
-
-def _payroll_month_groups(org_id, lo, hi):
-    """(shift_groups, timelog_groups) from storeops.payroll_month_rows (mig 407), each sorted by
-    first_ord (min shifts.id / epoch of min timelog.created_at) so the callers rebuild the SAME
-    first-seen insertion order the legacy row loops had — first-row-wins name resolution,
-    dominant-store tie-breaks, and stable same-name sort order all reproduce exactly.
-    Returns None when the range is open (no month given) or the RPC isn't available — callers
-    must then use the legacy full-row Python path."""
-    if not (lo and hi):
-        return None
-    try:
-        data = (sb().rpc("payroll_month_rows", {"p_org_id": org_id, "p_lo": lo, "p_hi": hi})
-                .execute().data) or []
-
-        def _ord(g):
-            v = g.get("first_ord")
-            return (v is None, v if v is not None else 0.0)
-        shift_groups = sorted((g for g in data if g.get("kind") == "shift"), key=_ord)
-        tl_groups = sorted((g for g in data if g.get("kind") == "timelog"), key=_ord)
-        return shift_groups, tl_groups
-    except Exception:
-        return None   # RPC missing/unreachable -> degrade gracefully to the legacy Python path
 
 
 # ── Inactive-employee phantom-schedule fix (2026-07-25, owner: "the employees assigned to [inactive
@@ -1314,153 +1299,206 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
     # DB happened to return first (the old behavior) or their static home_store.
     store_hours: dict = {}
 
-    groups = _payroll_month_groups(org_id, lo, hi)
-    if groups is not None:
-        # FAST PATH (mig 407): merge Postgres-side per-(employee, store) aggregates. actual_eff_sum
-        # already carries the per-ROW actual==0->scheduled fallback; timelog groups already exclude
-        # open punches and shift-covered days (no-double-count). Group order = first-row order.
-        shift_groups, tl_groups = groups
-        # Inactive employees' RPC groups can't be phantom-filtered post-aggregation (no per-row
-        # granularity survives the SQL GROUP BY) — excluded here and recomputed below via
-        # _inactive_activity_rows, the SAME shared path the legacy branch also uses.
-        if inactive_ids:
-            shift_groups = [g for g in shift_groups if g.get("employee_id") not in inactive_ids]
-            tl_groups = [g for g in tl_groups if g.get("employee_id") not in inactive_ids]
-        for g in shift_groups:
-            eid = g.get("employee_id")
+    # ── THE mig-914 RPC FAST PATH IS RETIRED FROM THE PAY PATH (2026-11-11, §STOREOPS-07) ───────
+    # `storeops.payroll_month_rows` decided the precedence `correction > closed punch > schedule`
+    # IN SQL. It could not read `storeops.manual_hours` and it could not read
+    # `storeops.payroll_hours_basis_config`, so whenever it answered — which was on every call that
+    # named a month or a range, i.e. every call this report makes — the tenant's own declaration and
+    # every hand-typed correction were silently out of the figure. That is the owner's report of
+    # 2026-11-11 ("i just fixed the hours in ny logistics ... it still shows the old hours"), and it
+    # is the duplicate-derivation defect the index rules forbid: two paths answered "what are this
+    # person's paid hours" and only one of them could see the facts.
+    #
+    # IT IS NOT REPLACED BY A CLEVERER RPC. The question needs per-(person, day) evidence and a
+    # config row; an aggregate cannot carry either. So the ONE derivation is the Python path below,
+    # which dereferences `payroll_hours_basis` — the one home — exactly as the other four pay
+    # surfaces already do. `harness_hours_correction_reaches_figure.py` §E1 fails the build if a
+    # second one reappears here.
+    #
+    # ALSO WORTH KNOWING: `harness_payroll_rpc_equivalence.py`, the lock that would have caught this
+    # drift, was pinned on `harness_unrun_pending.txt` (never run in CI) and had rotted to 26
+    # passed / 8 failed on `main` — the fast path had stopped emitting the basis keys entirely. A
+    # lock nobody runs is not a lock.
+    # THE ONE PATH: full row fetch + Python aggregation, dereferencing the one home per row.
+    # Inactive employees are excluded from this loop and recomputed via the shared, phantom-aware
+    # _inactive_activity_rows path below.
+    q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
+    if lo and hi:
+        q = q.gte("shift_date", lo).lt("shift_date", hi)
+    shifts = q.execute().data or []
+    # Fetch the period's CLOSED punches up-front so the shift loop below already knows which days
+    # are punch-driven (PUNCH-DRIVEN PAY, 2026-08-24). Open range (month=None) has no timelog
+    # basis -> empty, so the shift loop degrades to the pre-existing act>0?act:sched behavior.
+    tl = []
+    if lo and hi:
+        tl = (sb().table("timelog").select("employee_id,employee_name,hours,clock_out,work_date,store_code")
+              .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
+    _hb_cfg = _hours_basis_cfg(org_id)
+    manual_days, punch_days = _punch_driven_day_maps(shifts, tl, _hb_cfg)
+    for s in shifts:
+        eid = s.get("employee_id")
+        if eid in inactive_ids:
+            continue   # handled by _inactive_activity_rows below (phantom-schedule-only excluded there)
+        emp = emp_map.get(eid, {})
+        if eid not in summary:
+            summary[eid] = {
+                "employee_id": eid,
+                "name": s.get("employee_name") or emp.get("name", ""),
+                "store": "",  # filled below from store_hours (dominant store), home_store fallback
+                "pay_rate": float(emp.get("pay_rate") or 0),
+                "scheduled_hours": 0,
+                "actual_hours": 0,
+                "shifts": 0,
+            }
+        sched = float(s.get("scheduled_hours") or 0)
+        # PUNCH-DRIVEN PAY: actual_hours>0 (manual) wins; else the punch drives (shift -> 0) on a
+        # day with a closed punch and no manual correction; else the scheduled fallback. The punch
+        # itself is added by the timelog loop below, so a punch-driven day counts its hours ONCE.
+        act, _act_basis = _shift_actual_contribution_with_basis(s, manual_days, punch_days, _hb_cfg)
+        summary[eid]["scheduled_hours"] += sched
+        summary[eid]["actual_hours"]    += act
+        summary[eid]["shifts"] += 1
+        # WHY THESE HOURS (owner 2026-10-10). Additive and purely explanatory: the figures above
+        # are untouched. A day the punch measured contributes `measured_zero` here and its hours
+        # arrive from the punch loop below as `clocked` — so the tally shows BOTH, which is the
+        # honest account of a period that mixes punched and scheduled days.
+        _bt = summary[eid].setdefault("hours_by_basis", {})
+        _bt[_act_basis] = round(_bt.get(_act_basis, 0.0) + act, 4)
+        st = (s.get("store_code") or "").strip()
+        if st:
+            sh = store_hours.setdefault(eid, {})
+            sh[st] = sh.get(st, 0.0) + sched + act
+
+    # UNIVERSAL FALLBACK (2026-07-18, payroll data-flow audit — luxelink showed employees+shifts+rates
+    # but an empty Payroll Report for periods where reps clock in via the kiosk without a formal
+    # schedule entered): a real clock-in/out is "existing platform data" this report was silently
+    # dropping whenever no shifts row existed for that employee/day. Under PUNCH-DRIVEN PAY a punch
+    # counts UNLESS a manual correction (shift.actual_hours>0) covers its day — a merely-scheduled
+    # shift no longer suppresses it (the schedule contributed 0 above, so the punch is what's paid,
+    # never both). scheduled_hours stays 0 for a punch with no schedule of its own.
+    if lo and hi:
+        for t in tl:
+            if not (t.get("clock_out") and t.get("hours") is not None):
+                continue   # only CLOSED punches count (matches /payroll-raw's own rule)
+            eid = t.get("employee_id")
+            if eid in inactive_ids:
+                continue   # handled by _inactive_activity_rows below (always real activity, no fallback needed)
+            wd = str(t.get("work_date") or "")[:10]
+            if not eid or not wd or not _punch_counts_for_pay(t, manual_days, _hb_cfg):
+                continue   # manual correction that day wins -> punch excluded (never double-count)
             emp = emp_map.get(eid, {})
             if eid not in summary:
                 summary[eid] = {
                     "employee_id": eid,
-                    "name": g.get("employee_name") or emp.get("name", ""),
-                    "store": "",  # filled below from store_hours (dominant store), home_store fallback
-                    "pay_rate": float(emp.get("pay_rate") or 0),
-                    "scheduled_hours": 0,
-                    "actual_hours": 0,
-                    "shifts": 0,
-                }
-            sched = float(g.get("scheduled_sum") or 0)
-            act = float(g.get("actual_eff_sum") or 0)
-            summary[eid]["scheduled_hours"] += sched
-            summary[eid]["actual_hours"]    += act
-            summary[eid]["shifts"] += int(g.get("shift_count") or 0)
-            st = (g.get("store_code") or "").strip()
-            if st:
-                sh = store_hours.setdefault(eid, {})
-                sh[st] = sh.get(st, 0.0) + sched + act
-        for g in tl_groups:
-            eid = g.get("employee_id")
-            if not eid:
-                continue
-            emp = emp_map.get(eid, {})
-            if eid not in summary:
-                summary[eid] = {
-                    "employee_id": eid,
-                    "name": g.get("employee_name") or emp.get("name", ""),
+                    "name": t.get("employee_name") or emp.get("name", ""),
                     "store": "",
                     "pay_rate": float(emp.get("pay_rate") or 0),
                     "scheduled_hours": 0,
                     "actual_hours": 0,
                     "shifts": 0,
                 }
-            hrs = float(g.get("timelog_hours_sum") or 0)
+            hrs = float(t.get("hours") or 0)
             summary[eid]["actual_hours"] += hrs
-            st = (g.get("store_code") or "").strip()
+            # The punch's own basis, from the one home — never the word 'clocked' spelled here.
+            _pb = _hours_basis.CLOCKED
+            _bt = summary[eid].setdefault("hours_by_basis", {})
+            _bt[_pb] = round(_bt.get(_pb, 0.0) + hrs, 4)
+            st = (t.get("store_code") or "").strip()
             if st:
                 sh = store_hours.setdefault(eid, {})
                 sh[st] = sh.get(st, 0.0) + hrs
-    else:
-        # LEGACY PATH (pre-mig-407 fallback): full row fetch + Python aggregation — UNCHANGED for
-        # active/unknown employees. Inactive employees are excluded from this loop (below) and
-        # recomputed via the SAME shared _inactive_activity_rows path the fast branch uses.
-        q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
-        if lo and hi:
-            q = q.gte("shift_date", lo).lt("shift_date", hi)
-        shifts = q.execute().data or []
-        # Fetch the period's CLOSED punches up-front so the shift loop below already knows which days
-        # are punch-driven (PUNCH-DRIVEN PAY, 2026-08-24). Open range (month=None) has no timelog
-        # basis -> empty, so the shift loop degrades to the pre-existing act>0?act:sched behavior.
-        tl = []
-        if lo and hi:
-            tl = (sb().table("timelog").select("employee_id,employee_name,hours,clock_out,work_date,store_code")
-                  .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
-        _hb_cfg = _hours_basis_cfg(org_id)
-        manual_days, punch_days = _punch_driven_day_maps(shifts, tl, _hb_cfg)
-        for s in shifts:
-            eid = s.get("employee_id")
-            if eid in inactive_ids:
-                continue   # handled by _inactive_activity_rows below (phantom-schedule-only excluded there)
-            emp = emp_map.get(eid, {})
-            if eid not in summary:
-                summary[eid] = {
-                    "employee_id": eid,
-                    "name": s.get("employee_name") or emp.get("name", ""),
-                    "store": "",  # filled below from store_hours (dominant store), home_store fallback
-                    "pay_rate": float(emp.get("pay_rate") or 0),
-                    "scheduled_hours": 0,
-                    "actual_hours": 0,
-                    "shifts": 0,
-                }
-            sched = float(s.get("scheduled_hours") or 0)
-            # PUNCH-DRIVEN PAY: actual_hours>0 (manual) wins; else the punch drives (shift -> 0) on a
-            # day with a closed punch and no manual correction; else the scheduled fallback. The punch
-            # itself is added by the timelog loop below, so a punch-driven day counts its hours ONCE.
-            act, _act_basis = _shift_actual_contribution_with_basis(s, manual_days, punch_days, _hb_cfg)
-            summary[eid]["scheduled_hours"] += sched
-            summary[eid]["actual_hours"]    += act
-            summary[eid]["shifts"] += 1
-            # WHY THESE HOURS (owner 2026-10-10). Additive and purely explanatory: the figures above
-            # are untouched. A day the punch measured contributes `measured_zero` here and its hours
-            # arrive from the punch loop below as `clocked` — so the tally shows BOTH, which is the
-            # honest account of a period that mixes punched and scheduled days.
-            _bt = summary[eid].setdefault("hours_by_basis", {})
-            _bt[_act_basis] = round(_bt.get(_act_basis, 0.0) + act, 4)
-            st = (s.get("store_code") or "").strip()
-            if st:
-                sh = store_hours.setdefault(eid, {})
-                sh[st] = sh.get(st, 0.0) + sched + act
 
-        # UNIVERSAL FALLBACK (2026-07-18, payroll data-flow audit — luxelink showed employees+shifts+rates
-        # but an empty Payroll Report for periods where reps clock in via the kiosk without a formal
-        # schedule entered): a real clock-in/out is "existing platform data" this report was silently
-        # dropping whenever no shifts row existed for that employee/day. Under PUNCH-DRIVEN PAY a punch
-        # counts UNLESS a manual correction (shift.actual_hours>0) covers its day — a merely-scheduled
-        # shift no longer suppresses it (the schedule contributed 0 above, so the punch is what's paid,
-        # never both). scheduled_hours stays 0 for a punch with no schedule of its own.
-        if lo and hi:
-            for t in tl:
-                if not (t.get("clock_out") and t.get("hours") is not None):
-                    continue   # only CLOSED punches count (matches /payroll-raw's own rule)
-                eid = t.get("employee_id")
-                if eid in inactive_ids:
-                    continue   # handled by _inactive_activity_rows below (always real activity, no fallback needed)
-                wd = str(t.get("work_date") or "")[:10]
-                if not eid or not wd or not _punch_counts_for_pay(t, manual_days, _hb_cfg):
-                    continue   # manual correction that day wins -> punch excluded (never double-count)
-                emp = emp_map.get(eid, {})
-                if eid not in summary:
-                    summary[eid] = {
-                        "employee_id": eid,
-                        "name": t.get("employee_name") or emp.get("name", ""),
-                        "store": "",
-                        "pay_rate": float(emp.get("pay_rate") or 0),
-                        "scheduled_hours": 0,
-                        "actual_hours": 0,
-                        "shifts": 0,
-                    }
-                hrs = float(t.get("hours") or 0)
-                summary[eid]["actual_hours"] += hrs
-                # The punch's own basis, from the one home — never the word 'clocked' spelled here.
-                _pb = _hours_basis.CLOCKED
-                _bt = summary[eid].setdefault("hours_by_basis", {})
-                _bt[_pb] = round(_bt.get(_pb, 0.0) + hrs, 4)
-                st = (t.get("store_code") or "").strip()
-                if st:
-                    sh = store_hours.setdefault(eid, {})
-                    sh[st] = sh.get(st, 0.0) + hrs
 
-    # Inactive employees: ALWAYS computed via this ONE shared, phantom-aware path (never via the fast
-    # RPC groups or the legacy per-row loops above, which both explicitly skip them) — money-adjacent
+    # ══════════════════════════════════════════════════════════════════════════════════════════════
+    # THE CORRECTION A HUMAN TYPED (owner report 2026-11-11, §STOREOPS-07)
+    # ══════════════════════════════════════════════════════════════════════════════════════════════
+    # *"i just fixed the hours in ny logistics , went in to check it still shows the old hours,
+    # check and fix for good platform wide"*.
+    #
+    # 616 corrections sat in `storeops.manual_hours` (51 house, 565 LuxeLink; ±4,441h gross) and
+    # NOTHING on any pay path read them — this endpoint said so in its own comment and the drill-down
+    # reported it as a live defect. Meanwhile `shifts.actual_hours`, the one correction the figure DID
+    # honour, is written by nothing in the product: the whole frontend displays it in seven places and
+    # writes it in none. So no correction a manager could reach moved any figure, on any tenant.
+    #
+    # THE RULE IS THE ONE HOME'S, NOT THIS FUNCTION'S. `payroll_hours_basis.corrections_by_day` says
+    # how much a day MOVES — a correction is a DELTA on what was measured, floored so a day can never
+    # pay negative hours, skipped entirely for an org that declared `count_manual_hours = false` or
+    # for a day before its `corrections_effective_from`. This leg only APPLIES the answer, the same
+    # way the lunch deduction below applies its own. Nothing about the rule is spelled here.
+    #
+    # WHY A SEPARATE LEG AND NOT A FOURTH TERM IN THE LOOPS ABOVE. A `manual_hours` row carries NO
+    # store (mig 045) — those hours have no shift to attribute to — and this endpoint is the one pay
+    # surface that sums a day out of BOTH a shift loop and a punch loop. So the day's delta is
+    # resolved once and attributed to the store that day's own evidence names, falling back to the
+    # employee's home store. A term inside either loop would miss every day the OTHER loop owns,
+    # which for NY LOGISTICS is every day it has (it holds punches and not one shift row).
+    #
+    # NEVER BREAKS PAYROLL. A missing `manual_hours` table (mig 045 not run) reports a blocker and
+    # applies nothing — the uncorrected figure, never an error and never a zero.
+    _corr_applied = {}
+    try:
+        _ev_rows, _ev_blockers = _payroll_evidence.read_pay_evidence(sb(), org_id, lo, hi)
+        _corr_rows = [m for m in (_ev_rows.get("manual") or [])
+                      if m.get("employee_id") not in inactive_ids]
+        if _corr_rows:
+            _corr_ev = _hours_basis.build_evidence(
+                shifts=shifts, punches=tl,
+                manual_rows=_corr_rows)
+            _deltas = _hours_basis.corrections_by_day(_corr_ev, _hb_cfg,
+                                                      employee_rows=employees)
+            # WHICH STORE a correction's hours belong to: the store that day's own evidence names
+            # (the punch's, else the shift's), else the person's home store. Derived from the rows
+            # already in hand — never a store spelled here, never a store guessed.
+            _day_store = {}
+            for _s in (shifts or ()):
+                _k = (_s.get("employee_id"), str(_s.get("shift_date") or "")[:10])
+                _st = (_s.get("store_code") or "").strip()
+                if _st:
+                    _day_store.setdefault(_k, _st)
+            for _t in (tl or ()):
+                _k = (_t.get("employee_id"), str(_t.get("work_date") or "")[:10])
+                _st = (_t.get("store_code") or "").strip()
+                if _st:
+                    _day_store[_k] = _st          # a punch names where the person actually stood
+            for (_eid, _d), _delta in _deltas.items():
+                if not _delta:
+                    continue
+                _emp = emp_map.get(_eid, {})
+                if _eid not in summary:
+                    # A correction for a day with NO shift and NO punch is the "didnt clock in" case,
+                    # and it is the whole reason a person can be missing from `summary` here. Their
+                    # row is created rather than dropped: a corrected day is a worked day.
+                    summary[_eid] = {"employee_id": _eid, "name": _emp.get("name", ""), "store": "",
+                                     "pay_rate": float(_emp.get("pay_rate") or 0),
+                                     "scheduled_hours": 0, "actual_hours": 0, "shifts": 0}
+                _row = summary[_eid]
+                # The clamp the one home applies per DAY, applied again to the employee's PERIOD
+                # total — this endpoint's own figure can be lower than the one home's base (the lunch
+                # deduction, a store split), and a correction may not take a period negative either.
+                _delta = max(_delta, -float(_row["actual_hours"] or 0))
+                if not _delta:
+                    continue
+                _row["actual_hours"] = round(float(_row["actual_hours"] or 0) + _delta, 2)
+                _bt = _row.setdefault("hours_by_basis", {})
+                _bt[_hours_basis.CLOCKED_CORRECTED] = round(
+                    _bt.get(_hours_basis.CLOCKED_CORRECTED, 0.0) + _delta, 4)
+                _row["hours_corrected"] = round(float(_row.get("hours_corrected") or 0) + _delta, 2)
+                _corr_applied[(_eid, _d)] = _delta
+                _st = _day_store.get((_eid, _d)) or (_emp.get("home_store") or "").strip()
+                if _st:
+                    _sh = store_hours.setdefault(_eid, {})
+                    _sh[_st] = round(_sh.get(_st, 0.0) + _delta, 4)
+        if _ev_blockers:
+            # "We could not look" and "nobody typed a correction" must never print the same.
+            for _r in summary.values():
+                _r["corrections_unreadable"] = sorted({str(b.get("table") or "?")
+                                                       for b in _ev_blockers})
+    except Exception:
+        pass        # a correction read may never break payroll itself
+
+    # Inactive employees: ALWAYS computed via this ONE shared, phantom-aware path (never via the per-row loops
+    # above, which explicitly skip them) — money-adjacent
     # rule: real activity (a genuinely-clocked/worked hour) still appears and is paid at their real
     # rate; a leftover schedule-only shift for someone since deactivated does not.
     real_shifts, tl_rows = _inactive_activity_rows(org_id, lo, hi, inactive_ids)
@@ -1699,67 +1737,74 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
     emp_store_dollars: dict = {}
 
     by_store = {}
-    groups = _payroll_month_groups(org_id, lo, hi)
-    if groups is not None:
-        # FAST PATH (mig 407): hours_eff_sum already carries the per-ROW hrs = actual if >0 else
-        # scheduled basis; timelog groups already exclude open punches + shift-covered days.
-        # Inactive employees' groups are excluded here (2026-07-25) — recomputed below via
-        # _inactive_activity_rows, the SAME shared path the legacy branch also uses.
-        shift_groups, tl_groups = groups
-        if inactive_ids:
-            shift_groups = [g for g in shift_groups if g.get("employee_id") not in inactive_ids]
-            tl_groups = [g for g in tl_groups if g.get("employee_id") not in inactive_ids]
-        for g in shift_groups:
-            store = (g.get("store_code") or "").strip()
-            if not store:
+    # ── THE mig-914 RPC FAST PATH IS RETIRED FROM THE PAY PATH (2026-11-11, §STOREOPS-07) ───────
+    # `storeops.payroll_month_rows` decided the precedence `correction > closed punch > schedule`
+    # IN SQL. It could not read `storeops.manual_hours` and it could not read
+    # `storeops.payroll_hours_basis_config`, so whenever it answered — which was on every call that
+    # named a month or a range, i.e. every call this report makes — the tenant's own declaration and
+    # every hand-typed correction were silently out of the figure. That is the owner's report of
+    # 2026-11-11 ("i just fixed the hours in ny logistics ... it still shows the old hours"), and it
+    # is the duplicate-derivation defect the index rules forbid: two paths answered "what are this
+    # person's paid hours" and only one of them could see the facts.
+    #
+    # IT IS NOT REPLACED BY A CLEVERER RPC. The question needs per-(person, day) evidence and a
+    # config row; an aggregate cannot carry either. So the ONE derivation is the Python path below,
+    # which dereferences `payroll_hours_basis` — the one home — exactly as the other four pay
+    # surfaces already do. `harness_hours_correction_reaches_figure.py` §E1 fails the build if a
+    # second one reappears here.
+    #
+    # ALSO WORTH KNOWING: `harness_payroll_rpc_equivalence.py`, the lock that would have caught this
+    # drift, was pinned on `harness_unrun_pending.txt` (never run in CI) and had rotted to 26
+    # passed / 8 failed on `main` — the fast path had stopped emitting the basis keys entirely. A
+    # lock nobody runs is not a lock.
+    # THE ONE PATH: full row fetch + Python aggregation, dereferencing the one home per row.
+    q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
+    if lo and hi:
+        q = q.gte("shift_date", lo).lt("shift_date", hi)
+    shifts = q.execute().data or []
+    # PUNCH-DRIVEN PAY (2026-08-24): fetch the period's punches up-front so the shift loop already
+    # knows which (emp, day) is punch-driven, EXACTLY as /payroll does above — the two reconcile.
+    tl = []
+    if lo and hi:
+        tl = (sb().table("timelog").select("employee_id,hours,clock_out,work_date,store_code")
+              .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
+    _hb_cfg = _hours_basis_cfg(org_id)
+    manual_days, punch_days = _punch_driven_day_maps(shifts, tl, _hb_cfg)
+    for s in shifts:
+        eid = s.get("employee_id")
+        if eid in inactive_ids:
+            continue   # handled by _inactive_activity_rows below (phantom-schedule-only excluded there)
+        store = (s.get("store_code") or "").strip()
+        if not store:
+            continue
+        sched = float(s.get("scheduled_hours") or 0)
+        # actual_hours>0 (manual) wins; else 0 on a punch-driven day (punch replaces the schedule,
+        # attributed to the punch's own store below); else scheduled fallback.
+        hrs = _shift_actual_contribution(s, manual_days, punch_days, _hb_cfg)
+        rate = rate_map.get(eid, 0.0)
+        d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
+        d["hours"] += hrs
+        d["amount"] += hrs * rate
+        if eid in salaried_ids:
+            payroll_salary.accumulate(emp_store_hours, eid, store, hrs)
+            payroll_salary.accumulate(emp_store_dollars, eid, store, hrs * rate)
+
+    # UNIVERSAL FALLBACK (2026-07-18, same audit as /payroll) — a clock punch is real existing
+    # platform data this store auto-fill was dropping. Under PUNCH-DRIVEN PAY it counts (at the
+    # punch's own store) UNLESS a manual correction covers its day; the schedule contributed 0 for
+    # a punch-driven day above, so the punch's hours land ONCE, never on top of the schedule.
+    if lo and hi:
+        for t in tl:
+            if not (t.get("clock_out") and t.get("hours") is not None):
                 continue
-            eid = g.get("employee_id")
-            hrs = float(g.get("hours_eff_sum") or 0)
-            rate = rate_map.get(eid, 0.0)
-            d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
-            d["hours"] += hrs
-            d["amount"] += hrs * rate
-            if eid in salaried_ids:
-                payroll_salary.accumulate(emp_store_hours, eid, store, hrs)
-                payroll_salary.accumulate(emp_store_dollars, eid, store, hrs * rate)
-        for g in tl_groups:
-            eid = g.get("employee_id")
-            store = (g.get("store_code") or "").strip()
-            if not eid or not store:
-                continue
-            hrs = float(g.get("timelog_hours_sum") or 0)
-            rate = rate_map.get(eid, 0.0)
-            d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
-            d["hours"] += hrs
-            d["amount"] += hrs * rate
-            if eid in salaried_ids:
-                payroll_salary.accumulate(emp_store_hours, eid, store, hrs)
-                payroll_salary.accumulate(emp_store_dollars, eid, store, hrs * rate)
-    else:
-        # LEGACY PATH (pre-mig-407 fallback): full row fetch + Python aggregation — UNCHANGED.
-        q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
-        if lo and hi:
-            q = q.gte("shift_date", lo).lt("shift_date", hi)
-        shifts = q.execute().data or []
-        # PUNCH-DRIVEN PAY (2026-08-24): fetch the period's punches up-front so the shift loop already
-        # knows which (emp, day) is punch-driven, EXACTLY as /payroll does above — the two reconcile.
-        tl = []
-        if lo and hi:
-            tl = (sb().table("timelog").select("employee_id,hours,clock_out,work_date,store_code")
-                  .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
-        _hb_cfg = _hours_basis_cfg(org_id)
-        manual_days, punch_days = _punch_driven_day_maps(shifts, tl, _hb_cfg)
-        for s in shifts:
-            eid = s.get("employee_id")
+            eid = t.get("employee_id")
             if eid in inactive_ids:
-                continue   # handled by _inactive_activity_rows below (phantom-schedule-only excluded there)
-            store = (s.get("store_code") or "").strip()
-            if not store:
+                continue   # handled by _inactive_activity_rows below (always real activity, no fallback needed)
+            wd = str(t.get("work_date") or "")[:10]
+            store = (t.get("store_code") or "").strip()
+            if not eid or not wd or not store or not _punch_counts_for_pay(t, manual_days, _hb_cfg):
                 continue
-            sched = float(s.get("scheduled_hours") or 0)
-            # actual_hours>0 (manual) wins; else 0 on a punch-driven day (punch replaces the schedule,
-            # attributed to the punch's own store below); else scheduled fallback.
-            hrs = _shift_actual_contribution(s, manual_days, punch_days, _hb_cfg)
+            hrs = float(t.get("hours") or 0)
             rate = rate_map.get(eid, 0.0)
             d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
             d["hours"] += hrs
@@ -1768,29 +1813,54 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
                 payroll_salary.accumulate(emp_store_hours, eid, store, hrs)
                 payroll_salary.accumulate(emp_store_dollars, eid, store, hrs * rate)
 
-        # UNIVERSAL FALLBACK (2026-07-18, same audit as /payroll) — a clock punch is real existing
-        # platform data this store auto-fill was dropping. Under PUNCH-DRIVEN PAY it counts (at the
-        # punch's own store) UNLESS a manual correction covers its day; the schedule contributed 0 for
-        # a punch-driven day above, so the punch's hours land ONCE, never on top of the schedule.
-        if lo and hi:
-            for t in tl:
-                if not (t.get("clock_out") and t.get("hours") is not None):
+
+    # ── THE CORRECTION A HUMAN TYPED, at the store it belongs to (§STOREOPS-07) ──────────────────
+    # The SAME leg /payroll runs, over the SAME delta from the SAME one home — so the two endpoints
+    # still reconcile to the cent, which is what `harness_hours_correction_wiring.py` §D4 asserts.
+    # Reimplementing the rule here instead of dereferencing `corrections_by_day` is exactly the
+    # sibling derivation that put this report a fortnight out of step with the figure it explains.
+    try:
+        _ev_rows, _ev_blockers = _payroll_evidence.read_pay_evidence(sb(), org_id, lo, hi)
+        _corr_rows = [m for m in (_ev_rows.get("manual") or [])
+                      if m.get("employee_id") not in inactive_ids]
+        if _corr_rows:
+            _corr_ev = _hours_basis.build_evidence(shifts=shifts, punches=tl,
+                                                   manual_rows=_corr_rows)
+            _deltas = _hours_basis.corrections_by_day(_corr_ev, _hb_cfg, employee_rows=employees)
+            # The store that day's own evidence names — the punch's (where the person actually
+            # stood) over the shift's — else the person's home store. A correction row carries no
+            # store of its own (mig 045).
+            _day_store = {}
+            for _s in (shifts or ()):
+                _st = (_s.get("store_code") or "").strip()
+                if _st:
+                    _day_store.setdefault((_s.get("employee_id"),
+                                           str(_s.get("shift_date") or "")[:10]), _st)
+            for _t in (tl or ()):
+                _st = (_t.get("store_code") or "").strip()
+                if _st:
+                    _day_store[(_t.get("employee_id"), str(_t.get("work_date") or "")[:10])] = _st
+            _home = {e.get("employee_id"): (e.get("home_store") or "").strip() for e in employees}
+            for (_eid, _d), _delta in _deltas.items():
+                if not _delta:
                     continue
-                eid = t.get("employee_id")
-                if eid in inactive_ids:
-                    continue   # handled by _inactive_activity_rows below (always real activity, no fallback needed)
-                wd = str(t.get("work_date") or "")[:10]
-                store = (t.get("store_code") or "").strip()
-                if not eid or not wd or not store or not _punch_counts_for_pay(t, manual_days, _hb_cfg):
+                _store = _day_store.get((_eid, _d)) or _home.get(_eid) or ""
+                if not _store:
+                    continue        # no store means no store row to put it in, and never a guess
+                _rate = rate_map.get(_eid, 0.0)
+                _d_row = by_store.setdefault(_store, {"store_code": _store, "hours": 0.0,
+                                                      "amount": 0.0})
+                # A store's hours may not go negative either — the same clamp, one level up.
+                _delta = max(_delta, -float(_d_row["hours"] or 0))
+                if not _delta:
                     continue
-                hrs = float(t.get("hours") or 0)
-                rate = rate_map.get(eid, 0.0)
-                d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
-                d["hours"] += hrs
-                d["amount"] += hrs * rate
-                if eid in salaried_ids:
-                    payroll_salary.accumulate(emp_store_hours, eid, store, hrs)
-                    payroll_salary.accumulate(emp_store_dollars, eid, store, hrs * rate)
+                _d_row["hours"] += _delta
+                _d_row["amount"] += _delta * _rate
+                if _eid in salaried_ids:
+                    payroll_salary.accumulate(emp_store_hours, _eid, _store, _delta)
+                    payroll_salary.accumulate(emp_store_dollars, _eid, _store, _delta * _rate)
+    except Exception:
+        pass        # a correction read may never break payroll itself
 
     # Inactive employees: ALWAYS computed via this ONE shared, phantom-aware path (2026-07-25) — same
     # function /payroll uses, so both endpoints agree byte-for-byte on which of an inactive employee's
@@ -1956,9 +2026,18 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
     timelog = (sb().table("timelog").select("*").eq("org_id", org_id)
                .gte("work_date", start).lte("work_date", end)
                .in_("employee_id", list(ids)).execute().data) or []
-    manual = (sb().table("manual_hours").select("*").eq("org_id", org_id)
-              .gte("work_date", start).lte("work_date", end)
-              .in_("employee_id", list(ids)).execute().data) or []
+    # THE CORRECTIONS COME THROUGH THE ONE READ (§STOREOPS-07), then are narrowed to this person's
+    # id variants in PYTHON. This panel exists to EXPLAIN `GET /storeops/payroll`'s figure, so it
+    # must see corrections exactly when that endpoint sees them — including when it does not. A
+    # second query of its own succeeded here while the one read failed in a fixture, and the panel
+    # went on to count a correction the report had not: the drill-down said 10.5 h and the row it
+    # was explaining said 8.0. Two reads of one fact disagree the first time either one of them
+    # fails, which is the whole reason the one read exists.
+    _dd_rows, _dd_blockers = _payroll_evidence.read_pay_evidence(sb(), org_id, start,
+                                                                 _payroll_evidence.day_after(end))
+    _id_strs = {str(x) for x in ids}
+    manual = [m for m in (_dd_rows.get("manual") or [])
+              if str(m.get("employee_id")) in _id_strs]
     try:
         edits = (sb().table("payroll_change_log").select("source_table,source_id,work_date").eq("org_id", org_id)
                  .gte("work_date", start).lte("work_date", end)
@@ -2079,16 +2158,21 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
                             f"{hrs:.1f}h from a separate clock punch both counted this day — see "
                             f"Deliverable 3 (payroll investigation) in docs/handoffs/people.md.")
 
-    # Gate-1 N2 fix (2026-07-27, MEDIUM, honesty): GET /payroll never reads storeops.manual_hours on
-    # ANY path (grep-verified — neither the legacy Python aggregation nor the mig-407
-    # payroll_month_rows SQL touches that table at all). Folding a manual_hours row into
-    # `actual_hours` here would make this endpoint's total DIVERGE from the /payroll report row it
-    # exists to explain, for any employee with a manual-hours entry in range — exactly what the
-    # harness (Section C) now proves does NOT happen. Shown for transparency (a real correction
-    # happened, worth seeing) but marked `counted: false` and EXCLUDED from the reconciling total —
-    # consistent with the SAME `counted` language already used for shift/punch line items. Do NOT
-    # fold manual_hours into /payroll itself to "fix" this instead — that changes a pay figure
-    # (propose-first, see docs/handoffs/people.md Deliverable 3).
+    # A CORRECTION NOW COUNTS, AND THIS PANEL SAYS WHICH ONES DO (2026-11-11, §STOREOPS-07).
+    #
+    # The note that stood here said `GET /payroll` never reads `storeops.manual_hours` on any path,
+    # so a correction was shown `counted: false` and left out of the reconciling total. That was
+    # honest reporting of a real defect for four months, and the defect is the one the owner
+    # reported: 616 corrections, none of them reaching any figure. `/payroll` now folds them through
+    # `payroll_hours_basis.corrections_by_day`, so this panel must agree with it or it is explaining
+    # a figure that no longer exists.
+    #
+    # `counted` IS ASKED OF THE ONE HOME, NEVER DECIDED HERE. A correction can still be legitimately
+    # uncounted — the org declared `count_manual_hours = false`, or the day falls before its
+    # `corrections_effective_from` — and in that case the row carries the one home's OWN sentence
+    # for why, instead of a bare false. A reader is never shown an uncounted correction with no
+    # reason beside it.
+    _corr_cfg = _hours_basis_cfg(org_id)
     total_manual_not_in_payroll = 0.0
     for m in manual:
         d = str(m.get("work_date") or "")[:10]
@@ -2097,10 +2181,15 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
         row = day(d)
         hrs = float(m.get("hours") or 0)
         edited = ("manual_hours", str(m.get("id"))) in edited_source_ids
-        row["manual"].append({"id": m.get("id"), "hours": hrs, "reason": m.get("reason"), "edited": edited,
-                              "counted": False})
+        _counts, _why = _hours_basis.corrections_apply(d, _corr_cfg)
+        row["manual"].append({"id": m.get("id"), "hours": hrs, "reason": m.get("reason"),
+                              "edited": edited, "counted": bool(_counts),
+                              "not_counted_reason": None if _counts else _why})
+        if _counts:
+            row["actual_hours"] += hrs
+        else:
+            total_manual_not_in_payroll += hrs
         row["edited"] = True   # a manual_hours row is a manual adjustment by definition — worth flagging
-        total_manual_not_in_payroll += hrs
 
     out_days = [days[d] for d in sorted(days)]
     total_lunch_deduction = 0.0

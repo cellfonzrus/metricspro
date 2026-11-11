@@ -119,11 +119,22 @@ check("B1 the house default mode is schedule-fallback (today's behaviour)",
       DEFAULT["hours_basis_mode"], B.MODE_SCHEDULE_FALLBACK)
 check("B2 …and the org-level tick-box default is TRUE, so nobody is unpaid on apply",
       DEFAULT["pay_from_schedule_default"], True)
-# The two mode-dependent forcings, each deliberate and each about not moving money on deploy:
-check("B3 manual_hours are NOT folded into pay in the default mode (569 live rows /payroll never read)",
-      DEFAULT["count_manual_hours"], False)
-check("B4 …and they ARE the correction mechanism once clocked-only is on",
-      CLOCKED["count_manual_hours"], True)
+# B3/B4 CHANGED 2026-11-11 (§STOREOPS-07). `count_manual_hours` used to be FORCED FALSE in
+# schedule-fallback mode so that applying this module moved nobody's pay. That forcing turned out to
+# be the defect the owner reported: all four live tenants had declared `count_manual_hours = true`
+# and three of them were on schedule-fallback, so none of their 616 corrections could be read by
+# anything. "Do not move money on deploy" is still right and now has its OWN control — a DATE,
+# `corrections_effective_from` — which protects a closed month without overwriting what the tenant
+# said. A tenant that wants no corrections declares FALSE and is obeyed (B4b).
+check("B3 a tenant's count_manual_hours declaration survives BOTH modes, unoverwritten",
+      (DEFAULT["count_manual_hours"], CLOCKED["count_manual_hours"]), (True, True))
+check("B4 …and the thing that stops a deploy restating a closed month is a DATE, not the mode",
+      (DEFAULT["corrections_effective_from"], B.corrections_effective_from(DEFAULT)), (None, None))
+check("B4b an org that declares count_manual_hours FALSE is obeyed in either mode",
+      (B.resolve_config({"count_manual_hours": False})["count_manual_hours"],
+       B.resolve_config({"count_manual_hours": False,
+                         "hours_basis_mode": B.MODE_CLOCKED_ONLY})["count_manual_hours"]),
+      (False, False))
 check("B5 an auto-closed punch IS counted in the default mode, because it already is today",
       DEFAULT["count_auto_clockout_punches"], True)
 check("B6 …and is NOT a measurement under clocked-only",
@@ -156,9 +167,16 @@ check("C6 the audit entry point is the one the payroll change log already uses",
       (B.CHANGE_ENTRY_POINT, B.CHANGE_FIELD), ("pay_from_schedule_change", "pay_from_schedule"))
 
 section("D. precedence — correction > usable punch > measured zero > opt-in > unpaid")
-check("D1 a manual correction wins over a punch, under clocked-only",
+# D1 CHANGED 2026-11-11: a `manual_hours` row is a DELTA on what was measured, not a replacement
+# for it. 2,249 of the 4,441 corrected hours live are NEGATIVE ("didnt clock out", "Subtract") and a
+# negative figure can only be an adjustment — read as a replacement a lone -2.50 row pays somebody
+# MINUS two and a half hours (D8). So the correction lands ON the punch: 99.00 + 7.75.
+check("D1 a manual correction ADJUSTS the punch it corrects, and renames the basis",
       one(shifts=[shift()], punches=[punch(hours=99.0)], manual_rows=[manual(hours=7.75)],
-          cfg=CLOCKED)[:2], (7.75, B.CLOCKED_CORRECTED))
+          cfg=CLOCKED)[:2], (106.75, B.CLOCKED_CORRECTED))
+check("D1b the live shape: -2.50 off a 9.00h punched day pays 6.50, never -2.50",
+      one(punches=[punch(hours=9.0)], manual_rows=[manual(hours=-2.50)], cfg=CLOCKED)[:2],
+      (6.50, B.CLOCKED_CORRECTED))
 check("D2 a DM's shifts.actual_hours edit is the older spelling of the same act",
       one(shifts=[shift(act=8.25)], punches=[punch(hours=99.0)], cfg=CLOCKED)[:2],
       (8.25, B.CLOCKED_CORRECTED))
@@ -176,7 +194,16 @@ check("D7 no evidence at all is NOT_MEASURED_UNPAID with 0 — absence is never 
       B.resolve_day(None, CLOCKED)[:2], (0.0, B.NOT_MEASURED_UNPAID))
 check("D8 a NEGATIVE manual correction is still a measurement (there are negative rows live)",
       one(punches=[punch(hours=8.0)], manual_rows=[manual(hours=-2.0)], cfg=CLOCKED)[:2],
-      (-2.0, B.CLOCKED_CORRECTED))
+      (6.0, B.CLOCKED_CORRECTED))
+# D8b THE FLOOR AT ZERO. The same rule `payroll_approval.decide` enforces where an adjustment is
+#     TYPED ("that adjustment would make payable hours negative"), stated where the figure is READ —
+#     a rule enforced only at the keyboard is not a rule about the figure. Live precedent: E282 was
+#     hand-corrected by -273.56h against a 339.56h runaway.
+_h8, _b8, _d8 = one(punches=[punch(hours=2.0)], manual_rows=[manual(hours=-5.0)], cfg=CLOCKED)
+check("D8b a correction cannot drive a day's payable hours NEGATIVE", (_h8, _b8),
+      (0.0, B.CLOCKED_CORRECTED))
+check("D8c …and the clamp is STATED, never silent",
+      (_d8["correction_floored_at_zero"], _d8["correction_floored_from"]), (True, -3.0))
 _h, _b, _detail = one(shifts=[shift(sched=9.0)], cfg=CLOCKED)
 check("D9 the detail names the schedule it DID NOT pay, so nothing is invisible",
       _detail["scheduled_hours"], 9.0)
@@ -633,8 +660,17 @@ check("Q9 a pre-floor day's whole DETAIL equals the house schedule-fallback answ
 check("Q10 …including the auto-clockout forcing, which only schedule-fallback mode applies",
       (FLOORED["count_auto_clockout_punches"],
        FLOORED[B.PRE_FLOOR_KEY]["count_auto_clockout_punches"]), (False, True))
-check("Q11 …and the manual-hours forcing, the other mode-dependent one",
-      (FLOORED["count_manual_hours"], FLOORED[B.PRE_FLOOR_KEY]["count_manual_hours"]), (True, False))
+# Q11 CHANGED 2026-11-11: `count_manual_hours` is no longer mode-derived, so it is no longer a
+# SWITCH field — the pre-floor config must KEEP the org's own declaration rather than dropping it to
+# the house default. Dropping it would take an org that declared FALSE and hand it TRUE on every
+# pre-floor day, inventing a correction the tenant said it did not want. Corrections have their own
+# dated floor; the clocked floor does not gate them.
+check("Q11 the pre-floor config KEEPS the org's own corrections declaration, both ways",
+      (FLOORED["count_manual_hours"], FLOORED[B.PRE_FLOOR_KEY]["count_manual_hours"]), (True, True))
+_off = B.resolve_config({"hours_basis_mode": B.MODE_CLOCKED_ONLY, "count_manual_hours": False,
+                         "clocked_basis_effective_from": "2026-10-04"})
+check("Q11b …including a declared FALSE, which a pre-floor day may not turn into TRUE",
+      (_off["count_manual_hours"], _off[B.PRE_FLOOR_KEY]["count_manual_hours"]), (False, False))
 
 # Q12-Q13  THE WHOLE SWITCH IS RESTORED, not a third of it. This is the trap the first cut fell into:
 #          forcing only `hours_basis_mode` back leaves `pay_from_schedule_default = false` — the live
@@ -786,11 +822,21 @@ check("EC24 an AUTO-CLOCKED-OUT punch is still not evidence — the trim never r
        B.PUNCH_AUTO in ec(TRIM15, auto=True, **EARLY90)[2]["unusable_punches"],
        ec(TRIM15, auto=True, **EARLY90)[2]["early_clockin_trimmed_hours"]),
       (True, True, 0.0))
-check("EC25 a correction still OUT-RANKS the trim: a DM who fixed the day is not overridden by it",
-      B.resolve_day(B.build_evidence(shifts=[_sh()], punches=[_p(**EARLY90)],
-                                     manual_rows=[{"employee_id": "E1", "work_date": "2026-10-09",
-                                                   "hours": 7.75}]).get(("E1", "2026-10-09")),
-                    TRIM15)[:2], (7.75, B.CLOCKED_CORRECTED))
+# EC25 CHANGED 2026-11-11: the correction is a DELTA, so it is applied TO the trimmed figure rather
+# than replacing it. That is still "the DM is not overridden" — their adjustment survives the trim
+# and renames the basis — but the trim's own measurement is what it adjusts, which is the point of
+# applying the delta in ONE place for every branch instead of giving corrections a branch of their
+# own that works on a punched day and silently does nothing on a trimmed one.
+_ec25 = B.resolve_day(B.build_evidence(shifts=[_sh()], punches=[_p(**EARLY90)],
+                                       manual_rows=[{"employee_id": "E1", "work_date": "2026-10-09",
+                                                     "hours": 7.75}]).get(("E1", "2026-10-09")),
+                      TRIM15)
+_ec25_base = B.resolve_day(B.build_evidence(shifts=[_sh()], punches=[_p(**EARLY90)]).get(
+                               ("E1", "2026-10-09")), TRIM15)
+check("EC25 a correction ADJUSTS the trimmed figure and renames the basis",
+      (_ec25[0], _ec25[1]), (round(_ec25_base[0] + 7.75, 2), B.CLOCKED_CORRECTED))
+check("EC25b …and the trim it adjusted is still reported on the row, never hidden by it",
+      _ec25[2]["early_clockin_trimmed_hours"], _ec25_base[2]["early_clockin_trimmed_hours"])
 check("EC26 a manager OVERRIDE still out-ranks it too — the labour-law escape hatch survives",
       B.resolve_day({"day": "2026-10-09", "scheduled": 9.0, "scheduled_start_at": EC_START,
                      "_raw_punches": [_p(**EARLY90)],

@@ -79,7 +79,6 @@ harness_market_enumeration_guard.py
 harness_onboarding_intake.py
 harness_owner_rulings_k1_k3.py
 harness_payout_accrual.py
-harness_payroll_rpc_equivalence.py
 harness_pl_rebate_presentation.py
 harness_plan_custom_report_vocab.py
 harness_pos_syscat_price.py
