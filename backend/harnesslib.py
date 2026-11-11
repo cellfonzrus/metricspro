@@ -138,6 +138,37 @@ COA_PAID_HOURS_EVIDENCE_SANCTION = (
     "wages_by_store", "derive_wage_cells", "derive_wage_cells_with_basis",
 )
 
+#: SANCTIONED 2026-11-11 (index §ACCOUNT-01, owner report *"not pulling the employee salaries in for
+#: all stores for the p&l for the month of October"*). THE CODE→ADDRESS MAP MOVED TO ITS ONE HOME.
+#:
+#: `store_code_to_address` IS an attribution function, which is why it is pinned, and it is listed
+#: here because it attributed WRONGLY. It built its own `{store_code: store_address}` dict keyed on
+#: the code exactly as a feed typed it — a second and weaker copy of the question
+#: `store_identity.build_store_resolver` has always answered with a fold (`code.upper()`). One
+#: tenant's October shift rows spell four of its twenty declared codes in CAPITALS (`GRAND`,
+#: `DIVERSEY`, `CICERO`, `LAWRENCE` against declared `Grand`, `Diversey`, `Cicero`, `lawrence`), so
+#: eighteen rows matched no address: `payroll_auth_stores` could not see those stores, their hours
+#: were added on top of their already-authoritative entered payroll, and the month's whole salary
+#: line was the $1,928.85 that fell through onto four stores that exist nowhere in the org.
+#:
+#: It now returns `store_identity.build_code_index(...)` — the one home's map, whose `get` / `in`
+#: fold through `code_key`. WHAT MOVED, MEASURED LIVE 2026-11-11 over every tenant and every month
+#: Jun–Nov 2026, running `coa.wages_by_store` against production before and after:
+#:
+#:   · the reporting tenant: Jul 21→21, Aug 21→21, Sep 25→21 stores, Oct 24→20, Nov 24→20 —
+#:     every monthly TOTAL identical to the cent ($105,109.69 in October both sides), the dollars
+#:     moving off four undeclared keys onto the four declared addresses that own them;
+#:   · the house org, and the two remaining tenants: not one store key and not one cent changed in
+#:     any month (the house org's Oct/Nov are a clock-coverage refusal both sides, unchanged).
+#:
+#: So no money is created, lost or re-attributed BETWEEN stores: a phantom's dollars go to the store
+#: whose shifts earned them. Locked by `harness_store_identity_lock.py` §F (a second code map, or
+#: this function ceasing to dereference the home, fails the build) and proven with the live
+#: regression by `harness_store_code_case.py`.
+COA_STORE_CODE_INDEX_SANCTION = (
+    "store_code_to_address",
+)
+
 
 def coa_movement(base_src, now_src, sanctioned=()):
     """Compare two revisions of coa.py. Returns (removed, changed_outside_sanction, attribution_moved).

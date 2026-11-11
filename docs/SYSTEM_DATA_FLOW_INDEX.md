@@ -26395,6 +26395,7 @@ status word rather than a blank that reads as nil.
 | CORE-39 | core |
 | CORE-40 | core |
 | CORE-41 | core |
+| ACCOUNT-01 | account, commcalc, closing |
 | CORE-32 | core |
 | CORE-33 | core |
 | CORE-34 | core |
@@ -47033,3 +47034,119 @@ until it works for every tenant) · §CORE-33 (what a PERSON may reach — the s
 (the vertical, which decides what a KIND OF BUSINESS sees) · §39 (setup documents, the other
 registry keyed on report kinds) · §CORE-34/35 (the gate index that lists these two locks) · §19.36
 (the one customer sentence for "not switched on").
+
+## §ACCOUNT-01. A DECLARED STORE CODE IS CASE-BLIND, AND SALARY BOOKS ON THE SALARY LINE (reported 2026-11-11)
+
+Owner, verbatim: *"Luxelink is not pulling the employee salaries in for all stores for the p&l for
+the month of October - check and fix for good and do the same for all tenants"*, and in the same
+breath *"Also the commission is not reflecting on the p&l"*.
+
+### §ACCOUNT-01.1 What was on screen, and what it was made of
+
+LuxeLink's October 2026 P&L salary line read **$1,928.85**. Measured live on production before a
+line was changed:
+
+| fact | figure |
+|---|---|
+| salary the platform CAN measure for October from hours + punches, 24 keys | **$105,109.69** |
+| declared `Employee Salaries` rows typed into October's sheet (19 stores, created 9 Nov) | $37,734.31 |
+| declared `DM Salaries` rows (20 stores, a flat $1,275.00 allocation) | $25,500.01 |
+| what the `wages` line actually showed | **$1,928.85** |
+| what that $1,928.85 WAS | 18 shift rows on 4 stores that do not exist |
+
+Three distinct defects, two of them mechanism and fixed here, one of them data and REPORTED:
+
+### §ACCOUNT-01.2 THE CLASS — a caller answered a question the platform has one home for
+
+**`app/modules/account/coa.py` `store_code_to_address` built its OWN `{store_code: store_address}` dict, keyed on the code
+exactly as a feed typed it.** `store_identity.build_store_resolver` — the one home since §64 — has
+always folded a code (`code.upper()`), and `coa.build_inputs` books every cell through it
+(`add()` → `resolve_store`). So the statement decided payroll **authority** in one key space and
+**booked** the money in another, and the two disagreed over a capital letter: October's shifts carry
+`GRAND`, `DIVERSEY`, `CICERO`, `LAWRENCE` where `store_mapping` declares `Grand`, `Diversey`,
+`Cicero`, `lawrence`. `payroll_auth_stores` could not see those four stores, so their hours were
+added *on top of* their already-authoritative entered payroll — a phantom AND a double count — and
+because every real store's estimate was suppressed, the phantom was the whole line.
+
+**THE DESIGN FIX, one home, dereferenced:**
+
+- **`app/modules/account/store_identity.py` `code_key`** — THE fold for a declared store code (whitespace collapsed,
+  accents folded via `fold_accents` §70, upper-cased). `build_store_resolver`'s code step
+  dereferences it, so the resolver and the map cannot drift apart by one fold.
+- **`app/modules/account/store_identity.py` `build_code_index` → `CodeAddressMap`** — THE code→address map. A `dict`
+  subclass whose `get` / `in` / `[]` fold the key, so **every** existing `code2addr.get(code, code)`
+  site in the backend is fixed at once and a site added tomorrow cannot reintroduce the defect by
+  writing the same innocent `.get`. Keys stay the org's own stored spellings, so `.keys()` /
+  `.items()` / `.values()` are unchanged for a reader that prints a code (`royalty_router`).
+- **Ambiguity resolves to NOTHING**, never to a winner: two declared codes folding to one key with
+  DIFFERENT addresses are not a merge the platform may make on a capital letter (the retired local
+  `addr_by_code[code.upper()] = addr` was last-wins). Each still resolves under its exact spelling.
+- **The siblings, found and fixed in the same PR:** `app/modules/closing/router.py` held the same comprehension
+  TWICE (the 3-way tender recon and the deposit-accountability read). A drifted code is now a
+  DECLARED code there, so a scoped viewer SPAN-CHECKS it instead of dropping it — nobody gains a
+  store outside their span, and a real store stops vanishing from a DM's recon over a capital letter.
+
+**WHAT MOVED, measured live over every tenant and every month Jun–Nov 2026 (`coa.wages_by_store`
+against production, before and after):** LuxeLink Sep 25→21 keys, Oct 24→20, Nov 24→20, **every
+monthly total identical to the cent** ($105,109.69 in October both sides); the house org, Vzone and
+NY LOGISTICS unchanged in every month, key for key and cent for cent (the house org's Oct/Nov are a
+clock-coverage refusal both sides). No money is created, lost, or moved BETWEEN stores: a phantom's
+dollars reach the declared store whose shifts earned them.
+
+### §ACCOUNT-01.3 Salary belongs on the salary line — for a tenant that declared its own rows too
+
+`app/modules/commcalc/labour_vocabulary.py` `default_payroll_routes` applied **only where the vocabulary came from the house
+default**, so a tenant that took the trouble to declare its own payroll rows got the WORSE
+presentation: $63,234.32 of declared October salary booked inside *"Store operating expenses (rent /
+utilities / supplies)"*. `DEFAULT_PAYROLL_LINE`'s own reason — salary belongs on the salary line, not
+inside rent — is not true of one vocabulary and false of the other, and the house/explicit split was
+only ever argued for the authority **grain** (`HOUSE_AUTHORITY_GRAIN`, where it remains right).
+
+The whole route decision now lives in the one home: **`resolve(..., routes_cfg)`** takes the tenant's
+stored `payroll_expense_routes` and applies the rule — a non-empty stored map wins wholesale, an
+empty or absent one takes the salary line, `mode='off'` routes nothing. `coa._account_config` reads
+the answer instead of holding half of it (`if not cfg["payroll_expense_routes"]` is gone).
+**Routing moves a dollar between two OPEX lines; no bottom line changes** (proven, `B11`/`E8c`).
+
+### §ACCOUNT-01.4 The two defects that are DATA, and are reported rather than coded around
+
+- **A declared row the platform FILLS ITSELF outranks the platform's own live measurement.** October
+  typed $90.00 at `531 Utica Ave` against $3,888.74 of measured hours, $85.25 at `3735 W 26th St`
+  against $6,281.90. Membership in the payroll vocabulary confers authority, which suppresses the
+  estimate — so a frozen auto-fill of an in-progress month is published as the month's payroll. The
+  mechanism is NOT changed here: it moves money (LuxeLink October labour +$41,875.37 at minimum) and
+  money-touching changes are surfaced for the owner's word. Owner card posted 2026-11-11.
+- **The house org's October and November salary is NOT MEASURABLE and says so.** Only 65.49% of
+  October's 510 scheduled employee-days (42.68% of November's 246) carry a punch or a correction,
+  below the 85.00% the org requires; `payroll_evidence` refuses and the line carries the refusal in
+  its note (§14y). Missing clock data, not a code defect — it stays reported.
+- **Commission: the P&L is faithful, the derivation is stale.** The `rep_comm` line books
+  $2,145.25, which is exactly what `commcalc.rep_commissions` holds for LuxeLink October — 31 rows,
+  all stamped `created_at` **2026-10-06**, day six of the month, never re-run (September, run after
+  the month closed, is $12,703.71 over 45 rows; the house org re-ran on 10 Nov and reads
+  $9,829.72). `commcalc/auto_calc.py` is the §6l post-landing hook, so a tenant that lands no feed
+  gets no recalculation, and the statement compute does not trigger one. Nothing is miscomputed;
+  a five-day snapshot is being published as a month, and the statement does not say so. Reported,
+  not patched — the commission engine's one-homes are owned elsewhere (§6).
+
+### §ACCOUNT-01.5 What the lock holds
+
+`harness_store_identity_lock.py` **§F** fails the build when: `code_key` / `build_code_index` leave
+the home; `build_store_resolver` stops dereferencing the index; a code is folded with a local
+`.upper()` again; `coa.store_code_to_address` stops dereferencing the home; or **a second
+`{store_code: store_address}` map appears anywhere in `backend/app`** (it caught both
+`closing/router.py` sites on its first run). It reads CODE, not comments
+(`harnesslib.py_code_only`). The PROOF is **`harness_store_code_case.py`** (33 checks): the fold,
+the ambiguity rule, resolver/map agreement, the live October regression to the cent, and §E's
+cross-tenant pass — each tenant's own declared codes resolve in the other case while one tenant's
+codes reach nothing of another's. `harness_labour_vocabulary.py` carries the route rule (B8a–B8g,
+E8a–E8c; E8 used to assert the defect and says so). `harnesslib.COA_STORE_CODE_INDEX_SANCTION`
+carries the attribution sanction and the before/after; every other store and company resolver in
+`coa.py` stays pinned byte-identical.
+
+**Cross-references:** §64 (the store-identity home this dereferences) · §70 (`fold_accents` — "a
+fold that does not fold", the same class on a person's name) · §4e / §19.50 (the labour vocabulary
+and the carry rule) · §14y (paid hours, the evidence and the interlock) · §COMMCALC-23 (a carried
+month never inherits labour) · §19.18 (one fact, one home, dereferenced — never copied) ·
+§COMMCALC-49.10 (a feature is not finished until it works for every tenant) · §CORE-34/35 (the gate
+index that lists the new proof) · §6l (the post-landing recalculation hook §ACCOUNT-01.4 reports on).

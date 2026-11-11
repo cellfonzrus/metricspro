@@ -3126,8 +3126,17 @@ def tender_recon_3way(date: str = "", date_from: str = "", date_to: str = "", st
     resolve_addr = _addr_resolver(client, org_id)
     sm = (client.schema("commcalc").table("store_mapping").select("store_code,store_address")
           .eq("org_id", org_id).execute().data) or []
-    name_by_code = {s.get("store_code"): s.get("store_address") for s in sm if s.get("store_code")}
-    resolved_codes = set(name_by_code)
+    # THE CODE MAP, DEREFERENCED (2026-11-11). This was a `{code: address}` comprehension keyed on
+    # the code exactly as a feed typed it — a second copy of a question
+    # `account.store_identity.build_code_index` answers, and the shape of the defect that made a P&L
+    # salary line read $1,928.85 (harness_store_code_case.py). `build_code_index` is a dict for every
+    # reader below; its `get` / `in` fold case, accents and spacing, so a store that spells its code
+    # `CICERO` where the org declared `Cicero` is the SAME store here as it is everywhere else.
+    # A drifted code is therefore a DECLARED code now, which means a scoped viewer SPAN-CHECKS it
+    # instead of dropping it: nobody gains a store outside their span, and a real store stops
+    # vanishing from a DM's recon over a capital letter.
+    name_by_code = _store_identity.build_code_index(sm)
+    resolved_codes = name_by_code          # membership asks the folded map, not a frozen key set
     dep_cfg = _deposit_config(client, org_id)
     tenders_axis = [{"key": t, "label": tlabel.get(t, t)} for t in keys]
 
@@ -4924,7 +4933,8 @@ def deposit_recon_report(date: str = "", date_from: str = "", date_to: str = "",
     ks = scope_keyset(authorization, org_id)
     sm = (client.schema("commcalc").table("store_mapping").select("store_code,store_address")
           .eq("org_id", org_id).execute().data) or []
-    name_by_code = {s.get("store_code"): s.get("store_address") for s in sm if s.get("store_code")}
+    # Same dereference as the 3-way recon above — one home for "which store is this code".
+    name_by_code = _store_identity.build_code_index(sm)
 
     by_store_day = {}
     for x in deposits:

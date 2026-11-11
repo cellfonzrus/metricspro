@@ -141,13 +141,19 @@ def resolve_mode(mode):
     return m if m in MODES else HOUSE
 
 
-def resolve(payroll_cfg=None, commission_cfg=None, grain_cfg=None, mode=None):
+def resolve(payroll_cfg=None, commission_cfg=None, grain_cfg=None, mode=None, routes_cfg=None):
     """PURE: the ONE resolution of "which expense rows are labour already booked elsewhere".
 
     `payroll_cfg` / `commission_cfg` — the tenant's `account_config.payroll_expense_names` /
     `.labour_commission_expense_names` as stored (list, empty list, or None).
     `grain_cfg`  — its stored `payroll_authority_grain` ('org' | 'store' | None).
     `mode`       — its stored `labour_vocabulary_mode` (see `MODES`); absent ⇒ `HOUSE`.
+    `routes_cfg` — its stored `payroll_expense_routes` ({row name: P&L line}, or empty/None).
+
+    THE ROUTE RULE (owner report 2026-11-11, see `default_payroll_routes`): a NON-EMPTY stored route
+    map wins wholesale; an empty or absent one takes the salary line for every resolved payroll row,
+    whether the vocabulary came from the tenant or from the house. Routing moves a dollar between
+    two OPEX lines and never changes a bottom line.
 
     THE RULE, one sentence: a NON-EMPTY tenant list wins wholesale; an empty or absent list takes
     the platform's own default rows; `mode='off'` takes nothing.
@@ -170,10 +176,12 @@ def resolve(payroll_cfg=None, commission_cfg=None, grain_cfg=None, mode=None):
     com_explicit = _clean(commission_cfg)
     stored_grain = str(grain_cfg or "").strip().lower()
     stored_grain = stored_grain if stored_grain in ("org", "store") else "org"
+    stored_routes = _clean_routes(routes_cfg)
 
     if m == OFF:
         return {"mode": OFF, "payroll_names": [], "commission_names": [],
                 "payroll_source": OFF, "commission_source": OFF, "payroll_routes": {},
+                "payroll_routes_source": OFF,
                 "grain": stored_grain, "grain_source": EXPLICIT,
                 "apply_protection_tokens": apply_protection_tokens([], [])}
 
@@ -183,19 +191,50 @@ def resolve(payroll_cfg=None, commission_cfg=None, grain_cfg=None, mode=None):
     com_src = EXPLICIT if com_explicit else HOUSE
     # See HOUSE_AUTHORITY_GRAIN: the house vocabulary can only be switched on safely at store grain.
     grain = stored_grain if pay_src == EXPLICIT else HOUSE_AUTHORITY_GRAIN
+    routes = stored_routes or default_payroll_routes(pay)
     return {"mode": m, "payroll_names": pay, "commission_names": com,
             "payroll_source": pay_src, "commission_source": com_src,
-            "payroll_routes": default_payroll_routes(pay) if pay_src == HOUSE else {},
+            "payroll_routes": routes,
+            "payroll_routes_source": EXPLICIT if stored_routes else HOUSE,
             "grain": grain, "grain_source": EXPLICIT if pay_src == EXPLICIT else HOUSE,
             "apply_protection_tokens": apply_protection_tokens(pay, com)}
 
 
-def default_payroll_routes(payroll_names):
-    """PURE: the house `payroll_expense_routes` — every house payroll row onto `DEFAULT_PAYROLL_LINE`.
+def _clean_routes(routes):
+    """PURE: a stored `payroll_expense_routes` value → `{lowercased row name: line key}`, blanks
+    dropped. Anything that is not a mapping (None, a list, garbage) is "not configured" ⇒ `{}`.
+    Never raises."""
+    out = {}
+    if not isinstance(routes, dict):
+        return out
+    for k, v in routes.items():
+        name = " ".join(str(k or "").strip().split()).lower()
+        line = str(v or "").strip()
+        if name and line:
+            out[name] = line
+    return out
 
-    Only ever applied when the payroll vocabulary itself came from the house default; a tenant with
-    an explicit vocabulary keeps its own (possibly empty) route map, so its presentation does not
-    move under it. Routing changes WHICH opex line holds a dollar, never the bottom line."""
+
+def default_payroll_routes(payroll_names):
+    """PURE: the house `payroll_expense_routes` — every resolved payroll row onto
+    `DEFAULT_PAYROLL_LINE`.
+
+    APPLIED TO AN EXPLICIT VOCABULARY TOO since 2026-11-11, and that is the fix to the owner's
+    report *"not pulling the employee salaries in for all stores for the p&l for the month of
+    October"*. It used to apply only where the vocabulary came from the house default, so a tenant
+    that declared its own payroll rows got the WORSE presentation: its declared salary booked inside
+    "Store operating expenses (rent / utilities / supplies)" while the salary line read almost
+    nothing. Measured live on the reporting tenant, October 2026: $37,734.31 of declared employee
+    salary and $25,500.01 of declared DM salary filed under rent, with $1,928.85 on the salary line.
+    The tenant and the figures are named in `harness_store_code_case.py` and the index, which may
+    hold a measurement; this module may not hold a tenant's name at all (RULE TWO, guard G5a).
+    `DEFAULT_PAYROLL_LINE`'s own reason — salary belongs on the salary line — is not true of one
+    vocabulary and false of the other, and the house/explicit split was only ever argued for the
+    authority GRAIN (`HOUSE_AUTHORITY_GRAIN`, where it remains).
+
+    A tenant that stored a route map of its own still keeps it, wholesale (`resolve`'s
+    `routes_cfg`), so no tenant that has expressed a preference is moved. Routing changes WHICH opex
+    line holds a dollar, never the bottom line."""
     return {n.lower(): DEFAULT_PAYROLL_LINE for n in _clean(payroll_names)}
 
 

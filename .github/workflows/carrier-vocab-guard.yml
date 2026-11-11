@@ -1869,6 +1869,16 @@ jobs:
       - name: Run the store-identity proof (both live regressions as fixtures; the door survives a two-code store; unplaceable money is stated, never dropped — index §64)
         working-directory: backend
         run: python3 harness_gp_store_identity.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §ACCOUNT-01 — A DECLARED STORE CODE IS CASE-BLIND. The code→address map was a second,
+      # weaker copy of the question `build_store_resolver` already answers, keyed on the code exactly
+      # as a feed typed it: eighteen October shift rows spelling four codes in CAPITALS matched
+      # nothing, so payroll AUTHORITY was decided in one key space and the money booked in another
+      # and a whole month's salary line was $1,928.85 of hours on four stores that do not exist.
+      # Section F of the lock above fails the build on a second map; this is the proof, with the live
+      # regression and the cross-tenant assertions as fixtures.
+      - name: Run the store-code case proof (one fold, one code→address map, no phantom store; every tenant's own declarations — index §ACCOUNT-01)
+        working-directory: backend
+        run: python3 harness_store_code_case.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the any-subset-columns lock (no column-block ladder anywhere; one reading rule; every named reader on it; credential rows projected)
         working-directory: backend
         run: python3 harness_any_columns_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

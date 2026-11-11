@@ -23,7 +23,8 @@ or a second leading-token join appearing anywhere in the backend, FAILS THE BUIL
 """
 
 __all__ = [
-    "fold_accents", "squash_key", "lead_num_key", "build_store_resolver", "store_key",
+    "fold_accents", "squash_key", "lead_num_key", "code_key", "build_code_index",
+    "CodeAddressMap", "build_store_resolver", "store_key",
     "store_identity_index", "ambiguous_identities",
     "shared_identity_pairs", "may_be_one_store",
 ]
@@ -81,6 +82,93 @@ def lead_num_key(v):
     return "".join(ch for ch in tok if ch.isdigit()) or None
 
 
+def code_key(v):
+    """THE ONE fold for a DECLARED STORE CODE: whitespace collapsed, accents folded, upper-cased.
+
+    WHY IT IS ITS OWN FUNCTION (measured defect 2026-11-11, owner report *"Luxelink is not pulling
+    the employee salaries in for all stores for the p&l for the month of October"*). Eighteen of
+    LuxeLink's October shift rows carry their store code in CAPITALS — `GRAND`, `DIVERSEY`,
+    `CICERO`, `LAWRENCE` — where `store_mapping` declares `Grand`, `Diversey`, `Cicero`,
+    `lawrence`. `build_store_resolver` below has always folded a code (`code.upper()`) and so
+    matched them; the CODE→ADDRESS MAP that the P&L's wage path was handed had its own copy of the
+    question, keyed on the code exactly as typed, and matched none of them. The statement therefore
+    decided payroll AUTHORITY in one key space and BOOKED money in another, and the whole October
+    salary line was the $1,928.85 that fell through the gap onto four stores that exist nowhere.
+
+    So the fold is named, once, and both the resolver and the map dereference it — a capital letter
+    cannot make two key spaces again. It is a property of the ORG'S OWN declared rows and holds no
+    tenant, carrier, store or product word (RULE TWO), which is why it is house-wide rather than
+    per-org vocabulary.
+
+    `None` for a blank input — never an empty key, which would make every unlabelled row one store.
+    """
+    s = " ".join(fold_accents(str(v or "")).split())
+    return s.upper() or None
+
+
+class CodeAddressMap(dict):
+    """THE code→address map: a `dict` whose `get` / `in` / `[]` fold the key through `code_key`.
+
+    A DICT SUBCLASS DELIBERATELY, and this is the whole reason the fix is one edit rather than
+    twelve. The map is passed by value into `coa.derive_wage_cells`, `labour_coverage`,
+    `overhead_allocation` and read in `coa.build_inputs` as `code2addr.get(code, code)` at many
+    sites. Returning a mapping that answers the folded question means EVERY one of those callers
+    gains the fix without an edit of its own — and a caller added tomorrow cannot reintroduce the
+    defect by writing the same innocent `.get`. The keys remain the org's OWN stored spellings, so
+    `.keys()` / `.items()` / `.values()` / iteration / `len` are unchanged for a reader that prints
+    a code or lists the org's stores (`royalty_router`).
+
+    AMBIGUITY RESOLVES TO NOTHING, never to a winner — the same rule the resolver's squash and
+    street-number steps already apply. Two declared codes folding to one key with DIFFERENT
+    addresses are not a merge the platform may make on a capital letter; each still resolves under
+    its own exact spelling, and the fold answers neither.
+    """
+
+    def __init__(self, pairs=()):
+        super().__init__(pairs)
+        folded = {}
+        for code, addr in self.items():
+            k = code_key(code)
+            if k and addr:
+                folded.setdefault(k, set()).add(addr)
+        #: folded code -> address, only where exactly one declared address claims the fold
+        self._folded = {k: next(iter(v)) for k, v in folded.items() if len(v) == 1}
+
+    def get(self, code, default=None):
+        if dict.__contains__(self, code):
+            return dict.__getitem__(self, code)
+        k = code_key(code)
+        return self._folded.get(k, default) if k else default
+
+    def __contains__(self, code):
+        if dict.__contains__(self, code):
+            return True
+        k = code_key(code)
+        return bool(k) and k in self._folded
+
+    def __getitem__(self, code):
+        if dict.__contains__(self, code):
+            return dict.__getitem__(self, code)
+        k = code_key(code)
+        if k and k in self._folded:
+            return self._folded[k]
+        raise KeyError(code)
+
+
+def build_code_index(mapping_rows):
+    """PURE: `store_mapping` rows → the `CodeAddressMap` for "which store is this CODE?".
+
+    THE one home for that map. A row with no code or no address contributes nothing; the first
+    stored spelling of a repeated code wins, exactly as the dict comprehension it replaces did.
+    """
+    out = CodeAddressMap()
+    for r in (mapping_rows or []):
+        c, a = _norm((r or {}).get("store_code")), _norm((r or {}).get("store_address"))
+        if c and a and c not in dict.keys(out):
+            dict.__setitem__(out, c, a)
+    return CodeAddressMap(dict(out))
+
+
 def build_store_resolver(mapping_rows, alias_rows=None):
     """PURE twin of `coa.store_resolver`: (store_mapping rows, store_aliases rows) -> resolve(raw).
 
@@ -106,8 +194,15 @@ def build_store_resolver(mapping_rows, alias_rows=None):
 
     A code-keyed step never merges two stores: it lands on an address `store_mapping` already holds,
     so this can only collapse SPELLINGS of a known store, never invent a merge."""
-    addr_by_addr, addr_by_code = {}, {}
+    addr_by_addr = {}
     num_addrs, squash_addrs = {}, {}
+    # THE CODE STEP, DEREFERENCED (2026-11-11). This was a local `addr_by_code[code.upper()] = addr`
+    # — a SECOND copy of `build_code_index`'s question, and a last-wins one, so a folded collision
+    # silently picked whichever row the loop saw last. It now reads the one home's own index, which
+    # refuses an ambiguous fold instead of choosing. Every code that resolved before resolves to the
+    # same address; the only behaviour that changes is a collision between two DIFFERENT addresses,
+    # which now resolves to nothing under the fold (each still resolves under its exact spelling).
+    addr_by_code = build_code_index(mapping_rows)
     for r in (mapping_rows or []):
         addr = _norm((r or {}).get("store_address"))
         code = _norm((r or {}).get("store_code"))
@@ -119,15 +214,13 @@ def build_store_resolver(mapping_rows, alias_rows=None):
             sk = squash_key(addr)
             if sk:
                 squash_addrs.setdefault(sk, set()).add(addr)
-        if addr and code:
-            addr_by_code[code.upper()] = addr
 
     alias_addr, alias_nums, alias_squash = {}, {}, {}
     for r in (alias_rows or []):
         al, code = _norm((r or {}).get("alias")), _norm((r or {}).get("store_code"))
         if not (al and code):
             continue
-        target = addr_by_code.get(code.upper())
+        target = addr_by_code.get(code)        # folded by the one home (code_key)
         if not target:
             continue                      # an alias for a code with no address resolves nothing
         alias_addr[al.lower()] = target
@@ -155,8 +248,8 @@ def build_store_resolver(mapping_rows, alias_rows=None):
             return addr_by_addr[low]
         if low in alias_addr:
             return alias_addr[low]
-        if s.upper() in addr_by_code:
-            return addr_by_code[s.upper()]
+        if s in addr_by_code:
+            return addr_by_code[s]             # the one home's fold: case / accents / spacing
         sk = squash_key(s)
         if sk and sk in addr_by_squash:
             return addr_by_squash[sk]

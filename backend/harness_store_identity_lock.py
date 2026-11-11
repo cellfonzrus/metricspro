@@ -238,6 +238,59 @@ def main():
 
     print()
     print("=" * 78)
+    print("F. A declared store CODE is matched in ONE place, and case cannot split it")
+    print("=" * 78)
+    # OWNER REPORT 2026-11-11 ("not pulling the employee salaries in for all stores for the p&l for
+    # the month of October"). `build_store_resolver` has always folded a store code; the CODE→ADDRESS
+    # MAP the P&L's wage path was handed had its own copy, keyed on the code exactly as typed. So one
+    # tenant's October shift rows, which spell four codes in CAPITALS, matched nothing: payroll
+    # AUTHORITY was decided in one key space and the money booked in another, and $1,928.85 of hours
+    # landed on four stores that exist nowhere — the whole of that month's salary line.
+    #
+    # The fold is now `store_identity.code_key` and the map is `store_identity.build_code_index`.
+    # This section fails the build if either stops being the only one.
+    sid_src = open(os.path.join(_APP, "modules/account/store_identity.py"),
+                   encoding="utf-8").read()
+    ok("def code_key(" in sid_src and "def build_code_index(" in sid_src,
+       "store_identity no longer holds the store-code fold / code→address map")
+    ok("addr_by_code = build_code_index(" in sid_src,
+       "build_store_resolver has stopped dereferencing build_code_index — its code step is a "
+       "second copy of the fold again")
+    # READ CODE, NOT COMMENTS. The comment above the fixed line QUOTES the retired expression so a
+    # reader knows what was fixed, and a guard a truthful comment can break is a guard that gets
+    # deleted (harnesslib.py_code_only exists for exactly this, three times over).
+    import harnesslib
+    sid_code = harnesslib.py_code_only(sid_src)
+    ok("code.upper()" not in sid_code and "addr_by_code[code" not in sid_code,
+       "build_store_resolver folds a code with its own `.upper()` again instead of code_key")
+    coa_src = open(os.path.join(_APP, "modules/account/coa.py"), encoding="utf-8").read()
+    ok("_sid.build_code_index(" in coa_src,
+       "coa.store_code_to_address no longer dereferences the one home — it is building its own "
+       "code→address dict again, which is exactly the October defect")
+    # A SECOND MAP, anywhere. `{code: address}` written by hand is the defect's shape, whatever the
+    # local variable is called: a loop or comprehension that assigns a store_address under a
+    # store_code key. store_identity itself is the home and is excused.
+    _SECOND_MAP = re.compile(
+        r"""\[\s*_?norm[_a-z]*\(\s*\w*\.?get\(\s*['"]store_code['"]\s*\)[^\]]*\]\s*=\s*"""
+        r"""\w*_?norm[_a-z]*\(\s*\w*\.?get\(\s*['"]store_address['"]"""
+        r"""|['"]store_code['"]\s*\]\s*:\s*\w+\[\s*['"]store_address['"]\s*\]"""
+        r"""|\.get\(\s*['"]store_code['"]\s*\)\s*\)?\s*:\s*\w*\.?get\(\s*['"]store_address['"]""")
+    for root, _dirs, names in os.walk(_APP):
+        for n in sorted(names):
+            if not n.endswith(".py"):
+                continue
+            rel = os.path.relpath(os.path.join(root, n), _APP).replace(os.sep, "/")
+            if rel == "modules/account/store_identity.py":
+                continue
+            src = open(os.path.join(root, n), encoding="utf-8").read()
+            m = _SECOND_MAP.search(src)
+            ok(m is None,
+               f"{rel}:{src.count(chr(10), 0, m.start()) + 1 if m else 0} builds a SECOND "
+               "{store_code: store_address} map — call account.store_identity.build_code_index "
+               "so a capital letter cannot make two key spaces again")
+
+    print()
+    print("=" * 78)
     print("E. SQL does not decide store identity")
     print("=" * 78)
     def _sql_code(path):
