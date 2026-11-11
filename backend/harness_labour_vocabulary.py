@@ -173,8 +173,45 @@ ok("B7f …while the auto-filled row does",
    LC.authoritative_codes(
        [{"store_code": "B-1", "expense_name": "Employee Salaries", "amount": 4479.16,
          "source_key": None}], LV.resolve()["payroll_names"]) == frozenset({"B-1"}))
-ok("B8 a tenant's own route map is respected by resolve (it returns none of its own)",
-   LV.resolve(["Employee Salaries"])["payroll_routes"] == {})
+# ── B8: WHERE A DECLARED SALARY ROW BOOKS (owner report 2026-11-11) ──────────────────────────────
+# Owner: *"Luxelink is not pulling the employee salaries in for all stores for the p&l for the month
+# of October"*. It was. $37,734.31 of declared 'Employee Salaries' and $25,500.01 of 'DM Salaries'
+# were booked — inside **Store operating expenses (rent / utilities / supplies)**, because `resolve`
+# returned routes ONLY when the vocabulary came from the house default. A tenant that took the
+# trouble to declare its own payroll rows therefore got the WORSE presentation: the salary line read
+# $1,928.85 and the salary itself was filed under rent. Nothing in `DEFAULT_PAYROLL_LINE`'s reason —
+# *"salary belongs on the salary line, not inside rent / utilities / supplies"* — is true of one
+# vocabulary and false of the other, and the exclusion was never argued for routing (it is argued
+# for the GRAIN, where it is right, and C3 still holds it).
+#
+# So the ROUTE decision moves into the one home whole: a tenant's own stored map wins wholesale,
+# and where it stored none, every resolved payroll row goes to the salary line — house or explicit.
+# Routing moves a dollar between two opex lines; NET INCOME IS UNCHANGED (B11, and §F6 measures it).
+ok("B8a an EXPLICIT vocabulary now routes to the salary line too — the October defect",
+   LV.resolve(["Employee Salaries", "DM Salaries"])["payroll_routes"]
+   == {"employee salaries": LV.DEFAULT_PAYROLL_LINE, "dm salaries": LV.DEFAULT_PAYROLL_LINE})
+ok("B8b a tenant's OWN stored route map still wins wholesale",
+   LV.resolve(["Employee Salaries"], None, None, None,
+              {"employee salaries": "payroll_expenses"})["payroll_routes"]
+   == {"employee salaries": "payroll_expenses"})
+ok("B8c …including a map that routes only SOME of its rows — it is taken as stored, not merged",
+   LV.resolve(["Employee Salaries", "DM Salaries"], None, None, None,
+              {"dm salaries": "payroll_expenses"})["payroll_routes"]
+   == {"dm salaries": "payroll_expenses"})
+ok("B8d an EMPTY stored map is 'not configured', so the salary line applies",
+   LV.resolve(["Employee Salaries"], None, None, None, {})["payroll_routes"]
+   == {"employee salaries": LV.DEFAULT_PAYROLL_LINE}
+   and LV.resolve(["Employee Salaries"], None, None, None, None)["payroll_routes"]
+   == {"employee salaries": LV.DEFAULT_PAYROLL_LINE})
+ok("B8e mode 'off' still routes NOTHING — one opt-out, one place",
+   LV.resolve(["Employee Salaries"], None, None, LV.OFF, {})["payroll_routes"] == {}
+   and LV.resolve(["Employee Salaries"], None, None, LV.OFF,
+                  {"employee salaries": "wages"})["payroll_routes"] == {})
+ok("B8f a route map is never invented for a row the vocabulary does not hold",
+   set(LV.resolve(["Employee Salaries"])["payroll_routes"]) == {"employee salaries"})
+ok("B8g every route target is a REAL PL_SPEC opex line, whatever the tenant stored",
+   all(t in {k for k, _l, sec, *_ in coa.PL_SPEC if sec == "opex"}
+       for t in LV.resolve(["Employee Salaries", "DM Salaries"])["payroll_routes"].values()))
 ok("B9 the house routes send every house payroll row to ONE opex line",
    set(LV.resolve()["payroll_routes"].values()) == {LV.DEFAULT_PAYROLL_LINE}
    and len(LV.resolve()["payroll_routes"]) == len(LV.DEFAULT_PAYROLL_ROWS))
@@ -328,8 +365,23 @@ ok("E7 the FULLY-CONFIGURED shape is UNCHANGED — its own names, its own grain"
    c2["payroll_expense_names_list"] == ["DM Salaries", "Employee Salaries"]
    and c2["labour_commission_expense_names_list"] == ["Employee Commission"]
    and c2["payroll_authority_grain"] == "store")
-ok("E8 …and gets NO house routes (its presentation does not move under it)",
-   c2["payroll_expense_routes"] == {})
+# E8 USED TO ASSERT THE DEFECT (owner report 2026-11-11). `SHAPE_FULLY_CONFIGURED` is the live
+# shape of the tenant that reported it — its own two payroll rows, per-store grain, and an EMPTY
+# stored route map — and "gets NO house routes" is precisely why its declared salary was filed under
+# rent while its salary line read $1,928.85. An empty stored map is "not configured", not a
+# preference, so the salary line now applies to it as it already did to a house vocabulary.
+ok("E8a a declared vocabulary with NO stored route map now routes to the salary line",
+   c2["payroll_expense_routes"] == {"dm salaries": LV.DEFAULT_PAYROLL_LINE,
+                                    "employee salaries": LV.DEFAULT_PAYROLL_LINE},
+   c2["payroll_expense_routes"])
+c2own = cfg_for(dict(SHAPE_FULLY_CONFIGURED,
+                     payroll_expense_routes={"employee salaries": "payroll_expenses"}))
+ok("E8b …while a tenant that STORED a route map keeps it, wholesale — unmoved",
+   c2own["payroll_expense_routes"] == {"employee salaries": "payroll_expenses"},
+   c2own["payroll_expense_routes"])
+ok("E8c the routing moves no dollar out of opex — both targets are opex lines",
+   {sec for k, _l, sec, *_ in coa.PL_SPEC
+    if k in set(c2["payroll_expense_routes"].values())} == {"opex"})
 
 c3 = cfg_for(SHAPE_HALF_CONFIGURED)
 ok("E9 the HALF-CONFIGURED shape keeps its payroll list and its stored grain",

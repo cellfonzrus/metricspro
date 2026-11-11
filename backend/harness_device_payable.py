@@ -806,7 +806,13 @@ COA_SANCTIONED = (("build_inputs", "_account_config")
                   + _hl.COA_STORE_IDENTITY_SANCTION
                   # §14y.1 (2026-10-12): the P&L wage line now reads the punches. See the sanction's
                   # own comment in harnesslib for the measurement and why no resolver moved.
-                  + _hl.COA_PAID_HOURS_EVIDENCE_SANCTION)
+                  + _hl.COA_PAID_HOURS_EVIDENCE_SANCTION
+                  # §ACCOUNT-01 (2026-11-11): the code→address map moved to the store-identity
+                  # home so a declared code is case-blind. See the sanction's own comment in
+                  # harnesslib for the live before/after over every tenant and month — every
+                  # total identical to the cent, the only movement being a phantom key's
+                  # dollars reaching the declared store whose shifts earned them.
+                  + _hl.COA_STORE_CODE_INDEX_SANCTION)
 try:
     import harnesslib
     base = subprocess.run(["git", "merge-base", "HEAD", "origin/main"],

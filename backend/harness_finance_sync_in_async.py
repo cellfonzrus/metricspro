@@ -355,9 +355,25 @@ MONEY_MODULE_DELTA = {
     #   first side entry shipped (`harness_pl_commission_source.py`, unrunnable until now). These two
     #   are PURE predicates over a key — they book nothing, read nothing and change no existing
     #   function; `build_inputs` itself is byte-identical here.
+    # coa.py {store_code_to_address} (2026-11-11, index §ACCOUNT-01, owner report "not pulling the
+    #   employee salaries in for all stores for the p&l for the month of October"). THE CODE->ADDRESS
+    #   MAP MOVED TO ITS ONE HOME. It built its own `{store_code: store_address}` dict keyed on the
+    #   code exactly as a feed typed it — a second, weaker copy of the question
+    #   `store_identity.build_store_resolver` has always answered WITH a fold. One tenant's October
+    #   shift rows spell four of its twenty declared codes in CAPITALS, so eighteen rows matched no
+    #   address: payroll AUTHORITY was judged in one key space and the money booked in another, and
+    #   the month's whole salary line was $1,928.85 of hours on four stores that exist nowhere.
+    #   It now returns `store_identity.build_code_index(...)`. MEASURED live over every tenant and
+    #   every month Jun–Nov 2026, running `coa.wages_by_store` against production both sides: every
+    #   monthly TOTAL identical to the cent, the only movement being a phantom key's dollars reaching
+    #   the declared store whose shifts earned them (the reporting tenant Sep 25->21 keys, Oct 24->20,
+    #   Nov 24->20); the house org, Vzone and NY LOGISTICS unchanged key for key and cent for cent.
+    #   Locked by harness_store_identity_lock.py §F; proven by harness_store_code_case.py. The same
+    #   sanction, with the same measurement, is `harnesslib.COA_STORE_CODE_INDEX_SANCTION`.
     f"{MOD}/account/coa.py": ({"_account_config", "build_inputs", "wages_by_store",
                                "derive_wage_cells", "derive_wage_cells_with_basis",
-                               "store_resolver", "_squash_key", "_lead_num_key"},
+                               "store_resolver", "store_code_to_address",
+                               "_squash_key", "_lead_num_key"},
                               {"_lcov_mod", "build_inputs.add_comm",
                                "is_side_entry", "statement_lines"}),
     f"{MOD}/account/autocompute.py": (set(), set()),

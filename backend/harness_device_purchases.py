@@ -339,7 +339,13 @@ COA_SANCTIONED = (("build_inputs", "_account_config")
                   # plus the two pure wage-cell functions it hands the evidence to. See the
                   # sanction's own comment in harnesslib for the measurement and why no resolver
                   # moved; `wages_by_store` was already sanctioned here and is carried in that list.
-                  + harnesslib.COA_PAID_HOURS_EVIDENCE_SANCTION)
+                  + harnesslib.COA_PAID_HOURS_EVIDENCE_SANCTION
+                  # §ACCOUNT-01 (2026-11-11): the code→address map moved to the store-identity
+                  # home so a declared code is case-blind. See the sanction's own comment in
+                  # harnesslib for the live before/after over every tenant and month — every
+                  # total identical to the cent, the only movement being a phantom key's
+                  # dollars reaching the declared store whose shifts earned them.
+                  + harnesslib.COA_STORE_CODE_INDEX_SANCTION)
 _coa_base = _git("show", "%s:%s" % (base or "HEAD", coa_path)).stdout
 _coa_now = open(os.path.join(HERE, "app/modules/account/coa.py"), encoding="utf-8").read()
 if _coa_base.strip():

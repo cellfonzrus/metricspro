@@ -790,13 +790,22 @@ def wages_by_store(client, org_id, period):
 
 
 def store_code_to_address(client, org_id):
-    """store_expenses keys by store_code; map it to the canonical store_address."""
-    out = {}
-    for r in (_fetch_all(client, "store_mapping", "store_code,store_address", {"org_id": org_id})):
-        c, a = _norm_store(r.get("store_code")), _norm_store(r.get("store_address"))
-        if c and a:
-            out[c] = a
-    return out
+    """store_expenses keys by store_code; map it to the canonical store_address.
+
+    I/O ONLY since 2026-11-11. The MAP itself — and the fold that decides whether a code written in
+    another case is the same store — lives in `account.store_identity.build_code_index` /
+    `.code_key`, the one home `store_resolver` already resolves a code through. This function used
+    to build its own `{code: address}` dict keyed on the code EXACTLY as typed, which is a second
+    and weaker copy of that question: LuxeLink's October shift rows carry `GRAND`, `DIVERSEY`,
+    `CICERO`, `LAWRENCE` where `store_mapping` declares `Grand`, `Diversey`, `Cicero`, `lawrence`,
+    so eighteen rows matched nothing, `payroll_auth_stores` could not see those stores, and
+    $1,928.85 of hours was booked on top of their already-authoritative entered payroll — the whole
+    of the October salary line. `build_code_index` returns a `dict` in every respect a present
+    caller uses, so every `code2addr.get(code, code)` site in the backend is fixed at once rather
+    than one call at a time. Proof: `harness_store_code_case.py`. Lock:
+    `harness_store_identity_lock.py` §F. Index §ACCOUNT-01."""
+    return _sid.build_code_index(
+        _fetch_all(client, "store_mapping", "store_code,store_address", {"org_id": org_id}))
 
 
 def _account_config(client, org_id):
@@ -956,19 +965,25 @@ def _account_config(client, org_id):
         pass
     try:
         from app.modules.commcalc import labour_vocabulary as _lv
+        # THE STORED ROUTE MAP GOES IN, SO THE WHOLE ROUTE DECISION COMES OUT (2026-11-11). It used
+        # to be made HERE — `if not cfg["payroll_expense_routes"]` — which left the one home
+        # answering only half the question and this file holding the other half. That half was the
+        # owner's October defect: `resolve` returned routes only for a HOUSE vocabulary, so
+        # LuxeLink's declared salary booked under "rent / utilities / supplies" while its salary line
+        # read $1,928.85. A tenant's own map still wins wholesale; the home now says so.
         _vocab = _lv.resolve(cfg["payroll_expense_names_list"],
                              cfg["labour_commission_expense_names_list"],
-                             cfg["payroll_authority_grain"], _lv_mode)
+                             cfg["payroll_authority_grain"], _lv_mode,
+                             cfg["payroll_expense_routes"])
         cfg["labour_vocabulary"] = _vocab
         cfg["payroll_expense_names_list"] = list(_vocab["payroll_names"])
         cfg["payroll_expense_names"] = {n.lower() for n in _vocab["payroll_names"]}
         cfg["labour_commission_expense_names_list"] = list(_vocab["commission_names"])
         cfg["labour_commission_expense_names"] = {n.lower() for n in _vocab["commission_names"]}
         cfg["payroll_authority_grain"] = _vocab["grain"]
-        # A tenant's own route map always wins; the house routes apply only where it has none AND
-        # the vocabulary itself came from the house default (`resolve` returns {} otherwise).
-        if not cfg["payroll_expense_routes"]:
-            cfg["payroll_expense_routes"] = dict(_vocab["payroll_routes"])
+        # One decision, one home: `resolve` was given the tenant's own map and has already applied
+        # the rule "a stored map wins wholesale, otherwise the salary line".
+        cfg["payroll_expense_routes"] = dict(_vocab["payroll_routes"])
     except Exception as e:
         _warn("labour vocabulary unresolved — the stored per-org lists are used as-is", e)
     return cfg
