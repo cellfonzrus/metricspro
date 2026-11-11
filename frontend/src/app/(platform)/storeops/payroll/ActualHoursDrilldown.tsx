@@ -174,7 +174,7 @@ export default function ActualHoursDrilldown({ employeeId, name, start, end, onC
                 ⚠ Highlighted day(s) counted a scheduled shift AND a separate clock punch on the same
                 day — a known data artifact (schedule-created shift vs. kiosk punch identity mismatch),
                 not necessarily a real double shift. See {' '}
-                <a href="/storeops/payroll-change-log" style={{ color: 'var(--accent)' }}>the Payroll Change Log</a> for every change made to this employee's hours.
+                <a href="/storeops/payroll-change-log" style={{ color: 'var(--accent)' }}>the Payroll Change Log</a> for every change made to this employee&apos;s hours.
               </div>
             )}
           </>
