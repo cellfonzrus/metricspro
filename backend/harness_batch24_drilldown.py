@@ -511,10 +511,16 @@ for _k in phd.HOURS_KEYS:
           f"opening anything",
           [s["table"] for s in PP[_k]["sources"]]
           and all(s["rows"] > 0 for s in PP[_k]["sources"]))
-check("F2 AND THE CLOCK AND THE PLAN REALLY DO LAND ON DIFFERENT RELATIONS ROW BY ROW, which is what "
-      "makes that list mean anything — not an artefact of one fixture row",
+# F2 COUNTS UPDATED 2026-11-11 (§STOREOPS-07). The fixture's `clocked_corrected` row now names
+# THREE relations instead of one, because a correction is a delta on whatever measured the day: the
+# clock goes 2 -> 3 (the corrected row's own measurement) and `manual_hours` appears with the single
+# corrected row. `shifts` is unchanged at 3. The point of the check is unchanged and is the reason
+# the numbers are spelled rather than bounded — a relation that stopped answering, or one that
+# started, has to be noticed here and explained.
+check("F2 AND THE CLOCK, THE PLAN AND THE CORRECTIONS REALLY DO LAND ON DIFFERENT RELATIONS ROW BY "
+      "ROW, which is what makes that list mean anything — not an artefact of one fixture row",
       {s["table"]: s["rows"] for s in PP["actual_hours"]["sources"]}
-      == {lineage.TIME_CLOCK: 2, lineage.SCHEDULE: 3}
+      == {lineage.TIME_CLOCK: 3, lineage.SCHEDULE: 3, lineage.MANUAL_HOURS: 1}
       and PP["actual_hours"]["untraceable_origins"] == 2)
 check("F3 THE COVERAGE WARNING IS ON EVERY HOURS PANEL IN THIS FAMILY, in words, naming the measured "
       "shortfall — a figure resting on a thin month says so instead of presenting itself as settled",
@@ -534,12 +540,19 @@ check("F5 A PERSON PAID FROM THE PLAN IS STILL COUNTED, because the report pays 
       row(_ah, "Paid from the plan · S-1")["in_figure"] is True
       and row(_ah, "Paid from the plan · S-1")["measured"] is True
       and row(_ah, "Paid from the plan · S-1")["fields"]["hours basis"] == hb.SCHEDULE_OPT_IN)
-check("F6 REPORTED, NOT PAPERED OVER — hand-entered hours never reach this report's figure, so this "
-      "family NEVER names that relation. The gap is written down in the declaration and in the "
-      "registry rather than claimed as a provenance",
-      lineage.MANUAL_HOURS not in {s["table"] for p in PP.values() for s in p["sources"]}
-      and "manual_hours" in DECLS["payroll"]
-      and "does not read" in DECLS["payroll"])
+# F6 REWRITTEN 2026-11-11 (§STOREOPS-07). It used to assert the OPPOSITE and was right to: hand-
+# entered hours reached no figure, so naming that relation would have been a provenance claim about
+# a read that did not happen. That gap was the owner's reported defect — 616 corrections, none of
+# them counted — and the report now folds them. So the assertion flips with the fact, and what it
+# proves is the same discipline either way: this family names exactly the relations that ANSWERED.
+check("F6 A CORRECTED DAY NAMES THE CORRECTIONS RELATION, now that the figure reads it",
+      lineage.MANUAL_HOURS in set(phd.BASIS_RELATIONS[hb.CLOCKED_CORRECTED])
+      and "manual_hours" in DECLS["payroll"])
+check("F6b …and names the clock beside it, because a correction is a DELTA on what measured the day "
+      "— a reader asking why the figure is not what the clock said is sent to both",
+      {lineage.TIME_CLOCK, lineage.SCHEDULE} <= set(phd.BASIS_RELATIONS[hb.CLOCKED_CORRECTED]))
+check("F6c …and the declaration RECORDS that it used not to, rather than quietly rewriting history",
+      "§STOREOPS-07" in DECLS["payroll"] and "616" in DECLS["payroll"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -672,7 +685,13 @@ print(f"       MEASURED {len(MEASURED)} distinct grains over {len(ROW_SHAPE)} pa
       f"{len({s for s in ROW_SHAPE.values()})} row shapes")
 for _g in sorted(MEASURED, key=lambda g: (g[0], g[1], sorted(g[2]))):
     print(f"         · {_g[0]} / {_g[1]} / {sorted(_g[2])}")
-_CLOCK_AND_PLAN = frozenset({lineage.TIME_CLOCK, lineage.SCHEDULE, UNTRACEABLE})
+# UPDATED 2026-11-11 (§STOREOPS-07): `manual_hours` JOINED the clocked grain's provenance, because
+# from that date the Payroll Report READS a hand-typed correction and a corrected day resolves
+# `clocked_corrected` — which this family maps to the clock, the plan AND the corrections, since a
+# correction is a delta on whatever measured the day. For the four months before, naming that
+# relation would have been a claim about a read that did not happen (see F6).
+_CLOCK_AND_PLAN = frozenset({lineage.TIME_CLOCK, lineage.SCHEDULE, lineage.MANUAL_HOURS,
+                             UNTRACEABLE})
 _EXPECTED = {
     # PAYROLL — ONE person-and-pay-period row, two units, and FOUR grains on it.
     ("person_pay_period_row", rd.UNIT_HOURS, frozenset({lineage.SCHEDULE})),

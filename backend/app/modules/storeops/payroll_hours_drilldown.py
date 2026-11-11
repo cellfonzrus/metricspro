@@ -127,6 +127,11 @@ TIME_CLOCK = _lineage.TIME_CLOCK
 #: THE SCHEDULE — an INTENTION, and also the relation a manager's hours correction is typed onto
 #: (`shifts.actual_hours`) on this read. Dereferenced, never spelled.
 SCHEDULE = _lineage.SCHEDULE
+#: HAND-ENTERED HOURS — the correction route a manager actually HAS (`storeops.manual_hours`, mig
+#: 045). Named here from 2026-11-11, because from that date this report READS it (§STOREOPS-07); for
+#: the four months before, naming it would have been a provenance claim about a read that did not
+#: happen, and the docstring above says so. Dereferenced from the lineage registry, never spelled.
+MANUAL_HOURS = _lineage.MANUAL_HOURS
 #: THE EMPLOYEE RECORD — where a person's pay rate and their pay basis live. Named on every MONEY
 #: row, because the gross cannot be read without it. A registry NAME constant as of this batch, with
 #: its one pre-existing literal copy (`account/liabilities_drilldown.EMPLOYEES`) re-keyed in the SAME
@@ -154,7 +159,13 @@ BASIS_RELATIONS = {
     _hb.MEASURED_ZERO: (TIME_CLOCK,),
     _hb.CLOCKED_RECONCILED: (TIME_CLOCK,),
     _hb.CLOCKED_OVERRIDE: (TIME_CLOCK,),
-    _hb.CLOCKED_CORRECTED: (SCHEDULE,),
+    #: A CORRECTED DAY NAMES ALL THREE, and that is the honest provenance rather than a tidier
+    #: single one. A correction is a DELTA (§STOREOPS-07), so the figure rests on whatever measured
+    #: the day — the clock, or the schedule when nothing did — PLUS the correction itself, which
+    #: lives in `manual_hours` or, in its older and now-unwritable spelling, in the shift row's own
+    #: `actual_hours`. A reader asking why the figure is not what the clock said has to be sent to
+    #: the corrections as well as to the clock. Same posture as CLOCKED_TRIMMED_TO_SCHEDULE below.
+    _hb.CLOCKED_CORRECTED: (TIME_CLOCK, SCHEDULE, MANUAL_HOURS),
     #: TRIMMED TO THE ROSTERED START (§STOREOPS-03) answers out of BOTH relations, and that is the
     #: honest provenance rather than a tidier single one: the punch is where the hours came from, and
     #: the schedule is where the start they were cut back to came from. A reader asking why the figure

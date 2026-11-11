@@ -2033,11 +2033,9 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
     # went on to count a correction the report had not: the drill-down said 10.5 h and the row it
     # was explaining said 8.0. Two reads of one fact disagree the first time either one of them
     # fails, which is the whole reason the one read exists.
-    _dd_rows, _dd_blockers = _payroll_evidence.read_pay_evidence(sb(), org_id, start,
-                                                                 _payroll_evidence.day_after(end))
-    _id_strs = {str(x) for x in ids}
-    manual = [m for m in (_dd_rows.get("manual") or [])
-              if str(m.get("employee_id")) in _id_strs]
+    _dd_rows, _dd_blockers = _payroll_evidence.read_pay_evidence(
+        sb(), org_id, start, _payroll_evidence.day_after(end), employee_ids=list(ids))
+    manual = _dd_rows.get("manual") or []
     try:
         edits = (sb().table("payroll_change_log").select("source_table,source_id,work_date").eq("org_id", org_id)
                  .gte("work_date", start).lte("work_date", end)
@@ -2265,7 +2263,23 @@ def payroll_actual_hours_detail_route(employee_id: str, start: str, end: str,
     mig-434 pay gate (see get_payroll_route's docstring for the route-vs-function split). The
     drill-down is a single dict, and its money keys (`pay_rate`, `pay_amount`,
     `salary_period_pay`, `salary_derived_pay`) are all in PAY_FIELDS; the per-day rows carry hours
-    only, so a gated caller keeps the full hours explanation with no dollars attached."""
+    only, so a gated caller keeps the full hours explanation with no dollars attached.
+
+    WHOSE HOURS — FOUND BY THE SECURITY PASS §STOREOPS-07 REQUIRED (2026-11-11). This route applied
+    the pay gate and asked NOTHING about whose person this is, so any signed-in person in the org
+    could read any employee's day-by-day hours, their punches, their stores and every correction
+    filed against them, by passing an `employee_id`. Its own siblings all ask: `list_manual_hours`
+    scopes with `scope_emp_ids`, and five person-keyed reads ask `gate_person_rows`. This one was
+    missed, and it is the owner's §CORE-33 ruling to the letter — *"on ny logistics Manan was able
+    to go past [the clock-in screen] and also see the adjustment hours, this should not be
+    allowed"*. The same fact, one surface over.
+    ONE ANSWER, DEREFERENCED: `gate_person_rows` (§14w), asked of a one-row list keyed on the
+    employee being requested. No second rule, no copy of the span logic, and the SHARED function
+    stays ungated for in-process and harness callers — the same route-vs-function split the pay
+    gate above already uses."""
+    if not gate_person_rows([{"employee_id": employee_id}], authorization or "", org_id,
+                            people_fields=("employee_id",), since=start, until=end):
+        raise HTTPException(403, "These are not your people's hours.")
     out = payroll_actual_hours_detail(employee_id=employee_id, start=start, end=end,
                                       authorization=(authorization or ""), org_id=org_id)
     allowed = _payvis.can_see_pay(authorization or "", org_id, client=get_supabase())

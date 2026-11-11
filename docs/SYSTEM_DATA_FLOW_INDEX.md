@@ -44563,10 +44563,38 @@ rows again. For a PAY PERIOD — a week or a fortnight, which is what this repor
 hundreds of rows, not thousands; the RPC was written when the report was month-wide and basis-free. A
 correct figure that takes longer beats a fast figure that ignores a correction.
 
+### STOREOPS-07.65 WHAT THE SECURITY PASS FOUND (project rule 2026-10-30)
+
+A tenant-scoped read is where cross-tenant leakage lives, so the review that checks org-scoping also
+asks whose person a read is about. **It found one, pre-existing, on the surface this change already
+touches.**
+
+`GET /storeops/payroll/actual-hours-detail` applied the mig-434 PAY gate and asked **nothing** about
+whose person the `employee_id` names. So any signed-in person in the org could read **any**
+employee's day-by-day hours, their punches, the stores they stood in and every correction filed
+against them, simply by passing an id. Every sibling asks: `list_manual_hours` scopes with
+`scope_emp_ids`, and five person-keyed reads ask `gate_person_rows`. This one was missed.
+
+**It is the owner's own §CORE-33 ruling, one surface over** — *"on ny logistics Manan was able to go
+past [the clock-in screen] and also see the adjustment hours, this should not be allowed"*. The same
+fact about the same tenant, reached through a different door.
+
+Closed by dereferencing `gate_person_rows` (§14w) on the ROUTE, asked of a one-row list keyed on the
+employee being requested — no second rule and no copy of the span logic. The SHARED function stays
+ungated for in-process and harness callers, the same route-vs-function split the pay gate already
+uses. An UNRESTRICTED caller is unaffected and that is asserted (§D10c): gating a read must never
+take a drill-down away from the people whose job it is.
+
+Org-scoping itself was verified clean: every read on the new path is `.eq("org_id", org_id)`, and
+§D7 proves two orgs sharing an employee id each get their own correction. `read_pay_evidence` gained
+an `employee_ids` narrowing for the per-click drill-down, documented in its own docstring as **an
+optimisation and never a permission** — `org_id` is the boundary either way, so a caller cannot
+mistake a narrowed read for an authorisation it has not made.
+
 ### STOREOPS-07.7 THE LOCK
 
 `backend/harness_hours_correction_reaches_figure.py` (+ its integration half,
-`harness_hours_correction_wiring.py`) — 47 checks, DB-free, **wired into CI, not pinned**:
+`harness_hours_correction_wiring.py`) — 50 checks, DB-free, **wired into CI, not pinned**:
 
 - **§A** the delta semantics, on the live shapes, including the negative row and the zero floor;
 - **§B** the declaration honoured in BOTH modes and in BOTH directions, and the dated floor;
@@ -44574,7 +44602,9 @@ correct figure that takes longer beats a fast figure that ignores a correction.
 - **§D** the REAL handlers over an in-memory database: the reported defect, the pay that follows, the
   basis word, by-store reconciliation, the floor, all three tenant shapes, **no leakage when two orgs
   share an employee id**, a missing `manual_hours` table degrading to the uncorrected figure rather
-  than an error or a zero, and a corrected day that also has a shift row counting once;
+  than an error or a zero, a corrected day that also has a shift row counting once, and — §D10 —
+  the person gate above, driven through the real route with the one home's span answer stubbed, so
+  what is proved is that the ROUTE asks it rather than a second copy of the rule living in a test;
 - **§E1** *the pay path holds no second, SQL-side derivation* — fails the build if a `payroll_month_rows`
   call returns;
 - **§E2** the `manual_hours` read count PINNED at 6 (all of it Time Clock CRUD, none on the pay path),

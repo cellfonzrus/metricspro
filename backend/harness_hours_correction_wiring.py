@@ -294,6 +294,51 @@ def run():
           rs is not None and rs.get("actual_hours") == 7.00,
           f"got {None if rs is None else rs.get('actual_hours')}")
 
+    # ── D10 — WHOSE HOURS. Found by the security pass §STOREOPS-07 required (project rule
+    # 2026-10-30: a security review before it goes live). `GET /storeops/payroll/actual-hours-detail`
+    # applied the PAY gate and asked nothing about whose person this is, so any signed-in person in
+    # the org could read any employee's day-by-day hours, punches, stores and every correction filed
+    # against them by passing an `employee_id`. Its own siblings all ask. It is the owner's §CORE-33
+    # ruling one surface over — "Manan was able to … see the adjustment hours".
+    #
+    # The gate is `gate_person_rows` (§14w), DEREFERENCED. These checks drive it through the real
+    # route by stubbing that one home's own span answer, so what is proved is that the ROUTE asks
+    # it — not a second copy of the span rule living in this harness.
+    _real_span, _real_scope = R.schedule_emp_ids, R.scope_emp_ids
+    try:
+        R.schedule_emp_ids = lambda auth, org, since=None, until=None: {"E276"}
+        try:
+            own = R.payroll_actual_hours_detail_route(employee_id="E276", start=LO, end=HI,
+                                                      authorization="t", org_id=NY)
+            check("D10 a caller whose span HOLDS the employee still gets the drill-down",
+                  isinstance(own, dict) and own.get("employee_id") == "E276", str(own)[:120])
+        except Exception as e:                                    # noqa: BLE001
+            check("D10 a caller whose span HOLDS the employee still gets the drill-down", False,
+                  f"raised {type(e).__name__}: {e}")
+        try:
+            R.payroll_actual_hours_detail_route(employee_id="E273", start=LO, end=HI,
+                                                authorization="t", org_id=NY)
+            check("D10b a caller whose span does NOT hold the employee is refused", False,
+                  "the route served another person's hours detail")
+        except Exception as e:                                    # noqa: BLE001
+            check("D10b a caller whose span does NOT hold the employee is refused",
+                  getattr(e, "status_code", None) == 403, f"{type(e).__name__}: {e}")
+        # An UNRESTRICTED caller (a manager with no span narrowing) must be unaffected — gating a
+        # read must never take the drill-down away from the people whose job it is.
+        R.schedule_emp_ids = lambda auth, org, since=None, until=None: None
+        R.scope_emp_ids = lambda auth, org, since=None, until=None: None
+        try:
+            any_one = R.payroll_actual_hours_detail_route(employee_id="E273", start=LO, end=HI,
+                                                          authorization="t", org_id=NY)
+            check("D10c an unrestricted caller is unaffected by the new gate",
+                  isinstance(any_one, dict) and any_one.get("employee_id") == "E273",
+                  str(any_one)[:120])
+        except Exception as e:                                    # noqa: BLE001
+            check("D10c an unrestricted caller is unaffected by the new gate", False,
+                  f"raised {type(e).__name__}: {e}")
+    finally:
+        R.schedule_emp_ids, R.scope_emp_ids = _real_span, _real_scope
+
     return out
 
 
