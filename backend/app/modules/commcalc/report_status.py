@@ -73,15 +73,42 @@ def rows_for(per_report):
 def write(client, org_id, per_report):
     """Write each report's own verdict to its own `report_definitions` row.
 
+    TWO ROUND TRIPS, whatever the number of reports — not one per report. A sweep is one click, but
+    `harness_round_trip_ratchet.py` holds the whole estate to "a loop must not contain a query
+    filtered by the loop variable", and a recorder is no place to spend the exemption: the first
+    trip asks which of these reports this tenant has actually registered, the second writes them all
+    at once. Filtering to the rows that EXIST is also what makes the upsert safe — it can only
+    update, never invent a registry row for a report the tenant never registered (which would then
+    appear on the Connectors page as a report nobody set up).
+
     Never raises: this is the recorder of what happened, so it must not be the reason a run is
     reported as having failed. Returns the number of rows written."""
-    wrote = 0
-    for row in rows_for(per_report):
-        rkey = row.pop("report_key")
-        try:
-            (client.schema(SCHEMA).table(TABLE).update(row)
-             .eq("org_id", org_id).eq("report_key", rkey).execute())
-            wrote += 1
-        except Exception as e:
-            print(f"WARN report_status: could not record {rkey} verdict: {type(e).__name__}: {e}")
-    return wrote
+    rows = rows_for(per_report)
+    if not rows:
+        return 0
+    want = {r["report_key"]: r for r in rows}
+    try:
+        have = ((client.schema(SCHEMA).table(TABLE).select("report_key")
+                 .eq("org_id", org_id).in_("report_key", sorted(want)).execute()).data or [])
+    except Exception as e:
+        print(f"WARN report_status: could not read {TABLE} to record verdicts: "
+              f"{type(e).__name__}: {e}")
+        return 0
+    found = {str(h.get("report_key") or "") for h in have}
+    missing = sorted(set(want) - found)
+    if missing:
+        # REPORTED, never papered over: a report the sweep pulls for an org that has no registry
+        # row for it has nowhere to show its status, and that is a setup gap the operator must fix.
+        print(f"WARN report_status: org {org_id} has no {TABLE} row for {missing} — "
+              f"their verdicts have nowhere to be shown")
+    payload = [{"org_id": org_id, **want[k]} for k in sorted(found & set(want))]
+    if not payload:
+        return 0
+    try:
+        (client.schema(SCHEMA).table(TABLE)
+         .upsert(payload, on_conflict="org_id,report_key").execute())
+    except Exception as e:
+        print(f"WARN report_status: could not record verdicts for {sorted(found & set(want))}: "
+              f"{type(e).__name__}: {e}")
+        return 0
+    return len(payload)

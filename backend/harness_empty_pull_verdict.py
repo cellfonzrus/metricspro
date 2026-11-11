@@ -761,6 +761,10 @@ check("H66 the sentence is FITTED through the one home, not head-cut",
       and "[:600]" not in RSRC and f"[:{RS.DETAIL_CAP}]" not in RSRC
       and "THE CONCLUSION" in RS.rows_for({"mi": ("error", "A" * 800 + "THE CONCLUSION")})[0]["sweep_last_detail"],
       "a sweep's conclusion is written LAST, so a head cut throws away the only part worth reading")
+check("H68 recording the verdicts costs a FIXED number of round trips",
+      ".in_(" in fexec(RS.write) and ".upsert(" in fexec(RS.write)
+      and "for row in rows_for(" not in fexec(RS.write),
+      "one UPDATE per report is the N+1 harness_round_trip_ratchet.py holds the estate to")
 check("H67 a verdict never reaches a report other than its own",
       [r["report_key"] for r in RS.rows_for({"comp_report": ("error", "comp's own")})] == ["comp_report"]
       and len(RS.rows_for({"mi": ("ok", "a"), "epay_daily_tx": ("ok", "b")})) == 2)
