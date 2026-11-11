@@ -238,7 +238,18 @@ print("\n§D  a setting nothing reads is the defect this house has shipped four 
 
 R = open(os.path.join(HERE, "app", "modules", "commcalc", "router.py")).read()
 check("D1 arrears_days is in the columns the sweep reads from report_definitions",
-      "arrears_days" in R.split("_REGISTRY_SWEEP_COLS")[1].split(")")[0], "mig 1042 column unwired")
+      "arrears_days" in R.split("_REGISTRY_SWEEP_OPTIONAL")[1].split(")")[0], "mig 1042 column unwired")
+# …AND IT IS OPTIONAL, PROBED, NOT A BLOCK (§COMMCALC-69). Naming the column was never enough: for
+# 33 nights the column was named, the table did not have it, and the whole select 42703'd — taking
+# `refresh_days` with it and asking an in-arrears report for TODAY. A column this table may not have
+# yet belongs in the OPTIONAL list, which is probed one at a time, never in the required block.
+check("D1a …as an OPTIONAL column, so the one it lacks cannot drop the ones it has",
+      "arrears_days" not in R.split("_REGISTRY_SWEEP_REQUIRED")[1].split(")")[0]
+      and "_ct.present_columns(" in R.split("def _registry_report_cfg")[1].split("\ndef ")[0],
+      "a column a hand-applied migration has not created must cost ONE setting, not the row")
+check("D1b …and what was absent is REPORTED, not replaced by a default in silence",
+      "config_columns_missing" in R.split("def _registry_report_cfg")[1].split("\ndef ")[0],
+      "a house default standing in for a set value reads as the platform agreeing with the operator")
 check("D2 _expand_jobs dereferences arrears_days", 'rc.get("arrears_days")' in src(ES))
 check("D3 the stale-after threshold is read from config too",
       'empty_stale_after_days' in src(ES) and 'empty_stale_after_days' in R)

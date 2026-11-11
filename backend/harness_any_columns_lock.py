@@ -104,8 +104,18 @@ def _colset(s):
     return frozenset(c.strip() for c in s.split(",") if c.strip())
 
 
-def _select_calls(node):
-    """(table|None, cols, lineno, kind) for every `.select(<str | Name>)` under node."""
+def _select_calls(node, resolve=None):
+    """(table|None, cols, lineno, kind) for every `.select(<str | Name>)` under node.
+
+    A NAME THAT IS A COLUMN LIST IS A COLUMN LIST (found 2026-11-11). `resolve` folds a module-level
+    string constant to its value and reports it as "const", because the ladder this scan exists to
+    forbid is about the COLUMN SETS, not about how they are spelled at the call. `_registry_report_cfg`
+    carried a textbook TRY-FALLBACK for weeks — `.select(_REGISTRY_SWEEP_COLS)` with
+    `.select('report_key,auto,refresh_months')` in its handler — and the scan walked past it because
+    the wide list was a named constant. It cost 33 nights of a carrier report pulled one day at a
+    time (index §COMMCALC-69). A name that does NOT resolve to a string is still reported as "name",
+    so the TIER-TABLE rule below keeps the variable it needs to match on.
+    """
     out = []
     for n in ast.walk(node):
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "select" and n.args:
@@ -119,7 +129,9 @@ def _select_calls(node):
             if isinstance(a, ast.Constant) and isinstance(a.value, str):
                 out.append((t, a.value, n.lineno, "const"))
             elif isinstance(a, ast.Name):
-                out.append((t, a.id, n.lineno, "name"))
+                folded = resolve(a) if resolve else None
+                out.append((t, folded, n.lineno, "const") if folded is not None
+                           else (t, a.id, n.lineno, "name"))
     return out
 
 
@@ -155,8 +167,8 @@ def ladders_in(src, rel):
                     if any(s[3] == "name" and s[1] == n.target.id for s in _select_calls(n)):
                         hits.append(("FOR-LADDER", rel, n.lineno, strs))
         if isinstance(n, ast.Try):
-            body = [s for stmt in n.body for s in _select_calls(stmt)]
-            hand = [s for h in n.handlers for stmt in h.body for s in _select_calls(stmt)]
+            body = [s for stmt in n.body for s in _select_calls(stmt, const_str)]
+            hand = [s for h in n.handlers for stmt in h.body for s in _select_calls(stmt, const_str)]
             for tb, cb, lb, kb in body:
                 for th, ch, lh, kh in hand:
                     if kb == kh == "const" and tb == th and "," in cb and _colset(ch) < _colset(cb):
@@ -345,6 +357,17 @@ def main():
     check("g12 …and in a harness, which is where the copies actually were → (h) RED",
           not rule_absence_one_home(be, {"harness_x.py":
                                          'D = ("config_migrations_missing", "config_columns_missing")\n'})[0])
+    _named = ("WIDE = 'a,b,c,d'\nNARROW = 'a,b'\n"
+               "def read(c):\n    try:\n        return c.table('t').select(WIDE).execute()\n"
+               "    except Exception:\n        return c.table('t').select(NARROW).execute()\n")
+    check("g14 a TRY-FALLBACK whose column lists are NAMED CONSTANTS → (a) RED",
+          "TRY-FALLBACK" in {h[0] for h in ladders_in(_named, "synthetic.py")},
+          "this is the hole _registry_report_cfg sat in for weeks (§COMMCALC-69)")
+    check("g15 …and a `.select(<name>)` that is not a column list stays a 'name', so TIER-TABLE "
+          "keeps the variable it matches on",
+          {h[0] for h in ladders_in(
+              "def read(c, tiers):\n    i = 0\n    while i < 3:\n        cols = tiers[i]\n"
+              "        c.table('t').select(cols).execute()\n        i += 1\n", "s.py")} == {"TIER-TABLE"})
     check("g13 a caller that mentions ONE of the two keys (an assertion on what was reported) → "
           "(h) stays GREEN",
           rule_absence_one_home(be, {"harness_y.py":
