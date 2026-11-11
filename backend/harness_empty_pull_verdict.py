@@ -713,6 +713,62 @@ check("H58 the two day-grain legs keep separate ledger keys",
       and ES.START_END_DATES_CONTROL != ES.DAILY_RANGE_CONTROL,
       "a shared key made each leg's failure condemn the other leg's honest zero")
 
+# ── A REPORT'S OWN VERDICT BELONGS ON THE REPORT'S OWN ROW (index §COMMCALC-68) ───────────────
+# `report_definitions.sweep_last_status/_detail` are read by `router._setup_documents` to flag a
+# report urgent and show its error, and NOTHING wrote them — NULL on every row of every tenant.
+# Every leg wrote the ONE shared `epay_sweep_config.last_detail` instead, so comp's reason was
+# erased by the next transaction-detail tick within thirty minutes, every night. These checks fail
+# the build if the per-report write un-wires or a second copy of either fact appears.
+import importlib                                                       # noqa: E402
+RS = importlib.import_module("app.modules.commcalc.report_status")
+RSRC = src(RS)
+_ROUTER = importlib.import_module("app.modules.commcalc.router")
+_DO = fsrc(_ROUTER._do_epay_sweep)
+_RUN = fsrc(ES.run_epay_sweep)
+
+check("H59 which columns a report's verdict lives in is named ONCE",
+      RS.REPORT_STATUS_COLUMNS == ("sweep_last_status", "sweep_last_detail")
+      and all(c in RSRC for c in RS.REPORT_STATUS_COLUMNS),
+      "a third spelling of the column is the divergence this module exists to stop")
+check("H60 which registry row a sweep key belongs to is DEREFERENCED, never re-derived",
+      EPAY.count('registry_key") or k') == 0
+      and EPAY.count('registry_key") or key') == 0
+      and EPAY.count("def registry_key_of(") == 1
+      and 'spec["registry_key"]' not in src(RS),
+      "`spec.get('registry_key') or k` invents a row name for a report that declares none")
+check("H61 …and an undeclared report is refused rather than written to a guessed row",
+      _raises(ES.registry_key_of, "not_a_report"))
+check("H62 every declared report resolves to its own registry row",
+      all(ES.registry_key_of(k) == v["registry_key"] for k, v in ES.REPORTS.items())
+      and len({ES.registry_key_of(k) for k in ES.REPORTS}) == len(ES.REPORTS),
+      "two reports sharing one row is two verdicts in one column again")
+check("H63 the run records a verdict PER REPORT, where the key is in scope",
+      'summary["per_report"] = outcomes' in _RUN
+      and _RUN.count("outcomes[key] = ") >= 2
+      and "outcomes = {}" in _RUN,
+      "one verdict for a run that pulled four reports cannot say which report it is about")
+check("H64 a run that failed ENTIRELY still carries each report's reason",
+      "per_report=outcomes" in _RUN
+      and ES.EpayPortalError("x", per_report={"a": ("error", "y")}).per_report == {"a": ("error", "y")}
+      and ES.EpayPortalError("plain").per_report == {},
+      "the all-failed case is the one case the per-report rows matter most")
+check("H65 the caller WRITES those rows — on the mixed run and on the total failure",
+      _DO.count("report_status.write(") == 2
+      and "getattr(e, 'per_report', None)" in _DO,
+      "a registry written but not wired is not a fix; it has happened four times here (§19.18)")
+check("H66 the sentence is FITTED through the one home, not head-cut",
+      "_status_detail.fit(" in RSRC
+      and "[:600]" not in RSRC and f"[:{RS.DETAIL_CAP}]" not in RSRC
+      and "THE CONCLUSION" in RS.rows_for({"mi": ("error", "A" * 800 + "THE CONCLUSION")})[0]["sweep_last_detail"],
+      "a sweep's conclusion is written LAST, so a head cut throws away the only part worth reading")
+check("H68 recording the verdicts costs a FIXED number of round trips",
+      ".in_(" in fexec(RS.write) and ".upsert(" in fexec(RS.write)
+      and "for row in rows_for(" not in fexec(RS.write),
+      "one UPDATE per report is the N+1 harness_round_trip_ratchet.py holds the estate to")
+check("H67 a verdict never reaches a report other than its own",
+      [r["report_key"] for r in RS.rows_for({"comp_report": ("error", "comp's own")})] == ["comp_report"]
+      and len(RS.rows_for({"mi": ("ok", "a"), "epay_daily_tx": ("ok", "b")})) == 2)
+
 check("H9 ok is never true without the widget's own answer (§COMMCALC-56 holds here too)",
       ES.pick_jqx_item(_FixedPage({"ok": True, "hit": {"id": "a", "selected": None}}),
                        ["x"])["ok"] is False)

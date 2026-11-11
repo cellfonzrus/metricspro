@@ -207,6 +207,7 @@ Primary code homes:
 | COMMCALC-65 | **A period is never emptied by a column the schema does not have yet** | The store-DLAR sweep was taught 20 columns the portal had been sending for weeks (§COMMCALC-60); the hand-applied migration that creates them had not run; PostgREST refused the whole insert — and the sweep deletes the period before it inserts, so November's 28 store rows were gone. Both halves already had an answer somewhere in this repo and neither was wired to this caller: `core.column_tolerant` had governed READS since 2026-09-22, and `safe_replace` was written in August 2026 for this exact delete-then-insert failure. A registry nobody reads is not a fix (§19.18), and the file that worked around the ordering privately for one column said so in its own docstring. |
 | COMMCALC-66 | **Which controls set a report's window is a property of that report's page** | §COMMCALC-64's first tick (2026-11-10 21:00) named the panel's controls by their printed captions — account selector, `Username`, `Retailer Account ID`, `Terminal ID`, `Date of most recent transaction to include (mandatory)` — and that is the DAILY TRANSACTION DETAIL panel, which has no "Summarize by" on it and never did. Three rounds of "the control is missing" were measurements of the wrong page; the owner's photograph is of the comp report, where it exists. Cause: both day-grain reports declared `filter: "daily_range"`, one word meaning both "covers a range of days" and "driven by Summarize by + Start/End Date", so comp's routine ran against a page that never carried its control — and both legs wrote one ledger key, so each condemned the other's honest zero. The routine is now DECLARED per report through the one homes `date_filter_of` / `resolve_date_filter`; silence resolves to undeclared, never to another report's page, and undeclared is not a licence to run unfiltered — the leg reports the panel's date field NAMES (never values) through `describe_date_controls` and runs nothing. |
 | COMMCALC-67 | **The fields a report's date window is typed into are declared too** | §COMMCALC-66's first tick (2026-11-10 22:00) answered the question it was built to ask: "the page's date fields are StartDate, EndDate" — while this module's date step had always typed into `BeginDate`/`EndDate`, a name written into a string of browser JavaScript where no report could declare it. A report now declares both facts about its window in one row: whether an interval is set first (comp's "Summarize by") and which two fields carry the dates. `DATE_FILTERS` becomes that declaration, read through the one homes `date_window_plan` / `date_window_fields` / `date_window_interval`; `_set_daily_range` becomes the single `_set_date_window(page, begin, end, routine)` over the shared `_put_date_fields`, so a report with no interval goes straight to its fields and is never asked for a control it has not got; and no field name appears in the JavaScript at all. Comp's behaviour is unchanged — and because ITS page has still never been measured, correcting it when the 23:30 leg reports is a row here rather than an edit to a string. |
+| COMMCALC-68 | **A report's own verdict belongs on the report's own row** | Found while trying to read WHY comp had never landed a row: `commcalc.report_definitions` carries `sweep_last_status` and `sweep_last_detail` PER REPORT, a user-visible surface already READS them (`router._setup_documents` sets a report's `urgent` flag and `auto_error` text from exactly those two columns) — and nothing had ever written them. NULL on every row of every tenant, so a report whose automatic pull failed every night showed as not urgent, with no error, on the surface built to show precisely that. Every leg wrote the ONE shared `epay_sweep_config.last_detail` instead, overwritten by whichever leg ran last: comp runs at 23:30 America/New_York, the transaction-detail leg every thirty minutes, so comp's sentence was erased within half an hour, every night — which is why three rounds of diagnosis read the transaction report's failures and reasoned about comp. The class: a run that pulls N reports and records ONE verdict cannot say which report it is about, for any N > 1. `run_epay_sweep` now records an outcome keyed by the report it belongs to, at each point where that key is in scope (success, failure, unresolved report id, and the deferred zero the ledger refuses to vouch for); `EpayPortalError` carries `per_report` so the all-failed case still gives each row its reason; `epay_sweep.registry_key_of` is the ONE home for which registry row a sweep key belongs to, replacing three inline re-derivations that invented a row name for any report declaring none; and the new `report_status` module is the one writer, fitting each sentence through `core.status_detail.fit` because a sweep's conclusion is written LAST. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -26361,6 +26362,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-65 | commcalc |
 | COMMCALC-66 | commcalc |
 | COMMCALC-67 | commcalc |
+| COMMCALC-68 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -46707,6 +46709,99 @@ whether they took. And `comp_report` has still never landed a row via the sweep
 Cross-references: §COMMCALC-66 (the per-report declaration this extends, and the verdict that
 produced this measurement) · §COMMCALC-64 (naming a control by its caption) · §COMMCALC-56 (verified
 from the control) · RULE TWO (config, never code) · §19.18 (one fact, one home, dereferenced).
+
+## §COMMCALC-68. A REPORT'S OWN VERDICT BELONGS ON THE REPORT'S OWN ROW (found 2026-11-10)
+
+### COMMCALC-68.1 HOW IT WAS FOUND
+
+§COMMCALC-67 shipped at 22:40 and the next question was the obvious one: what did the comp leg
+actually say? There was nowhere to read it. The connector's status line
+(`commcalc.epay_sweep_config.last_status` / `last_detail`) is ONE row per org, overwritten by every
+tick, and the Daily Transaction Detail leg rides every thirty-minute tick while comp runs once a
+night at 23:30 America/New_York. So comp's sentence had been erased within half an hour, every
+night, for as long as the two legs have shared the connector.
+
+Then the worse half. `commcalc.report_definitions` has carried `sweep_last_status` and
+`sweep_last_detail` PER REPORT since migration 290, and a user-visible surface already reads them:
+`router._setup_documents` (lines ~12287–12326) selects exactly those two columns and sets
+
+```python
+failed = bool(d.get('auto')) and str(d.get('sweep_last_status') or '').lower() in ('error', 'partial')
+'urgent': failed,
+'auto_error': (d.get('sweep_last_detail') or '')[:300] if failed else None,
+```
+
+**Nothing has ever written them.** Both are NULL on every row of every tenant. A report whose
+automatic pull fails every single night shows as not urgent, with no error, on the surface built to
+show precisely that. The registry written and never wired, for the fourth time here (§19.18).
+
+That is also the plain answer to why three rounds of diagnosis this evening (§COMMCALC-64, -66, -67)
+were reading the transaction report's failures while reasoning about comp: the only verdict visible
+belonged to whichever leg had run most recently.
+
+### COMMCALC-68.2 THE RULE
+
+> **A run that pulls N reports and records ONE verdict cannot say which report the verdict is
+> about, for any N > 1.** Each report's outcome is recorded where its key is in scope, and written
+> to that report's own row.
+
+Not comp's bug and not the connector's — the shared status line is still right as the CONNECTOR's
+summary (did the sweep reach the portal, did it log in, did it finish). It is simply not a record of
+any particular report, and it was being read as one.
+
+### COMMCALC-68.3 WHAT CHANGED
+
+- **`commcalc/report_status.py`** — the one writer. `REPORT_STATUS_COLUMNS` names the two columns
+  once; `rows_for(per_report)` turns `{sweep_key: (status, detail)}` into one row per report, keyed
+  by the REGISTRY key; `write(client, org_id, per_report)` updates `commcalc.report_definitions` by
+  `(org_id, report_key)` and never raises — a recorder of what happened must not become the reason a
+  run is reported as failed.
+- **`epay_sweep.registry_key_of(key)`** — the one home for "which `report_definitions` row
+  configures this sweep report". A sweep key is not a registry key (`mi` is configured as
+  `mi_report`), and the mapping is declared on the report itself. Three places re-derived it inline
+  with a fallback to the sweep key, which silently invents a row name for a report that declares
+  none; all three now dereference, and an undeclared report RAISES, because a verdict written to a
+  guessed row is worse than one not written.
+- **`run_epay_sweep`** builds `outcomes` at every point where the report's key is in scope: the
+  unresolved-report-id errors, each leg's success (`_outcome_sentence` — rows, window, mode), each
+  leg's exception, and the ledger settlement that downgrades a zero the run cannot vouch for to
+  `partial`. It returns them as `summary["per_report"]`.
+- **`EpayPortalError(msg, per_report=…)`** carries them through the one case where every report
+  failed — otherwise the case that matters most is the case where no row gets its reason.
+- **`router._do_epay_sweep`** calls `report_status.write` on the ok/partial path AND in the
+  `EpayPortalError` handler.
+- Each sentence is shortened through **`core.status_detail.fit`**, not `detail[:600]`: a sweep's
+  conclusion is written last, so a head cut throws away the only part worth reading (the defect
+  `core/status_detail.py` exists for).
+
+### COMMCALC-68.4 WHAT STAYED
+
+The connector's shared status line is unchanged and still written exactly as before, including
+`last_run_at` advancing only on a real import (§19.21). No migration: both columns already exist.
+No report's behaviour changes — this adds a record, it does not alter a pull.
+
+### COMMCALC-68.5 TESTS AND THE LOCK
+
+`backend/tests/unit/test_each_report_records_its_own_sweep_verdict.py` — 9 units, written red
+(`ImportError: cannot import name 'report_status'`) before the module existed.
+`harness_empty_pull_verdict.py` H59–H67 fail the build if the column names gain a second spelling,
+if a caller stops dereferencing `registry_key_of`, if two reports resolve to one row, if the run
+stops recording per report, if either `report_status.write` call disappears, or if the sentence is
+head-cut instead of fitted. Verified biting: removing `summary["per_report"] = outcomes` and the
+`EpayPortalError` write turns H63 and H65 red.
+
+### COMMCALC-68.6 WHAT THIS DOES NOT FIX
+
+It records a verdict; it does not make comp pull. `comp_report` has still never landed a row via the
+sweep (`commcalc.upload_log`, `filename = 'epay auto-sweep'`; `raw_comp_report`'s 78,053 rows are
+manual uploads). The next 04:30 UTC tick is the first that will leave its reason somewhere that
+survives to morning. Nothing writes these columns for the VidaPay or DLAR sweeps yet — the same
+class, excused here only because each of those pulls one report per run, so their shared line is
+not ambiguous.
+
+Cross-references: §COMMCALC-67 / -66 / -64 (the three measurements this made readable) ·
+§19.18 (a registry written and its callers not wired) · §19.21 (what was written, not what was
+attempted) · §19.41 (the run's verdict ledger) · `core/status_detail.py` (keep both ends).
 
 ## §COMMCALC-60. A FIGURE THE FEED SENDS THAT NOTHING READS IS NOT A FIGURE THIS PLATFORM HAS — one home for which store-DLAR column is which metric (owner ask 2026-11-10)
 
