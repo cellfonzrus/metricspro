@@ -3578,9 +3578,23 @@ def _registry_auto_map(client, org_id):
 
 # Columns the sweep reads per report. Kept as a literal list so a pre-290 database (which lacks the
 # schedule columns) can be detected and degraded gracefully rather than 400-ing the whole sweep.
-_REGISTRY_SWEEP_COLS = ('report_key,auto,refresh_months,refresh_days,arrears_days,'
-                        'empty_stale_after_days,'
-                        'sweep_hour,sweep_minute,sweep_timezone,sweep_next_run_at')
+# WHICH SETTINGS THIS READER WANTS, split by whether the table is guaranteed to have them.
+# REQUIRED predates every hand-applied migration here; OPTIONAL arrives by migration and is PROBED
+# individually before the one real select, so one column a migration has not created cannot take the
+# others down with it (`core.column_tolerant`, index §4b.1).
+#
+# MEASURED 2026-11-11 04:46 UTC, and the reason this is split at all: `arrears_days` and
+# `empty_stale_after_days` (migration 1042, written 2026-10-03, surfaced for approval and never
+# applied) do not exist in production. The single wide select answered 400 / 42703 every run, the
+# old `except` re-read `report_key,auto,refresh_months`, and `refresh_days = 14` was dropped with
+# them — so `_expand_jobs` fell to DEFAULT_REFRESH_DAYS and asked an IN-ARREARS carrier report for
+# ONE day, every night, for 33 nights, receiving nothing and recording a quiet source. A
+# column-block ladder, which is exactly what §4b.1 forbids; it escaped
+# `harness_any_columns_lock.py` only because the lists were named constants rather than literals.
+_REGISTRY_SWEEP_REQUIRED = ('report_key', 'auto', 'refresh_months')
+_REGISTRY_SWEEP_OPTIONAL = ('refresh_days', 'arrears_days', 'empty_stale_after_days',
+                            'sweep_hour', 'sweep_minute', 'sweep_timezone', 'sweep_next_run_at',
+                            'portal_report_id')
 
 
 def _registry_report_cfg(client, org_id):
@@ -3593,31 +3607,38 @@ def _registry_report_cfg(client, org_id):
     has ONE hour for all three reports, but Comprehensive Comp must run at 23:30 because the
     carrier posts the day's compensation late in the evening.
 
-    Degrades to {} — i.e. the built-in defaults — if migration 290 has not been applied."""
+    TOLERANT OF ANY SUBSET, AND IT SAYS WHAT WAS ABSENT (index §4b.1). Every optional column is
+    probed on its own through `column_tolerant.present_columns` before the one real select, so a
+    column a hand-applied migration has not created yet costs that one SETTING and not the whole
+    row. Each report's mapping carries `config_columns_missing`, the key the house already uses, so
+    a caller can say "apply migration X" instead of reading a default and calling it the answer —
+    which is how a one-day window hid for 33 nights.
+    """
+    def _tbl():
+        return client.schema('commcalc').table('report_definitions')
+
+    def _scope(q):
+        return q.eq('org_id', org_id)
+
     try:
-        rows = (client.schema('commcalc').table('report_definitions')
-                .select(_REGISTRY_SWEEP_COLS).eq('org_id', org_id).execute().data) or []
+        present = _ct.present_columns(_tbl, _scope, _REGISTRY_SWEEP_OPTIONAL)
+        cols = _ct.select_list(_REGISTRY_SWEEP_REQUIRED, _REGISTRY_SWEEP_OPTIONAL, present)
+        rows = (_scope(_tbl().select(cols)).execute().data) or []
     except Exception as e:
-        # pre-290: the schedule columns don't exist yet. Fall back to the columns that do.
-        print(f'WARN report_definitions sweep columns unavailable (run migration 290?): {e}')
-        try:
-            rows = (client.schema('commcalc').table('report_definitions')
-                    .select('report_key,auto,refresh_months').eq('org_id', org_id).execute().data) or []
-        except Exception:
-            return {}
-    out = {r['report_key']: r for r in rows if r.get('report_key')}
-    # Optional operator override: a pinned portal report id (e.g. the Daily Transaction Detail menu id)
-    # so the sweep need not resolve it by label. Read in isolation so a database without the column
-    # never disturbs the main select above.
-    try:
-        pin = (client.schema('commcalc').table('report_definitions')
-               .select('report_key,portal_report_id').eq('org_id', org_id).execute().data) or []
-        for p in pin:
-            rk = p.get('report_key')
-            if rk in out and p.get('portal_report_id'):
-                out[rk]['portal_report_id'] = p['portal_report_id']
-    except Exception:
-        pass
+        print(f'WARN report_definitions unreadable: {type(e).__name__}: {e}')
+        return {}
+    absent = [c for c in _REGISTRY_SWEEP_OPTIONAL if c not in present]
+    if absent:
+        # REPORTED, never papered over: a setting the sweep cannot read is a setting the operator
+        # believes is in force.
+        print(f'WARN report_definitions is missing {absent} — those settings fall back to house '
+              f'defaults until the migration that adds them is applied (1042 adds arrears_days / '
+              f'empty_stale_after_days)')
+    out = {}
+    for r in rows:
+        rk = r.get('report_key')
+        if rk:
+            out[rk] = {**r, 'config_columns_missing': absent}
     return out
 
 

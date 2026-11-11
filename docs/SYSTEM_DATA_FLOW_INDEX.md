@@ -208,6 +208,7 @@ Primary code homes:
 | COMMCALC-66 | **Which controls set a report's window is a property of that report's page** | §COMMCALC-64's first tick (2026-11-10 21:00) named the panel's controls by their printed captions — account selector, `Username`, `Retailer Account ID`, `Terminal ID`, `Date of most recent transaction to include (mandatory)` — and that is the DAILY TRANSACTION DETAIL panel, which has no "Summarize by" on it and never did. Three rounds of "the control is missing" were measurements of the wrong page; the owner's photograph is of the comp report, where it exists. Cause: both day-grain reports declared `filter: "daily_range"`, one word meaning both "covers a range of days" and "driven by Summarize by + Start/End Date", so comp's routine ran against a page that never carried its control — and both legs wrote one ledger key, so each condemned the other's honest zero. The routine is now DECLARED per report through the one homes `date_filter_of` / `resolve_date_filter`; silence resolves to undeclared, never to another report's page, and undeclared is not a licence to run unfiltered — the leg reports the panel's date field NAMES (never values) through `describe_date_controls` and runs nothing. |
 | COMMCALC-67 | **The fields a report's date window is typed into are declared too** | §COMMCALC-66's first tick (2026-11-10 22:00) answered the question it was built to ask: "the page's date fields are StartDate, EndDate" — while this module's date step had always typed into `BeginDate`/`EndDate`, a name written into a string of browser JavaScript where no report could declare it. A report now declares both facts about its window in one row: whether an interval is set first (comp's "Summarize by") and which two fields carry the dates. `DATE_FILTERS` becomes that declaration, read through the one homes `date_window_plan` / `date_window_fields` / `date_window_interval`; `_set_daily_range` becomes the single `_set_date_window(page, begin, end, routine)` over the shared `_put_date_fields`, so a report with no interval goes straight to its fields and is never asked for a control it has not got; and no field name appears in the JavaScript at all. Comp's behaviour is unchanged — and because ITS page has still never been measured, correcting it when the 23:30 leg reports is a row here rather than an edit to a string. |
 | COMMCALC-68 | **A report's own verdict belongs on the report's own row** | Found while trying to read WHY comp had never landed a row: `commcalc.report_definitions` carries `sweep_last_status` and `sweep_last_detail` PER REPORT, a user-visible surface already READS them (`router._setup_documents` sets a report's `urgent` flag and `auto_error` text from exactly those two columns) — and nothing had ever written them. NULL on every row of every tenant, so a report whose automatic pull failed every night showed as not urgent, with no error, on the surface built to show precisely that. Every leg wrote the ONE shared `epay_sweep_config.last_detail` instead, overwritten by whichever leg ran last: comp runs at 23:30 America/New_York, the transaction-detail leg every thirty minutes, so comp's sentence was erased within half an hour, every night — which is why three rounds of diagnosis read the transaction report's failures and reasoned about comp. The class: a run that pulls N reports and records ONE verdict cannot say which report it is about, for any N > 1. `run_epay_sweep` now records an outcome keyed by the report it belongs to, at each point where that key is in scope (success, failure, unresolved report id, and the deferred zero the ledger refuses to vouch for); `EpayPortalError` carries `per_report` so the all-failed case still gives each row its reason; `epay_sweep.registry_key_of` is the ONE home for which registry row a sweep key belongs to, replacing three inline re-derivations that invented a row name for any report declaring none; and the new `report_status` module is the one writer, fitting each sentence through `core.status_detail.fit` because a sweep's conclusion is written LAST. |
+| COMMCALC-69 | **A setting the reader cannot reach is not a setting that says nothing** | §COMMCALC-68's first night paid for itself: comp's own row said "0 rows, and nothing has landed for 33 day(s)", and the window it had asked the portal for was `2026-11-10..2026-11-10` — ONE day, against a `refresh_days` of 14 sitting in its own registry row. The reader asked for two columns migration 1042 (written 2026-10-03 for this exact defect, surfaced for approval, never applied) never added; PostgREST refused the whole select with 42703, and the handler re-read three columns, dropping `refresh_days`, `sweep_hour`, `sweep_minute`, `sweep_timezone` and `sweep_next_run_at` with the two that were genuinely absent. So an in-arrears carrier report was asked for today, every night, correctly returned nothing, and was recorded as a quiet source — no control was ever broken, which is why §COMMCALC-64/-66/-67's controls all took and still nothing landed. A column-block ladder, the shape §4b.1 has forbidden since 2026-09-22, which escaped its lock only because the column lists were named constants and the scan resolved literals. Both closed: the reader probes each optional column through `column_tolerant.present_columns` and reports `config_columns_missing`; `harness_any_columns_lock.py` now folds a named constant to its value before judging a TRY-FALLBACK, and carries g14/g15 so it cannot stop. The column itself is the owner's to apply — migration 1042 is money-touching by its own note. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -26363,6 +26364,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-66 | commcalc |
 | COMMCALC-67 | commcalc |
 | COMMCALC-68 | commcalc |
+| COMMCALC-69 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -46803,6 +46805,93 @@ not ambiguous.
 Cross-references: §COMMCALC-67 / -66 / -64 (the three measurements this made readable) ·
 §19.18 (a registry written and its callers not wired) · §19.21 (what was written, not what was
 attempted) · §19.41 (the run's verdict ledger) · `core/status_detail.py` (keep both ends).
+
+## §COMMCALC-69. A SETTING THE READER CANNOT REACH IS NOT A SETTING THAT SAYS NOTHING (measured 2026-11-11)
+
+### COMMCALC-69.1 HOW IT WAS FOUND
+
+§COMMCALC-68 shipped at 00:21 UTC and the comp leg ran at 04:30. Its own row, readable for the first
+time:
+
+```
+sweep_last_status : partial
+sweep_last_detail : "Comprehensive Comp: 0 rows, and nothing has landed for 33 day(s) —
+                     longer than the 7 day(s) a quiet source is given. Something has stopped working."
+window asked for  : 2026-11-10..2026-11-10        <-- ONE DAY
+refresh_days      : 14                            <-- what the row itself says
+```
+
+Two facts in that. **No broken control was recorded**, so comp's page did accept the controls three
+rounds of work went into (§COMMCALC-64, -66, -67) — they were right, and were never the reason
+nothing landed. And the window was one day wide against a declared fourteen.
+
+`router._REGISTRY_SWEEP_COLS` named `arrears_days` and `empty_stale_after_days`. Neither exists in
+production — `database/migrations/1042_report_arrears_window.sql`, written **2026-10-03 for this
+exact defect**, surfaced for owner approval and never applied. PostgREST answered the whole select
+with `400 / 42703 column report_definitions.arrears_days does not exist`, and the handler re-read
+`report_key,auto,refresh_months` only. `refresh_days` went over the side with the two that were
+genuinely absent, `_expand_jobs` fell to `DEFAULT_REFRESH_DAYS = 1`, and an in-arrears carrier
+report was asked for today, every night, for thirty-three nights. It correctly returned nothing, and
+the platform recorded a quiet source.
+
+1042's own header says this, measured on 2026-10-03: *"every nightly run asked an IN-ARREARS source
+for TODAY, received zero rows, and recorded a clean 'nothing posted' … Two months of commission
+statements never landed and no alert fired."* The migration was the fix and was never applied; the
+code then grew a second, invisible way to produce the same outcome.
+
+### COMMCALC-69.2 THE RULE
+
+> **A reader that cannot reach one of its columns has lost that SETTING, not the row.** A house
+> default standing in silently for a setting the operator has set is indistinguishable, from the
+> outside, from the platform agreeing with them.
+
+This is §4b.1's rule, not a new one — and §4b.1 has forbidden exactly this ladder since the
+2026-09-22 owner defect. The failure here is that the lock could not see it.
+
+### COMMCALC-69.3 WHAT CHANGED
+
+- `_REGISTRY_SWEEP_COLS` becomes `_REGISTRY_SWEEP_REQUIRED` + `_REGISTRY_SWEEP_OPTIONAL`.
+  `_registry_report_cfg` probes each optional column on its own through
+  `column_tolerant.present_columns`, builds the one real select with `select_list`, and returns
+  `config_columns_missing` on every report's mapping — the key the house already uses
+  (`column_tolerant.ABSENCE_KEYS`). What is absent is printed, naming migration 1042.
+- The separate `portal_report_id` select is gone: it was a second read of the same row, and
+  `portal_report_id` is simply one more optional column now.
+- `harness_any_columns_lock.py` folds a module-level string constant to its value before judging a
+  TRY-FALLBACK (`_select_calls(node, resolve)`), so a ladder spelled through a named constant is a
+  ladder. A `.select(<name>)` that does NOT resolve to a string stays a `"name"`, because the
+  TIER-TABLE rule matches on that variable — g15 pins it.
+
+### COMMCALC-69.4 WHAT STAYED
+
+No migration in this change, and no behaviour change where every column exists: with 1042 applied
+the reader spells the same column list and returns the same values. **Migration 1042 is the owner's
+to apply** — it changes which slice of days a carrier portal is asked for, which is money-touching
+by its own note. Surfaced as one self-committing Run at
+`/mnt/project-files/epay-sweep/APPLY_comp_window_2026-11-11.sql`.
+
+### COMMCALC-69.5 TESTS AND THE LOCK
+
+`backend/tests/unit/test_registry_report_cfg_tolerates_any_columns.py` — 7 units over a fake
+PostgREST builder that refuses the whole select the way 42703 does, written red (5 of 7 failing):
+`refresh_days` survives two absent columns, what was absent is reported, a fully-migrated table
+reads exactly as before, an unreadable table still answers `{}`, and the reader holds no narrower
+fallback list. The seventh drives `harness_any_columns_lock.ladders_in` over a synthetic
+named-constant ladder; g14/g15 in the lock itself keep it closed in CI.
+
+### COMMCALC-69.6 WHAT THIS DOES NOT FIX
+
+Comp still pulls one day until 1042 is applied — this change makes the gap VISIBLE and reported, it
+does not create the column. `epay_daily_tx` has no `report_definitions` row at all (the one report
+currently landing rows, 417 on 2026-11-11), so it has nowhere to show a status and takes house
+defaults for its window; that is a setup row, not code. And the sibling readers of this same table
+in `_epay_sub_schedule` and `_setup_documents` keep their own selects — checked, and neither names a
+column 1042 adds, so neither can fall the same way today.
+
+Cross-references: §4b.1 (the one reading rule, and the lock this widens) · §COMMCALC-68 (the
+per-report verdict that made this readable at all) · §COMMCALC-67 / -66 / -64 (the controls this
+exonerates) · §19.41 (the empty-pull verdict that reported the 33 days honestly) · §19.18 (a
+registry written and its callers not reading it).
 
 ## §COMMCALC-60. A FIGURE THE FEED SENDS THAT NOTHING READS IS NOT A FIGURE THIS PLATFORM HAS — one home for which store-DLAR column is which metric (owner ask 2026-11-10)
 
