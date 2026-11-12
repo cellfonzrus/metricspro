@@ -1,0 +1,110 @@
+name: access probe rotation
+
+# THE SCHEDULE (owner 2026-11-12: "put it on schdule and one module at a time from the front end as
+# though somebnbody was trying to hack in to the system").
+#
+# This is the UNATTENDED half: every day it probes ONE module of the deployed platform as an
+# anonymous stranger and fails if anything answers that should have refused. It needs no credentials
+# and no secrets, so it cannot rot and cannot be skipped for want of a test account — which is
+# exactly why it is separate from the three-persona pass. The CONFINED-EMPLOYEE and CROSS-TENANT
+# personas (the Manan class) need real test logins and judgement about what a 200 actually contained,
+# so they run in the scheduled agent session (.claude/agents/security-testing-agent.md), not here.
+#
+# ★ READ-ONLY ★ `security_probe.py` cannot send a write to a production host (`send_guard` raises),
+# and a write route is measured with the side-effect-free 405 oracle instead. Nothing here mutates
+# anything, which is what makes a daily unattended run against production safe.
+#
+# The module is picked from the rotation by DAY NUMBER, so every module is reached before any is
+# reached twice, the pick is reproducible from the date alone, and the rotation itself is derived
+# from the deployed route table — a module that ships tomorrow is probed without editing this file.
+
+on:
+  schedule:
+    - cron: "40 7 * * *"   # daily, 07:40 UTC
+  workflow_dispatch:
+    inputs:
+      module:
+        description: "Probe one named module instead of the day's pick (blank = the rotation)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: access-probe-rotation
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  probe:
+    name: One module, as a stranger
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r backend/requirements.txt
+
+      # The probe before the report. A red harness means no finding it produces can be trusted, so
+      # the run stops here rather than publishing numbers from a broken tool.
+      - name: Prove the probe first
+        run: python backend/harness_security_probe.py
+
+      - name: Probe the day's module
+        id: probe
+        working-directory: backend
+        env:
+          PROBE_BASE_URL: https://api.metricspro.tech
+          # Through `env`, NEVER interpolated into the script: a `${{ }}` in a run body is textually
+          # substituted before bash sees it, so a crafted value would execute. Only a writer can
+          # dispatch this workflow, which makes it a small door — and a door this job has no reason
+          # to leave open, in a file whose whole subject is doors nobody meant to leave open.
+          PROBE_MODULE: ${{ inputs.module }}
+        run: |
+          if [ -n "$PROBE_MODULE" ]; then
+            ARGS=(--module "$PROBE_MODULE")
+          else
+            ARGS=(--rotate "$(date -u +%j)")
+          fi
+          python security_probe.py "${ARGS[@]}" --out probe-findings.json | tee "$GITHUB_STEP_SUMMARY"
+          python - <<'PY'
+          import json, os, sys
+          r = json.load(open("probe-findings.json"))
+          # `public_recon` is the gate OBEYING its declaration: /openapi.json, /docs and /redoc are
+          # in `_PUBLIC_EXACT`, marked "currently open". Whether that declaration is right is the
+          # owner's call, not this job's, and a schedule that is red every rotation for a question
+          # nobody has answered yet teaches everyone to ignore it. So it is REPORTED, loudly, and
+          # does not fail the build. The day the owner rules on it, that ruling is the fix and this
+          # exception goes with it — it is not a permanent excuse.
+          POLICY = {"public_recon"}
+          bad = [f for f in r["findings"]
+                 if f["severity"] in ("high", "medium") and f["verdict"] not in POLICY]
+          policy = [f for f in r["findings"] if f["verdict"] in POLICY]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
+              fh.write(f"\n\n**module `{r['module']}`** — {r['probes']} probes, "
+                       f"{len(r['findings'])} finding(s), {r['coverage']['unprobed']} unprobed.\n")
+              fh.write("\nThe confined-employee and cross-tenant personas are NOT measured here "
+                       "(no credentials in CI); see the scheduled agent session.\n")
+              for f in bad:
+                  fh.write(f"\n- `{f['severity']}` **{f['verdict']}** — "
+                           f"{f['persona']} {f['method']} `{f['path']}` → HTTP {f['status']}")
+              for f in policy:
+                  fh.write(f"\n- `policy, not failing` **{f['verdict']}** — "
+                           f"{f['method']} `{f['path']}` → HTTP {f['status']} "
+                           f"(awaiting the owner's ruling)")
+          # A reachable surface fails the build. A GAP never does — a gap is reported, not enforced,
+          # or the schedule would go red for a question it was never able to ask.
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: access-probe-findings
+          path: backend/probe-findings.json
+          if-no-files-found: warn

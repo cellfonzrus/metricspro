@@ -217,6 +217,7 @@ Primary code homes:
 | STOREOPS-05 | **The phone shows the week the TENANT declared, and whose shifts it shows is the server's answer** | "Make scheduling and hr with store vista and closing live in the app also" — the rota, time off and cover requests existed only on the web, and the phone had no schedule at all. The gates were already right (`gate_person_rows`, §14w) and the week start was already declared per tenant; what was missing was a surface. Who decides which seven days a week IS on a phone, and what stops a client-side filter from being mistaken for a permission? |
 | STOREOPS-07 | **A correction a human types reaches the figure, or nothing does** | "i just fixed the hours in ny logistics , went in to check it still shows the old hours , check and fix for good platform wide" — and nothing he could have typed could have moved those figures. **616 hand-typed corrections** sat in `storeops.manual_hours` (51 house, 565 LuxeLink; ±4,441h gross), eight of them filed in the ten days before the report, and no pay or hours path read that table at all. All four tenants had declared `count_manual_hours = true` and `resolve_config` forced it FALSE for the three on `schedule_fallback`. The one correction the figure DID honour, `shifts.actual_hours`, is written by nothing in the product — the frontend displays it in seven places and writes it in none. And the mig-914 RPC decided `correction > punch > schedule` in SQL, where it could read neither the corrections nor the declaration. Who owns "what are this person's paid hours that day", what does a correction MEAN when 2,249 of its hours are negative, and what stops a closed month restating the moment the fold is switched on? |
 | CORE-33 | **What an employee may reach is one declaration, and the API is what enforces it** | "on ny logistics Manan was able to go past [the clock-in screen] and also see the adjustment hours, this should not be allowed for any sales reps — this is universal across the board". The browser was the only gate: a menu row the viewer could see opened its whole subtree by URL, and the payroll writes behind those pages asked for no authority at all. Who decides what a surface's audience is, and what makes the API refuse a caller the menu would not offer it to? |
+| CORE-42 | **A gate proved in-process is a claim, not a measurement** | "create a testng agent who deciatedly is checking the data leakage, unwanted access to modules even if theya re gated like the case of manan and we discovered by accident, c annot have an accident of this sort, put it on schdule and one module at a time from the front end as though somebnbody was trying to hack in to the system". Every access control here is proved by a harness that imports the handler — which catches a wrong rule and not a right rule that was never reached. Who asks the DEPLOYED platform what it actually answers an unprivileged outsider, one module at a time, and what stops that probe from writing to production or from reporting a pass on a question it never asked? |
 | CORE-32 | **A guard that reads source code must be told f-strings exist** | Found by running the suite on a newer interpreter than CI's: the guard that stops our own setup internals reaching a customer was RED on Python 3.13 and GREEN on 3.11. PEP 701 stopped making an f-string one string token, so it had stopped seeing f-strings — and the same file held a SECOND reader of the same fact that had been taught the new shape. What proves a capability that depends on the interpreter, when CI pins one? |
 | CORE-34 | **A proof that cannot start is not a passing proof** | Four frontend proof programs were red, and not one of them was red about the thing it proves: three had each hand-rolled their own TypeScript compile and lost the `@/` path alias, and the fourth read a Python endpoint with a regex that a refactor had moved past. What compiles a frontend proof, what reads Python from one, and what stops the next proof writing a fifth copy of either? |
 | CORE-35 | **Which job runs this gate has one derived answer** | 312 proof harnesses were declared as debt and nothing ran them; five more were exempt because a workflow MENTIONED their filename in a comment or a `paths:` filter, and one of those five had been red the whole time. A reviewer could not tell a gated check from an ungated one without reading 15 workflow files, and got it wrong in writing. Where is the list of what CI actually enforces, and what keeps it true? |
@@ -26399,6 +26400,7 @@ status word rather than a blank that reads as nil.
 | CORE-39 | core |
 | CORE-40 | core |
 | CORE-41 | core |
+| CORE-42 | core |
 | ACCOUNT-01 | account, commcalc, closing |
 | CORE-32 | core |
 | CORE-33 | core |
@@ -47423,3 +47425,104 @@ and the carry rule) · §14y (paid hours, the evidence and the interlock) · §C
 month never inherits labour) · §19.18 (one fact, one home, dereferenced — never copied) ·
 §COMMCALC-49.10 (a feature is not finished until it works for every tenant) · §CORE-34/35 (the gate
 index that lists the new proof) · §6l (the post-landing recalculation hook §ACCOUNT-01.4 reports on).
+
+## §CORE-42. A GATE PROVED IN-PROCESS IS A CLAIM, NOT A MEASUREMENT (owner directive 2026-11-12)
+
+Owner, verbatim: *"create a testng agent who deciatedly is checking the data leakage, unwanted access
+to modules even if theya re gated like the case of manan and we discovered by accident, c annot have
+an accident of this sort, put it on schdule and one module at a time from the front end as though
+somebnbody was trying to hack in to the system"*.
+
+### §CORE-42.1 The class
+
+§CORE-33's defect (NY Logistics' Manan reading adjustment hours past the clock-in screen) and
+§STOREOPS-07.65's (a person-keyed drill-down that applied the pay gate and never asked whose employee
+id was passed) were both real, both reachable from a browser, and **both found by accident** — one
+while the owner looked at a screen, one while an agent fixed something else. Neither was found by a
+control, and this platform has many.
+
+The reason is structural. Every access control here is proved by a harness that **imports the
+handler and calls it with a fake client**: `harness_privesc_rbac_gates`, `harness_rep_surface`,
+`harness_cross_tenant_isolation`, `harness_org_scope_guard`. That shape catches a **wrong rule**. It
+cannot catch a rule that is right and **never reached** — a middleware that did not fire for this
+path, an allowlist that over-matches, a route mounted outside the gate, a deploy carrying
+`REP_CONFINE=0`. So: **a gate proved in-process is a claim the code makes about itself; nobody was
+measuring what the deployed platform actually answers.** `security.yml` scanned dependencies, source
+and secrets, and sent no request to the host.
+
+### §CORE-42.2 The mechanism
+
+`backend/security_probe.py` — the ONE home for "ask the deployed platform, from outside, whether a
+surface refuses the people it should". Three personas, each the shape of a real attacker: `anon` (no
+header at all), `rep` (a real signed-in individual contributor — the Manan shape), `cross_tenant` (a
+real signed-in admin of tenant B carrying tenant A's identifiers). Credentials are read from the
+environment by NAME (`PROBE_REP_*`, `PROBE_CROSS_*`, `PROBE_FOREIGN_MARKERS`) and never appear in
+code, report, commit or memory.
+
+**It holds no copy of any declaration.** "May a confined employee reach this path" is asked of
+`core/rep_surface.api_allowed`; "is this path public" is asked of
+`core/tenant_middleware._is_public` + `_PUBLIC_METHODS`. §H of the harness fails the build if a
+second copy of either appears, and §C/D monkeypatches the one home to prove the answer FOLLOWS it.
+
+**One module per run, and the rotation is DERIVED** from the deployed app's own `/openapi.json`, not
+hand-kept: a module that ships tomorrow is probed tomorrow with no edit. `--rotate <n>` is
+deterministic, so a run is always reproducible from its number. The framework's own unpublished
+endpoints (`/openapi.json`, `/docs`, `/redoc`) are named explicitly — they are absent from the schema
+and are an attacker's first stop — and that is the one surface named rather than derived.
+
+### §CORE-42.3 ★ Read-only against production, by construction ★
+
+The property that makes an unattended daily run against the live system safe, enforced rather than
+intended: `plan_for_module` **cannot emit** a production write for any persona, `send_guard`
+**raises** if one is constructed, and a host is production **unless it proves otherwise** (an empty
+or mistyped base URL gets the read-only rules). A write route is still measured, with a
+side-effect-free oracle: **an unauthenticated read sent to a write-only path must be refused by the
+middleware, which runs before route matching, so a `405` means the request reached the router — the
+gate did not fire.** Nothing is written to learn it.
+
+The oracle is **not always valid**, and the first live run proved it: `GET /api/v1/core/auth-config`
+answered 200 because that read is declared public, while the gated `PUT` shares its path — read as
+the oracle, a false positive. A false positive in a security report is not a harmless cost; it trains
+the reader to skim. The oracle is now planned only where a read must be refused, and a write it
+cannot cover is reported **unprobed**, never dropped and never guessed at.
+
+### §CORE-42.4 A run that measured nothing can never read as a pass
+
+`coverage` reports each persona `ran` or `skipped` and the run `measured: true|false`; a missing test
+account makes a run honest rather than green (owner 2026-10-30: nothing declared means nothing
+identified, and the surface says so). `findings` lists only what is wrong, worst first, and
+deliberately **excludes gaps** — a hundred unmeasurable writes must never bury one leak — while
+`gaps` reports them separately. Both halves are in every report. Verdicts: `leak` / `foreign_rows`
+(high), `gate_not_reached` / `locked_out` / `public_recon` (medium), `unknown` (low), `not_measured`
+(a gap). **`locked_out` is a finding of equal weight** — a gate that refuses an employee their own
+screen is a defect, so both directions of the employee's reach are measured (★ NO LOCKOUT ★, §22).
+
+### §CORE-42.5 What runs it
+
+| when | what | personas | fails the build |
+|---|---|---|---|
+| every PR (`security.yml`, job "The attacker's pass is trustworthy") | `harness_security_probe.py`, 127 checks | — | yes |
+| daily 07:40 UTC (`access-probe-rotation.yml`), one module by day number | the live probe, no secrets needed | `anon` | yes, on a reachable surface |
+| the scheduled agent session (`.claude/agents/security-testing-agent.md`) | the live probe + human judgement | all three | reported to the owner |
+
+The daily job needs no credential, so it cannot rot for want of a test account — which is why the
+confined-employee and cross-tenant personas live in the agent session instead: they need real logins
+AND judgement about what a 200 actually contained. **A probe reports a status code; a report claims a
+defect, and the agent reproduces every finding by hand before saying so.**
+
+### §CORE-42.6 First pass, 2026-11-12
+
+All 23 modules, 1,840 operations, `anon` only: **no surface answered a stranger.** 690 of 696
+parameterless reads refused; the 6 that answered are each in `_PUBLIC_EXACT` by declaration. Open:
+`/openapi.json`, `/docs` and `/redoc` hand any stranger the entire route table, field names and
+request shapes (`_PUBLIC_EXACT` marks them *"currently open"*). That leaks no tenant data; it tells
+an attacker where to aim. Reported `public_recon`, medium, and deliberately **not** failing the daily
+job — the declaration is the owner's to rule on, and a schedule red every rotation for an unanswered
+question teaches everyone to ignore it. The `rep` and `cross_tenant` personas — the Manan class
+itself — are **unmeasured pending test accounts**.
+
+Cross-references: §CORE-33 (the declaration this measures from outside, and the incident) ·
+§STOREOPS-07.65 (the sibling found by accident) · §CORE-20 (a request path is not evidence of which
+route it reached — the allowlist this dereferences) · §CORE-19.6 (the anon Data API grants, the same
+question asked of the database) · §19.18 (one fact, one home, dereferenced) · §22 (★ NO LOCKOUT ★) ·
+§CORE-34/35 (the gate index listing these jobs) · §19.25 (a failing harness fails CI).
