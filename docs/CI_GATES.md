@@ -16,6 +16,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 
 | Workflow | Jobs | Runs on |
 |---|---|---|
+| `access-probe-rotation.yml` | 1 | `schedule`, `workflow_dispatch` |
 | `branch-base-guard.yml` | 1 | `pull_request_target`, `workflow_dispatch` |
 | `carrier-vocab-guard.yml` | 45 | `pull_request`, `push`, `workflow_dispatch` |
 | `data-qa-guard.yml` | 4 | `pull_request`, `push`, `workflow_dispatch` |
@@ -27,12 +28,12 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `mobile-ota-update.yml` | 1 | `push`, `workflow_dispatch` |
 | `module-graph-guard.yml` | 2 | `pull_request`, `push`, `workflow_dispatch` |
 | `org-scope-guard.yml` | 19 | `pull_request`, `push`, `workflow_dispatch` |
-| `security.yml` | 14 | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
+| `security.yml` | 15 | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
 | `tests.yml` | 15 | `pull_request`, `push`, `workflow_dispatch` |
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 619 gates
+## Gated — 620 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -548,6 +549,8 @@ the Runs on column is how you can tell.
 | `harness_scope_label.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_scope_label_lock.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_screen_link_guard.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_security_probe.py` | `access-probe-rotation.yml` | One module, as a stranger (`probe`) | `schedule`, `workflow_dispatch` |
+| `harness_security_probe.py` | `security.yml` | The attacker's pass is trustworthy (access probe) (`access-probe`) | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
 | `harness_self_lockout.py` | `org-scope-guard.yml` | A write may not lock out its own author (`self-lockout`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_service_role.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_settings_audit.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
