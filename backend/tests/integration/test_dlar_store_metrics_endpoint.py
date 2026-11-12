@@ -29,7 +29,9 @@ PATH = "/api/v1/commcalc/dlar-store"
 CATALOG = "/api/v1/commcalc/dlar-store-catalog"
 
 # The brand-new figures, named here so a test failure says WHICH column stopped arriving at the API.
-NEW_COLUMNS = ("activations_total", "total_trade_ins", "value_trade_ins", "swaps_total",
+# `activations_total` is NOT among them: the owner ruled it the same measurement as gross adds
+# (2026-11-12, §COMMCALC-71), so it is a SPELLING on `gross_adds` and never a column of its own.
+NEW_COLUMNS = ("total_trade_ins", "value_trade_ins", "swaps_total",
                "starlink_activations", "byod_total", "protection_dop", "avg_platinum_points",
                "total_health_checks", "projection", "mom_percent_change", "yoy_percent_change")
 
@@ -40,7 +42,7 @@ def _store_row(org=ORG, *, address="123 Main St", location="Main Street", code="
            "atu": 66.67, "protect_pct": 80.0, "byod_pct": 35.0, "family_plan_pct": 45.0,
            "tmr3": 62.5, "aal_conversion": 3.85, "conversion_rate": 12.0,
            "total_acts": None, "gross_adds": None, "total_upgrades": None,
-           "zero_selling_days": 2, "activations_total": 134, "total_trade_ins": 11,
+           "zero_selling_days": 2, "total_trade_ins": 11,
            "value_trade_ins": 7, "upgrade_value_trade_ins": 3, "offer_trade_ins": 1,
            "trade_in_unlocked_activations": 4, "swaps_total": 9, "rpl_count": 2,
            "starlink_activations": 5, "starlink_sales": 6, "auxiliary_device_acts": 8,
@@ -87,8 +89,10 @@ def test_the_newly_declared_columns_come_back_from_the_read(wired, api_client):
     assert len(rows) == 1
     for col in NEW_COLUMNS:
         assert col in rows[0], f"{col} declared and landed but not served"
-    assert rows[0]["activations_total"] == 134
+    assert rows[0]["byod_total"] == 21
     assert rows[0]["yoy_percent_change"] == -4.25
+    # the column the owner ruled a SPELLING is not served as a column of its own (§COMMCALC-71)
+    assert "activations_total" not in rows[0]
 
 
 def test_a_column_the_source_stopped_sending_reads_absent_not_zero(wired, api_client):
@@ -132,10 +136,10 @@ def test_an_unapplied_column_is_unavailable_with_a_reason_never_a_zero(wired, ap
     _seed_stores(wired)
     wired.seed("commcalc.raw_dlar_store", [_store_row()])
     monkeypatch.setattr("app.core.column_tolerant.present_columns",
-                        lambda *a, **k: frozenset({"activations_total"}))
+                        lambda *a, **k: frozenset({"byod_total"}))
     body = api_client.get(CATALOG, params={"org_id": ORG}).json()
     by_key = {m["key"]: m for m in body["metrics"]}
-    assert by_key["activations_total"]["available"] is True
+    assert by_key["byod_total"]["available"] is True
     missing = by_key["total_trade_ins"]
     # The sentence names a migration, so it rides the §19.36 message key `reason` and
     # SetupNoticeMiddleware may replace it with the neutral house sentence for a non-super-admin
@@ -170,13 +174,13 @@ def test_one_tenants_rows_never_reach_another_tenants_read(wired, api_client):
     wired.seed("commcalc.raw_dlar_store", [
         _store_row(),
         _store_row(OTHER_ORG, address="9 Other Ave", location="Other Ave", code="V-001",
-                   activations_total=999),
+                   byod_total=999),
     ])
     mine = api_client.get(f"{PATH}/{PERIOD}", params={"org_id": ORG}).json()
     theirs = api_client.get(f"{PATH}/{PERIOD}", params={"org_id": OTHER_ORG}).json()
     assert [r["store_code"] for r in mine] == ["B-1115"]
     assert [r["store_code"] for r in theirs] == ["V-001"]
-    assert all(r["activations_total"] != 999 for r in mine)
+    assert all(r["byod_total"] != 999 for r in mine)
     assert theirs[0]["market"] == "NJ", "each tenant's market comes from its OWN vocabulary"
 
 

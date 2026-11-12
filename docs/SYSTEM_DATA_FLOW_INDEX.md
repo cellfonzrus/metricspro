@@ -47322,7 +47322,9 @@ its new spelling being dropped (§H, RE-AIMED 2026-11-12 when the owner answered
 carrier name in the module; an optional column read without the per-column probe.
 
 Plus `backend/tests/unit/test_dlar_metric_catalog.py` (15) and
-`backend/tests/integration/test_dlar_store_metrics_endpoint.py` (8).
+`backend/tests/integration/test_dlar_store_metrics_endpoint.py` (8). Its "unapplied column"
+and cross-tenant cases moved off `activations_total` on 2026-11-12 (§COMMCALC-71) — the column they
+used as the example is no longer one.
 
 **Two stale pins RE-AIMED, not relaxed** (the fourth time this pattern has appeared — §19.18).
 `harness_portal_cell.py` §C1/C3/E1/E2/F3 used the September 2026 record capture as "a record carrying
@@ -47724,6 +47726,12 @@ negative control was kept:
 - `backend/tests/unit/test_dlar_metric_catalog.py` — the "lands under its own name" test is replaced
   by `test_renamed_gross_adds_field_is_a_spelling_not_a_second_column` and
   `test_total_activations_is_both_parts_or_neither_never_a_partial_sum`.
+- `backend/tests/integration/test_dlar_store_metrics_endpoint.py` — three cases used
+  `activations_total` as their example of a brand-new column (the unapplied-migration case, the
+  served-columns case, the cross-tenant case). It is no longer a column, so each moved to
+  `byod_total`, and the served-columns case now asserts the spelling is NOT served on its own. CI
+  caught this, not the local run: `pytest tests/unit` passes it, `pytest tests -m integration`
+  does not — run both.
 
 ### §COMMCALC-71.8 NOT done here
 
