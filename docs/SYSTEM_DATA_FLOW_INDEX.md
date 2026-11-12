@@ -93,6 +93,7 @@ Primary code homes:
 | POS-16 | **A wholesale customer, and the W-9 that makes their sales tax-free** | "A customer type as wholesale where the option to not charge tax will be by default if the user confirms they received the filled out w9 … block the user to make a sale before the system has an updated w9, only the admin can go past … and a return link for the customer to send the w9 back." |
 | POS-17 | **The cash / credit mismatch an edit or a void leaves behind** | "I need the POS Cash Register to have the ability to edit the sale from the prior day and create log of the cash or credit mismatch." Editing a sale moves what the customer owes and voiding one stops them owing it — so where does the money already taken go, who is told, and why was nothing comparing the two? |
 | POS-18 | **A pre-owned device is a different device** | "CPO is certified pre owned is a different device than new, IMEI is unique." Which device conditions exist, what does this feed call one, and why was a refurbished handset staying off the new one's order row only by accident? |
+| POS-20 | **A till's spelling of the checkout contract is checked by nothing** | "checkout failed as the register does not know tender blank where as cash was checked." Which keys does `pos.checkout` actually read, why had the phone register never recorded a correct sale, and what stops the next till inventing a field name? |
 | POS-19 | **What a customer still owes us, and which certificate lapses when** | "Build them" — the two reports the terms tender and the wholesale W-9 imply. A sale on terms is the platform's first receivable, and nothing measured it. Building it found that the mismatch log would have called every terms sale a $100 refund owed to the customer: "what was tendered" and "what the till has" were one figure until a tender settled later. Which sales are receivables at all, when is a balance late, and what does a report say about a payment the platform cannot yet record? |
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
@@ -26388,6 +26389,7 @@ status word rather than a blank that reads as nil.
 | POS-16 | pos |
 | POS-17 | pos |
 | POS-18 | pos |
+| POS-20 | pos |
 | POS-19 | pos |
 | PAYABLES-01 | payables |
 | CORE-25 | core |
@@ -34263,6 +34265,140 @@ sentence and only the platform super admin sees which migration.
 | registered | report directory (`rbac.REPORT_DIRECTORY`), §CORE-17 ledger (`flat`), `core/module_graph.FACTS['pos_open_receivable']` |
 | migrations | **none** — both reports read columns migrations 1106 and 1107 already added |
 | money | **no money moves.** Nothing is written by either report; the §POS-17 fix changes a comparison, and the live effect is that a terms sale no longer reads as a refund owed |
+
+## §POS-20. A TILL'S SPELLING OF THE CHECKOUT CONTRACT IS CHECKED BY NOTHING (owner report 2026-11-12)
+
+Owner, trying to ring a sale on the phone: *"checkout failed as the register does not know tender
+blank where as cash was checked"*.
+
+The message was literally true. The phone sent `{ method: 'cash' }`; `pos/router.checkout` and the
+`pos.checkout` RPC both read `payment_method`. So the tender arrived empty and
+`tender_vocabulary.plan_payment` refused it with its own sentence — *"This register does not know a
+tender called “(blank)”."*
+
+### §POS-20.1 The refusal was the only thing that stopped a silently WRONG sale
+
+Fixing the tender alone would have been worse than leaving it broken. Three more keys were wrong the
+same way, and `pos.checkout` COALESCEs every one of them:
+
+| the phone sent | the RPC reads | what it would have stored |
+|---|---|---|
+| `method` | `payment_method` | blank tender → refused (what the owner hit) |
+| `quantity` | `qty` | **`COALESCE(…, 1)` — every line at quantity ONE** |
+| `short_name` | `description` | no description on the sale line |
+| nothing | `subtotal`, `tax_total`, `total`, `extended_price` | **`COALESCE(…, 0)` — the sale stored at $0.00** |
+
+So the phone register had **never been able to record a correct sale**, and nothing anywhere said
+so. Two handsets would have been sold as one, for nothing, and no later report could have told that
+row from a real one. A tender check the owner tripped over is the entire reason it was found instead
+of being discovered in next month's numbers.
+
+### §POS-20.2 THE CLASS, not the instance
+
+The class is not "the app misspelled `payment_method`". It is **"a till's spelling of the checkout
+contract is checked by nothing"**: the keys are defined in SQL, read in Python, and written by two
+TypeScript packages that cannot import each other — and a key no reader recognises is **dropped,
+not refused**. Renaming four fields fixes the instance. What fixes the class:
+
+- **ONE declaration.** `backend/app/modules/pos/checkout_contract.py` names the keys `pos.checkout`
+  reads, which of them a till MUST send, the spellings already known to be wrong (`MISSPELLINGS`),
+  and the keys a till may carry that deliberately never reach the wire (`CLIENT_ONLY_KEYS` — an
+  unlisted stray key fails the build, so "the RPC ignores it" is always a decision somebody made).
+  `refusal(group, keys)` is the one sentence, and it **names the field the caller meant**.
+- **It cannot drift from the SQL.** The harness DERIVES the key set out of the migration that
+  defines `pos.checkout` and asserts equality with the declaration — and refuses a *later*
+  migration redefining the function behind its back.
+- **`qty` and the money keys are REQUIRED, by name.** Their COALESCE defaults are 1 and 0, so their
+  absence does not look like an absence afterwards. That is the shape that hides.
+- **The phone's wire body is a TYPE.** `mobile/src/modules/pos/checkout-body.ts` emits
+  `CheckoutWireBody`, whose required keys are the contract's, so a misspelled or missing key is a
+  **compile error** and CI's typecheck refuses it. The old `CheckoutBody` type declared
+  `{ store_code?, register_number?, note? }` with `CartLine[]` items and `{ method, amount }`
+  payments — every one of those a key the RPC does not read. **A type that permits the wrong shape
+  is not a type**, and that one was the defect's hiding place.
+
+### §POS-20.3 The money, and the one thing the phone REFUSES rather than guesses
+
+A rate alone does not price a line; how the rate is applied does the rest. Those four settings
+(`tax_applied_on`, `tax_method`, `tax_cap_enabled`, `tax_cap_amount`) lived **only** in
+`frontend/src/lib/pos-config.ts` until now, which is exactly why a second till could not price
+anything. They are now declared in `pos_config_effective.SERVER_DEFAULTS` — **values mirrored from
+the browser's registry, so declaring them changed no price on any till** — and
+`GET /pos/tax-codes/resolve` answers them **beside the rate**, so no till carries a copy of the
+store-override → org-default → declared-default precedence. The pin (§D) fails the build if the two
+sides ever disagree.
+
+The phone's money rule mirrors the web register's `recalcItem` and its totals. Where it CANNOT:
+`tax_method = 'cost_based'` means "never tax below the product's cost", and the phone's cart carries
+no cost. **It refuses the sale and says why** (`CHECKOUT_TAX_METHOD_UNPRICEABLE`) rather than pricing
+it a second way — guessing there would recreate the two-tills-disagree defect this section exists to
+prevent. A store with no resolved rate is said out loud too, never charged as a quiet $0.00.
+
+### §POS-20.4 Honest about what is NOT one home yet
+
+Both tills are TypeScript in packages that cannot import one another, so the money rule is written
+**twice** — once in the browser's page component, once in the phone's module — and held equal by a
+pinned case table rather than by a shared file. That is weaker than §19.18 asks for, and it is named
+here rather than glossed: the durable fix is either a module both builds can resolve, or the server
+pricing the line. **The owner was asked which** on 2026-11-12; the code already records a deliberate
+decision that a till's figures stand (`pos/router.checkout`: *"the server resolves the rate itself,
+so a till holding a stale rate sends a figure that legitimately differs"*), and reversing that is the
+owner's call, not an agent's.
+
+### §POS-20.5 What the lock refuses
+
+`backend/harness_pos_checkout_contract.py` — **64 checks**, every one with a negative control.
+
+- §A the declaration drifting from the SQL; a later migration redefining `pos.checkout`; a required
+  key that is not one the RPC reads; `qty` or a money key becoming optional.
+- §B the refusal failing to name the field a caller meant; the exact shapes the phone sent on
+  2026-11-12 passing; a VALID sale being refused; a never-seen key going unnamed.
+- §C a declared till going missing; the web till spelling a wire key the RPC cannot read; the
+  phone's builder stopping being pure or losing its test; its wire types dropping a required key or
+  making one optional; its test stopping comparing all three key groups, or its key lists drifting
+  from the contract.
+- §D the tax-pricing defaults drifting between the server, the browser and this pin; the endpoint
+  stopping answering the basis; a literal tax rate appearing in the phone's own code.
+
+**Mutation-tested, and two mutations found real holes in the lock itself** — recorded because the
+holes are the interesting part:
+
+| mutation | result |
+|---|---|
+| the phone's type returns to `method` | C6 red |
+| the web till returns to `method` on the wire | C2b red |
+| the declaration drops `qty` | A3 + A4 red |
+| `qty` becomes optional | A3 + A4 red |
+| the server's `tax_method` default drifts | D2 red |
+| the phone's test stops comparing key groups | C7 red |
+| the test's key list adds the old wrong spelling | C7b red |
+
+The first version of §C scanned the phone with a regex between two markers and **caught nothing**:
+`payments:` appears as a TYPE member above the literal, so the slice landed on the wrong text and
+passed. The first version of §C7 asked only whether `Object.keys` appeared **anywhere** in the test
+file, and a mutation that gutted all three comparisons passed it, because the words survived in a
+different test. **A check that can be satisfied by a leftover is not a check**, and only the
+mutation pass said so.
+
+### §POS-20.6 Files, locks, routes
+
+| | |
+|---|---|
+| declaration | `backend/app/modules/pos/checkout_contract.py` (`SALE_KEYS` / `ITEM_KEYS` / `PAYMENT_KEYS`, the REQUIRED_* sets, `MISSPELLINGS`, `CLIENT_ONLY_KEYS`, `refusal`) |
+| contract source of truth | `database/migrations/1107_pos_wholesale_w9.sql` — the `pos.checkout` body, pinned by name in the harness |
+| phone's one home | `mobile/src/modules/pos/checkout-body.ts` (`buildCheckoutBody`, `unitTax`) + `checkout-contract.ts` (the cart shape and the two refusal sentences) |
+| phone's screen | `mobile/app/(app)/pos/checkout.tsx` — shows subtotal / tax / total from the builder's own figures, so what is displayed is what is sent |
+| endpoint | `GET /pos/tax-codes/resolve` — now returns `pricing` (the four resolved keys) and `needs_product_cost` beside `rate` |
+| config | `pos_config_effective.SERVER_DEFAULTS` gains `tax_applied_on` / `tax_method` / `tax_cap_enabled` / `tax_cap_amount`; `TAX_PRICING_KEYS`, `TAX_METHOD_NEEDS_COST` |
+| locks | `backend/harness_pos_checkout_contract.py` (64) · `mobile/src/modules/pos/checkout-body.test.ts` (13) · the mobile typecheck |
+| registered | CI job `carrier-vocab-guard.yml` (the POS proofs job), `docs/CI_GATES.md` (generated) |
+| migrations | **none** — the contract was always what `pos.checkout` read; only the tills were wrong |
+| money | **no money moves.** No stored row changes. The web till's figures are sent and stored exactly as before; the phone could not complete a sale at all, so it had none to restate |
+
+**Cross-refs:** §POS-15 (what a till may be paid with — the vocabulary whose refusal surfaced this) ·
+§POS-14 (which store a sale is for, and the server resolving the rate) · §POS-16 (the W-9 exemption
+that reads line tax) · §CORE-10 (a guard that goes blind fails CI) · §19.18 (one fact, one home,
+dereferenced — never copied, and §POS-20.4 on where this falls short of it).
 
 ## §COMMCALC-20. A HANDSET THAT BOOKS A REBATE BOOKS A COST (owner report 2026-10-19)
 
