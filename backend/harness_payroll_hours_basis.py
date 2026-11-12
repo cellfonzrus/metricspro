@@ -329,8 +329,28 @@ check("G11 a ticked employee's unmeasured day is still NOT counted as measured",
                  employee_rows=[{"employee_id": "E1", "pay_from_schedule": True}])["measured_days"], 0)
 
 section("H. the measurement question, asked on its own")
+# H1 deliberately asks the UNDATED default. A correction is a measurement whatever the org's PAY
+# settings say — both the `count_manual_hours` switch and the required `corrections_effective_from`
+# date are neutralised for a measurement-only resolution. Asking a dated config here would let the
+# date gate creep back in unnoticed, which is how `salary_expense` broke in CI on 2026-11-12:
+# `day_measurement` resolves `resolve_config(None)`, so every corrected day read as unmeasured and
+# the salary rollup fell back to the SCHEDULE.
 check("H1 a correction is a measurement whatever the pay mode says",
-      B.measurement_state({"manual": 7.75, "manual_rows": 1}, CLOCKED),
+      B.measurement_state({"manual": 7.75, "manual_rows": 1}, DEFAULT),
+      (B.CLOCKED_CORRECTED, 7.75))
+check("H1b …and the undated org that folds NO pay still reports the day as measured",
+      B.measurement_state({"manual": 7.75, "manual_rows": 1}, UNDATED_CLOCKED),
+      (B.CLOCKED_CORRECTED, 7.75))
+check("H1c …while that same org still pays the UNCORRECTED figure, so the two never conflate",
+      B.resolve_day(B.build_evidence(punches=[punch(hours=9.0)],
+                                     manual_rows=[manual(hours=-2.50)]).get(("E1", "2026-10-09")),
+                    UNDATED_CLOCKED)[0], 9.0)
+check("H1d …and a PRE-FLOOR corrected day is measured too, not just a post-floor one",
+      B.measurement_state({"manual": 7.75, "manual_rows": 1},
+                          B.resolve_config({"hours_basis_mode": B.MODE_CLOCKED_ONLY,
+                                            "clocked_basis_effective_from": "2026-11-01",
+                                            "corrections_effective_from": "2026-11-01"}),
+                          day="2026-10-09"),
       (B.CLOCKED_CORRECTED, 7.75))
 check("H2 a usable punch is a measurement", B.measurement_state(
       {"_raw_punches": [{"clock_out": "x", "hours": 8.5}]}, DEFAULT), (B.CLOCKED, 8.5))

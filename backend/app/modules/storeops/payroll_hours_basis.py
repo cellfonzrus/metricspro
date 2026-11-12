@@ -461,6 +461,16 @@ def effective_from(cfg):
     return _day(cfg.get("clocked_basis_effective_from"))
 
 
+#: MEASUREMENT-ONLY RESOLUTION. A cfg carrying this key is being resolved to answer "was this day
+#: MEASURED", not "what is paid", so `corrections_apply` does not apply the PAY gates — neither the
+#: required date nor the floor. A human correction is always a measurement, whatever the org's pay
+#: dates say: a day somebody wrote down is a day somebody wrote down. Without this, a corrected day
+#: on an org that has set no date reads as UNMEASURED, and `salary_expense` falls back to the
+#: SCHEDULE for it — the same defect `measurement_state` already forces `count_manual_hours` to
+#: prevent, reappearing through the date instead of the switch. Only `measurement_state` sets it.
+CORRECTIONS_UNGATED_KEY = "_corrections_ungated_for_measurement"
+
+
 def corrections_effective_from(cfg):
     """PURE: the ISO date on and after which a `manual_hours` correction is folded, or None.
 
@@ -508,6 +518,9 @@ def corrections_apply(day, cfg):
     if not cfg.get("count_manual_hours"):
         return False, ("This org is not set to count hand-entered corrections, so the figure is "
                        "what the clock and the schedule say.")
+    if cfg.get(CORRECTIONS_UNGATED_KEY):
+        # Measurement-only resolution: the PAY gates below do not apply. See the key's own note.
+        return True, None
     if not corrections_effective_from(cfg):
         return False, (
             "This org has not set the date its hand-entered corrections start counting toward pay, "
@@ -1215,19 +1228,24 @@ def measurement_state(cell, cfg, day=None):
     `marketing/router`'s event payroll both dereference this instead of each deciding again.
     """
     cfg = dict(cfg if isinstance(cfg, dict) else resolve_config(None))
-    # A HUMAN CORRECTION IS ALWAYS A MEASUREMENT, whatever the pay mode says. `resolve_config`
-    # forces `count_manual_hours` off in schedule-fallback mode so that applying this change moves
-    # nobody's PAY — but "was this day measured" is a different question from "is this correction
-    # paid", and answering the first one with the second one's switch would make a corrected day
-    # look unmeasured and send the salary rollup back to the schedule.
+    # A HUMAN CORRECTION IS ALWAYS A MEASUREMENT, whatever the org's PAY settings say. "Was this
+    # day measured" is a different question from "is this correction paid", and answering the first
+    # with the second's controls makes a corrected day look unmeasured and sends the salary rollup
+    # back to the SCHEDULE. There are TWO such controls and both are neutralised here: the
+    # `count_manual_hours` switch, and (from §STOREOPS-07) the `corrections_effective_from` date,
+    # which is REQUIRED for a pay fold. The date caught `salary_expense` in CI on 2026-11-12 —
+    # `day_measurement` resolves `resolve_config(None)`, which names no date, so every corrected
+    # day read as unmeasured. One gate neutralised and the other forgotten is the same defect.
     cfg["count_manual_hours"] = True
+    cfg[CORRECTIONS_UNGATED_KEY] = True
     # …AND ON BOTH SIDES OF THE FLOOR. A pre-floor day is answered from `PRE_FLOOR_KEY`, so forcing
     # the flag only on the outer dict would make a CORRECTED pre-floor day read as unmeasured —
     # which is the exact defect the paragraph above exists to prevent, reappearing on one side of a
     # date boundary instead of everywhere.
     _pre = cfg.get(PRE_FLOOR_KEY)
     if isinstance(_pre, dict):
-        cfg[PRE_FLOOR_KEY] = {**_pre, "count_manual_hours": True}
+        cfg[PRE_FLOOR_KEY] = {**_pre, "count_manual_hours": True,
+                              CORRECTIONS_UNGATED_KEY: True}
     hours, basis, _detail = resolve_day(cell, cfg, None, day)
     if basis_is_measurement(basis):
         return basis, round(float(hours), 2)

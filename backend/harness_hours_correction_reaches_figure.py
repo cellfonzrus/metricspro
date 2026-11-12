@@ -313,6 +313,31 @@ check("E4 the correction delta is applied in the one home",
       "the delta/floor rule has left payroll_hours_basis")
 
 
+# E5 — THE PAY GATE MUST NOT REACH THE MEASUREMENT QUESTION. Caught in CI 2026-11-12: making the
+# corrections date required made every corrected day read UNMEASURED through
+# `salary_expense.day_measurement`, which resolves `resolve_config(None)` — so the salary rollup
+# fell back to the SCHEDULE for a day a human had written down. `measurement_state` already forced
+# `count_manual_hours` for exactly this reason; one gate neutralised and the other forgotten is the
+# same defect. This asserts the behaviour AND that both gates are still neutralised together.
+import app.modules.storeops.salary_expense as _salexp  # noqa: E402
+_sal_state, _sal_hours = _salexp.day_measurement(
+    "E1", "2026-08-05", {"E1": {"2026-08-05": 6.0}}, {"E1": {"2026-08-05": 99.0}})
+check("E5 a correction is still a MEASUREMENT for the salary rollup on an undated org",
+      (_sal_state, _sal_hours), (_salexp.MEASURED_NONZERO, 6.0))
+# Both SET sites must survive: the outer cfg and the PRE_FLOOR_KEY copy. Ungating only the outer
+# one is the hazard measurement_state's own comment describes for count_manual_hours — a corrected
+# PRE-floor day reading as unmeasured on one side of a date boundary.
+_MS_SRC = BASIS_SRC[BASIS_SRC.index("def measurement_state"):]
+_MS_SRC = _MS_SRC[:_MS_SRC.index("def corrections_by_day")]
+check("E5b measurement_state ungates the corrections date on BOTH sides of the floor",
+      _MS_SRC.count("CORRECTIONS_UNGATED_KEY") >= 2
+      and _MS_SRC.count('"count_manual_hours"] = True') >= 1,
+      f"found {_MS_SRC.count('CORRECTIONS_UNGATED_KEY')} ungate site(s) in measurement_state")
+check("E5c …and that ungating is for MEASUREMENT only — pay still honours the date",
+      HB.corrections_apply(DAY, HB.resolve_config(FALLBACK_ROW))[0] is False,
+      "the measurement ungate has leaked into the pay path")
+
+
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("Z. ARMED negative control — a planted replacement-semantics bug must FAIL this harness")
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
