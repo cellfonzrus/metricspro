@@ -69,6 +69,38 @@ PINNED_IOS_DEPLOYMENT_TARGET = "15.1"
 # Not a secret: it is the app's public App Store Connect identifier.
 PINNED_ASC_APP_ID = "6804841051"
 
+# THE TOOLCHAIN THIS APP IS BUILT WITH, DECLARED — never "latest". This is the pin the owner's THIRD
+# crash report bought, and the drift it refuses is the whole story behind §CORE-29.3b and §CORE-38.
+#
+# Both iOS profiles asked EAS for `"image": "latest"`, so the toolchain moved whenever Expo's did and
+# nothing in this repository recorded that it had. It moved to Xcode 27 — and an app built with the
+# iOS 27 SDK that has not adopted the UIScene lifecycle is KILLED AT LAUNCH by UIKit, deliberately,
+# before a line of JavaScript runs:
+#
+#   exception: EXC_BREAKPOINT (SIGTRAP)
+#   0  UIKitCore  ___UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption_block_invoke
+#   3  UIKitCore  -[UIApplication workspace:didCreateScene:withTransitionContext:completion:]
+#
+# (TestFlight build 14, `DTAppStoreToolsBuild: 27B52`, iPhone OS 27.0.1, owner report 2026-11-12.)
+# Expo SDK 52's iOS template does not adopt scenes, so EVERY build of this app made with Xcode 27
+# traps. The same source built with Xcode 26 launches on the same phone — build 9 (2026-09-16) did.
+# The trap is keyed to the SDK the binary was BUILT with, not to the iOS version on the device, which
+# is why reading the app's own code could never find it and three diagnoses from the repository alone
+# were wrong.
+#
+# Xcode 26 is also the floor Apple requires for App Store Connect uploads from 2026-04-28, so this
+# pin is the one value that clears the trap AND stays submittable.
+#
+# NOT THE WHOLE FIX, and §CORE-29.3c says so: Apple will raise that floor again, and the durable
+# answer is the Expo SDK upgrade, whose template adopts the scene lifecycle. A manifest-only adoption
+# does NOT satisfy UIKit's check — a real scene delegate is required — so this is not a config line
+# that can be added to an SDK 52 app.
+PINNED_IOS_BUILD_IMAGE = "macos-sequoia-15.6-xcode-26.2"
+
+# Image names that MOVE. Pinning exists to refuse exactly these: this app's toolchain may not change
+# because somebody else shipped.
+FLOATING_IMAGE_NAMES = ("latest", "default", "stable")
+
 failures: list[str] = []
 checks = 0
 
@@ -292,6 +324,47 @@ check("R6.17 the iOS submit profile names the App Store Connect app we mean",
       "Without it a non-interactive `eas submit` cannot run; with the WRONG one the binary goes to "
       "another app's record. If the app record really changed, move the declaration and say why.")
 control("R6.17", str({}.get("ascAppId") or "") == PINNED_ASC_APP_ID)
+
+
+# ── R7 · the toolchain is DECLARED, and cannot drift ──────────────────────────────────────────────
+ios_profiles = {name: (prof.get("ios") or {})
+                for name, prof in (eas.get("build") or {}).items()}
+
+# DERIVED from eas.json and compared with a DECLARED set, per §CORE-10: a new build profile cannot
+# inherit a floating toolchain unnoticed, because its appearance fails this check first.
+DECLARED_IOS_PROFILES = {"development", "preview", "production"}
+check("R7.1 the iOS build profiles are exactly the declared ones",
+      set(ios_profiles) == DECLARED_IOS_PROFILES,
+      f"mobile/eas.json declares profiles {sorted(ios_profiles)}; this harness declares "
+      f"{sorted(DECLARED_IOS_PROFILES)}. A new profile must be added here and given a pinned image.")
+control("R7.1", {"production"} == DECLARED_IOS_PROFILES)
+
+# `development` runs on a developer's own machine and reaches no tester, so it is excused BY NAME
+# rather than by silence. Every profile that makes a binary somebody else installs must pin.
+SHIPPING_IOS_PROFILES = ("preview", "production")
+for profile_name in SHIPPING_IOS_PROFILES:
+    image = str((ios_profiles.get(profile_name) or {}).get("image") or "")
+    check(f"R7.2 the {profile_name} profile pins its build image",
+          image == PINNED_IOS_BUILD_IMAGE,
+          f"mobile/eas.json build.{profile_name}.ios.image is {image!r} but this harness pins "
+          f"{PINNED_IOS_BUILD_IMAGE!r}. An app built with the iOS 27 SDK is killed at launch by UIKit "
+          "until it adopts the UIScene lifecycle, which Expo SDK 52 does not.")
+control("R7.2", "latest" == PINNED_IOS_BUILD_IMAGE)
+
+floating = sorted(name for name, ios in ios_profiles.items()
+                  if str(ios.get("image") or "") in FLOATING_IMAGE_NAMES)
+check("R7.3 no iOS profile asks for a moving toolchain", floating == [],
+      f"these profiles name a floating image: {floating}. This app's toolchain may not change "
+      "because somebody else shipped — that is what killed build 14.")
+control("R7.3", sorted(n for n, i in {"production": {"image": "latest"}}.items()
+                       if str(i.get("image") or "") in FLOATING_IMAGE_NAMES) == [])
+
+# Xcode 26 is both the floor Apple requires for uploads and the last version without the trap, so the
+# pin must name 26 specifically: a pin that drifted forward to 27 would be "declared" and still dead.
+check("R7.4 the pinned image names Xcode 26", "xcode-26" in PINNED_IOS_BUILD_IMAGE,
+      f"{PINNED_IOS_BUILD_IMAGE!r} must name Xcode 26 — 27 traps at launch, and anything below 26 is "
+      "refused by App Store Connect from 2026-04-28.")
+control("R7.4", "xcode-26" in "macos-tahoe-26.5-xcode-27.0")
 
 
 if failures:

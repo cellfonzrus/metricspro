@@ -15,7 +15,7 @@
     "preview": {
       "distribution": "internal",
       "channel": "preview",
-      "ios": { "simulator": false, "image": "latest" },
+      "ios": { "simulator": false, "image": "macos-sequoia-15.6-xcode-26.2" },
       "android": { "buildType": "apk" },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://metricspro-production.up.railway.app",
@@ -26,7 +26,7 @@
     "production": {
       "autoIncrement": true,
       "channel": "production",
-      "ios": { "image": "latest" },
+      "ios": { "image": "macos-sequoia-15.6-xcode-26.2" },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://metricspro-production.up.railway.app",
         "EXPO_PUBLIC_SUPABASE_URL": "https://etxdalernqqtwjcrtcuj.supabase.co",
