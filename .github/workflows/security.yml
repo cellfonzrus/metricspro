@@ -223,3 +223,20 @@ jobs:
         with: { python-version: "3.11" }
       - name: harness_subject_set_lock
         run: python backend/harness_subject_set_lock.py
+
+  access-probe:
+    # Enforcing (index §CORE-42). The probe that measures the DEPLOYED platform's access gates from
+    # outside is itself code, and a security tool that is wrong is worse than none because it reports
+    # a pass. This proves the probe before any report it produces is believed: that the rotation is
+    # derived from the live route table (so a new module cannot be silently skipped), that the
+    # expectation DEREFERENCES rep_surface and the public allowlist rather than copying them, and
+    # that it can never send a write to a production host.
+    name: The attacker's pass is trustworthy (access probe)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r backend/requirements.txt
+      - name: harness_security_probe
+        run: python backend/harness_security_probe.py
