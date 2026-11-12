@@ -268,3 +268,77 @@ def stamp_flags(client, org_id: str, rows, mi_rows=None) -> dict:
             r.setdefault("store_code", None)
         return {"total": len(rows or []), "by_store_string": 0, "by_mdn": 0,
                 "unresolved": len(rows or []), "error": str(e)}
+
+
+# ── CAPTURE: the write-side canonicaliser, for every writer of a store code ──────────────────────
+# Owner, 2026-11-12: "this is a mapping issue the system shoudl eb smart enough to cpature this
+# fromt eh get go". Index §COMMCALC-70; proof + lock `backend/harness_store_code_capture.py`.
+#
+# WHY HERE and not in a new module: this file is ALREADY the one home for "which declared
+# store_code is this string?", and its index is already the span keyset's own vocabulary. A second
+# write-side resolver is the duplicate defect the index rules forbid — two paths answering one
+# question drift, and the drift is exactly what this fixes. So `capture_code` IS `resolve_code`; it
+# adds a NAME for the capture intent, not a rule.
+def capture_code(index, raw):
+    """PURE. The org's DECLARED spelling of the store `raw` names, or None when it declares none.
+
+    `raw` may arrive as the code in any case, an explicit alias, or the store's ADDRESS — all three
+    are in the index. Nothing fuzzy: a spelling the org has never recorded resolves to None, because
+    inventing a store at capture time writes a wrong fact that every later reader believes."""
+    return resolve_code(index, raw)
+
+
+def stamp_capture(index, row, field: str = "store_code") -> bool:
+    """Rewrite `row[field]` to the DECLARED store code, IN PLACE. True when the org recognised it.
+
+    * recognised   → the declared spelling, so the stored fact is canonical from birth.
+    * unrecognised → the value is KEPT (trimmed), never blanked and never guessed at. The row is
+      reported through `unrecognised_spellings` so a human maps the store; the write itself must
+      never fail on a mapping gap (a rep's punch is not the place to enforce config hygiene).
+    * an empty index (a vocabulary read that failed) → NOTHING is rewritten. A config read failure
+      must not be able to move a store.
+    * blank in, blank out, and not counted as a mapping gap.
+    """
+    try:
+        if not index:          # a vocabulary read that failed says NOTHING about this store
+            return False
+        raw = _norm((row or {}).get(field))
+        if not raw:
+            return False
+        code = capture_code(index, raw)
+        if code:
+            row[field] = code
+            return True
+        row[field] = raw
+        return False
+    except Exception:                                            # pragma: no cover - defensive
+        return False
+
+
+def unrecognised_spellings(index, rows, field: str = "store_code") -> dict:
+    """PURE: {spelling: row count} for every value of `field` the org's vocabulary does not know.
+
+    This is the REPORT half of the capture rule: the gap is surfaced as the owner's mapping work,
+    not closed by code picking a store. Empty dict IS the invariant."""
+    out: dict[str, int] = {}
+    for r in (rows or []):
+        raw = _norm((r or {}).get(field))
+        if not raw or capture_code(index, raw):
+            continue
+        out[raw] = out.get(raw, 0) + 1
+    return out
+
+
+def capture_store_code(client, org_id: str, raw):
+    """I/O wrapper: (value to store, recognised?) for ONE store string on the write path.
+
+    Best-effort exactly like `stamp_flags` — a vocabulary read failure degrades to the trimmed raw
+    string, which is what the writer would have stored before this existed."""
+    try:
+        idx = store_index(client, org_id)
+    except Exception as e:                                       # pragma: no cover - I/O guard
+        print(f"WARN flag_store_resolver capture_store_code vocabulary read failed: {e}")
+        return _norm(raw) or None, False
+    row = {"store_code": raw}
+    ok = stamp_capture(idx, row)
+    return row.get("store_code") or None, ok

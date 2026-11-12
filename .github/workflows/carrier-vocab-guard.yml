@@ -1879,6 +1879,14 @@ jobs:
       - name: Run the store-code case proof (one fold, one code→address map, no phantom store; every tenant's own declarations — index §ACCOUNT-01)
         working-directory: backend
         run: python3 harness_store_code_case.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §COMMCALC-70 — AND THE CODE IS CANONICAL FROM BIRTH. Folding on read makes each reader
+      # correct; it does not make the stored fact true. The kiosk had written 2,058 punches under a
+      # spelling no org declares (180 of them in November, after the read-side fold landed) and the
+      # schedule 97 more. This proof holds the capture rule AND fails the build if any insert/upsert
+      # into shifts / timelog / shift_templates stops dereferencing the write-side one home.
+      - name: Run the store-code capture proof + lock (every write stamps the declared code; an unknown spelling is reported, never guessed — index §COMMCALC-70)
+        working-directory: backend
+        run: python3 harness_store_code_capture.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the any-subset-columns lock (no column-block ladder anywhere; one reading rule; every named reader on it; credential rows projected)
         working-directory: backend
         run: python3 harness_any_columns_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

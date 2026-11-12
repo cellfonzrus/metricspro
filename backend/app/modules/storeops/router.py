@@ -89,12 +89,42 @@ from app.modules.storeops import attendance_exceptions as _attn
 from app.modules.storeops import payroll_hours_drilldown as _phd
 from app.modules.storeops import scheduled_hours_drilldown as _shd
 from app.modules.core import portal_secret as _psec   # THE credential-column registry (index §CORE-03)
+# THE write-side store-code home (index §COMMCALC-70): every store code this module STORES is
+# stamped to the org's own declared spelling before it is written. Never a second resolver.
+from app.modules.commcalc import flag_store_resolver as _store_capture
 
 try:
     from zoneinfo import ZoneInfo
     _BIZ_TZ = ZoneInfo(settings.BUSINESS_TZ or "America/New_York")
 except Exception:                       # zoneinfo/tzdata unavailable → fall back to UTC (no crash)
     _BIZ_TZ = timezone.utc
+
+
+def _stamp_store_code(org_id, row, field="store_code"):
+    """Stamp `row[field]` to the org's OWN DECLARED store code BEFORE the row is written.
+
+    Owner, 2026-11-12: *"this is a mapping issue the system shoudl eb smart enough to cpature this
+    fromt eh get go"*. The kiosk was writing 2,058 punches under a spelling the org does not
+    declare (`CICERO` for `Cicero`), and the schedule 97 more; every reader then had to fold a case
+    to find them, and the one reader that did not lost a whole month's salary line (§ACCOUNT-01).
+
+    STATES NO RESOLUTION RULE: the answer comes from `commcalc/flag_store_resolver`, the one home
+    for "which declared store_code is this string?" (§285). A spelling the org does not declare is
+    KEPT exactly as typed — a rep's punch is never refused over a config gap, and nothing here
+    invents a store. Best-effort: a vocabulary read failure leaves the row exactly as it arrived.
+    Proof + lock: `backend/harness_store_code_capture.py`. Index §COMMCALC-70."""
+    try:
+        _store_capture.stamp_capture(_store_capture.store_index(sb(), org_id), row, field)
+    except Exception as e:                                  # pragma: no cover - defensive
+        print(f"WARN store-code capture skipped ({field}): {e}")
+    return row
+
+
+def _captured_store_code(org_id, raw):
+    """The declared spelling of ONE store string on a write path (see `_stamp_store_code`)."""
+    row = {"store_code": raw}
+    _stamp_store_code(org_id, row)
+    return row.get("store_code")
 
 router = APIRouter(prefix="/storeops", tags=["StoreOps"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -577,6 +607,8 @@ def create_shift(shift: dict, org_id: str = ORG_ID):
     # Stamp org_id so the row survives the org-scoped read filter on GET /shifts.
     # (shifts.org_id has NO column default → an unstamped insert lands NULL and vanishes.)
     shift = {**shift, "org_id": shift.get("org_id") or org_id}
+    # The store code is canonicalised at CAPTURE, so the schedule stores the org's own spelling.
+    _stamp_store_code(shift["org_id"], shift)
     r = sb().table("shifts").insert(shift).execute()
     out = r.data[0] if r.data else shift
     if timeoff_warning:
@@ -4370,6 +4402,7 @@ def save_week_as_template(body: WeekStartIn, org_id: str = ORG_ID):
         except Exception:
             continue
         eid = str(s.get("employee_id")) if s.get("employee_id") else None
+        _stamp_store_code(org_id, s)    # canonical at capture — the template keys on this code
         by_key[(eid, wd, s.get("store_code"))] = {
             "org_id": org_id,
             "employee_id": eid, "employee_name": s.get("employee_name"), "store_code": s.get("store_code"),
@@ -4420,6 +4453,7 @@ def apply_templates(body: WeekStartIn, org_id: str = ORG_ID):
                 skipped_off += 1
                 continue
         try:
+            _stamp_store_code(org_id, t)   # a template saved before the capture rule is fixed here
             sb().table("shifts").insert({
                 "org_id": org_id,
                 "employee_id": eid, "employee_name": t.get("employee_name"), "store_code": t.get("store_code"),
@@ -5218,6 +5252,7 @@ def _activate_pending_clockins_for_shift(org_id, shift):
                      "notes": "auto clock-in on manager schedule approval (held unscheduled tap)"}
             if p.get("client_request_id"):
                 punch["client_request_id"] = p["client_request_id"]
+            _stamp_store_code(org_id, punch)
             try:
                 ins = sb().table("timelog").insert(punch).execute()
                 tl = (ins.data or [punch])[0]
@@ -5384,6 +5419,9 @@ def clock_in(body: ClockInIn, authorization: str = Header(default=""), org_id: s
     now = datetime.now(timezone.utc)
     # Which store is this punch for? The kiosk sends the selected store; fall back to home store.
     req_store = (body.store_code or "").strip() or home_store
+    # CAPTURE (§COMMCALC-70): the kiosk's spelling becomes the org's declared spelling here, so the
+    # punch, its geofence verdict and its work_date are all keyed on the same store as the schedule.
+    req_store = _captured_store_code(org_id, req_store) or req_store
     # Business-local date, bucketed in THIS STORE's zone (migration 851) so a late-evening Central-time
     # punch lands on the correct calendar day, not the Eastern one. Falls back to the tenant zone when
     # the store has no own zone set.
@@ -5541,6 +5579,7 @@ def clock_in_override(body: ClockInOverrideIn, authorization: str = Header(defau
     org_id = (mgr.get("org_id") or org_id)   # the manager's own tenant is authoritative
     employee_id = (body.employee_id or "").strip()
     store_code = (body.store_code or "").strip()
+    store_code = _captured_store_code(org_id, store_code) or store_code   # §COMMCALC-70 capture
     if not employee_id or not store_code:
         raise HTTPException(400, "employee_id and store_code are required")
     open_rows = (sb().table("timelog").select("id").eq("org_id", org_id).eq("employee_id", employee_id)
