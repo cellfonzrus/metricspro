@@ -92,12 +92,24 @@ check("B3 a MISSING figure is 'unknown' — not zero, not fine",
 check("B4 a computed scope with NO goal is 'unset' — checked BEFORE any pass can be returned",
       re.search(r"if \(m <= 0\)[\s\S]{0,120}kind: 'unset'", ts) is not None
       and ts.index("kind: 'unset'") < ts.index("kind: 'met'"))
+# SCOPED TO `targetState`'s OWN BODY. It was a whole-file count until 2026-11-12, when the sibling
+# trend verdict (§COMMCALC-71) moved in beside this one — which is exactly where it belongs, since a
+# trend is the same kind of fact about the same goal and needs the same refusal to call the absence
+# of a target a pass. A whole-file count would have forced that sibling to live somewhere else, and
+# "the gate made me put the second copy in another file" is how this vocabulary drifted apart the
+# first time. The count still pins precisely what it names: targetState's three non-passing states.
+_TARGET_BODY = ts.split("export function targetState")[1].split("\nexport ")[0]
 check("B5 'unset' and 'unknown' are NOT passing — the absence of a goal is never a pass",
-      ts.count("passing: false") == 3 and ts.count("passing: true") == 1)
+      _TARGET_BODY.count("passing: false") == 3 and _TARGET_BODY.count("passing: true") == 1)
+# AND THE SIBLING IS HELD TO THE SAME RULE, by name: two of its four states mean "nobody measured
+# this" and exactly one may pass.
+_TREND_BODY = ts.split("export function trendState")[1].split("\nexport ")[0] if "export function trendState" in ts else ""
+check("B5b the trend verdict beside it refuses to pass without a measured, real target",
+      bool(_TREND_BODY) and _TREND_BODY.count("passing: true") == 1
+      and _TREND_BODY.count("passing: false") == 3)
 check("B6 the helper takes need, NOT achieved, so a caller cannot hand in a pair that disagrees "
       "(a second way to compute the same answer is how this drifted)",
-      "targetState(monthly: unknown, need: unknown)" in ts and "achieved" not in
-      ts.split("export function targetState")[1])
+      "targetState(monthly: unknown, need: unknown)" in ts and "achieved" not in _TARGET_BODY)
 
 # ══ C. EVERY RENDER SITE — the class, not just the reported instance ══════════════════════════════
 SITES = [

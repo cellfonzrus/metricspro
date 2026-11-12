@@ -1571,6 +1571,12 @@ FACTS: dict[str, dict] = {
             # The report's endpoint reads the device-line test directly, so the look-back counts the
             # same lines the two ordering screens do.
             'app/modules/commcalc/router.py': ('_devvocab', '_dp'),
+            # The month-end trend home (§COMMCALC-71, 2026-11-12). `dim / elapsed` IS "how many per
+            # window-unit", so it asks here rather than dividing again — which is what leaves ONE
+            # division behind every projected figure in the tree. Its own window is in DAYS, the
+            # unit rule above allowing it beside the two callers that count days and the one that
+            # counts months.
+            'app/modules/commcalc/month_trend.py': ('_dp',),
         },
     },
     'device_model_family': {
@@ -2200,7 +2206,45 @@ FACTS: dict[str, dict] = {
             # closed" and `month_days` for the calendar it is judged against; it owns neither.
             'app/modules/commcalc/pay_data_quality.py': ('_fp',),
             'app/modules/commcalc/router.py': ('_feed_period', 'sales_recon'),
+            # §COMMCALC-71 — the month-end trend home reads `period_month_year` for either spelling,
+            # `month_days` for the month's length and `month_state` for "is this month still in
+            # progress". Its first draft re-derived all three, and `router._is_open_month`'s own copy
+            # of the third is why July once read as a closed month: this is the fact the whole
+            # factoring turns on, so the trend home dereferences it and owns none of it.
+            'app/modules/commcalc/month_trend.py': ('_fp',),
             'app/modules/notify/report_registry.py': ('SR',),
+        },
+    },
+    'month_trend': {
+        "question": ("WHAT IS THIS MONTH-TO-DATE FIGURE TRENDING TO, and may it be trended at all? "
+                     "The arithmetic was inline TWICE in the Executive MTD report "
+                     "(`trend_factor = dim / elapsed`, once for the month and once for a date range "
+                     "inside it) and its answer was already on two screens as \"Trending Acc. $\" "
+                     "and \"Trending Acc. Sales\", so the action plan's need for it in 2026-11 "
+                     "would have been the THIRD copy. The rule it keeps unchanged: the month-to-date "
+                     "divided by the days COMPLETED — strictly before the caller's own as-of day, "
+                     "because today is in progress — times the days the month holds. A finished "
+                     "month has nothing to project (factor 1.0) and a FUTURE one is refused outright, "
+                     "since `feed_period` rightly calls it open and that is exactly why there is no "
+                     "run rate to carry across it. The states are the point: nothing projectable is "
+                     "`not_measured` and NEVER `short` (a shortfall nobody measured is not a "
+                     "shortfall), and no target is `no_target` and never `on_track` — the 2026-09-10 "
+                     "\"0 achieved with on target\" defect, which a trend could have reintroduced. "
+                     "The same home owns WHO IS AN OUTLIER, median-based on projected attainment, "
+                     "naming nobody below four measured figures, because \"highlight the outliers in "
+                     "a different colour\" has to mean one rule rather than one per screen."),
+        "homes": ('app/modules/commcalc/month_trend.py',),
+        "index": ('COMMCALC-71',),
+        "locks": ('harness_month_trend_one_home.py',),
+        # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
+        "callers": {
+            # The two sites that HELD the inline copies: the Executive MTD report's whole-month
+            # factor and its date-range factor. Both now ask for a window and a factor.
+            'app/modules/commcalc/router.py': ('_month_trend',),
+            # The per-category trend the Daily Targets screen, the action plan and every report card
+            # read, plus the team roll-up's verdict — `aggregate_stores` sums the stores' OWN
+            # projections rather than re-dividing the team's achieved, and asks here for the verdict.
+            'app/modules/commcalc/targets_engine.py': ('_month_trend',),
         },
     },
     'sweep_due': {

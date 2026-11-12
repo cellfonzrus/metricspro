@@ -29,7 +29,7 @@ from app.modules.commcalc import pay_data_quality as _pdq   # 2026-10-06 — THE
 from app.modules.commcalc import device_reimb_recon as _drr   # 2026-10-08 — ePay-paid vs distributor-claimed device reimbursement (index §19.52; pure)
 from app.modules.commcalc import carrier_device_money as _cdm   # THE device-financing dollars per device (index §COMMCALC-44)
 from app.modules.commcalc import report_status   # 2026-11-10 — THE per-report sweep verdict writer (index §COMMCALC-68)
-from app.modules.commcalc import month_trend as _month_trend   # 2026-11-12 — THE "what is this month trending to" window, factor and verdict (index §COMMCALC-58)
+from app.modules.commcalc import month_trend as _month_trend   # 2026-11-12 — THE "what is this month trending to" window, factor and verdict (index §COMMCALC-71)
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
 from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
 from app.modules.commcalc import daily_incentive as _daily_incentive   # 2026-10-10 — THE daily-incentive shapes (mig 1072); every rule is a config row (index §74)
@@ -35349,7 +35349,7 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
     mo, yr = _month_year(period)
     dim = _calendar.monthrange(yr, mo)[1] if (1 <= mo <= 12 and yr) else 30
     open_m = _is_open_month(period)
-    # WHAT A MONTH-TO-DATE FIGURE IS TRENDING TO HAS ONE HOME (§COMMCALC-58). This was the FIRST of
+    # WHAT A MONTH-TO-DATE FIGURE IS TRENDING TO HAS ONE HOME (§COMMCALC-71). This was the FIRST of
     # two inline copies of `dim / elapsed` in this file, and the Daily Targets screen prints its
     # answer as "Trending Acc. $" — so a third copy for the action plan would have been a third
     # answer to one question. Factored, both copies rewired, no figure moves.
@@ -38342,7 +38342,7 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
                             # reported separately (owner directive 2026-07-17).
                             'setup_fee_mtd': m.get('setup_fee_mtd', 0),
                             # WHAT THIS STORE IS TRENDING TO on this category, and whether that
-                            # reaches the target (§COMMCALC-58). Served, never re-derived on the
+                            # reaches the target (§COMMCALC-71). Served, never re-derived on the
                             # screen: the factor already has one home and the Daily Targets page
                             # prints its answer, so a client-side copy would be a third.
                             'trend': m.get('trend')})

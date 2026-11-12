@@ -11,7 +11,7 @@
 // for exactly the same reason: "a different colour" has to mean ONE colour.
 //
 // The arithmetic is NOT here. The projection, the verdict and which stores are outliers are all
-// decided by the server (`commcalc/month_trend`, §COMMCALC-58) so the screen and the mailed copy
+// decided by the server (`commcalc/month_trend`, §COMMCALC-71) so the screen and the mailed copy
 // cannot disagree. This module only turns a served verdict into words and a colour.
 import { describe, it, expect } from 'vitest'
 import { trendState, OUTLIER_COLOR, targetState } from '../target-state'

@@ -209,6 +209,7 @@ Primary code homes:
 | COMMCALC-67 | **The fields a report's date window is typed into are declared too** | §COMMCALC-66's first tick (2026-11-10 22:00) answered the question it was built to ask: "the page's date fields are StartDate, EndDate" — while this module's date step had always typed into `BeginDate`/`EndDate`, a name written into a string of browser JavaScript where no report could declare it. A report now declares both facts about its window in one row: whether an interval is set first (comp's "Summarize by") and which two fields carry the dates. `DATE_FILTERS` becomes that declaration, read through the one homes `date_window_plan` / `date_window_fields` / `date_window_interval`; `_set_daily_range` becomes the single `_set_date_window(page, begin, end, routine)` over the shared `_put_date_fields`, so a report with no interval goes straight to its fields and is never asked for a control it has not got; and no field name appears in the JavaScript at all. Comp's behaviour is unchanged — and because ITS page has still never been measured, correcting it when the 23:30 leg reports is a row here rather than an edit to a string. |
 | COMMCALC-68 | **A report's own verdict belongs on the report's own row** | Found while trying to read WHY comp had never landed a row: `commcalc.report_definitions` carries `sweep_last_status` and `sweep_last_detail` PER REPORT, a user-visible surface already READS them (`router._setup_documents` sets a report's `urgent` flag and `auto_error` text from exactly those two columns) — and nothing had ever written them. NULL on every row of every tenant, so a report whose automatic pull failed every night showed as not urgent, with no error, on the surface built to show precisely that. Every leg wrote the ONE shared `epay_sweep_config.last_detail` instead, overwritten by whichever leg ran last: comp runs at 23:30 America/New_York, the transaction-detail leg every thirty minutes, so comp's sentence was erased within half an hour, every night — which is why three rounds of diagnosis read the transaction report's failures and reasoned about comp. The class: a run that pulls N reports and records ONE verdict cannot say which report it is about, for any N > 1. `run_epay_sweep` now records an outcome keyed by the report it belongs to, at each point where that key is in scope (success, failure, unresolved report id, and the deferred zero the ledger refuses to vouch for); `EpayPortalError` carries `per_report` so the all-failed case still gives each row its reason; `epay_sweep.registry_key_of` is the ONE home for which registry row a sweep key belongs to, replacing three inline re-derivations that invented a row name for any report declaring none; and the new `report_status` module is the one writer, fitting each sentence through `core.status_detail.fit` because a sweep's conclusion is written LAST. |
 | COMMCALC-69 | **A setting the reader cannot reach is not a setting that says nothing** | §COMMCALC-68's first night paid for itself: comp's own row said "0 rows, and nothing has landed for 33 day(s)", and the window it had asked the portal for was `2026-11-10..2026-11-10` — ONE day, against a `refresh_days` of 14 sitting in its own registry row. The reader asked for two columns migration 1042 (written 2026-10-03 for this exact defect, surfaced for approval, never applied) never added; PostgREST refused the whole select with 42703, and the handler re-read three columns, dropping `refresh_days`, `sweep_hour`, `sweep_minute`, `sweep_timezone` and `sweep_next_run_at` with the two that were genuinely absent. So an in-arrears carrier report was asked for today, every night, correctly returned nothing, and was recorded as a quiet source — no control was ever broken, which is why §COMMCALC-64/-66/-67's controls all took and still nothing landed. A column-block ladder, the shape §4b.1 has forbidden since 2026-09-22, which escaped its lock only because the column lists were named constants and the scan resolved literals. Both closed: the reader probes each optional column through `column_tolerant.present_columns` and reports `config_columns_missing`; `harness_any_columns_lock.py` now folds a named constant to its value before judging a TRY-FALLBACK, and carries g14/g15 so it cannot stop. The column itself is the owner's to apply — migration 1042 is money-touching by its own note. |
+| COMMCALC-71 | **A month-to-date figure is trended in ONE place, and an outlier is not a verdict** | "it shoudl also show trending and which stores are not trending towards the accessories goals … the outloers shoudl be highlighted in a different color". The projection was ALREADY HERE, inline TWICE in the Executive MTD report and already on two screens as "Trending Acc. $", so the third copy the action plan wanted was factored instead — and the draft of that home re-derived three more facts (`feed_period`'s month parsing, month length and open/closed) and the division itself (`demand_projection.velocity`) before the duplicate check caught them. What may a trend say when no day of the month has completed, what may it say when there is no target, and who may be called an outlier when four stores are the whole distribution? |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -7875,6 +7876,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Reconciled paid hours**, and the sentence saying why | the window the two clock records agree on (house default), or the ruling read literally, or ours alone — declared per org | `payroll_hours_basis.reconcile_clock_records`. Measured 2026-10-09 across 16 pairs: today 146.42h/$2,156.45 · literal 143.63h/$2,113.60 · house default 142.98h/$2,102.63 (§14z) |
 | **Employees a payroll run would price at $0.00** | an active hourly employee with no `pay_rate` | `clock_variance.employees_without_rate` → `payroll_run_gate`, which REFUSES and names them. Measured 2026-10-10: 13 of 46 house hourly employees (§14z) |
 | **Who needs improvement — by metric, by store, or by sales rep?** | the verdicts the action-plan endpoint already reached (a category's severity from `targets_engine.build_action_items`, a KPI's pass/fail AND what nothing fed from `kpi_failing.evaluate`, at-risk dollars from the calculated commission rows), grouped three ways | `frontend/src/lib/action-plan-tiles.ts` — `planMetrics` reads THIS tenant's declared axis off the payload and `buildTiles` takes it as a REQUIRED argument, so nothing declared means no tiles rather than house words. A tile's figure is the CARDINALITY of the list it prints (never a re-summed target, achieved or need — that fold stays `targets_drilldown.team_totals`'), and a metric nothing fed reads `not measured` with no figure at all. Lock: `harness_action_plan_tiles.py` (§COMMCALC-57) |
+| **Is this store going to FINISH the month on target, and who is not?** | the month-to-date figure the targets engine already summed, carried across the month at the rate it was earned | `commcalc/month_trend.py` — `month_window` (the completed-days divisor, "completed" being strictly before the plan's own as-of day), `factor`, `project`, `verdict`, `trend_of`, `outliers`. The SAME window and factor behind "Trending Acc. $" on Daily Targets and "Trending Acc. Sales" on Executive MTD, which were two inline copies until 2026-11-12. Served per category by `targets_engine.compute_scope`, summed per team by `aggregate_stores`. Lock: `harness_month_trend_one_home.py` (§COMMCALC-71) |
 
 - **Which of my stores is running down, and in which month-of-life rung?** — ONE home `commcalc/commission_leg_store_trend` (`pivot` / `partial_months` / `totals_row` / `ties_to` / `ladder_public`), a PURE pivot of `router._commission_leg_trend_compute`'s own money; the rungs are `commission_legs.months_present`'s, from the DATA. Lock `harness_commission_leg_store_trend.py` (76). Live 2026-10-15, house org, May–Sep complete months: 28 stores, every month ties exactly; company **−$25,534.27 / −19.4%** of which M1 is only −3.7% — M2–M12 −17.9% and the Unlabelled rung **−50.6%**; `1710 W 4th St` −46.1% with its M1 −38.9% (shrinking now) against `117 E Burnside Ave` whose **M1 moved 0.0%** while M2–M12 fell 35.9% and **M4 fell $594.60** (a cohort lost four months ago) — §COMMCALC-12.
 - **Where is the M2–M12 commission on the P&L, and which store's trailing legs are running down?** — the commission line is shown in TWO parts: the money this month's own activations earned, and `account/ma_store_pnl.CARRIER_COMM_TRAILING_LINE` ("Carrier commissions & incentives — M2–M12 (trailing legs, activated in an earlier month)"), an `auto_opt` revenue line INSERTED into `coa.PL_SPEC` beside the line it divides. ONE home for the split: `ma_store_pnl.split_leg_bookings`, re-pointing the trailing-rung dollars of bookings that already exist — the rung is the booking's OWN (`ma_commission_bookings` / `ma_tx_bookings` emit a lockstep `legs` tag from the `ma_field_leg` / `month_leg_of` call they already make), the bucket is `commission_legs.bucket_for_leg`, the switch is `pl_carrier_comm_leg_split` (mig `1086`, house answer ON). **Every P&L total is identical to the cent either way** — both halves are revenue lines of one section — and `harness_prospect_eval.py` §V2 (`no_total_moved`) asserts it by name. Per STORE with every uploaded month side by side: `prospect_eval.commission_leg_store_months`, which is §COMMCALC-12's own pivot fed by the prospect's uploads (no second pivot, no second money path). Today's only caller is the Store Takeover Evaluation; the live P&L is excused in writing — §COMMCALC-15.5. — §COMMCALC-15.
@@ -26369,6 +26371,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-68 | commcalc |
 | COMMCALC-69 | commcalc |
 | COMMCALC-70 | commcalc, storeops |
+| COMMCALC-71 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -47777,3 +47780,159 @@ Cross-references: §CORE-33 (the declaration this measures from outside, and the
 route it reached — the allowlist this dereferences) · §CORE-19.6 (the anon Data API grants, the same
 question asked of the database) · §19.18 (one fact, one home, dereferenced) · §22 (★ NO LOCKOUT ★) ·
 §CORE-34/35 (the gate index listing these jobs) · §19.25 (a failing harness fails CI).
+
+---
+
+## §COMMCALC-71. A MONTH-TO-DATE FIGURE IS TRENDED IN ONE PLACE, AND AN OUTLIER IS NOT A VERDICT (owner ask 2026-11-12)
+
+Owner, of the Daily Action Plan's team-total block:
+
+> "Your team total · 19 stores under you / Accessories / $24,820 / $163,000 … $138,180 to go< it
+> shoudl also show trending and which stores are not trending towards the accessories goals"
+
+> "also if one metric is slected from the drop down it shoudl only hsow that metrics across all
+> stores and all reps as filtered or all reps and all stores if not filtered. the outloers shoudl be
+> highlighted in a different color"
+
+### COMMCALC-71.1 THE DUPLICATE CHECK, which changed what was built
+
+**The projection was already here, written inline TWICE** in `router.py`'s Executive MTD report —
+`trend_factor = (dim / elapsed)`, once for the whole month and once for a date range inside it — and
+its answer was already on two screens: **"Trending Acc. $"** on Daily Targets and **"Trending Acc.
+Sales"** on Executive MTD. A third copy for the action plan would have been a third answer to one
+question, and the three would have parted company the first time anybody changed what "elapsed"
+means. The fact was **factored** into `commcalc/month_trend.py` and **both callers were rewired in
+the same change** (§19.18: writing the registry without wiring the callers to it is not a fix).
+
+The first draft of that home then re-derived **four more facts** before the check caught them, which
+is worth recording because the draft looked perfectly reasonable:
+
+| what the draft wrote itself | the home it should have read |
+|---|---|
+| parsing `'2026-11'` into a month and year | `feed_period.period_month_year` — and it handles `'November 2026'`, `'nov 2026'` and `'2026-11-12'` too |
+| `calendar.monthrange(...)` for the month's length | `len(feed_period.month_days(period))` |
+| comparing `(yr, mo)` against today to decide "open" | `feed_period.month_state` |
+| `units / window` | `demand_projection.velocity` (§COMMCALC-49.2) |
+
+`router._is_open_month` is the cautionary tale cited in the code: its own copy of the third one
+mapped `'2026-07'` to January, so July read as a closed month and the report took the wrong source.
+
+### COMMCALC-71.2 THE RULE, unchanged from the callers that established it
+
+```
+projected month-end = (month-to-date ÷ days COMPLETED) × days the month holds
+```
+
+- **"Completed" means strictly before today**, because today is in progress. Counting it would
+  divide a part-day's sales by a whole day and read every store as collapsing each morning.
+- **"Today" is the plan's own as-of day**, not the wall clock. The action plan is a screen whose
+  premise is "where do we stand as of this day", so its divisor moves with that picker and does not
+  jump when the real month turns. Pinned by the integration test, because a reader who assumed the
+  calendar decided it would be surprised.
+- A **finished** month has nothing to project: elapsed is the whole month and the factor is 1.0.
+- A **future** month gets no projection at all. `feed_period` rightly calls it open — nothing about
+  it has finished — which is exactly why there is no run rate to carry across it. Without that
+  branch the naive reading divides December's target by November's elapsed days.
+- **One division in the whole codebase.** Even `factor()` does not write `dim / elapsed`: that *is*
+  "how many per window-unit", so it asks `demand_projection.velocity`.
+
+**A known bias, stated rather than hidden.** `achieved_mtd` includes today's sales while the divisor
+counts only completed days, so a store with a strong today reads slightly ahead of its true run
+rate. This is inherited deliberately: it is what the existing "Trending Acc. $" figure does, and one
+basis both screens share is worth more than two bases that are each defensible.
+
+### COMMCALC-71.3 THE FOUR STATES a trend verdict may take
+
+| kind | when | and NEVER |
+|---|---|---|
+| `not_measured` | nothing could be projected (no completed day, an unknown month, a future month) | **not `short`** — printing a shortfall nobody measured invents one |
+| `no_target` | there is no goal to be on track for | **not `on_track`** — "target met" for a scope with no target is the owner-reported defect of §23e/2026-09-10, and a trend must not reintroduce it |
+| `on_track` | the projection reaches the target | — |
+| `short` | it falls `gap` under it, in the metric's own unit | — |
+
+`verdict()` tests the **target first and the projection second**, so a scope with neither reports
+that it has no target rather than that it was not measured. The lock pins that ordering, because
+reversing the two lines reads as a perfectly sensible refactor.
+
+**The team projection is the SUM of the stores' own projections**, each on its own window — never
+the team's achieved re-divided. The stores do not share one window, and a second division would be a
+second answer. When stores nothing could project are missing from it the block reports
+`partial: true` and the screen says *"a floor — N store(s) could not be projected"*, because a total
+that silently omits rows is overstating its evidence.
+
+### COMMCALC-71.4 WHO IS AN OUTLIER — one stated rule, on the server
+
+`month_trend.outliers` decides it, and the screen never does:
+
+- **Median-based.** A mean is dragged by the very store being looked for, so the one store having an
+  extraordinary month would raise the bar it is measured against and hide itself. The spread is the
+  median absolute deviation and the threshold is `OUTLIER_SPREAD_MULTIPLE` (2.5) spreads.
+- **Measured on projected ATTAINMENT** (% of each store's own target), so the rule does not merely
+  rediscover which stores are big.
+- A store nothing measured is **absent from the distribution**, never at the bottom of it.
+- **Nobody is named below `OUTLIER_MIN_COUNT` (4) measured stores.** Two stores are not a
+  distribution, and calling the lower one an outlier would be an accusation dressed up as arithmetic.
+- An **identical pack** has zero spread, which would make every unequal figure an outlier; the rule
+  falls back to the gap from the median rather than multiplying by nothing.
+- **An outlier is not a verdict.** The store furthest *ahead* of the pack is one too, so the colour
+  (`frontend/src/lib/target-state.OUTLIER_COLOR`) is deliberately neither the pass green nor the
+  behind amber, and it is **one constant** so "a different colour" means one thing everywhere —
+  including the mailed copy.
+- It is flagged per **(store, metric)**: a store can be the stray on one metric and ordinary on
+  another, so one badge on the store would assert something the rule never measured.
+
+### COMMCALC-71.5 THE SCREEN
+
+| the owner's words | what the screen does |
+|---|---|
+| "show trending" | the team tile prints **Trending to X**, then the verdict, then the gap in the metric's own unit |
+| "which stores are not trending towards the accessories goals" | `stores_not_trending` names them under that metric's tile |
+| "the outloers shoudl be highlighted in a different color" | ▼/▲ in `OUTLIER_COLOR`, on the team tile and on each store's own metric cell, with the median and the pack size in the tooltip so the highlight has a stated basis |
+| "if one metric is slected … it shoudl only hsow that metrics across all stores and all reps" | `action-plan-tiles.focusPlan` narrows the detail through **the one home's own predicate**, so the tiles and the detail cannot disagree about what "focused" means |
+
+A store's metric cell now reads *"…/day **needed**"* beside its trend: `pace` is what the store must
+hold and the trend is what it is actually heading for, and the two sitting unlabelled next to each
+other invited exactly one misreading.
+
+`focusPlan` deliberately does **not** narrow two things. **Every store and every rep is kept** —
+focusing a metric is not a store filter, and a store carrying nothing for the focused metric must
+still appear, or its missing figure becomes a missing store. **The at-risk money is never narrowed**,
+because a tier is earned across all of a rep's KPIs and a payout attributed to one of them would be
+a figure nobody computed.
+
+### COMMCALC-71.6 LOCKED
+
+`backend/harness_month_trend_one_home.py` — **82 checks, 8 negative controls**, CI job *"One
+month-end projection, one outlier rule (lock)"* on `tests.yml`. It fails the build if:
+
+- a second copy of the division appears **anywhere under `backend/app`** (scanned over the whole
+  tree, not the two lines that were reported);
+- either rewired caller stops dereferencing the home, or the range site stops passing its span;
+- the home re-derives any of the four facts above, reads a clock more than once, or reaches a
+  database;
+- the screen computes a projection or an outlier rule of its own (while *printing* the served median
+  is required — a highlight with no stated basis is one nobody can argue with);
+- `not_measured` / `no_target` lose their refusal to read as on-track, `verdict()`'s ordering flips,
+  `project()` stops refusing an incomplete window, or `trendState` stops falling through to a
+  non-passing state;
+- the detail grows a second focus predicate, or `focusPlan` starts narrowing the at-risk money.
+
+Tests: `backend/tests/unit/test_month_trend.py` (30, written first, including that the factor
+reproduces the removed inline arithmetic exactly), the cross-tenant endpoint cases in
+`backend/tests/integration/test_action_plan_tiles_endpoint.py` (every tenant's own declared
+categories, its own targets, and that no tenant's trend or outlier block names another tenant's
+store), `frontend/src/lib/__tests__/trend-state.test.ts` (7) and the `focusPlan` cases in
+`action-plan-tiles.test.ts` (6).
+
+### COMMCALC-71.7 What this does NOT do
+
+- **No new figure, endpoint, table or migration.** The trend is the month-to-date the engine already
+  summed, carried forward by the factor two screens already used.
+- **It does not fix the known bias in §COMMCALC-71.2** (today's sales over yesterday's days). Doing
+  so would move the live "Trending Acc. $" figure, which is a separate, deliberate decision.
+- **It does not trend a KPI.** The axis here is the declared target categories; a rep KPI is a rate
+  or a count scored against a threshold, not a month-to-date that accumulates.
+
+Related: §COMMCALC-57 (the tiles this extends) · §COMMCALC-49.2 (the velocity home it dereferences)
+· §19.18 (one fact, one home, dereferenced — never copied) · §23e (the silent-zero rule) ·
+§CORE-17.3m (the team fold) · §CORE-34/35 (the gate index listing this job).

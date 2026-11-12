@@ -81,7 +81,7 @@ interface PeerMeta {
 /** One category of the team roll-up as the server folded it (§CORE-17.3m). */
 interface TeamCat {
   monthly?: number | null; achieved_mtd?: number | null; need?: number | null
-  /** §COMMCALC-58 — the team's projection is the SUM of the stores' own, so `partial` says plainly
+  /** §COMMCALC-71 — the team's projection is the SUM of the stores' own, so `partial` says plainly
    *  when stores nothing could project are missing from it, and `stores_not_trending` answers the
    *  owner's "which stores are not trending towards the accessories goals" directly. */
   trend?: {
@@ -537,8 +537,9 @@ export default function ActionPlanPage() {
                         {((a.outliers?.high || []).length > 0 || (a.outliers?.low || []).length > 0) && (
                           <div style={{ fontSize: 10, marginTop: 3, color: OUTLIER_COLOR }}
                                title={`Outside the pack by more than 2.5× its own spread of projected attainment (median ${a.outliers?.median ?? '—'}%, over ${a.outliers?.counted ?? 0} stores with a target).`}>
-                            {(a.outliers?.low || []).length > 0 && <>▼ {(a.outliers?.low || []).join(', ')} </>}
-                            {(a.outliers?.high || []).length > 0 && <>▲ {(a.outliers?.high || []).join(', ')}</>}
+                            {[(a.outliers?.low || []).length > 0 ? `▼ ${(a.outliers?.low || []).join(', ')}` : '',
+                               (a.outliers?.high || []).length > 0 ? `▲ ${(a.outliers?.high || []).join(', ')}` : '']
+                              .filter(Boolean).join('  ')}
                           </div>
                         )}
                       </div>
@@ -613,7 +614,7 @@ export default function ActionPlanPage() {
                           {(() => { const ts = targetState(m.target, m.need); return (
                             <div style={{ fontSize: 10, color: ts.color }}>{ts.kind === 'short' ? `${metricText(m.need, m.unit)} to go · ${metricText(m.pace, m.unit)}/day needed` : ts.label}</div>
                           ) })()}
-                          {/* THIS STORE'S OWN TREND, served (§COMMCALC-58). `pace` above is what it
+                          {/* THIS STORE'S OWN TREND, served (§COMMCALC-71). `pace` above is what it
                               MUST do; this is what it is actually heading for. */}
                           {(() => {
                             const t: PlanTrend | null | undefined = m.trend

@@ -75,7 +75,7 @@ export function targetState(monthly: unknown, need: unknown): TargetState {
 // "no goal was set" must not render as the state that means "you will make it".
 //
 // THE ARITHMETIC IS NOT HERE. The projection and this verdict are decided by the server
-// (`commcalc/month_trend`, index §COMMCALC-58) — the same window and factor that have always
+// (`commcalc/month_trend`, index §COMMCALC-71) — the same window and factor that have always
 // produced "Trending Acc. $" on the Daily Targets screen. A second copy in TypeScript would be a
 // third answer to one question, and the mailed copy would stop agreeing with the screen.
 export type TrendVerdict = 'on_track' | 'short' | 'no_target' | 'not_measured'

@@ -25,7 +25,7 @@ Also here, for the same one-home reason, is what makes a store an OUTLIER (`outl
 "highlight the outliers in a different colour" has to mean the same thing on every surface that
 highlights, and a rule written per screen is a rule nobody can argue with.
 
-Index: §COMMCALC-58.
+Index: §COMMCALC-71.
 """
 from __future__ import annotations
 
@@ -129,11 +129,11 @@ def month_window(period, today: _dt.date | None = None,
 def factor(window: dict) -> float:
     """What a month-to-date figure is multiplied by to reach month end. 1.0 for a finished month."""
     w = window or {}
-    elapsed = int(w.get('elapsed') or 0)
-    dim = int(w.get('days_in_month') or 0)
-    if elapsed <= 0:
-        return 1.0
-    return dim / elapsed
+    # `dim / elapsed` IS "how many per window-unit" — the same question `demand_projection.velocity`
+    # answers, so it is asked there rather than divided again here. That leaves exactly ONE division
+    # behind every projected figure in the codebase, which is the whole point of this module.
+    v = _dp.velocity(w.get('days_in_month'), w.get('elapsed'))
+    return 1.0 if v is None else v
 
 
 def project(mtd, window: dict, unit: str = 'dollars'):

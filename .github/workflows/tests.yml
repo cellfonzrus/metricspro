@@ -113,6 +113,23 @@ jobs:
         working-directory: mobile
         run: npm run test
 
+  month-trend-one-home-lock:
+    # The design lock for "what is this month trending to" (index §COMMCALC-71). The projection was
+    # inline in router.py TWICE and already on two screens; it is factored into
+    # commcalc/month_trend.py and both callers rewired. This gate fails the build if a third copy of
+    # the division appears anywhere under backend/app, if either caller stops dereferencing the home,
+    # if the screen starts projecting or deciding outliers for itself, or if the not-measured and
+    # no-target states lose their refusal to read as on-track.
+    name: One month-end projection, one outlier rule (lock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: harness_month_trend_one_home
+        working-directory: backend
+        run: python harness_month_trend_one_home.py
+
   action-plan-tiles-lock:
     # The design lock for the Daily Action Plan's tiles (index §COMMCALC-57): ONE grouping of the
     # verdicts the endpoint already reached, over the vocabulary the TENANT declared, with
