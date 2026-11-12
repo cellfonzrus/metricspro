@@ -29,8 +29,9 @@ WHAT THIS FAILS THE BUILD ON
     report's columns and the PAID score naming a different set);
  F. the 21 measured-arriving fields going undeclared again, by name;
  G. `non_selling_days` becoming a SECOND column beside `zero_selling_days` (one fact, two homes);
- H. `activations_total` being quietly folded into `gross_adds` while the owner decision is open
-    (§19.26: missing beats wrong on a figure reps are scored against);
+ H. the gross-adds rename becoming a SECOND column again, or the new spelling being dropped (the
+    owner ruled `activations_total` the same measurement as gross adds on 2026-11-12; one fact, one
+    column, both spellings read — and `total_acts` must stay a both-parts-or-neither total);
  I. RULE TWO — a carrier, tenant or product name appearing in the catalog module;
  J. an optional column being read without the per-column probe (§4b.1), which would 400 the whole
     read on an unapplied migration and show a person nothing at all.
@@ -56,6 +57,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
 from app.modules.commcalc import dlar_metric_catalog as cat   # noqa: E402
 from app.modules.commcalc import dlar_sweep as ds             # noqa: E402
 from app.modules.commcalc import kpi_failing as kf            # noqa: E402
+from app.modules.commcalc import portal_cell as _cellmod       # noqa: E402
 
 P = F = 0
 
@@ -73,6 +75,7 @@ def check(label, ok, got=None):
 _ROOT = pathlib.Path(__file__).resolve().parent
 _ROUTER = (_ROOT / "app" / "modules" / "commcalc" / "router.py")
 _CAT_SRC = (_ROOT / "app" / "modules" / "commcalc" / "dlar_metric_catalog.py").read_text("utf-8")
+_SWEEP_SRC = (_ROOT / "app" / "modules" / "commcalc" / "dlar_sweep.py").read_text("utf-8")
 _RSRC = _ROUTER.read_text("utf-8") if _ROUTER.exists() else ""
 _PAGE = (_ROOT.parent / "frontend" / "src" / "app" / "(platform)" / "commcalc" / "kpi" / "page.tsx")
 _PSRC = _PAGE.read_text("utf-8") if _PAGE.exists() else ""
@@ -147,10 +150,20 @@ check("G1 the renamed field is a SPELLING of the column we had, not a second col
       len(_zsd) == 1 and "non_selling_days" in _zsd[0][2:]
       and not any(r[0] == "non_selling_days" for r in ds.STORE_FIELDS))
 _gross = [r for r in ds.STORE_FIELDS if r[0] == "gross_adds"]
-check("H1 `activations_total` is its own column while the owner decision is open",
-      any(r[0] == "activations_total" for r in ds.STORE_FIELDS))
-check("H2 and it is NOT folded into gross_adds on a guess (§19.26)",
-      bool(_gross) and "activations_total" not in _gross[0][2:])
+check("H1 the renamed gross-adds field is a SPELLING of `gross_adds`, not a second column",
+      len(_gross) == 1 and "activations_total" in _gross[0][2:]
+      and not any(r[0] == "activations_total" for r in ds.STORE_FIELDS))
+check("H2 the OLD spelling is still read, so a month spelled the old way keeps landing",
+      bool(_gross) and "gross_activation_quantity" in _gross[0][2:])
+check("H3 the rename is tracked in STORE_DERIVED_FROM, so `total_acts` arrival follows it",
+      "activations_total" in ds.STORE_DERIVED_FROM
+      and "gross_activation_quantity" in ds.STORE_DERIVED_FROM)
+check("H4 `total_acts` is BOTH-PARTS-OR-NEITHER, never a partial sum reported as a total",
+      bool(re.search(r"""row\["total_acts"\]\s*=\s*_cell\.as_int\(\s*_cell\.total_all\(""",
+                     _SWEEP_SRC)))
+check("H5 and the both-or-neither total is absent when a part is missing",
+      _cellmod.total_all(3, None) is None and _cellmod.total_all(3, 4) == 7
+      and _cellmod.total(3, None) == 3)
 
 print("── I. RULE TWO ─────────────────────────────────────────────────────────────────────────────")
 for _w in ("boost", "elevate", "cellfonz", "luxelink", "vzone", "t-mobile", "verizon", "metro"):
@@ -165,7 +178,7 @@ check("J2 the read list has no duplicate (a duplicated column makes PostgREST 40
       len(cat.select_columns()) == len(set(cat.select_columns())))
 check("J3 every brand-new column is optional",
       all(cat.by_key()[c]["optional"] for c in
-          ("activations_total", "total_trade_ins", "starlink_activations", "yoy_percent_change")))
+          ("byod_total", "total_trade_ins", "starlink_activations", "yoy_percent_change")))
 check("J4 nothing migration 002 already created became optional",
       not any(cat.by_key()[c]["optional"] for c in
               ("atu", "protect_pct", "total_acts", "zero_selling_days")))
