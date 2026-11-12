@@ -43886,6 +43886,62 @@ code, however carefully. **The crash report should have been the first request, 
 a report is "it crashes" and the platform holds the evidence, ask for the platform's evidence before
 reasoning from the source.
 
+### §CORE-29.3d A PIN IS A REQUEST; THE BINARY IS THE ANSWER (2026-11-12)
+
+§CORE-29.3c pinned the toolchain. A pin is a **request** to EAS, and it is not evidence about the
+binary that leaves for TestFlight — which is the whole shape of the defect, because the drift in
+§CORE-29.3c was invisible for exactly one reason: **no build this repository ever made said what it
+had been built with.** `"image": "latest"` was a request too, and nobody could see what it resolved
+to on any given day.
+
+So the binary is read, not the config. `DTXcode` in the built `Info.plist` is the answer.
+
+**One home:** `mobile/scripts/binary-toolchain.py` — unpacks nothing itself, reads the app's
+`Info.plist` with `plistlib` (Apple ships a BINARY plist; an XML reader cannot open it) and reports
+`DTXcode`, `DTXcodeBuild`, `DTSDKName`, `DTPlatformVersion`, `MinimumOSVersion` and both version
+strings. `xcode_major()` is the rule: `DTXcode` is the version with its dot removed, so Xcode 26.2 is
+`2620` and 27.0 is `2700`, and the major is every digit but the last two — which keeps working when
+Apple reaches a three-digit major. An unreadable value reads as **unknown, never as a number**, and
+unknown refuses.
+
+**Where it is wired:** `mobile-build-and-submit.yml`, step `what actually built it`, **between the
+build and the submission**. It downloads the `.ipa` the build log names, reads it, writes the facts
+into the job summary AND into the posted issue comment, and **exits non-zero when the Xcode major
+disagrees with what `eas.json` asked for** — so a binary iOS would kill at launch never reaches a
+tester. Order is the gate: a submission cannot be recalled, so a check that ran after it would only
+report a dead binary that had already left.
+
+**What the lock refuses** (R8, eleven checks, every one with a negative control): the reader going
+missing; the reader deriving the toolchain from `eas.json` instead of the binary; its rule becoming
+unprovable without a device; an unreadable `DTXcode` being answered anyway; the mismatch being
+reported without refusing; the workflow carrying a second plist reader instead of dereferencing the
+one home; the step moving after the submission; and the result not reaching the issue the owner
+actually reads. R8.10 is the **regression, end to end**: a real binary plist is built in a temp
+directory and the reader is run against the defect that shipped — DTXcode `2700` against a pin of
+26 — and must refuse, while the correct binary must pass. R8.11 does the same for an empty `DTXcode`.
+Mutation-tested: inlining a plist reader in the YAML reddens R8.6 and R8.7; moving the step after the
+submission reddens R8.8; deleting the reader reddens R8.1, R8.2, R8.3 and R8.5; making
+`xcode_major()` answer anyway reddens R8.4.
+
+**Also corrected here, because the false claim cost a diagnosis step.** A comment in
+`mobile-build-and-submit.yml` stated that GitHub's job logs are unreachable from the cloud container
+that drives this repository. **They are reachable** —
+`gh api repos/<owner>/<repo>/actions/jobs/<id>/logs` returns them. The claim was written into the
+repository, believed on a later read, and acted on. It is corrected in place rather than deleted, and
+the mirroring to the issue still earns its place for a different reason: the owner reads the issue,
+not the logs.
+
+**Apple's submission API is a separate, transient failure.** Build 16 (version 0.1.0) built
+successfully and then `eas submit` returned *"App Store Connect returned an unexpected server
+error"* — Apple-side, nothing to do with this repository. A resubmit of the existing build
+(`skip_build=true`, which submits `--latest` and spends no build minutes) is the response; the binary
+does not need rebuilding.
+
+**Cross-refs:** §CORE-29.3c (the pin, and the crash it answers) · §CORE-29.3b (the same drift,
+surfacing at compile time) · §CORE-26.8 (the build button this step lives in) · §CORE-38.7 (nothing
+in CI launches this app, which is why the binary has to be read) · §CORE-10 (a guard that goes blind
+fails CI) · §19.18 (one fact, one home, dereferenced — never copied).
+
 ### §CORE-29.4 What the lock refuses
 
 - The rule losing its purity (an import in `running-bundle.ts`), which would end its CI proof.

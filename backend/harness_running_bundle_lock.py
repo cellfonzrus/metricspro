@@ -367,6 +367,157 @@ check("R7.4 the pinned image names Xcode 26", "xcode-26" in PINNED_IOS_BUILD_IMA
 control("R7.4", "xcode-26" in "macos-tahoe-26.5-xcode-27.0")
 
 
+# ── R8 · the build REPORTS what built it, and refuses to submit when it disagrees ─────────────────
+#
+# R7 pins the toolchain, and a pin is a REQUEST. It is not evidence that the binary leaving for
+# TestFlight was built with what was asked for, and the drift that caused §CORE-29.3c was invisible
+# precisely because no build this repository ever made said what it had been built with. So the
+# binary is read, not the config: `DTXcode` in the built Info.plist is the answer.
+#
+# ONE HOME: mobile/scripts/binary-toolchain.py. The workflow dereferences it rather than carrying its
+# own plist reader, and this section refuses the ways that un-wires.
+TOOLCHAIN_READER = MOBILE / "scripts/binary-toolchain.py"
+BUILD_WORKFLOW = ROOT / ".github/workflows/mobile-build-and-submit.yml"
+reader_src = read(TOOLCHAIN_READER)
+build_wf = read(BUILD_WORKFLOW)
+
+check("R8.1 the toolchain reader exists", bool(reader_src),
+      f"{TOOLCHAIN_READER.relative_to(ROOT)} is missing — there is nothing that can say what built a "
+      "binary, so a pin cannot be verified against the thing it produced.")
+control("R8.1", bool(""))
+
+check("R8.2 the reader reads the BINARY, not the config",
+      "plistlib" in reader_src and "DTXcode" in reader_src,
+      "the reader must open the built Info.plist and read DTXcode. Anything derived from eas.json "
+      "re-states the request and proves nothing about the answer.")
+control("R8.2", "plistlib" in 'image = eas["build"]["production"]["ios"]["image"]')
+
+# The reader's rule is PURE and provable here, so the pipeline's correctness does not wait on a Mac.
+# DTXcode drops the dot: Xcode 26.2 is 2620, 27.0 is 2700, and a future 100.1 would be 10010.
+_reader_ns: dict = {}
+try:
+    exec(compile(reader_src, str(TOOLCHAIN_READER), "exec"), _reader_ns)
+except Exception as exc:  # a reader that cannot be imported cannot be proved
+    check("R8.3 the reader's rule can be proved without a device", False, f"{exc}")
+    _xcode_major = None
+else:
+    _xcode_major = _reader_ns.get("xcode_major")
+
+if _xcode_major is None:
+    check("R8.3 the reader's rule can be proved without a device", False,
+          "xcode_major is not a module-level function, so the rule cannot be exercised here")
+else:
+    cases = {"2620": "26", "2700": "27", "1620": "16", "10010": "100"}
+    wrong = {k: _xcode_major(k) for k, v in cases.items() if _xcode_major(k) != v}
+    check("R8.3 the reader's rule can be proved without a device", wrong == {},
+          f"xcode_major misread {wrong} — DTXcode is the version with its dot removed, so the major "
+          f"is every digit but the last two.")
+    control("R8.3", _xcode_major("2620") == "2")
+
+    # An unreadable DTXcode must read as UNKNOWN, never as a number that happens to compare equal.
+    # Zero and "" are the plausible-looking answers that hide this class (owner directive 2026-10-30).
+    blanks = [v for v in ("", "?", "26", "abc", "  ") if _xcode_major(v) != ""]
+    check("R8.4 an unreadable DTXcode reads as unknown, not as a number", blanks == [],
+          f"xcode_major returned a value for {blanks} — a binary whose toolchain cannot be read must "
+          "stop the submission, not pass a comparison by accident.")
+    # The defect is a rule that answers anyway. "" or "0" is exactly the plausible-looking number
+    # that would compare equal to nothing and let the submission through.
+    _lenient = lambda value: value[:-2] or "0"  # noqa: E731 — a defective stand-in, not a helper
+    control("R8.4", [v for v in ("", "?", "26", "abc", "  ") if _lenient(v) != ""] == [])
+
+check("R8.5 the reader REFUSES on a mismatch",
+      "--expect-xcode" in reader_src and "return 1" in reader_src,
+      "reporting a mismatch is not enough: a submission cannot be recalled, so the reader must exit "
+      "non-zero and stop the job.")
+control("R8.5", "--expect-xcode" in "print(facts)")
+
+# The workflow must DEREFERENCE the one home rather than carry a second copy of the rule.
+check("R8.6 the build workflow dereferences the reader",
+      "scripts/binary-toolchain.py" in build_wf,
+      f"{BUILD_WORKFLOW.relative_to(ROOT)} must run the reader. A plist parsed inline in YAML is the "
+      "second copy CLAUDE.md forbids.")
+control("R8.6", "scripts/binary-toolchain.py" in "python3 - <<'PY'\nimport plistlib\nPY")
+
+check("R8.7 the workflow carries no second plist reader",
+      "plistlib" not in build_wf,
+      f"{BUILD_WORKFLOW.relative_to(ROOT)} parses a plist itself. One fact, one home, dereferenced.")
+control("R8.7", "plistlib" not in "import plistlib")
+
+# ORDER IS THE GATE. A failing step aborts its job, so a check that runs AFTER the submission would
+# report a dead binary that had already left for Apple.
+_wf_steps = [line for line in build_wf.splitlines() if line.strip().startswith("- name:")]
+_names = [line.split("- name:", 1)[1].strip() for line in _wf_steps]
+try:
+    _i_tool = _names.index("what actually built it")
+    _i_submit = _names.index("send it to testers")
+    _ordered = _i_tool < _i_submit
+except ValueError:
+    _ordered = False
+check("R8.8 the toolchain check runs BEFORE the submission", _ordered,
+      f"step order is {_names} — 'what actually built it' must precede 'send it to testers', or a "
+      "binary iOS will kill at launch reaches testers before anybody reads it.")
+control("R8.8", ["send it to testers", "what actually built it"].index("what actually built it")
+        < ["send it to testers", "what actually built it"].index("send it to testers"))
+
+# And the result must reach the OWNER, who reads the issue comment and not the job summary.
+check("R8.9 the result says what built it where the owner will read it",
+      "steps.toolchain.outputs.dtxcode" in build_wf,
+      "the posted report must carry the Xcode the binary was built with. The whole defect was a "
+      "toolchain nobody could see.")
+control("R8.9", "steps.toolchain.outputs.dtxcode" in "echo '- build step: ok'")
+
+# R8.10 — the REGRESSION, end to end, with no device and no network. A source-text lock proves the
+# pipeline is wired; it does not prove the wiring works. So an .ipa's real layout is built here — a
+# BINARY plist, the format Apple actually ships, which a naive XML reader cannot open — and the
+# reader is run against the exact defect that shipped: a binary built with Xcode 27 while eas.json
+# asked for 26. It must REFUSE, and it must accept the binary that is correct.
+import plistlib as _plistlib
+import tempfile as _tempfile
+import contextlib as _contextlib
+import io as _io
+
+_main = _reader_ns.get("main") if _xcode_major is not None else None
+if _main is None:
+    check("R8.10 the reader refuses the binary that actually shipped (end to end)", False,
+          "main() is not a module-level function, so the pipeline cannot be exercised here")
+else:
+    def _ipa(dtxcode: str, sdk: str) -> str:
+        """An unpacked .ipa carrying a real binary Info.plist."""
+        root = _tempfile.mkdtemp()
+        app = pathlib.Path(root) / "Payload" / "MetricsPro.app"
+        app.mkdir(parents=True)
+        with open(app / "Info.plist", "wb") as fh:
+            _plistlib.dump({"DTXcode": dtxcode, "DTXcodeBuild": "x", "DTSDKName": sdk,
+                            "DTPlatformVersion": sdk.replace("iphoneos", ""),
+                            "MinimumOSVersion": PINNED_IOS_DEPLOYMENT_TARGET,
+                            "CFBundleVersion": "16", "CFBundleShortVersionString": "0.1.0"},
+                           fh, fmt=_plistlib.FMT_BINARY)
+        return root
+
+    def _run(dtxcode: str, sdk: str, want: str) -> int:
+        with _contextlib.redirect_stdout(_io.StringIO()), _contextlib.redirect_stderr(_io.StringIO()):
+            return _main([_ipa(dtxcode, sdk), "--expect-xcode", want])
+
+    _pinned_major = (re.search(r"xcode-(\d+)", PINNED_IOS_BUILD_IMAGE) or [None, ""])[1]
+    _shipped = _run("2700", "iphoneos27.0", _pinned_major)   # build 14, the one that died on launch
+    _correct = _run("2620", "iphoneos26.2", _pinned_major)   # what the pin asks for
+    check("R8.10 the reader refuses the binary that actually shipped (end to end)",
+          _shipped == 1 and _correct == 0,
+          f"against the pinned Xcode {_pinned_major!r}: a DTXcode 2700 binary exited {_shipped} "
+          f"(must be 1) and a DTXcode 2620 binary exited {_correct} (must be 0). This is the defect "
+          "that reached the owner's phone three times; it may not pass.")
+    control("R8.10", _run("2700", "iphoneos27.0", "27") == 1 and _run("2620", "iphoneos26.2", "27") == 0)
+
+    # A binary whose plist cannot be read must STOP the submission, not be waved through. "Nothing
+    # declared means nothing identified, and the surface says so" (owner directive 2026-10-30).
+    _unreadable = _run("", "iphoneos26.2", _pinned_major)
+    check("R8.11 a binary whose toolchain cannot be read is refused", _unreadable == 1,
+          f"an empty DTXcode exited {_unreadable} — a blank is the plausible-looking answer that "
+          "hid this class, so it must refuse rather than compare against nothing.")
+    control("R8.11", _run("2620", "iphoneos26.2", _pinned_major) == 1)
+
+
+
 if failures:
     print(f"FAIL — {len(failures)} of {checks} checks failed\n")
     for f in failures:
