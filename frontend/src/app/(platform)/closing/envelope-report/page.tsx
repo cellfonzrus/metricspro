@@ -389,7 +389,7 @@ export default function EnvelopeReportPage() {
             <button key={v} className="btn" onClick={() => setView(v as any)} style={{
               fontSize: 12.5, padding: '4px 12px',
               background: view === v ? 'var(--accent)' : 'var(--surface2)',
-              color: view === v ? 'white' : 'var(--text2)',
+              color: view === v ? 'var(--c-fg-ffffff)' : 'var(--text2)',
             }}>{label}</button>
           ))}
       </div>
@@ -554,7 +554,7 @@ export default function EnvelopeReportPage() {
                       </label>
                       {r.chargeback_status && (
                         <div style={{ fontSize: 11, marginTop: 3 }}>
-                          <span style={{ color: r.chargeback_status === 'posted' ? '#c0392b' : r.chargeback_status === 'waived' ? 'var(--text3)' : '#b7791f' }}>
+                          <span style={{ color: r.chargeback_status === 'posted' ? 'var(--c-fg-c0392b)' : r.chargeback_status === 'waived' ? 'var(--text3)' : 'var(--c-fg-b7791f)' }}>
                             {r.chargeback_status} · {fmt(r.chargeback_amount)}
                           </span>
                           {canDecide && r.chargeback_status === 'pending' && (

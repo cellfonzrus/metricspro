@@ -125,7 +125,7 @@ export default function EventWorkspace() {
 
       {/* Approval only appears when it applies — an off-by-default workflow should be invisible. */}
       {e.approval_state !== 'not_required' && (
-        <div style={{ ...panel, marginBottom: 12, borderColor: e.approval_state === 'approved' ? '#16a34a' : '#f39c12' }}>
+        <div style={{ ...panel, marginBottom: 12, borderColor: e.approval_state === 'approved' ? 'var(--c-bg-16a34a)' : 'var(--c-bg-f39c12)' }}>
           <strong style={{ textTransform: 'capitalize' }}>Approval: {e.approval_state}</strong>
           <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 3 }}>{e.approval_reason}</div>
           {e.approved_by && <div style={{ fontSize: 12, color: 'var(--text2)' }}>by {e.approved_by} · {fmtDateTime(e.approved_at)}</div>}
@@ -156,7 +156,7 @@ export default function EventWorkspace() {
         {TABS.map(t => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{
             ...btn, border: 'none', borderRadius: 0, background: 'transparent',
-            borderBottom: `2px solid ${tab === t.key ? '#2563eb' : 'transparent'}`,
+            borderBottom: `2px solid ${tab === t.key ? 'var(--c-bg-2563eb)' : 'transparent'}`,
             fontWeight: tab === t.key ? 700 : 400,
           }}>{t.label}</button>
         ))}

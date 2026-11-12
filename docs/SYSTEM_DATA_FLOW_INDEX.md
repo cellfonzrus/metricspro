@@ -31008,6 +31008,69 @@ Files: `frontend/theme_palette.mjs` (**new**), `frontend/prove_theme_tokens.mjs`
 `frontend/src/app/layout.tsx`, `frontend/src/app/(platform)/layout.tsx`, 371 page/component files
 (mechanical dereference), `.github/workflows/carrier-vocab-guard.yml`.
 
+### §CORE-15.5 THE TERNARY BRANCH THAT KEPT HALF THE ROWS WHITE (reported 2026-11-12)
+
+Owner, on the Finance Dashboard expense grid (LuxeLink, dark theme): *"half of the things are not
+visible on this screen and this [is] happening to a lot of other screens."* Every other expense row
+was a white band with no name in it — only the Fixed/Variable badge showed. The row said
+
+    background: ci % 2 ? 'var(--c-bg-fafbfc)' : 'white'
+
+— the first branch a token §CORE-15 had converted, the second a literal it had not. In the dark theme
+the token became `#141b21` and the literal stayed white, while the label's colour was `var(--text)`,
+near-white. **Measured in a real browser before the fix: row `rgb(255,255,255)`, ink
+`rgb(255,255,255)` — a contrast ratio of 1.00:1.** After: `rgb(13,14,17)` and `rgb(23,24,29)` under
+white ink, ~19:1.
+
+**THE CLASS, not the instance.** §CORE-15 read a literal's ROLE by looking BACKWARDS for the nearest
+`name:` or `name=`. What lies between a literal and its property is an EXPRESSION, so:
+
+- a colour KEYWORD counted only when a property colon sat immediately before it, which made every
+  keyword in a **ternary branch** invisible — and a ternary branch is the second half of every
+  striped row in the app;
+- a HEX took the nearest `name:`/`name=` within 200 characters, which in
+  `background: f === s.store ? '#eff6ff' : 'white'` is the COMPARISON `store =`, so the colour landed
+  in the ambiguous pin instead of being converted.
+
+Both are one mistake. `theme_palette.propRanges` / `propOfValue` now parse properties FORWARD into
+value spans and match a literal to the innermost span containing it — ternary branches, nested calls,
+arrays and prettier-wrapped values included. **357 stranded literals in 116 files** converted on this
+pass; the ambiguous pin fell **837 → 546**. A keyword that is an OPERAND of a comparison
+(`lamp === 'red'`) is still not a colour, and is excluded explicitly: that regression (admin/control-box)
+has now been caught by the type checker under both the old rule and the new one.
+
+**ONE HOME FOR A STRIPED ROW.** Tokens alone do not finish it: 46 tables each wrote their own answer to
+"which colour is row 3", in two shapes — one correct, one invisible — that no reader could tell apart.
+`frontend/src/lib/surface.ts` (**new**) is now THE home: `SURFACE`, `SURFACE2`, `rowStripe(index)`,
+`rowStripeOr(index, tint)`. The even row is an **opaque token, never `transparent`**, because a
+transparent row under a `position: sticky` first column shows the scrolled body through it — the same
+reason the grid had reached for literal white in the first place.
+
+**LOCKED SO IT CANNOT UN-WIRE.** `prove_theme_tokens.mjs` (already in CI, `carrier-vocab-guard.yml`)
+gains §C′1–C′7, the exact shapes that escaped, including a control asserting the OLD backwards rule
+really did miss the shipped line; and §H1–H7: `rowStripe` is declared, spells no colour of its own,
+never returns `transparent`, and **no file may hand-roll `% 2` into a background**. `B1` (no literal
+on a property whose role is declared) now has teeth it did not have before. Unit tests:
+`src/lib/__tests__/surface.test.ts`.
+
+**EVERY TENANT.** Nothing here reads an org: the defect and the fix are in the stylesheet and the
+markup, identical for Cellfonz R Us, LuxeLink and Vzone. Verified by rendering under both themes.
+
+**WHAT IS STILL NOT DONE.** 546 literals remain pinned in `theme_ambiguous_pin.txt` — colours in
+status maps (`cancelled: '#fee2e2'`) whose role is decided where the map is consumed. They are
+self-consistent pairs (a pale fill with its own dark ink), so they read as a light patch on black
+rather than as invisible text. The pin may only shrink.
+
+Files: `frontend/theme_palette.mjs`, `frontend/prove_theme_tokens.mjs`,
+`frontend/theme_ambiguous_pin.txt`, `frontend/src/lib/surface.ts` (**new**),
+`frontend/src/lib/__tests__/surface.test.ts` (**new**), `frontend/src/app/globals.css`,
+116 page/component files (mechanical dereference), 27 of them also dereferencing `rowStripe`.
+
+**Cross-references:** §CORE-15 (the theme home this extends — not a sibling mechanism) · §19.18 (one
+fact, one home, dereferenced — never copied) · §COMMCALC-49.10 (a feature is not finished until it
+works for every tenant) · §CORE-25 (`lib/viewport.ts` — the same shape of fix on layout) ·
+§CORE-34/35/36 (the gate index that lists this lock) · §CORE-14 (the nav accent palette, untouched).
+
 ## §COMMCALC-11. AN INVISIBLE HUMAN CHECK IS STILL A CHECK (owner report 2026-10-15)
 
 Owner, in his own words, after declaring the UPS reporting-portal login: *"it has been over 5 minutes

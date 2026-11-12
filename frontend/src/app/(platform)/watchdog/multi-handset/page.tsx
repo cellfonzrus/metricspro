@@ -305,7 +305,7 @@ export default function MultiHandsetDrillDownPage() {
                           </td>
                           <td style={tdRight}>{c.all_zero_dollars ? '$0.00' : fmt(c.dollars)}</td>
                           <td style={{ ...tdRight,
-                                       color: c.accessory_dollars === 0 ? '#dc2626' : undefined }}>
+                                       color: c.accessory_dollars === 0 ? 'var(--c-fg-dc2626)' : undefined }}>
                             {money(c.accessory_dollars)}
                           </td>
                           <td style={tdRight}>

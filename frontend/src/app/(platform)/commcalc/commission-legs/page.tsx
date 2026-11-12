@@ -366,7 +366,7 @@ export default function CommissionLegsPage() {
                             <td style={{ ...tdL, color: 'var(--text3)', fontSize: 11, maxWidth: 320, whiteSpace: 'normal' }}>{s.splits_on}</td>
                             {pivot === 'legs'
                               ? legCols.map(k => (
-                                <td key={k} style={{ ...td, color: k === 'unsplit' && s.legs?.[k] ? '#b45309' : undefined }}>
+                                <td key={k} style={{ ...td, color: k === 'unsplit' && s.legs?.[k] ? 'var(--c-fg-b45309)' : undefined }}>
                                   {s.legs?.[k] ? fmt(s.legs[k]) : '·'}
                                 </td>))
                               : periods.map(p => (
@@ -547,7 +547,7 @@ export default function CommissionLegsPage() {
               </thead>
               <tbody>
                 {shown.map(r => (
-                  <tr key={r.label} style={{ borderTop: '1px solid var(--border)', background: r.bucket === 'unsplit' ? '#fffbeb' : undefined }}>
+                  <tr key={r.label} style={{ borderTop: '1px solid var(--border)', background: r.bucket === 'unsplit' ? 'var(--c-bg-fffbeb)' : undefined }}>
                     <td style={{ padding: '5px 8px', fontWeight: 500 }}>{r.label}</td>
                     <td style={{ padding: '5px 8px', color: 'var(--text3)', fontSize: 11 }}>
                       {r.sources.map(x => x === 'payment_detail' ? 'Processor Payment Detail' : x === 'comp_report' ? 'Comprehensive Comp' : x).join(' · ')}

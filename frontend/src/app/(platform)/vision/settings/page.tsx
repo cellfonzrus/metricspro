@@ -344,7 +344,7 @@ export default function VisionSettingsPage() {
                       onChange={v => act(() => api(`/api/v1/vision/cameras/${c.id}`, { method: 'PATCH', body: JSON.stringify({ is_entrance: v }) }), 'Camera updated.')} /></td>
                     <td style={cell}><Check checked={c.audio_enabled} disabled={!canEdit || !c.supports_audio || cfg.audio_kill_switch}
                       onChange={v => act(() => api(`/api/v1/vision/cameras/${c.id}`, { method: 'PATCH', body: JSON.stringify({ audio_enabled: v }) }), 'Camera updated.')} /></td>
-                    <td style={{ ...cell, color: c.status === 'online' ? '#16a34a' : 'var(--text3)' }}>{c.status}</td>
+                    <td style={{ ...cell, color: c.status === 'online' ? 'var(--c-fg-16a34a)' : 'var(--text3)' }}>{c.status}</td>
                   </tr>
                 ))}
               </tbody>
@@ -479,7 +479,7 @@ export default function VisionSettingsPage() {
                   <tr key={r.employee_id}>
                     <td style={cell}>{r.name}</td>
                     <td style={cell}>{r.store_code || '—'}</td>
-                    <td style={{ ...cell, color: r.status === 'signed' ? '#16a34a' : r.status === 'not_asked' ? 'var(--text3)' : '#dc2626' }}>
+                    <td style={{ ...cell, color: r.status === 'signed' ? 'var(--c-fg-16a34a)' : r.status === 'not_asked' ? 'var(--text3)' : 'var(--c-fg-dc2626)' }}>
                       {r.status.replace('_', ' ')}
                     </td>
                     <td style={cell}>{fmtDateTime(r.signed_at || r.withdrawn_at)}</td>

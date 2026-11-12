@@ -447,13 +447,13 @@ export default function TaxCodesSection({ stores, rows, onSettingsChanged }: Pro
               </thead>
               <tbody>
                 {grid.map(s => (
-                  <tr key={s.store_code} style={{ background: s.effective_scope === 'none' ? '#fef2f2' : undefined }}>
+                  <tr key={s.store_code} style={{ background: s.effective_scope === 'none' ? 'var(--c-bg-fef2f2)' : undefined }}>
                     <td style={{ ...td, fontWeight: 600 }}>{s.store_code}
                       {s.address && <div style={{ fontWeight: 400, fontSize: 11.5, color: 'var(--text3)' }}>{s.address}</div>}
                     </td>
                     <td style={td}>{s.market || '—'}</td>
                     <td style={td}>{pct(s.rate)}</td>
-                    <td style={{ ...td, fontWeight: 700, color: s.effective_scope === 'none' ? '#dc2626' : '#16a34a' }}>
+                    <td style={{ ...td, fontWeight: 700, color: s.effective_scope === 'none' ? 'var(--c-fg-dc2626)' : 'var(--c-fg-16a34a)' }}>
                       {s.effective_scope === 'none' ? '$0 — no rate' : pct(s.effective_rate)}
                     </td>
                     <td style={{ ...td, fontSize: 12, color: 'var(--text2)' }}>

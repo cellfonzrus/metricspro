@@ -91,7 +91,7 @@ export default function RoyaltyReconPage() {
                     <Fragment key={k}>
                       <tr><td style={td}>{l.label}</td><td style={tdr}>{fmt(l.royalty)}</td>
                         <td style={tdr}>{l.status === 'no_daily_map' ? '—' : fmt(l.daily)}</td>
-                        <td style={{ ...tdr, color: l.status === 'variance' ? '#b91c1c' : undefined }}>{l.status === 'no_daily_map' ? '—' : fmt(l.variance)}</td>
+                        <td style={{ ...tdr, color: l.status === 'variance' ? 'var(--c-fg-b91c1c)' : undefined }}>{l.status === 'no_daily_map' ? '—' : fmt(l.variance)}</td>
                         <td style={{ ...td, color: col }}>{txt}{l.matched_by === 'same name' ? ' (by name)' : ''}</td>
                         <td style={td}>{Object.keys(l.days || {}).length > 0 && <button className="btn" onClick={() => setOpen(open === k ? null : k)}>{open === k ? 'Hide' : 'Days'}</button>}</td></tr>
                       {open === k && (

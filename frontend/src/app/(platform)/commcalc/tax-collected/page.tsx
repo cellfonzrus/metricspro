@@ -9,6 +9,7 @@ import DrillDownPanel, {
   DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
 } from '@/components/DrillDownPanel'
 import { narrowPanel, agreesToTheCent } from '@/lib/drill-narrow'
+import { rowStripe } from '@/lib/surface'
 
 // WHERE EVERY FIGURE CAME FROM (index §CORE-17.3u). The server serves a panel per measured figure
 // from commcalc/sales_outcome_drilldown.py, folded over the SAME store rows this page prints, plus
@@ -321,7 +322,7 @@ export default function TaxCollectedPage() {
                     return (
                       <Fragment key={r.store}>
                         <tr onClick={() => setOpen(o => ({ ...o, [r.store]: !o[r.store] }))}
-                            style={{ borderTop: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : undefined, cursor: 'pointer' }}>
+                            style={{ borderTop: '1px solid var(--border)', background: rowStripe(i), cursor: 'pointer' }}>
                           <td style={{ padding: '9px 14px', fontSize: 13, fontWeight: 500 }}>
                             <span style={{ color: 'var(--text3)', marginRight: 6 }}>{isOpen ? '▾' : '▸'}</span>{r.store}
                           </td>

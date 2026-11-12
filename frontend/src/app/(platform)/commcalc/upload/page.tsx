@@ -399,7 +399,7 @@ export default function UploadPage() {
           // selected period) — a day-grain feed has no period badge at all.
           const everLanded = !!prior || !!lastData[id]?.last_at
           return (
-            <div key={id} className="card" style={{ border: status === 'done' ? '1px solid #86efac' : status === 'error' ? '1px solid #fca5a5' : status === 'warn' ? '1px solid #fcd34d' : undefined, background: status === 'done' ? '#f0fdf4' : status === 'error' ? '#fef2f2' : status === 'warn' ? '#fffbeb' : undefined }}>
+            <div key={id} className="card" style={{ border: status === 'done' ? '1px solid var(--c-bg-86efac)' : status === 'error' ? '1px solid var(--c-bg-fca5a5)' : status === 'warn' ? '1px solid var(--c-bg-fcd34d)' : undefined, background: status === 'done' ? 'var(--c-bg-f0fdf4)' : status === 'error' ? 'var(--c-bg-fef2f2)' : status === 'warn' ? 'var(--c-bg-fffbeb)' : undefined }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
                 <span style={{ fontSize: 28 }}>{icon}</span>
                 <div style={{ flex: 1 }}>
@@ -424,7 +424,7 @@ export default function UploadPage() {
                   {/* When the last SET OF DATA landed (any path: manual, email sweep, portal pull). */}
                   <LastUploadLine rec={lastData[id]} loaded={lastLoaded} />
                   {/* a refusal that names a page ("Upload it under Upload Files / Onboarding — Commission Intake") is a LINK */}
-                  {msg && <div style={{ marginTop: 8, fontSize: 12, color: status === 'done' ? '#16a34a' : status === 'warn' ? '#b45309' : '#dc2626' }}><LinkedText text={msg} /></div>}
+                  {msg && <div style={{ marginTop: 8, fontSize: 12, color: status === 'done' ? 'var(--c-fg-16a34a)' : status === 'warn' ? 'var(--c-fg-b45309)' : 'var(--c-fg-dc2626)' }}><LinkedText text={msg} /></div>}
                   {/* Honest amber panel: WHY an upload saved 0 rows (X-report parser forensics,
                       price-guard refusal, shrink warning). Renders nothing on a clean save. */}
                   <UploadGuardBanner outcome={outcomes[id] || null} />
@@ -443,7 +443,7 @@ export default function UploadPage() {
         {moduleTiles.map(entry => {
           const status = statuses[entry.id] || 'idle'; const msg = messages[entry.id] || ''
           return (
-            <div key={entry.id} className="card" style={{ border: status === 'done' ? '1px solid #86efac' : status === 'error' ? '1px solid #fca5a5' : undefined, background: status === 'done' ? '#f0fdf4' : status === 'error' ? '#fef2f2' : undefined }}>
+            <div key={entry.id} className="card" style={{ border: status === 'done' ? '1px solid var(--c-bg-86efac)' : status === 'error' ? '1px solid var(--c-bg-fca5a5)' : undefined, background: status === 'done' ? 'var(--c-bg-f0fdf4)' : status === 'error' ? 'var(--c-bg-fef2f2)' : undefined }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
                 <span style={{ fontSize: 28 }}>{entry.icon}</span>
                 <div style={{ flex: 1 }}>
@@ -466,7 +466,7 @@ export default function UploadPage() {
                     </label>
                   )}
                   <LastUploadLine rec={moduleLast(entry)} loaded={lastLoaded} tracked={entry.tracked !== false} />
-                  {msg && <div style={{ marginTop: 8, fontSize: 12, color: status === 'done' ? '#16a34a' : '#dc2626' }}>{msg}</div>}
+                  {msg && <div style={{ marginTop: 8, fontSize: 12, color: status === 'done' ? 'var(--c-fg-16a34a)' : 'var(--c-fg-dc2626)' }}>{msg}</div>}
                 </div>
               </div>
             </div>
@@ -499,7 +499,7 @@ export default function UploadPage() {
           const status = statuses[label] || 'idle'; const msg = messages[label] || ''
           const landed = customTypes.find((c: any) => (c.label || '').trim().toLowerCase() === label.toLowerCase())
           return (
-            <div key={rep.key} className="card" style={{ border: status === 'done' ? '1px solid #86efac' : status === 'error' ? '1px solid #fca5a5' : status === 'warn' ? '1px solid #fcd34d' : undefined, background: status === 'done' ? '#f0fdf4' : status === 'error' ? '#fef2f2' : status === 'warn' ? '#fffbeb' : undefined }}>
+            <div key={rep.key} className="card" style={{ border: status === 'done' ? '1px solid var(--c-bg-86efac)' : status === 'error' ? '1px solid var(--c-bg-fca5a5)' : status === 'warn' ? '1px solid var(--c-bg-fcd34d)' : undefined, background: status === 'done' ? 'var(--c-bg-f0fdf4)' : status === 'error' ? 'var(--c-bg-fef2f2)' : status === 'warn' ? 'var(--c-bg-fffbeb)' : undefined }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
                 <span style={{ fontSize: 28 }}>📥</span>
                 <div style={{ flex: 1 }}>
@@ -519,7 +519,7 @@ export default function UploadPage() {
                       <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadCustomReport(rep, f) }} />
                     </label>
                   )}
-                  {msg && <div style={{ marginTop: 8, fontSize: 12, color: status === 'done' ? '#16a34a' : status === 'warn' ? '#b45309' : '#dc2626' }}>{msg}</div>}
+                  {msg && <div style={{ marginTop: 8, fontSize: 12, color: status === 'done' ? 'var(--c-fg-16a34a)' : status === 'warn' ? 'var(--c-fg-b45309)' : 'var(--c-fg-dc2626)' }}>{msg}</div>}
                 </div>
               </div>
             </div>

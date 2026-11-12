@@ -8,6 +8,7 @@ import DrillDownPanel, {
   DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
 } from '@/components/DrillDownPanel'
 import { agreesToTheCent } from '@/lib/drill-narrow'
+import { rowStripe } from '@/lib/surface'
 
 // WHERE "LIFETIME BILLED" CAME FROM (index §CORE-17.3p, batch 16).
 //
@@ -149,7 +150,7 @@ export default function PaygoPage() {
                 </thead>
                 <tbody>
                   {[...(data.current ? [data.current] : []), ...data.history].map((r, i) => (
-                    <tr key={r.vip_payment_id} style={{ borderTop: '1px solid var(--border)', background: r.batch_type === 'pending' ? '#fef2f2' : (i % 2 === 0 ? 'transparent' : 'var(--surface2)') }}>
+                    <tr key={r.vip_payment_id} style={{ borderTop: '1px solid var(--border)', background: r.batch_type === 'pending' ? 'var(--c-bg-fef2f2)' : (rowStripe(i)) }}>
                       <td style={{ padding: '9px 14px', fontSize: 13, fontWeight: 500 }}>{pretty(r.created_on)}</td>
                       <td style={{ padding: '9px 14px', fontSize: 12 }}>
                         {r.batch_type === 'pending'

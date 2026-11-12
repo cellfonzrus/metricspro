@@ -14,6 +14,7 @@ import { useAuth } from '@/lib/auth-context'
 import EntityPicker from '@/components/EntityPicker'
 import AssignPasswordCard from '@/components/AssignPasswordCard'
 import Link from 'next/link'
+import { rowStripe } from '@/lib/surface'
 
 // One-click templates for the roles most tenants need but the base 4 don't include.
 const ROLE_TEMPLATES: { name: string; display: string; permissions: any }[] = [
@@ -702,7 +703,7 @@ export default function RolesAdminPage() {
         {(['people', 'roles'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} style={{ padding: '7px 16px', borderRadius: 8,
             border: '1px solid var(--border)', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-            background: tab === t ? 'var(--accent)' : 'var(--surface)', color: tab === t ? '#fff' : 'var(--text2)' }}>
+            background: tab === t ? 'var(--accent)' : 'var(--surface)', color: tab === t ? 'var(--c-fg-ffffff)' : 'var(--text2)' }}>
             {t === 'people' ? '👥 Assign people' : '⚙️ Role permissions'}
           </button>
         ))}
@@ -1090,7 +1091,7 @@ export default function RolesAdminPage() {
                     const ovCount = Object.keys(e.widget_overrides || {}).length
                     return (
                     <Fragment key={e.id}>
-                    <tr style={{ borderTop: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
+                    <tr style={{ borderTop: '1px solid var(--border)', background: rowStripe(i) }}>
                       <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 500 }}>{e.name}{e.manual && <span className="badge" style={{ fontSize: 10, marginLeft: 6 }}>added</span>}<div style={{ fontSize: 11, color: 'var(--text3)' }}>{e.manual ? '✋ manual user' : (e.home_store || '—')}</div></td>
                       <td style={{ padding: '8px 12px' }}>
                         {e.id > 0
@@ -1263,7 +1264,7 @@ export default function RolesAdminPage() {
                               <span>Access code: <strong style={{ fontFamily: 'monospace' }}>{revealed[e.email].access_code}</strong></span>
                               <span>Status: <strong>{revealed[e.email].status}</strong></span>
                               {revealed[e.email].expires_at && <span>Expires: {String(revealed[e.email].expires_at).slice(0, 10)}</span>}
-                              <span>Delivery: <strong style={{ color: revealed[e.email].delivery_status === 'failed' ? '#dc2626' : '#059669' }}>
+                              <span>Delivery: <strong style={{ color: revealed[e.email].delivery_status === 'failed' ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)' }}>
                                 {revealed[e.email].delivery_status || 'not attempted'}</strong></span>
                               {(revealed[e.email].resent_count || 0) > 0 && <span>Resent ×{revealed[e.email].resent_count}</span>}
                             </div>

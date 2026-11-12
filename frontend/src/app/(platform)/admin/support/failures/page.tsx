@@ -112,7 +112,7 @@ export default function FleetFailureTriage() {
       <div className="card" style={{ padding: 12, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', margin: '10px 0' }}>
         <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
           {([['false', 'Unreviewed'], ['true', 'Reviewed'], ['', 'All']] as const).map(([v, lbl]) => (
-            <button key={lbl} onClick={() => setReviewedFilter(v)} style={{ padding: '6px 12px', fontSize: 13, border: 'none', cursor: 'pointer', background: reviewedFilter === v ? 'var(--accent)' : 'transparent', color: reviewedFilter === v ? '#fff' : 'var(--text2)' }}>{lbl}</button>
+            <button key={lbl} onClick={() => setReviewedFilter(v)} style={{ padding: '6px 12px', fontSize: 13, border: 'none', cursor: 'pointer', background: reviewedFilter === v ? 'var(--accent)' : 'transparent', color: reviewedFilter === v ? 'var(--c-fg-ffffff)' : 'var(--text2)' }}>{lbl}</button>
           ))}
         </div>
         <select style={sel2} value={fOrg} onChange={e => setFOrg(e.target.value)}>

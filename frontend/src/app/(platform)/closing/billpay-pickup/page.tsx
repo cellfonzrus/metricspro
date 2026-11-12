@@ -255,8 +255,8 @@ export default function BillPayPickupPage() {
       <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-            <button className="btn" style={{ borderRadius: 0, border: 'none', fontSize: 12, background: !rangeMode ? 'var(--accent)' : 'transparent', color: !rangeMode ? 'white' : 'var(--text2)' }} onClick={() => setRangeMode(false)}>Day</button>
-            <button className="btn" style={{ borderRadius: 0, border: 'none', fontSize: 12, background: rangeMode ? 'var(--accent)' : 'transparent', color: rangeMode ? 'white' : 'var(--text2)' }} onClick={() => setRangeMode(true)}>Range</button>
+            <button className="btn" style={{ borderRadius: 0, border: 'none', fontSize: 12, background: !rangeMode ? 'var(--accent)' : 'transparent', color: !rangeMode ? 'var(--c-fg-ffffff)' : 'var(--text2)' }} onClick={() => setRangeMode(false)}>Day</button>
+            <button className="btn" style={{ borderRadius: 0, border: 'none', fontSize: 12, background: rangeMode ? 'var(--accent)' : 'transparent', color: rangeMode ? 'var(--c-fg-ffffff)' : 'var(--text2)' }} onClick={() => setRangeMode(true)}>Range</button>
           </div>
           {!rangeMode
             ? <input type="date" style={sel} value={date} onChange={e => setDate(e.target.value)} />
@@ -403,7 +403,7 @@ export default function BillPayPickupPage() {
                           resolution the coverage recon / Cash Recon (Management) uses, compared at
                           store-day grain against the declared ePay-on-cash. Feed absent => an honest
                           "no POS data"; feed present but silent for this store-day => honest zero. */}
-                      <td style={{ ...cell, color: e.pos_status === 'mismatch' ? '#dc2626' : 'var(--text2)', fontWeight: e.pos_status === 'mismatch' ? 700 : 400 }}
+                      <td style={{ ...cell, color: e.pos_status === 'mismatch' ? 'var(--c-fg-dc2626)' : 'var(--text2)', fontWeight: e.pos_status === 'mismatch' ? 700 : 400 }}
                           title={e.pos_status === 'no_pos_data' ? 'No processor bill-payment feed resolved for this range'
                             : `Store-day declared (cash + card) ${fmt(e.pos_declared_day)} vs POS ${fmt(e.pos_billpay)} (Δ ${fmt(e.pos_delta)})`}>
                         {e.pos_billpay == null ? <span style={{ color: 'var(--text3)', fontStyle: 'italic' }}>no POS data</span>

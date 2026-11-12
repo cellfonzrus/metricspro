@@ -173,7 +173,7 @@ function NotifySettings({ setMsg, health }: { setMsg: (s: string) => void; healt
 function Row({ good, label, detail }: { good: boolean; label: string; detail?: string }) {
   return (
     <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 13, padding: '3px 0' }}>
-      <span style={{ color: good ? 'green' : 'var(--c-fg-b45309)' }}>{good ? '✓' : '⚠'}</span>
+      <span style={{ color: good ? 'var(--c-fg-008000)' : 'var(--c-fg-b45309)' }}>{good ? '✓' : '⚠'}</span>
       <span style={{ minWidth: 250 }}>{label}</span>
       <span style={{ color: 'var(--muted,var(--c-fg-888888))', fontSize: 12 }}>{detail || ''}</span>
     </div>
@@ -475,7 +475,7 @@ function SendLog({ log }: { log: LogRow[] }) {
               <td style={td}>{d10(l.created_at)}</td>
               <td style={td}>{l.report_label || l.report_key}</td><td style={td}>{l.channel}</td>
               <td style={td}>{l.target}</td>
-              <td style={{ ...td, color: l.status === 'sent' ? 'green' : '#c00' }}>{l.status}</td>
+              <td style={{ ...td, color: l.status === 'sent' ? 'var(--c-fg-008000)' : 'var(--c-fg-cc0000)' }}>{l.status}</td>
               <td style={{ ...td, color: deliveryColor(l.delivery_status) }}>{l.delivery_status || '—'}</td>
               <td style={{ ...td, fontSize: 12 }}>{routeLabel(l.delivery_route)}</td>
               <td style={td}>{l.triggered_by}</td>

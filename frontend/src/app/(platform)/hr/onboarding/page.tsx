@@ -180,7 +180,7 @@ export default function OnboardingAdminPage() {
       {/* tabs: the operational Documents board vs the checklist/intake template setup */}
       <div style={{ display: 'flex', gap: 6, borderBottom: '1px solid var(--border)', marginBottom: 16 }}>
         {([['docs', '📤 Documents'], ['done', '✅ Completed'], ['reconcile', '🔁 Reconcile mandatory docs'], ['setup', '🧩 Checklist setup']] as const).map(([k, l]) => (
-          <button key={k} onClick={() => setTab(k)} style={{ padding: '8px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer', background: 'none', border: 'none', borderBottom: tab === k ? '2px solid var(--accent,#2563eb)' : '2px solid transparent', color: tab === k ? 'var(--accent,#2563eb)' : 'var(--text2)' }}>{l}</button>
+          <button key={k} onClick={() => setTab(k)} style={{ padding: '8px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer', background: 'none', border: 'none', borderBottom: tab === k ? '2px solid var(--accent,var(--c-bg-2563eb))' : '2px solid transparent', color: tab === k ? 'var(--accent,var(--c-fg-2563eb))' : 'var(--text2)' }}>{l}</button>
         ))}
       </div>
 
@@ -466,7 +466,7 @@ function DocumentsBoard() {
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
         <input style={{ ...inp, width: 220 }} placeholder="Search name / ID / email…" value={q} onChange={e => setQ(e.target.value)} />
         {chips.map(([k, l]) => (
-          <button key={k} onClick={() => setFilter(k)} style={{ ...btn, fontSize: 12, padding: '4px 10px', borderRadius: 20, background: filter === k ? 'var(--accent,#2563eb)' : 'var(--surface)', color: filter === k ? '#fff' : 'var(--text2)', border: filter === k ? 'none' : '1px solid var(--border)' }}>{l} ({count(k)})</button>
+          <button key={k} onClick={() => setFilter(k)} style={{ ...btn, fontSize: 12, padding: '4px 10px', borderRadius: 20, background: filter === k ? 'var(--accent,var(--c-bg-2563eb))' : 'var(--surface)', color: filter === k ? 'var(--c-fg-ffffff)' : 'var(--text2)', border: filter === k ? 'none' : '1px solid var(--border)' }}>{l} ({count(k)})</button>
         ))}
         <div style={{ flex: 1 }} />
         <ReportExportBar title="Onboarding — Documents Board" columns={cols} rows={shown} />

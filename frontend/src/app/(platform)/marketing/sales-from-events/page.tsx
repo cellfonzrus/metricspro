@@ -541,7 +541,7 @@ function RoiDay({ row, onSaved }: { row: any; onSaved: () => void }) {
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text2)' }}>ROI</div>
           <div style={{ fontSize: 24, fontWeight: 700,
-                        color: row.roi_pct === null ? 'var(--text2)' : (row.net >= 0 ? '#16a34a' : '#dc2626') }}>
+                        color: row.roi_pct === null ? 'var(--text2)' : (row.net >= 0 ? 'var(--c-fg-16a34a)' : 'var(--c-fg-dc2626)') }}>
             {row.roi_pct === null ? 'Not computed' : pct(row.roi_pct)}
           </div>
           <div style={{ fontSize: 12, color: 'var(--text2)' }}>

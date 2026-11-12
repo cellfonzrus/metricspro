@@ -276,12 +276,12 @@ export default function CommissionCategoryMapPage() {
           </tr></thead>
           <tbody>
             {obs.map((o, i) => (
-              <tr key={i} style={{ borderTop: '1px solid var(--border)', background: o.category === 'other' ? '#fff7ed' : undefined }}>
+              <tr key={i} style={{ borderTop: '1px solid var(--border)', background: o.category === 'other' ? 'var(--c-bg-fff7ed)' : undefined }}>
                 <td style={{ padding: '5px 8px', color: 'var(--text2)' }}>{o.order_type}</td>
                 <td style={{ padding: '5px 8px' }}>{o.product_name}</td>
                 <td style={{ padding: '5px 8px', textAlign: 'right' }}>{o.count}</td>
                 <td style={{ padding: '5px 8px', textAlign: 'right' }}>{money(o.payout_total)}</td>
-                <td style={{ padding: '5px 8px', fontWeight: 600, color: o.category === 'other' ? '#9a3412' : 'inherit' }}>{labels[o.category] || o.category}</td>
+                <td style={{ padding: '5px 8px', fontWeight: 600, color: o.category === 'other' ? 'var(--c-fg-9a3412)' : 'inherit' }}>{labels[o.category] || o.category}</td>
                 <td style={{ padding: '5px 8px', fontWeight: 600, color: LEG_TINT[o.leg_bucket || 'unsplit'] }}
                   title={`${o.leg_why === 'rule_override' ? 'set by a rule' : o.leg_why === 'payment_month' ? "from the label's own payment month" : o.leg_why === 'label_override' ? 'set for this exact label' : o.leg_why === 'month_in_label' ? 'month named in the label' : 'the source states no month-of-life'}${o.leg_month ? ` · month ${o.leg_month}` : ''}`}>
                   {LEG_LABEL[o.leg_bucket || 'unsplit'] || o.leg_bucket}

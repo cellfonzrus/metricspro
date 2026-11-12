@@ -136,7 +136,7 @@ export default function PipelineBoardPage() {
                  style={{
                    ...panel, minWidth: 260, maxWidth: 300, flex: '0 0 auto',
                    background: over === stage.id ? 'var(--surface)' : 'var(--surface2)',
-                   borderColor: over === stage.id ? '#2563eb' : 'var(--border)',
+                   borderColor: over === stage.id ? 'var(--c-bg-2563eb)' : 'var(--border)',
                    maxHeight: '75vh', overflowY: 'auto',
                  }}>
               <div style={{ fontWeight: 700, fontSize: 14 }}>

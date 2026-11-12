@@ -55,12 +55,39 @@ check('C3 the two role lists share no name (a property cannot be both)',
   !P.FG_PROPS.some(n => P.BG_PROPS.includes(n)))
 // The regression: `c.lamp !== 'green'` and `type Lamp = 'green'` are a STATUS and a type. Converting
 // them changed what the page compared, and the type checker caught it — so the keyword rule is strict.
-check('C4 a keyword is a colour only directly after a property COLON, never in a type or a comparison',
+check('C4 a keyword is a colour only where it is the VALUE of a colour property, never in a type or a comparison',
   P.sites([join(P.SRC, 'app', '(platform)', 'admin', 'control-box', 'page.tsx')])
     .every(s => !s.quoted))
-check('C5 …and a keyword that IS a colour value is still seen',
-  P.sites([join(P.SRC, 'app', 'login', 'page.tsx')]).length > 0
+check('C5 …and a keyword that IS a colour value is still seen, wherever in the value it sits',
+  P.roleOf(P.propOfValue("style={{ background: 'white' }}", 22)) === 'bg'
   && P.NAMED.white === '#ffffff' && P.NAMED.crimson === '#dc143c')
+
+// ——— §C′ THE REGRESSION (index §CORE-37) ————————————————————————————————————————————————————————
+// 2026-11-12: every other row of the Finance Dashboard expense grid was a white band with no label
+// in it. The row said `background: ci % 2 ? 'var(--c-bg-fafbfc)' : 'white'` — the FIRST branch a
+// token, the second a literal this generator could not see, because role was read by looking
+// BACKWARDS from the literal and what lies between a literal and its property is an expression.
+// These assert the rule that replaced it, on the exact shapes that escaped.
+console.log("§C' the ternary branch that hid the white rows")
+const roleIn = (line, needle) => P.roleOf(P.propOfValue(line, line.indexOf(needle)))
+const STRIPE = "<tr style={{ background: ci % 2 ? 'var(--c-bg-fafbfc)' : 'white' }}>"
+check("C'1 the SECOND branch of a striped row is a background — the exact line that shipped white rows",
+  roleIn(STRIPE, "'white'") === 'bg')
+check("C'2 a hex behind a comparison is a background, not an ambiguous site",
+  roleIn("style={{ background: f === s.store ? '#eff6ff' : 'white' }}", '#eff6ff') === 'bg')
+check("C'3 a value that wraps over lines keeps its property",
+  roleIn("style={{\n  background: active\n    ? 'var(--accent)'\n    : '#fef2f2',\n}}", '#fef2f2') === 'bg')
+check("C'4 the SIBLING property is not blamed — a white letter on an accent button stays a letter",
+  roleIn("style={{ background: 'var(--accent)', color: '#ffffff' }}", '#ffffff') === 'fg')
+check("C'5 a nested call inside the value does not end it",
+  roleIn("style={{ background: shade(row, i % 2 ? 'var(--surface2)' : '#fafbfc') }}", '#fafbfc') === 'bg')
+check("C'6 a colour in a STATUS MAP is still not claimed as a CSS property",
+  P.roleOf(P.propOfValue("const TONE = { cancelled: '#fee2e2' }", 25)) === null)
+check("C'7 …and the old backwards rule really did miss it, so this is a fix and not a no-op",
+  (() => {
+    const before = STRIPE.slice(0, STRIPE.indexOf("'white'"))
+    return !/([A-Za-z][A-Za-z0-9_-]*)\s*:\s*$/.test(before)
+  })())
 
 // ——— §D readable on black ————————————————————————————————————————————————————————————————————
 console.log('§D readable on black')
@@ -125,6 +152,44 @@ check('G4 the contrast measure is real: black on black fails, white on black pas
   contrast('#000000', '#000000') === 1 && contrast('#ffffff', '#000000') > 20)
 check('G5 the derivation keeps the HUE — a red warning does not arrive blue',
   Math.abs(P.toHsl(P.rgb(P.darkCounterpart('#b91c1c', 'fg')))[0] - P.toHsl(P.rgb('#b91c1c'))[0]) < 1)
+
+// ——— §H one home for a STRIPED ROW (index §CORE-37) —————————————————————————————————————————————
+// Tokens alone do not finish the job the white rows exposed. 46 tables each wrote their own answer to
+// "which colour is row 3", and the two shapes they used were `i % 2 ? 'var(--surface2)' : 'transparent'`
+// and `… : 'white'` — one correct, one invisible, and nothing could tell them apart at a glance. The
+// rule now lives in `lib/surface.rowStripe`, and the even row is an OPAQUE token rather than
+// `transparent`, because a transparent row under a `position: sticky` first column shows the scrolled
+// body through it. A table that hand-rolls the rule again fails here.
+console.log('§H one home for a striped row')
+const surface = readFileSync(join(P.SRC, 'lib', 'surface.ts'), 'utf8')
+check('H1 lib/surface.ts declares the striping rule and the two surfaces',
+  /export function rowStripe\(/.test(surface) && /export const SURFACE\b/.test(surface)
+  && /export const SURFACE2\b/.test(surface))
+check('H2 the one home spells no colour of its own — it answers with tokens',
+  !/#[0-9a-fA-F]{3,6}\b/.test(surface.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '')))
+check('H3 the even row is opaque, so a sticky first column cannot show the body through it',
+  !/return\s+'transparent'/.test(surface))
+const STRIPE_IN_BG = /\b(?:background|backgroundColor)\s*:((?:[^,;\n}]|\n\s*[?:])*)/g
+const handRolled = []
+for (const f of files) {
+  if (f === join(P.SRC, 'lib', 'surface.ts')) continue
+  const src = readFileSync(f, 'utf8')
+  for (const m of src.matchAll(STRIPE_IN_BG)) {
+    if (!/%\s*2\b/.test(m[1])) continue
+    handRolled.push(f.replace(P.SRC, 'src') + ':' + src.slice(0, m.index).split('\n').length)
+  }
+}
+check('H4 no table hand-rolls its own stripe — they all call rowStripe()',
+  handRolled.length === 0, handRolled.slice(0, 8))
+check('H5 the tables that were converted really do dereference the home',
+  files.filter(f => /rowStripe\(/.test(readFileSync(f, 'utf8'))).length >= 25,
+  files.filter(f => /rowStripe\(/.test(readFileSync(f, 'utf8'))).length)
+check('H6 NEGATIVE CONTROL: the planted shape that shipped the white rows is caught',
+  [..."<tr style={{ background: ci % 2 ? 'var(--surface2)' : 'white' }}>".matchAll(STRIPE_IN_BG)]
+    .some(m => /%\s*2\b/.test(m[1])))
+check('H7 NEGATIVE CONTROL: a call through the home is NOT caught',
+  [..."<tr style={{ background: rowStripe(ci) }}>".matchAll(STRIPE_IN_BG)]
+    .every(m => !/%\s*2\b/.test(m[1])))
 
 console.log(`\n${pass} passed, ${fails.length} failed`)
 if (fails.length) { fails.forEach(f => console.log('  - ' + f)); process.exit(1) }

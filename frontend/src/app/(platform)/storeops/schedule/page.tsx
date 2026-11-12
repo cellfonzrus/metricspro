@@ -491,8 +491,8 @@ export default function SchedulePage() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <div className="seg" style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-            <button className="btn" style={{ borderRadius: 0, border: 'none', background: view === 'store' ? 'var(--accent)' : 'transparent', color: view === 'store' ? 'white' : 'var(--text2)' }} onClick={() => setView('store')}>By store</button>
-            <button className="btn" style={{ borderRadius: 0, border: 'none', background: view === 'employee' ? 'var(--accent)' : 'transparent', color: view === 'employee' ? 'white' : 'var(--text2)' }} onClick={() => setView('employee')}>By employee</button>
+            <button className="btn" style={{ borderRadius: 0, border: 'none', background: view === 'store' ? 'var(--accent)' : 'transparent', color: view === 'store' ? 'var(--c-fg-ffffff)' : 'var(--text2)' }} onClick={() => setView('store')}>By store</button>
+            <button className="btn" style={{ borderRadius: 0, border: 'none', background: view === 'employee' ? 'var(--accent)' : 'transparent', color: view === 'employee' ? 'var(--c-fg-ffffff)' : 'var(--text2)' }} onClick={() => setView('employee')}>By employee</button>
           </div>
           {/* Multi-select markets: pick one or several markets to schedule a whole district at once. */}
           <div style={{ position: 'relative' }}>
@@ -701,8 +701,8 @@ export default function SchedulePage() {
               <button onClick={() => setReportOpen(false)} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--text3)' }}>✕</button>
             </div>
             <div className="seg" style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', margin: '10px 0 14px' }}>
-              <button className="btn" style={{ borderRadius: 0, border: 'none', background: reportGran === 'week' ? 'var(--accent)' : 'transparent', color: reportGran === 'week' ? 'white' : 'var(--text2)' }} onClick={() => { setReportGran('week'); setDrillKey(null) }}>Week over week</button>
-              <button className="btn" style={{ borderRadius: 0, border: 'none', background: reportGran === 'month' ? 'var(--accent)' : 'transparent', color: reportGran === 'month' ? 'white' : 'var(--text2)' }} onClick={() => { setReportGran('month'); setDrillKey(null) }}>Month over month</button>
+              <button className="btn" style={{ borderRadius: 0, border: 'none', background: reportGran === 'week' ? 'var(--accent)' : 'transparent', color: reportGran === 'week' ? 'var(--c-fg-ffffff)' : 'var(--text2)' }} onClick={() => { setReportGran('week'); setDrillKey(null) }}>Week over week</button>
+              <button className="btn" style={{ borderRadius: 0, border: 'none', background: reportGran === 'month' ? 'var(--accent)' : 'transparent', color: reportGran === 'month' ? 'var(--c-fg-ffffff)' : 'var(--text2)' }} onClick={() => { setReportGran('month'); setDrillKey(null) }}>Month over month</button>
             </div>
             {trendErr && <div style={{ color: 'var(--c-fg-b91c1c)', fontSize: 13, marginBottom: 10 }}>{trendErr}</div>}
             {!trend ? (

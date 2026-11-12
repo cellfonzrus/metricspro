@@ -60,7 +60,7 @@ export default function ProductivityInsightsPage() {
         <div style={{ display: 'flex', background: 'var(--surface2)', padding: 3, borderRadius: 8, gap: 3 }}>
           {[['acc', 'Accessory $/hr'], ['boxes', 'Boxes/hr']].map(([k, l]) => (
             <button key={k} onClick={() => setMetric(k)} className="btn" style={{
-              fontSize: 12.5, background: metric === k ? 'white' : 'transparent',
+              fontSize: 12.5, background: metric === k ? 'var(--c-bg-ffffff)' : 'transparent',
               color: metric === k ? 'var(--accent)' : 'var(--text2)', boxShadow: metric === k ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
             }}>{l}</button>
           ))}

@@ -769,7 +769,7 @@ export default function CommissionPlansPage() {
           <button key={t} onClick={() => setTab(t)} style={{
             border: 'none', background: 'none', cursor: 'pointer', padding: '8px 14px', fontSize: 13,
             fontWeight: tab === t ? 700 : 500, color: tab === t ? 'var(--text)' : 'var(--text2)',
-            borderBottom: tab === t ? '2px solid var(--primary, #2563eb)' : '2px solid transparent', marginBottom: -1,
+            borderBottom: tab === t ? '2px solid var(--primary, var(--c-bg-2563eb))' : '2px solid transparent', marginBottom: -1,
           }}>{label}</button>
         ))}
       </div>
@@ -1024,7 +1024,7 @@ export default function CommissionPlansPage() {
                   ariaLabel="Tier match value" onChange={v => upd({ tier_match_value: v })}
                   onOpChange={op => upd({ tier_match_op: op })} />
                 {(draft.tier_match_field || 'any') !== 'any' && tierCount && (
-                  <span style={{ fontSize: 10.5, color: tierCount.lines === 0 ? '#b45309' : 'var(--text3)' }}>
+                  <span style={{ fontSize: 10.5, color: tierCount.lines === 0 ? 'var(--c-fg-b45309)' : 'var(--text3)' }}>
                     {tierCount.lines === 0
                       ? `⚠ matches nothing in the last ${planOpts?.window?.months || 3} months — the tier would count 0`
                       : `${tierCount.lines.toLocaleString()} line${tierCount.lines === 1 ? '' : 's'} match this tier rule`}
@@ -1694,7 +1694,7 @@ export default function CommissionPlansPage() {
             <div style={{ marginBottom: 10 }}>
               {cov.coverage.plan_warnings.map((w: any, i: number) => (
                 <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12.5, padding: '5px 0', borderTop: i ? '1px solid var(--border)' : undefined }}>
-                  <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 8, whiteSpace: 'nowrap', background: w.severity === 'high' ? '#fee2e2' : '#fef3c7', color: w.severity === 'high' ? '#991b1b' : '#92400e' }}>{w.severity}</span>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 8, whiteSpace: 'nowrap', background: w.severity === 'high' ? 'var(--c-bg-fee2e2)' : 'var(--c-bg-fef3c7)', color: w.severity === 'high' ? 'var(--c-fg-991b1b)' : 'var(--c-fg-92400e)' }}>{w.severity}</span>
                   <span>{w.message}</span>
                 </div>
               ))}
@@ -1863,7 +1863,7 @@ export default function CommissionPlansPage() {
                         <td style={td}>
                           {p.current_plans.length === 0 ? <span style={{ color: 'var(--text3)' }}>none</span> :
                             p.current_plans.map(c => (
-                              <span key={c.plan_id} style={{ fontSize: 11, fontWeight: 600, padding: '1px 7px', borderRadius: 8, marginRight: 4, background: c.plan_id === bulkPlanId ? '#dcfce7' : '#f1f5f9', color: c.plan_id === bulkPlanId ? '#166534' : '#475569' }}>{c.plan_name}</span>
+                              <span key={c.plan_id} style={{ fontSize: 11, fontWeight: 600, padding: '1px 7px', borderRadius: 8, marginRight: 4, background: c.plan_id === bulkPlanId ? 'var(--c-bg-dcfce7)' : 'var(--c-bg-f1f5f9)', color: c.plan_id === bulkPlanId ? 'var(--c-fg-166534)' : 'var(--c-fg-475569)' }}>{c.plan_name}</span>
                             ))}
                         </td>
                       </tr>

@@ -100,7 +100,7 @@ export default function ProductivityPage() {
         {([['productivity', 'Productivity'], ['ranking', 'Stack Ranking'], ['review', 'Performance Review'], ['config', '⚙️ Config']] as [Tab, string][]).map(([k, lbl]) => (
           <button key={k} onClick={() => setTab(k)}
             style={{ padding: '6px 14px', fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer',
-              background: tab === k ? 'var(--accent)' : 'transparent', color: tab === k ? '#fff' : 'var(--text2)' }}>
+              background: tab === k ? 'var(--accent)' : 'transparent', color: tab === k ? 'var(--c-fg-ffffff)' : 'var(--text2)' }}>
             {lbl}
           </button>
         ))}

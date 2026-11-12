@@ -275,8 +275,8 @@ export default function AdminAttention() {
                     <button key={k} onClick={() => openTab(k as any)}
                       style={{ fontSize: 12.5, fontWeight: 700, cursor: 'pointer', borderRadius: 8,
                         padding: '5px 10px', border: '1px solid var(--border)',
-                        background: tab === k ? 'var(--accent)' : 'white',
-                        color: tab === k ? 'white' : 'var(--text2)' }}>
+                        background: tab === k ? 'var(--accent)' : 'var(--c-bg-ffffff)',
+                        color: tab === k ? 'var(--c-fg-ffffff)' : 'var(--text2)' }}>
                       {label}{badge ? ` (${badge})` : ''}
                     </button>
                   ))}

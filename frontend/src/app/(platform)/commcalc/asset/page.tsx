@@ -5,6 +5,7 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { LinkedText } from '@/components/ScreenLink'
+import { rowStripe } from '@/lib/surface'
 import DrillDownPanel, {
   DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
 } from '@/components/DrillDownPanel'
@@ -411,7 +412,7 @@ export default function AssetPage() {
                   {Object.entries(summary.by_status)
                     .sort((a,b) => b[1].owed - a[1].owed)
                     .map(([status, d], i) => (
-                    <tr key={status} style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
+                    <tr key={status} style={{ borderTop: '1px solid var(--border)', background: rowStripe(i) }}>
                       <td style={{ padding: '10px 14px' }}>{statusPill(status)}</td>
                       <td style={{ padding: '10px 14px', fontSize: 13 }}>{d.count.toLocaleString()}</td>
                       <td style={{ padding: '10px 14px', fontSize: 13, fontWeight: 600, color: d.owed > 0 ? 'var(--c-fg-dc2626)' : 'var(--text2)' }}>{fmt(d.owed)}</td>
@@ -445,7 +446,7 @@ export default function AssetPage() {
                           onClick={() => toggleCategory(cat)}
                           style={{
                             borderTop: '1px solid var(--border)',
-                            background: isOpen ? 'var(--accent)' + '12' : (i % 2 === 0 ? 'transparent' : 'var(--surface2)'),
+                            background: isOpen ? 'var(--accent)' + '12' : (rowStripe(i)),
                             cursor: 'pointer',
                           }}>
                           <td style={{ padding: '10px 14px', fontSize: 13, fontWeight: 500 }}>
@@ -491,7 +492,7 @@ export default function AssetPage() {
                       {Object.entries(detail.by_status)
                         .sort((a,b) => b[1].owed - a[1].owed)
                         .map(([status, s], i) => (
-                        <tr key={status} style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
+                        <tr key={status} style={{ borderTop: '1px solid var(--border)', background: rowStripe(i) }}>
                           <td style={{ padding: '8px 14px' }}>{statusPill(status)}</td>
                           <td style={{ padding: '8px 14px', fontSize: 13 }}>{s.count.toLocaleString()}</td>
                           <td style={{ padding: '8px 14px', fontSize: 13, fontWeight: 600, color: s.owed > 0 ? 'var(--c-fg-dc2626)' : 'var(--text2)' }}>{fmt(s.owed)}</td>
@@ -517,7 +518,7 @@ export default function AssetPage() {
                       </thead>
                       <tbody>
                         {detail.rows.map((r, i) => (
-                          <tr key={r.id} style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
+                          <tr key={r.id} style={{ borderTop: '1px solid var(--border)', background: rowStripe(i) }}>
                             <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.store || '—'}</td>
                             <td style={{ padding: '8px 12px', fontSize: 12, fontFamily: 'monospace' }}>{r.esn_imei || '—'}</td>
                             <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.device_model || '—'}</td>

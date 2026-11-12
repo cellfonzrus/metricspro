@@ -264,7 +264,7 @@ function HRPageBody() {
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
         {TABS.map(t => (
-          <button key={t.k} onClick={() => switchTab(t.k)} style={{ padding: '7px 16px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, fontWeight: 600, cursor: 'pointer', background: tab === t.k ? 'var(--accent)' : 'var(--surface)', color: tab === t.k ? '#fff' : 'var(--text2)' }}>{t.label}</button>
+          <button key={t.k} onClick={() => switchTab(t.k)} style={{ padding: '7px 16px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, fontWeight: 600, cursor: 'pointer', background: tab === t.k ? 'var(--accent)' : 'var(--surface)', color: tab === t.k ? 'var(--c-fg-ffffff)' : 'var(--text2)' }}>{t.label}</button>
         ))}
         {msg && <span style={{ fontSize: 13, color: 'var(--text2)' }}>{msg}</span>}
         <span style={{ flex: 1 }} />
@@ -549,7 +549,7 @@ function HRPageBody() {
                       <td style={td}>{r.type || '—'}</td>
                       <td style={td}>{r.start_date}</td>
                       <td style={td}>{r.end_date}</td>
-                      <td style={td}><span style={{ fontSize: 12, fontWeight: 600, color: r.status === 'approved' ? '#15803d' : r.status === 'denied' ? '#b42318' : '#b45309' }}>{r.status}</span></td>
+                      <td style={td}><span style={{ fontSize: 12, fontWeight: 600, color: r.status === 'approved' ? 'var(--c-fg-15803d)' : r.status === 'denied' ? 'var(--c-fg-b42318)' : 'var(--c-fg-b45309)' }}>{r.status}</span></td>
                     </tr>
                   ))}
                   {timeoff.length === 0 && <tr><td style={td} colSpan={5}><span style={{ color: 'var(--text3)' }}>No time-off requests in your area.</span></td></tr>}

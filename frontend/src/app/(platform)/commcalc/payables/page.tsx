@@ -472,7 +472,7 @@ function PayablesPageBody() {
         {(['payables', 'forecast', 'owed', 'map', 'terms'] as Tab[]).map(t => (
           <button key={t} onClick={() => setTab(t)}
             style={{ padding: '7px 14px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, cursor: 'pointer',
-              background: tab === t ? 'var(--accent, #2563eb)' : 'var(--surface)', color: tab === t ? '#fff' : 'var(--text)', fontWeight: tab === t ? 600 : 400 }}>
+              background: tab === t ? 'var(--accent, var(--c-bg-2563eb))' : 'var(--surface)', color: tab === t ? 'var(--c-fg-ffffff)' : 'var(--text)', fontWeight: tab === t ? 600 : 400 }}>
             {t === 'payables' ? 'Payables (per IMEI)' : t === 'forecast' ? 'Forecast (phones)' : t === 'owed' ? 'Daily Owed' : t === 'map' ? 'Phone Mapping' : 'Payment Terms'}
           </button>
         ))}

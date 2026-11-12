@@ -5,6 +5,7 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
+import { rowStripe } from '@/lib/surface'
 import DrillDownPanel, {
   DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
 } from '@/components/DrillDownPanel'
@@ -297,7 +298,7 @@ export default function OnInventoryByStorePage() {
                 </thead>
                 <tbody>
                   {sorted.map((r, i) => (
-                    <tr key={r.store} style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
+                    <tr key={r.store} style={{ borderTop: '1px solid var(--border)', background: rowStripe(i) }}>
                       <td style={{ padding: '8px 12px', fontSize: 12, fontWeight: 600 }}>
                         {r.store || '—'}
                         {!!r.also_seen_as?.length && (

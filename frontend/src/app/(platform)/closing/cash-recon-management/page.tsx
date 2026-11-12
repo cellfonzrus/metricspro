@@ -189,8 +189,8 @@ export default function CashReconManagementPage() {
         <>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
             <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-              <button className="btn" style={{ borderRadius: 0, border: 'none', fontSize: 12, background: !rangeMode ? 'var(--accent)' : 'transparent', color: !rangeMode ? 'white' : 'var(--text2)' }} onClick={() => setRangeMode(false)}>Day</button>
-              <button className="btn" style={{ borderRadius: 0, border: 'none', fontSize: 12, background: rangeMode ? 'var(--accent)' : 'transparent', color: rangeMode ? 'white' : 'var(--text2)' }} onClick={() => setRangeMode(true)}>Range</button>
+              <button className="btn" style={{ borderRadius: 0, border: 'none', fontSize: 12, background: !rangeMode ? 'var(--accent)' : 'transparent', color: !rangeMode ? 'var(--c-fg-ffffff)' : 'var(--text2)' }} onClick={() => setRangeMode(false)}>Day</button>
+              <button className="btn" style={{ borderRadius: 0, border: 'none', fontSize: 12, background: rangeMode ? 'var(--accent)' : 'transparent', color: rangeMode ? 'var(--c-fg-ffffff)' : 'var(--text2)' }} onClick={() => setRangeMode(true)}>Range</button>
             </div>
             {!rangeMode
               ? <input type="date" style={sel} value={date} onChange={e => setDate(e.target.value)} />
@@ -338,8 +338,8 @@ export default function CashReconManagementPage() {
                         {r.mgmt_counted == null ? '—' : fmt(r.mgmt_counted)}</td>
                       <td style={{ ...cell, textAlign: 'right', fontWeight: r.mgmt_variance != null && Math.abs(r.mgmt_variance) > (data?.tolerance ?? 1) ? 700 : 400,
                         color: r.mgmt_variance == null ? 'var(--text3)'
-                          : r.mgmt_variance < -(data?.tolerance ?? 1) ? '#dc2626'
-                          : r.mgmt_variance > (data?.tolerance ?? 1) ? '#b45309' : '#166534' }}>
+                          : r.mgmt_variance < -(data?.tolerance ?? 1) ? 'var(--c-fg-dc2626)'
+                          : r.mgmt_variance > (data?.tolerance ?? 1) ? 'var(--c-fg-b45309)' : 'var(--c-fg-166534)' }}>
                         {r.mgmt_variance == null ? '—' : `${r.mgmt_variance > 0 ? '+' : ''}${fmt(r.mgmt_variance)}`}</td>
                       <td style={{ ...cell, textAlign: 'right' }}>{fmt(r.billpay_pickup)}</td>
                       <td style={{ ...cell, textAlign: 'right', color: 'var(--text2)' }}>{r.pos_cash == null ? '—' : fmt(r.pos_cash)}</td>
@@ -349,11 +349,11 @@ export default function CashReconManagementPage() {
                         {r.sales_billpay == null ? '—' : fmt(r.sales_billpay)}</td>
                       <td style={{ ...cell, textAlign: 'right', color: 'var(--text2)' }}>{r.sales_billpay_card == null ? '—' : fmt(r.sales_billpay_card)}</td>
                       <td style={{ ...cell, textAlign: 'right', color: 'var(--text2)' }}>{r.pos_billpay == null ? '—' : fmt(r.pos_billpay)}</td>
-                      <td style={{ ...cell, textAlign: 'right', fontWeight: r.billpay_status === 'mismatch' ? 700 : 400, color: r.billpay_status === 'mismatch' ? '#dc2626' : 'var(--text3)' }}>
+                      <td style={{ ...cell, textAlign: 'right', fontWeight: r.billpay_status === 'mismatch' ? 700 : 400, color: r.billpay_status === 'mismatch' ? 'var(--c-fg-dc2626)' : 'var(--text3)' }}>
                         {r.billpay_delta == null ? '—' : `${r.billpay_delta > 0 ? '+' : ''}${fmt(r.billpay_delta)}`}
                         {r.billpay_status === 'mismatch' && ' ⚠'}
                       </td>
-                      <td style={{ ...cell, textAlign: 'right', fontWeight: r.three_way_status === 'mismatch' ? 700 : 400, color: r.three_way_status === 'mismatch' ? '#dc2626' : r.three_way_status === 'ok' ? '#166534' : 'var(--text3)' }}
+                      <td style={{ ...cell, textAlign: 'right', fontWeight: r.three_way_status === 'mismatch' ? 700 : 400, color: r.three_way_status === 'mismatch' ? 'var(--c-fg-dc2626)' : r.three_way_status === 'ok' ? 'var(--c-fg-166534)' : 'var(--text3)' }}
                           title={r.three_way_status === 'declared_only' ? 'Only the declared leg has data for this store-day' : `Δ declared−sales ${r.delta_declared_sales == null ? '—' : fmt(r.delta_declared_sales)} · Δ sales−processor ${r.delta_sales_processor == null ? '—' : fmt(r.delta_sales_processor)}`}>
                         {r.three_way_status === 'ok' ? '✓' : r.three_way_status === 'mismatch' ? '⚠' : '—'}
                       </td>

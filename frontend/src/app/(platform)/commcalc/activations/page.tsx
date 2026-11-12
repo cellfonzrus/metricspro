@@ -162,7 +162,7 @@ export default function ActivationsPage() {
           {(['market', 'store'] as const).map(t => (
             <button key={t} onClick={() => setTab(t)}
               style={{ padding: '6px 14px', fontSize: 12.5, fontWeight: 700, border: 'none', cursor: 'pointer',
-                background: tab === t ? 'var(--accent, #2563eb)' : 'transparent', color: tab === t ? '#fff' : 'var(--text2)' }}>
+                background: tab === t ? 'var(--accent, var(--c-bg-2563eb))' : 'transparent', color: tab === t ? 'var(--c-fg-ffffff)' : 'var(--text2)' }}>
               By {t === 'market' ? 'Market' : 'Store'}
             </button>
           ))}

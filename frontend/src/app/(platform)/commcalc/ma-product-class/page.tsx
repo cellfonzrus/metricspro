@@ -308,8 +308,8 @@ export default function MaProductClassPage() {
           <button key={t} onClick={() => setTab(t)} style={{
             padding: '6px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
             border: '1px solid var(--border)',
-            background: tab === t ? 'var(--accent,#2563eb)' : 'var(--surface)',
-            color: tab === t ? '#fff' : 'var(--text)',
+            background: tab === t ? 'var(--accent,var(--c-bg-2563eb))' : 'var(--surface)',
+            color: tab === t ? 'var(--c-fg-ffffff)' : 'var(--text)',
           }}>{t === 'names' ? '🏷️ Product names' : '📊 Impact preview'}</button>
         ))}
       </div>

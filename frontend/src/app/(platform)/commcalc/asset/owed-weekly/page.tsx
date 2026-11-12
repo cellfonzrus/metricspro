@@ -5,6 +5,7 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
+import { rowStripe } from '@/lib/surface'
 import DrillDownPanel, {
   DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
 } from '@/components/DrillDownPanel'
@@ -300,7 +301,7 @@ export default function OwedWeeklyPage() {
                             No payable rows fall in this period for the current filter.
                           </td></tr>
                         ) : dec.periods.map((pd, i) => (
-                          <tr key={pd.key || `unplaced-${i}`} style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
+                          <tr key={pd.key || `unplaced-${i}`} style={{ borderTop: '1px solid var(--border)', background: rowStripe(i) }}>
                             <td style={{ padding: '9px 14px', fontSize: 13, fontWeight: 500 }}>{pd.label}</td>
                             <td style={{ padding: '9px 14px', fontSize: 12, color: 'var(--text2)', whiteSpace: 'nowrap' }}>
                               {pd.start && pd.end ? (pd.start === pd.end ? pretty(pd.start) : `${pretty(pd.start)} → ${pretty(pd.end)}`) : '—'}
@@ -366,7 +367,7 @@ export default function OwedWeeklyPage() {
                   {report.by_store.length === 0 ? (
                     <tr><td colSpan={7} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>Nothing bills on this Friday for the current filter.</td></tr>
                   ) : report.by_store.map((s, i) => (
-                    <tr key={s.store} style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
+                    <tr key={s.store} style={{ borderTop: '1px solid var(--border)', background: rowStripe(i) }}>
                       <td style={{ padding: '9px 14px', fontSize: 13, fontWeight: 500 }}>{s.store}</td>
                       <td style={{ padding: '9px 14px', fontSize: 12, color: 'var(--text2)' }}>{s.market || '—'}</td>
                       <td style={{ padding: '9px 14px', fontSize: 13 }}>{s.sold_count}</td>
@@ -400,7 +401,7 @@ export default function OwedWeeklyPage() {
                 ) : report.upcoming.map((u, i) => (
                   <tr key={u.thursday}
                       onClick={() => setFriday(u.thursday)}
-                      style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)', cursor: 'pointer' }}>
+                      style={{ borderTop: '1px solid var(--border)', background: rowStripe(i), cursor: 'pointer' }}>
                     <td style={{ padding: '9px 14px', fontSize: 13, fontWeight: 500 }}>{pretty(u.thursday)}</td>
                     <td style={{ padding: '9px 14px', fontSize: 13 }}>{u.count.toLocaleString()}</td>
                     <td style={{ padding: '9px 14px', fontSize: 13, color: 'var(--c-fg-059669)' }}>{fmt(u.sold_owed)}</td>
@@ -428,14 +429,14 @@ export default function OwedWeeklyPage() {
                 </thead>
                 <tbody>
                   {report.rows.map((r, i) => (
-                    <tr key={r.id} style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
+                    <tr key={r.id} style={{ borderTop: '1px solid var(--border)', background: rowStripe(i) }}>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.store || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.device_model || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 11, fontFamily: 'monospace' }}>{r.esn_imei || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.phone_number || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.contract_type || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 11 }}>
-                        <span style={{ background: r.bill_path === 'aging' ? '#fef3c7' : '#d1fae5', color: r.bill_path === 'aging' ? '#92400e' : '#065f46', borderRadius: 5, padding: '1px 7px', fontWeight: 600 }}>{r.bill_path}</span>
+                        <span style={{ background: r.bill_path === 'aging' ? 'var(--c-bg-fef3c7)' : 'var(--c-bg-d1fae5)', color: r.bill_path === 'aging' ? 'var(--c-fg-92400e)' : 'var(--c-fg-065f46)', borderRadius: 5, padding: '1px 7px', fontWeight: 600 }}>{r.bill_path}</span>
                       </td>
                       <td style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>{r.date_sold || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>{r.due_date || '—'}</td>

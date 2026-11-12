@@ -191,7 +191,7 @@ export default function FailureLogsPage() {
             <button key={lbl} onClick={() => setReviewedFilter(v)} style={{
               padding: '6px 12px', fontSize: 13, border: 'none', cursor: 'pointer',
               background: reviewedFilter === v ? 'var(--accent)' : 'transparent',
-              color: reviewedFilter === v ? '#fff' : 'var(--text2)',
+              color: reviewedFilter === v ? 'var(--c-fg-ffffff)' : 'var(--text2)',
             }}>{lbl}</button>
           ))}
         </div>

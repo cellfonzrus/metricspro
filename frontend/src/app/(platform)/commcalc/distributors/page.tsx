@@ -145,7 +145,7 @@ export default function DistributorsPage() {
           <div key={d.id}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderTop: '1px solid var(--border)', fontSize: 13, flexWrap: 'wrap' }}>
               <span style={{ fontWeight: 700 }}>{d.name}</span>
-              <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: d.arrangement === 'consignment' ? '#ede9fe' : d.arrangement === 'cod' ? '#fee2e2' : '#dbeafe', color: d.arrangement === 'consignment' ? '#6d28d9' : d.arrangement === 'cod' ? '#b91c1c' : '#1d4ed8' }}>
+              <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: d.arrangement === 'consignment' ? 'var(--c-bg-ede9fe)' : d.arrangement === 'cod' ? 'var(--c-bg-fee2e2)' : 'var(--c-bg-dbeafe)', color: d.arrangement === 'consignment' ? 'var(--c-fg-6d28d9)' : d.arrangement === 'cod' ? 'var(--c-fg-b91c1c)' : 'var(--c-fg-1d4ed8)' }}>
                 {arrLabel(d.arrangement)}{d.arrangement === 'terms' && d.terms_days ? ` · ${d.terms_days}d` : ''}{d.arrangement === 'consignment' ? ` · ${d.billing_cycle}` : ''}
               </span>
               {d.carrier_id && <span style={{ fontSize: 12, color: 'var(--text3)' }}>{carrierName(d.carrier_id)}</span>}
@@ -183,7 +183,7 @@ export default function DistributorsPage() {
                           <td style={{ padding: '4px 8px', fontSize: 12 }}>{p.pay_date || '—'}</td>
                           <td style={{ padding: '4px 8px', fontSize: 12 }}>{p.period || '—'}</td>
                           <td style={{ padding: '4px 8px', fontSize: 12, fontWeight: 600 }}>{fmt(p.amount)}</td>
-                          <td style={{ padding: '4px 8px', fontSize: 12, color: p.funding_source === 'borrowed' ? '#b45309' : '#15803d' }}>{p.funding_source}</td>
+                          <td style={{ padding: '4px 8px', fontSize: 12, color: p.funding_source === 'borrowed' ? 'var(--c-fg-b45309)' : 'var(--c-fg-15803d)' }}>{p.funding_source}</td>
                           <td style={{ padding: '4px 8px', fontSize: 12 }}>{p.account_label || '—'}</td>
                           <td style={{ padding: '4px 8px', fontSize: 12 }}>{p.ref || '—'}</td>
                           <td style={{ padding: '4px 8px' }}><button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-fg-dc2626)', fontSize: 12 }} onClick={() => delPayment(p.id)}>✕</button></td>

@@ -4,6 +4,7 @@ import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
+import { rowStripe } from '@/lib/surface'
 
 // Phones flagged "physically missing" during Inventory Aging investigation — show in aging but not in
 // the store. The list to investigate + the owed-to-distributor exposure at risk.
@@ -83,7 +84,7 @@ export default function MissingPhonesPage() {
                 </tr></thead>
                 <tbody>
                   {rows.map((r, i) => (
-                    <tr key={(r.esn_imei || '') + i} style={{ borderTop: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : undefined }}>
+                    <tr key={(r.esn_imei || '') + i} style={{ borderTop: '1px solid var(--border)', background: rowStripe(i) }}>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.store || <span style={{ color: 'var(--c-fg-dc2626)' }}>not in ledger</span>}{r.market ? ` · ${r.market}` : ''}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.device_model || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 11, fontFamily: 'monospace' }}>{r.esn_imei || '—'}</td>

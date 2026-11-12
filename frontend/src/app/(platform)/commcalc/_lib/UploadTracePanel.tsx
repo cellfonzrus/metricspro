@@ -101,7 +101,7 @@ export function UploadTracePanel({ period, uploadType, onClose }:
                         {days.length ? <span title={days.map(d => `${d}: ${r.date_counts[d]}`).join('\n')}>{days.length} day(s): {days[0]}…{days[days.length - 1]}</span>
                           : periods.length ? periods.join(', ') : '—'}
                       </td>
-                      <td style={{ padding: '6px 8px', maxWidth: 280, color: r.status === 'error' ? '#991b1b' : 'var(--text3)' }}>{String(detail).slice(0, 220)}</td>
+                      <td style={{ padding: '6px 8px', maxWidth: 280, color: r.status === 'error' ? 'var(--c-fg-991b1b)' : 'var(--text3)' }}>{String(detail).slice(0, 220)}</td>
                     </tr>
                   )
                 })}

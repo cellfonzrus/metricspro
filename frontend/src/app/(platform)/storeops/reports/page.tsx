@@ -316,7 +316,7 @@ export default function StoreOpsReportsPage() {
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', background: 'var(--surface2)', padding: 3, borderRadius: 8, gap: 3 }}>
           {(['employee', 'store'] as const).map(v => (
-            <button key={v} onClick={() => setView(v)} className="btn" style={{ background: view === v ? 'white' : 'transparent', color: view === v ? 'var(--accent)' : 'var(--text2)', fontSize: 13, boxShadow: view === v ? '0 1px 3px rgba(0,0,0,0.1)' : 'none' }}>
+            <button key={v} onClick={() => setView(v)} className="btn" style={{ background: view === v ? 'var(--c-bg-ffffff)' : 'transparent', color: view === v ? 'var(--accent)' : 'var(--text2)', fontSize: 13, boxShadow: view === v ? '0 1px 3px rgba(0,0,0,0.1)' : 'none' }}>
               {v === 'employee' ? '👤 By Employee' : '🏪 By Store'}
             </button>
           ))}

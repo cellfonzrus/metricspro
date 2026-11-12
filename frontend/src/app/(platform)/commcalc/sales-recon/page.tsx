@@ -171,8 +171,8 @@ export default function SalesReconPage() {
       {/* APPLIES? then LOADED? (copy.ts) — a POS with no daily-feed kind is told so, never invited to upload one. */}
       {empty && (
         <div role="status" data-empty-state={empty.kind}
-          style={{ background: empty.kind === 'not_applicable' ? '#eff6ff' : '#fffbeb', border: `1px solid ${empty.kind === 'not_applicable' ? '#bfdbfe' : '#fde68a'}`,
-            borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13, color: empty.kind === 'not_applicable' ? '#1e40af' : '#92400e' }}>
+          style={{ background: empty.kind === 'not_applicable' ? 'var(--c-bg-eff6ff)' : 'var(--c-bg-fffbeb)', border: `1px solid ${empty.kind === 'not_applicable' ? 'var(--c-bg-bfdbfe)' : 'var(--c-bg-fde68a)'}`,
+            borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13, color: empty.kind === 'not_applicable' ? 'var(--c-fg-1e40af)' : 'var(--c-fg-92400e)' }}>
           {empty.text}
         </div>
       )}
@@ -226,7 +226,7 @@ export default function SalesReconPage() {
             <button key={t.key} onClick={() => { setTab(t.key); setStoreFilter('') }}
               style={{ padding: '8px 16px', borderRadius: 8, fontSize: 14, fontWeight: 600,
                 border: active ? `2px solid ${t.color}` : '1px solid var(--c-bg-e5e7eb)',
-                background: active ? `${t.color}10` : 'white', color: active ? t.color : 'var(--c-fg-374151)', cursor: 'pointer' }}>
+                background: active ? `${t.color}10` : 'var(--c-bg-ffffff)', color: active ? t.color : 'var(--c-fg-374151)', cursor: 'pointer' }}>
               {t.label} <span style={{ opacity: 0.7 }}>({tabCount(t.key)})</span>
             </button>
           )
@@ -294,7 +294,7 @@ export default function SalesReconPage() {
                 <tbody>
                   {data.by_store.map(st => (
                     <tr key={st.store} onClick={() => setStoreFilter(storeFilter === st.store ? '' : st.store)}
-                      style={{ borderTop: '1px solid var(--c-bg-f3f4f6)', cursor: 'pointer', background: storeFilter === st.store ? '#eff6ff' : 'white' }}>
+                      style={{ borderTop: '1px solid var(--c-bg-f3f4f6)', cursor: 'pointer', background: storeFilter === st.store ? 'var(--c-bg-eff6ff)' : 'var(--c-bg-ffffff)' }}>
                       <td style={{ padding: '8px 16px', fontWeight: 500 }}>{st.store}</td>
                       <td style={{ padding: '8px 16px', textAlign: 'right', color: st.missing_in_monthly ? 'var(--c-fg-dc2626)' : 'var(--c-fg-9ca3af)' }}>{st.missing_in_monthly}</td>
                       <td style={{ padding: '8px 16px', textAlign: 'right', color: st.amount_mismatch ? 'var(--c-fg-d97706)' : 'var(--c-fg-9ca3af)' }}>{st.amount_mismatch}</td>

@@ -191,7 +191,7 @@ export default function RecoveryPage() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
         {tiles.map(t => (
           <button key={t.k} onClick={() => setStatus(t.k)} style={{ ...card, margin: 0, cursor: 'pointer', textAlign: 'left',
-            outline: status === t.k ? '2px solid var(--accent, #2563eb)' : 'none' }}>
+            outline: status === t.k ? '2px solid var(--accent, var(--c-bg-2563eb))' : 'none' }}>
             <div style={{ fontSize: 12, color: 'var(--text3)' }}>{t.label}</div>
             <div style={{ fontSize: 20, fontWeight: 800 }}>{b[t.k]?.count || 0}</div>
             <div style={{ fontSize: 12, color: 'var(--text3)' }}>{t.sub}</div>

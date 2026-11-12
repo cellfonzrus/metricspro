@@ -562,7 +562,7 @@ export default function ExecMtdPage() {
           {(['location', 'employee'] as const).map((tb) => (
             <button key={tb} onClick={() => setTab(tb)}
               style={{ padding: '6px 14px', fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer',
-                background: tab === tb ? 'var(--accent)' : 'transparent', color: tab === tb ? '#fff' : 'var(--text2)' }}>
+                background: tab === tb ? 'var(--accent)' : 'transparent', color: tab === tb ? 'var(--c-fg-ffffff)' : 'var(--text2)' }}>
               {tb === 'location' ? 'By location' : 'By employee'}
             </button>
           ))}

@@ -6,6 +6,7 @@ import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
 import { NoLedgerData } from '../_shared/NoLedgerData'
+import { rowStripe } from '@/lib/surface'
 import DrillDownPanel, {
   DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
 } from '@/components/DrillDownPanel'
@@ -120,7 +121,7 @@ function RowTable({ rows, accent }: { rows: Row[]; accent: string }) {
           {rows.map((r, i) => {
             const st = stateFor(r); const imei = r.esn_imei || ''
             return (
-            <tr key={r.id} style={{ borderTop:'1px solid var(--border)', background: st.missing ? 'var(--c-bg-fff1f2)' : (i%2===0?'transparent':'var(--surface2)') }}>
+            <tr key={r.id} style={{ borderTop:'1px solid var(--border)', background: st.missing ? 'var(--c-bg-fff1f2)' : (rowStripe(i)) }}>
               <td style={{ padding:'8px 12px', fontSize:12 }}>{r.store || '—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12, color:'var(--text2)' }}>{r.market || '—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12 }}>{r.device_model || '—'}</td>
@@ -179,7 +180,7 @@ function ByModelTable({ rows, meta }: { rows: ByModel[]; meta: { total_models: n
         </thead>
         <tbody>
           {rows.map((m, i) => (
-            <tr key={m.device_model} style={{ borderTop:'1px solid var(--border)', background: i%2===0?'transparent':'var(--surface2)' }}>
+            <tr key={m.device_model} style={{ borderTop:'1px solid var(--border)', background: rowStripe(i) }}>
               <td style={{ padding:'8px 12px', fontSize:12 }}>{m.device_model}</td>
               <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right' }}>{m.under45}</td>
               <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right', color:'var(--c-fg-d97706)', fontWeight:600 }}>{m.warn}</td>

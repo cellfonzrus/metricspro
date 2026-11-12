@@ -223,7 +223,7 @@ export default function TourRunner() {
             {steps.map((s, i) => (
               <span key={s.id || i} aria-hidden
                 style={{ width: i === idx ? 16 : 6, height: 6, borderRadius: 4,
-                  background: i === idx ? '#2563eb' : i < idx ? '#93c5fd' : 'var(--border)',
+                  background: i === idx ? 'var(--c-bg-2563eb)' : i < idx ? 'var(--c-bg-93c5fd)' : 'var(--border)',
                   transition: 'width 120ms ease-out' }} />
             ))}
           </div>

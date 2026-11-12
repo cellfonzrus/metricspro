@@ -109,7 +109,7 @@ export default function ManagementIncentivePage() {
       <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
         {(['plans', 'compute'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} className="btn"
-            style={{ fontSize: 13, background: tab === t ? 'var(--accent)' : undefined, color: tab === t ? '#fff' : undefined }}>
+            style={{ fontSize: 13, background: tab === t ? 'var(--accent)' : undefined, color: tab === t ? 'var(--c-fg-ffffff)' : undefined }}>
             {t === 'plans' ? '🧩 Plans' : '🧮 Compute & Payouts'}
           </button>
         ))}
@@ -417,7 +417,7 @@ function ComputeTab({ plans }: { plans: Plan[] }) {
                   <td style={{ padding: '6px 8px' }}>{p.employee_name || p.employee_id}</td>
                   <td style={{ padding: '6px 8px', fontWeight: 600 }}>{money(p.total)}</td>
                   <td style={{ padding: '6px 8px' }}>{p.qualified ? '✓' : '—'}</td>
-                  <td style={{ padding: '6px 8px' }}><span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: p.status === 'paid' ? '#dcfce7' : p.status === 'approved' ? '#dbeafe' : '#fef3c7', color: p.status === 'paid' ? '#166534' : p.status === 'approved' ? '#1e40af' : '#92400e' }}>{p.status}</span></td>
+                  <td style={{ padding: '6px 8px' }}><span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: p.status === 'paid' ? 'var(--c-bg-dcfce7)' : p.status === 'approved' ? 'var(--c-bg-dbeafe)' : 'var(--c-bg-fef3c7)', color: p.status === 'paid' ? 'var(--c-fg-166534)' : p.status === 'approved' ? 'var(--c-fg-1e40af)' : 'var(--c-fg-92400e)' }}>{p.status}</span></td>
                   <td style={{ padding: '6px 8px' }}>
                     {p.status === 'draft' && <button className="btn" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => decide(p.id, 'approve')}>Approve</button>}{' '}
                     {p.status === 'approved' && <button className="btn btn-primary" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => decide(p.id, 'pay')}>Mark paid</button>}{' '}

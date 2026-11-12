@@ -595,7 +595,7 @@ export default function PosActivationsPage() {
                   <td style={{ ...cell, color: 'var(--text2)', fontFamily: 'monospace' }}>{a.phone_serial || '—'}</td>
                   <td style={{ ...cell, color: 'var(--text2)', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.promotion_offered || '—'}</td>
                   <td style={cell}>
-                    <span style={{ color: a.status === 'active' ? '#27ae60' : '#dc2626', fontWeight: 600, textTransform: 'capitalize' }}>{a.status}</span>
+                    <span style={{ color: a.status === 'active' ? 'var(--c-fg-27ae60)' : 'var(--c-fg-dc2626)', fontWeight: 600, textTransform: 'capitalize' }}>{a.status}</span>
                   </td>
                 </tr>
               ))}
@@ -652,7 +652,7 @@ export default function PosActivationsPage() {
             <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--surface2)', overflowX: 'auto' }}>
               {FORM_TABS.map(t => (
                 <button key={t} onClick={() => setFormTab(t)}
-                  style={{ padding: '9px 16px', fontSize: 12, fontWeight: formTab === t ? 700 : 400, color: formTab === t ? 'var(--text)' : 'var(--text2)', background: formTab === t ? 'var(--surface)' : 'transparent', border: 'none', borderBottom: formTab === t ? '2px solid #3498db' : '2px solid transparent', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                  style={{ padding: '9px 16px', fontSize: 12, fontWeight: formTab === t ? 700 : 400, color: formTab === t ? 'var(--text)' : 'var(--text2)', background: formTab === t ? 'var(--surface)' : 'transparent', border: 'none', borderBottom: formTab === t ? '2px solid var(--c-bg-3498db)' : '2px solid transparent', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                   {t}
                 </button>
               ))}

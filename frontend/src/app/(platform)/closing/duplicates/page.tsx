@@ -67,8 +67,8 @@ export default function ClosingDuplicatesPage() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-            <button className="btn" style={{ borderRadius: 0, border: 'none', background: mode === 'date' ? 'var(--accent)' : 'transparent', color: mode === 'date' ? 'white' : 'var(--text2)' }} onClick={() => setMode('date')}>Day</button>
-            <button className="btn" style={{ borderRadius: 0, border: 'none', background: mode === 'period' ? 'var(--accent)' : 'transparent', color: mode === 'period' ? 'white' : 'var(--text2)' }} onClick={() => setMode('period')}>Month</button>
+            <button className="btn" style={{ borderRadius: 0, border: 'none', background: mode === 'date' ? 'var(--accent)' : 'transparent', color: mode === 'date' ? 'var(--c-fg-ffffff)' : 'var(--text2)' }} onClick={() => setMode('date')}>Day</button>
+            <button className="btn" style={{ borderRadius: 0, border: 'none', background: mode === 'period' ? 'var(--accent)' : 'transparent', color: mode === 'period' ? 'var(--c-fg-ffffff)' : 'var(--text2)' }} onClick={() => setMode('period')}>Month</button>
           </div>
           {mode === 'date'
             ? <input className="select" style={sel} type="date" value={date} onChange={e => setDate(e.target.value)} />

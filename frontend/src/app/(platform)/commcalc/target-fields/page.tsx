@@ -144,7 +144,7 @@ export default function TargetFieldsPage() {
                 </td>
                 <td style={{ padding: '7px 8px' }}>{f.required ? '✓' : ''}</td>
                 <td style={{ padding: '7px 8px' }}>
-                  <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 10, background: f.source === 'custom' ? '#ecfdf5' : 'var(--surface)', border: '1px solid var(--border)', color: f.source === 'custom' ? '#047857' : 'var(--text3)' }}>{f.source === 'custom' ? 'custom' : 'default'}</span>
+                  <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 10, background: f.source === 'custom' ? 'var(--c-bg-ecfdf5)' : 'var(--surface)', border: '1px solid var(--border)', color: f.source === 'custom' ? 'var(--c-fg-047857)' : 'var(--text3)' }}>{f.source === 'custom' ? 'custom' : 'default'}</span>
                 </td>
                 <td style={{ padding: '7px 8px' }}>
                   {f.source === 'custom'

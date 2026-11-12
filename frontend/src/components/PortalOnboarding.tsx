@@ -159,9 +159,9 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
         <span style={{ fontSize: 13, color: 'var(--text2)' }}>{d.progress.done}/{d.progress.total} done</span>
       </div>}
       {note && <div style={{ ...card, padding: 12,
-        background: noteKind === 'err' ? '#fef2f2' : noteKind === 'warn' ? '#fffbeb' : '#ecfdf5',
-        borderColor: noteKind === 'err' ? '#fca5a5' : noteKind === 'warn' ? '#fde68a' : '#a7f3d0',
-        color: noteKind === 'err' ? '#991b1b' : noteKind === 'warn' ? '#92400e' : '#065f46', fontSize: 14 }}>{note}</div>}
+        background: noteKind === 'err' ? 'var(--c-bg-fef2f2)' : noteKind === 'warn' ? 'var(--c-bg-fffbeb)' : 'var(--c-bg-ecfdf5)',
+        borderColor: noteKind === 'err' ? 'var(--c-bg-fca5a5)' : noteKind === 'warn' ? 'var(--c-bg-fde68a)' : 'var(--c-bg-a7f3d0)',
+        color: noteKind === 'err' ? 'var(--c-fg-991b1b)' : noteKind === 'warn' ? 'var(--c-fg-92400e)' : 'var(--c-fg-065f46)', fontSize: 14 }}>{note}</div>}
 
       <div style={{ ...card, borderColor: d.needs_work_state ? 'var(--c-bg-fca5a5)' : 'var(--border)' }}>
         <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>Which state will you work in?</div>

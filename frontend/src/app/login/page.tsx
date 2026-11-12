@@ -88,7 +88,7 @@ export default function LoginPage() {
                 onClick={async () => { setPicking(t.org_id); await switchTenant(t.org_id) }}
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
                   width: '100%', textAlign: 'left', padding: '12px 14px', borderRadius: 10,
-                  border: '1px solid var(--c-bg-cbd5e1)', background: picking === t.org_id ? '#eef2ff' : 'white',
+                  border: '1px solid var(--c-bg-cbd5e1)', background: picking === t.org_id ? 'var(--c-bg-eef2ff)' : 'var(--c-bg-ffffff)',
                   cursor: picking ? 'wait' : 'pointer' }}>
                 <span>
                   <span style={{ display: 'block', fontSize: 14, fontWeight: 700, color: 'var(--c-fg-1e293b)' }}>{t.name}</span>

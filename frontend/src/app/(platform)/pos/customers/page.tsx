@@ -547,7 +547,7 @@ export default function PosCustomersPage() {
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--surface2)', flexWrap: 'wrap' }}>
           {['Lines','Invoices','Notes','Scanned Documents'].map(tab => (
             <button key={tab} onClick={() => setDetailTab(tab)}
-              style={{ padding: '10px 18px', fontSize: 12, fontWeight: detailTab === tab ? 700 : 400, color: detailTab === tab ? 'var(--text)' : 'var(--text2)', background: detailTab === tab ? 'var(--surface)' : 'transparent', border: 'none', borderBottom: detailTab === tab ? '2px solid var(--accent, #3498db)' : '2px solid transparent', cursor: 'pointer' }}>
+              style={{ padding: '10px 18px', fontSize: 12, fontWeight: detailTab === tab ? 700 : 400, color: detailTab === tab ? 'var(--text)' : 'var(--text2)', background: detailTab === tab ? 'var(--surface)' : 'transparent', border: 'none', borderBottom: detailTab === tab ? '2px solid var(--accent, var(--c-bg-3498db))' : '2px solid transparent', cursor: 'pointer' }}>
               {tab === 'Notes' && selected ? `Notes (${notes.length})`
                 : tab === 'Lines' && selected ? `Lines (${lines.length})`
                 : tab === 'Invoices' && selected ? `Invoices (${invoices.length})` : tab}
@@ -718,7 +718,7 @@ export default function PosCustomersPage() {
             <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
               {['General','Marketing','Settings'].map(tab => (
                 <button key={tab} onClick={() => setFormTab(tab)}
-                  style={{ padding: '10px 20px', fontSize: 12, fontWeight: formTab === tab ? 700 : 400, color: formTab === tab ? 'var(--text)' : 'var(--text2)', background: formTab === tab ? 'var(--surface)' : 'transparent', border: 'none', borderBottom: formTab === tab ? '2px solid var(--accent, #3498db)' : '2px solid transparent', cursor: 'pointer' }}>
+                  style={{ padding: '10px 20px', fontSize: 12, fontWeight: formTab === tab ? 700 : 400, color: formTab === tab ? 'var(--text)' : 'var(--text2)', background: formTab === tab ? 'var(--surface)' : 'transparent', border: 'none', borderBottom: formTab === tab ? '2px solid var(--accent, var(--c-bg-3498db))' : '2px solid transparent', cursor: 'pointer' }}>
                   {tab}
                 </button>
               ))}

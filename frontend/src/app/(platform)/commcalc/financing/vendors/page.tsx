@@ -245,8 +245,8 @@ export default function FinancingVendorsPage() {
             </label>
             <span style={{
               fontSize: 11.5, padding: '2px 8px', borderRadius: 20,
-              background: v.detection_status === 'configured' ? '#dcfce7' : '#fef3c7',
-              color: v.detection_status === 'configured' ? '#166534' : '#92400e',
+              background: v.detection_status === 'configured' ? 'var(--c-bg-dcfce7)' : 'var(--c-bg-fef3c7)',
+              color: v.detection_status === 'configured' ? 'var(--c-fg-166534)' : 'var(--c-fg-92400e)',
             }}>
               {v.detection_status === 'configured' ? '✓ detection configured'
                 : v.detection_status === 'inherited_default' ? '◐ inherited default'

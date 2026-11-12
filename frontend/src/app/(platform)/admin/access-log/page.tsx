@@ -66,7 +66,7 @@ export default function AccessLogPage() {
         <div style={{ display: 'flex', background: 'var(--surface2)', padding: 3, borderRadius: 8, gap: 3 }}>
           {([['ip', 'By IP'], ['actor', 'By user'], ['raw', 'Raw']] as const).map(([k, l]) => (
             <button key={k} onClick={() => setGroup(k)} className="btn" style={{
-              fontSize: 12.5, background: group === k ? 'white' : 'transparent',
+              fontSize: 12.5, background: group === k ? 'var(--c-bg-ffffff)' : 'transparent',
               color: group === k ? 'var(--accent)' : 'var(--text2)', boxShadow: group === k ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
             }}>{l}</button>
           ))}

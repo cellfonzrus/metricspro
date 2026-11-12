@@ -150,9 +150,9 @@ export default function AiAssistant({ initialOpen = false, initialQuestion = '',
             <button key={m} onClick={() => !disabled && setMode(m)} disabled={disabled}
               title={m === 'data' && !dataOK ? (data?.reason || 'Not available for this login') : undefined}
               style={{ fontSize: 12, padding: '4px 10px', borderRadius: 999, cursor: disabled ? 'not-allowed' : 'pointer',
-                border: '1px solid ' + (mode === m ? '#2563eb' : 'var(--border)'),
-                background: mode === m ? '#2563eb' : 'transparent',
-                color: mode === m ? '#fff' : (disabled ? 'var(--text3)' : 'var(--text1)'),
+                border: '1px solid ' + (mode === m ? 'var(--c-bg-2563eb)' : 'var(--border)'),
+                background: mode === m ? 'var(--c-bg-2563eb)' : 'transparent',
+                color: mode === m ? 'var(--c-fg-ffffff)' : (disabled ? 'var(--text3)' : 'var(--text1)'),
                 opacity: disabled ? 0.55 : 1 }}>{label}</button>
           )
         })}
@@ -189,8 +189,8 @@ export default function AiAssistant({ initialOpen = false, initialQuestion = '',
         {msgs.map((m, i) => (
           <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
             maxWidth: m.role === 'user' ? '85%' : '100%', width: m.role === 'user' ? undefined : '100%' }}>
-            <div style={{ background: m.role === 'user' ? '#2563eb' : 'var(--surface)',
-              color: m.role === 'user' ? '#fff' : 'var(--text1)',
+            <div style={{ background: m.role === 'user' ? 'var(--c-bg-2563eb)' : 'var(--surface)',
+              color: m.role === 'user' ? 'var(--c-fg-ffffff)' : 'var(--text1)',
               border: m.role === 'user' ? 'none' : '1px solid var(--border)', borderRadius: 12,
               padding: '8px 12px', fontSize: 14, whiteSpace: 'pre-wrap' }}>{m.content}</div>
             {m.role === 'assistant' && (

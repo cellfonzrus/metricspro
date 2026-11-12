@@ -121,8 +121,8 @@ export default function StoreVisitsPage() {
                     <td style={{ ...cell, color: mismatch ? 'var(--amber)' : undefined }}>{v.actual_rep || '—'}{mismatch ? ' ⚠️' : ''}</td>
                     <td style={cell}>
                       <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10,
-                        background: v.status === 'submitted' ? 'var(--green-bg, #e6f7ec)' : 'var(--surface2)',
-                        color: v.status === 'submitted' ? 'var(--green, #16794a)' : 'var(--text2)' }}>
+                        background: v.status === 'submitted' ? 'var(--green-bg, var(--c-bg-e6f7ec))' : 'var(--surface2)',
+                        color: v.status === 'submitted' ? 'var(--green, var(--c-fg-16794a))' : 'var(--text2)' }}>
                         {v.status === 'submitted' ? 'Submitted' : 'In progress'}
                       </span>
                     </td>

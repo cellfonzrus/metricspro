@@ -701,7 +701,7 @@ export default function ReportsPage() {
       <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: 'var(--surface2)', padding: 4, borderRadius: 10, width: 'fit-content' }}>
         {TABS.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} className="btn" style={{
-            background: tab === t.id ? 'white' : 'transparent',
+            background: tab === t.id ? 'var(--c-bg-ffffff)' : 'transparent',
             color: tab === t.id ? 'var(--accent)' : 'var(--text2)',
             boxShadow: tab === t.id ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
             fontSize: 13,

@@ -122,7 +122,7 @@ export default function CommissionLedgerSetupPage() {
       <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
         {STEPS.map((s, i) => (
           <div key={s} style={{ flex: 1, textAlign: 'center', padding: '6px 4px', borderRadius: 8, fontSize: 12, fontWeight: 600,
-            background: i === step ? 'var(--accent,#2563eb)' : 'var(--surface)', color: i === step ? '#fff' : i < step ? 'var(--text2)' : 'var(--text3)',
+            background: i === step ? 'var(--accent,var(--c-bg-2563eb))' : 'var(--surface)', color: i === step ? 'var(--c-fg-ffffff)' : i < step ? 'var(--text2)' : 'var(--text3)',
             border: '1px solid var(--border)' }}>{i + 1}. {s}{i < step ? ' ✓' : ''}</div>
         ))}
       </div>
@@ -140,7 +140,7 @@ export default function CommissionLedgerSetupPage() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
             {tmpls.map(t => (
               <div key={t.key} onClick={() => setSrc(t.key)} style={{ ...card, cursor: 'pointer',
-                borderColor: src === t.key ? 'var(--accent,#2563eb)' : 'var(--border)', borderWidth: src === t.key ? 2 : 1 }}>
+                borderColor: src === t.key ? 'var(--accent,var(--c-bg-2563eb))' : 'var(--border)', borderWidth: src === t.key ? 2 : 1 }}>
                 <div style={{ fontWeight: 700, fontSize: 14 }}>{t.label}</div>
                 <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 3 }}>
                   {t.builtin ? (t.rule_count ? `Ready to use · ${t.rule_count} rules` : 'Preconfigured (no rules yet)') : `Your template · ${t.rule_count} rules`}

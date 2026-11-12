@@ -11,6 +11,7 @@ import DrillDownPanel, {
   DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
 } from '@/components/DrillDownPanel'
 import { agreesToTheCent } from '@/lib/drill-narrow'
+import { rowStripe } from '@/lib/surface'
 
 // WHERE EACH OF THESE FIGURES CAME FROM (index §CORE-17.3p, batch 16). Seven figures on one grain —
 // the invoiced subtotal, the grand total and each of the five fee buckets — all folded over the SAME
@@ -188,7 +189,7 @@ function InvoiceDetailModal({ vipId, onClose }: { vipId: number; onClose: () => 
               {[['Subtotal', inv.sub_total], ['Shipping', inv.shipping], ['Discount', inv.discount], ['Other Cost', inv.other_cost], ['Other Ded.', inv.other_deductions], ['Tax', inv.tax], ['Grand Total', inv.grand_total]].map(([lab, v]) => (
                 <div key={lab as string} style={{ padding: '10px 12px', background: 'var(--surface2)', borderRadius: 8 }}>
                   <div style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>{lab as string}</div>
-                  <div style={{ fontSize: 16, fontWeight: 700, marginTop: 3, color: lab === 'Grand Total' ? '#059669' : 'var(--text1)' }}>{money(v)}</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, marginTop: 3, color: lab === 'Grand Total' ? 'var(--c-fg-059669)' : 'var(--text1)' }}>{money(v)}</div>
                 </div>
               ))}
             </div>
@@ -541,7 +542,7 @@ export default function VipInvoicesPage() {
                 </thead>
                 <tbody>
                   {summary.by_store.map((s, i) => (
-                    <tr key={s.location} style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
+                    <tr key={s.location} style={{ borderTop: '1px solid var(--border)', background: rowStripe(i) }}>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{s.location}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right' }}>{s.invoices}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right' }}>{fmt(s.shipping)}</td>
@@ -581,7 +582,7 @@ export default function VipInvoicesPage() {
                     <tr><td colSpan={7} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>No invoices match.</td></tr>
                   ) : invSort.sorted.map((r, i) => (
                     <tr key={r.vip_id} onClick={() => setDetailId(r.vip_id)}
-                      style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)', cursor: 'pointer' }}>
+                      style={{ borderTop: '1px solid var(--border)', background: rowStripe(i), cursor: 'pointer' }}>
                       <td style={{ padding: '8px 12px', fontSize: 12, fontFamily: 'monospace', color: 'var(--accent)', fontWeight: 600 }}>{r.invoice_number || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>{d10(r.created_on)}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.location || '—'}</td>

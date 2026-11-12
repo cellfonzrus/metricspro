@@ -157,7 +157,7 @@ export default function ClosingImportsPage() {
           <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)', fontSize: 13, color: 'var(--text2)' }}>
             {cfg.next_run_at && <div>Next run: <b>{new Date(cfg.next_run_at).toLocaleString()}</b></div>}
             {cfg.last_run_at && <div>Last run: {new Date(cfg.last_run_at).toLocaleString()}</div>}
-            {cfg.last_status && <div>Last status: <b style={{ color: cfg.last_status === 'ok' ? 'var(--green, #16794a)' : 'var(--amber, #b45309)' }}>{cfg.last_status}</b> — {cfg.last_detail}</div>}
+            {cfg.last_status && <div>Last status: <b style={{ color: cfg.last_status === 'ok' ? 'var(--green, var(--c-fg-16794a))' : 'var(--amber, var(--c-fg-b45309))' }}>{cfg.last_status}</b> — {cfg.last_detail}</div>}
           </div>
         )}
       </div>

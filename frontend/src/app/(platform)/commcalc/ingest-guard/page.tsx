@@ -4,6 +4,7 @@ import { api, getActiveOrg } from '@/lib/client'
 import { actorLabel } from '@/lib/actor'
 import { SetupNotice } from '@/lib/setupNotice'
 import { sourceLabel } from '@/lib/sourceLabels'
+import { rowStripe } from '@/lib/surface'
 
 /**
  * CROSS-TENANT INGEST GUARD — admin UI (owner-approved 2026-08-06).
@@ -156,7 +157,7 @@ export default function IngestGuardPage() {
           {modes.map(m => (
             <label key={m.value}
               style={{
-                flex: '1 1 220px', minWidth: 220, border: `2px solid ${mode === m.value ? 'var(--primary, #2563eb)' : 'var(--border)'}`,
+                flex: '1 1 220px', minWidth: 220, border: `2px solid ${mode === m.value ? 'var(--primary, var(--c-bg-2563eb))' : 'var(--border)'}`,
                 borderRadius: 10, padding: 12, cursor: 'pointer',
                 background: mode === m.value ? 'rgba(37,99,235,.06)' : 'transparent',
               }}>
@@ -222,7 +223,7 @@ export default function IngestGuardPage() {
             </thead>
             <tbody>
               {items.map((it, i) => (
-                <tr key={it.id} style={{ borderBottom: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
+                <tr key={it.id} style={{ borderBottom: '1px solid var(--border)', background: rowStripe(i) }}>
                   <td style={td}>
                     <div style={{ fontWeight: 600 }}>{it.store_raw}</div>
                     <div style={{ fontSize: 11, color: 'var(--text3)' }}>

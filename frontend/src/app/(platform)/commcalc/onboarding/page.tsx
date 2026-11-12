@@ -146,7 +146,7 @@ export default function OnboardingPage() {
             <span style={{ fontWeight: 700 }}>{ready} of {total} steps done</span><span style={{ color: 'var(--text3)' }}>{pct}%</span>
           </div>
           <div style={{ height: 10, background: 'var(--surface2, var(--c-bg-eef2f7))', borderRadius: 999, overflow: 'hidden' }}>
-            <div style={{ width: `${pct}%`, height: '100%', background: pct === 100 ? '#16a34a' : '#2563eb', transition: 'width .3s' }} />
+            <div style={{ width: `${pct}%`, height: '100%', background: pct === 100 ? 'var(--c-bg-16a34a)' : 'var(--c-bg-2563eb)', transition: 'width .3s' }} />
           </div>
         </div>
       )}

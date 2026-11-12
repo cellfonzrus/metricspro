@@ -183,7 +183,7 @@ export default function ReconPage() {
                     return (
                       <>
                         <tr key={r.store} onClick={() => expandable && setOpen(o => ({ ...o, [r.store]: !o[r.store] }))}
-                          style={{ borderTop: '1px solid var(--border)', fontSize: 13, cursor: expandable ? 'pointer' : 'default', background: r.status === 'under' ? '#fef2f2' : 'transparent' }}>
+                          style={{ borderTop: '1px solid var(--border)', fontSize: 13, cursor: expandable ? 'pointer' : 'default', background: r.status === 'under' ? 'var(--c-bg-fef2f2)' : 'transparent' }}>
                           <td style={{ padding: '8px 16px' }}>{expandable && <span style={{ fontSize: 11, marginRight: 6 }}>{open[r.store] ? '▾' : '▸'}</span>}{r.store}</td>
                           <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(r.memo_total)}</td>
                           <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(r.mi_atu_total)}</td>

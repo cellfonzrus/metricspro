@@ -127,7 +127,7 @@ function TrainingCenterBody() {
         ).map((t: 'tours' | 'flowcharts' | 'scripts') => (
           <button key={t} onClick={() => setTab(t)} className="btn"
             style={{ fontSize: 13, background: tab === t ? 'var(--accent)' : undefined,
-              color: tab === t ? 'white' : undefined }}>
+              color: tab === t ? 'var(--c-fg-ffffff)' : undefined }}>
             {t === 'tours' ? 'Walk-throughs' : t === 'flowcharts' ? 'Flowcharts' : 'Recording scripts'}
           </button>
         ))}

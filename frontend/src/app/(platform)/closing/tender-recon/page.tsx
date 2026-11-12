@@ -185,8 +185,8 @@ export default function XTenderReconPage() {
               selectedStores={filt.stores} onStoresChange={ids => setFilt(f => ({ ...f, stores: ids }))}
             />
             <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-              <button className="btn" style={{ borderRadius: 0, border: 'none', background: mode === 'date' ? 'var(--accent)' : 'transparent', color: mode === 'date' ? 'white' : 'var(--text2)' }} onClick={() => setMode('date')}>Day</button>
-              <button className="btn" style={{ borderRadius: 0, border: 'none', background: mode === 'period' ? 'var(--accent)' : 'transparent', color: mode === 'period' ? 'white' : 'var(--text2)' }} onClick={() => { setMode('period'); if (!period) setPeriod(localToday().slice(0, 7)) }}>Month</button>
+              <button className="btn" style={{ borderRadius: 0, border: 'none', background: mode === 'date' ? 'var(--accent)' : 'transparent', color: mode === 'date' ? 'var(--c-fg-ffffff)' : 'var(--text2)' }} onClick={() => setMode('date')}>Day</button>
+              <button className="btn" style={{ borderRadius: 0, border: 'none', background: mode === 'period' ? 'var(--accent)' : 'transparent', color: mode === 'period' ? 'var(--c-fg-ffffff)' : 'var(--text2)' }} onClick={() => { setMode('period'); if (!period) setPeriod(localToday().slice(0, 7)) }}>Month</button>
             </div>
             {mode === 'date'
               ? <input className="select" type="date" value={date} onChange={e => setDate(e.target.value)} />

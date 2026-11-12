@@ -245,7 +245,7 @@ export default function ReceiptImportPage() {
           <button className="btn btn-secondary" onClick={() => loadRebuilt()}>Show rebuilt sales</button>
         </div>
         {job && (
-          <div style={{ marginTop: 10, fontSize: 13, padding: '8px 12px', borderRadius: 6, background: job.state === 'failed' ? '#fde8e8' : 'var(--bg)', border: '1px solid var(--border)' }}>
+          <div style={{ marginTop: 10, fontSize: 13, padding: '8px 12px', borderRadius: 6, background: job.state === 'failed' ? 'var(--c-bg-fde8e8)' : 'var(--bg)', border: '1px solid var(--border)' }}>
             {job.state === 'running' && jobRunning
               ? <div>⏳ Rebuilding {job.from} → {job.to} in the background: month {job.months_done ?? 0} of {job.months_total}
                   {job.current ? ` (through ${job.current})` : ''} · {job.invoices ?? 0} invoice(s) so far — you can leave this page; it keeps going.</div>
