@@ -148,9 +148,23 @@ for fname, body in funcs.items():
         offenders.append(fname)
 check("D1 every storeops write of a store code dereferences the capture home",
       not offenders, offenders)
-_writers = [f for f in funcs if WRITE.search(funcs[f])]
-check("D2 the writes are still there to be checked (the scan is not vacuously green)",
-      len(_writers) >= 6, _writers)
+# DECLARED, not counted (harness_subject_set_lock): these are the six functions in storeops/router
+# that write a store code. A writer that LEAVES this set names itself here instead of taking its own
+# assertion away quietly; a NEW writer fails §D2 and must be added deliberately — which is the whole
+# point, because adding it means reading §D1 and stamping the code.
+STORE_CODE_WRITERS = {
+    "create_shift",                           # POST /shifts — the schedule save
+    "save_week_as_template",                  # the weekly template
+    "apply_templates",                        # the shifts a template creates
+    "_activate_pending_clockins_for_shift",   # the held tap a manager's schedule activates
+    "clock_in",                               # the kiosk
+    "clock_in_override",                      # a manager clocking someone in elsewhere
+}
+_writers = {f for f in funcs if WRITE.search(funcs[f])}
+check("D2 the writers are EXACTLY the declared set (the scan cannot go blind)",
+      _writers == STORE_CODE_WRITERS,
+      {"only_in_code": sorted(_writers - STORE_CODE_WRITERS),
+       "only_declared": sorted(STORE_CODE_WRITERS - _writers)})
 # `_stamp_store_code` must reach the HOME; `_captured_store_code` is one line over it, so it is
 # allowed to reach the home THROUGH it — one hop, and the hop is itself checked on the line above.
 for _w, _want in (("_stamp_store_code", r"(stamp_capture|capture_code)\s*\("),
