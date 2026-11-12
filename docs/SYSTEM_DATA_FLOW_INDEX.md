@@ -26368,6 +26368,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-67 | commcalc |
 | COMMCALC-68 | commcalc |
 | COMMCALC-69 | commcalc |
+| COMMCALC-70 | commcalc, storeops |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -47548,6 +47549,77 @@ and the carry rule) · §14y (paid hours, the evidence and the interlock) · §C
 month never inherits labour) · §19.18 (one fact, one home, dereferenced — never copied) ·
 §COMMCALC-49.10 (a feature is not finished until it works for every tenant) · §CORE-34/35 (the gate
 index that lists the new proof) · §6l (the post-landing recalculation hook §ACCOUNT-01.4 reports on).
+
+
+## §COMMCALC-70. A STORE CODE IS CANONICAL FROM BIRTH — CAPTURE, NOT ONLY READ (reported 2026-11-12)
+
+Owner, on §ACCOUNT-01: *"this is a mapping issue the system shoudl eb smart enough to cpature this
+fromt eh get go"*. Right, and the stronger claim: folding on READ makes each reader correct; it does
+not make the stored fact true, and the next reader that joins without the fold is wrong again.
+
+### §COMMCALC-70.1 What was in the tables, measured live 2026-11-12
+
+Against each org's OWN declared vocabulary (`commcalc.store_mapping` + `storeops.stores` +
+`commcalc.store_aliases`, via `flag_store_resolver.store_index`):
+
+| table | rows whose code is not the declared spelling | written by | rows nothing can resolve |
+|---|---|---|---|
+| `storeops.timelog` | **2,131** | `device='kiosk'` 2,058 · `kiosk-override` 47 · auto-activate 26 | 38 |
+| `storeops.shifts` | 97 (LuxeLink 82 · house 15, `b-1115`) | the schedule save and the template apply | 123 |
+| `commcalc.store_expenses` | 0 | — | 491 |
+| `storeops.shift_templates` | 0 | — | 0 |
+
+The kiosk writes `CICERO`, `GRAND`, `LAWRENCE`, `ARMITAGE` where the orgs declare `Cicero`, `Grand`,
+`lawrence`, `Armitage` — **180 of those punches are November 2026**, so this was still happening
+after §ACCOUNT-01 landed. 2,094 of the LuxeLink clock rows hold a store **ADDRESS** in a column
+named `store_code`.
+
+### §COMMCALC-70.2 THE CLASS
+
+**A column named `store_code` is written with whatever the source happened to call the store — a
+code, a code in another case, or an address — because no WRITE passes through the one place that
+answers "which store is this string?".**
+
+### §COMMCALC-70.3 The design fix
+
+* `commcalc/flag_store_resolver` was ALREADY the write-side home for that question (§285, keyed on
+  the span keyset's own vocabulary). It gains `capture_code` (which IS `resolve_code` — a name for
+  the intent, never a second rule), `stamp_capture`, `unrecognised_spellings` and the I/O
+  `capture_store_code`. **No new module**: a sibling write-side resolver is the duplicate defect the
+  index rules forbid.
+* `storeops/router._stamp_store_code` / `._captured_store_code` are the two one-line wrappers, and
+  **all six** writes of a store code in that module go through them: `create_shift`,
+  `save_week_as_template`, `apply_templates`, `_activate_pending_clockins_for_shift`, `clock_in`
+  (the kiosk) and `clock_in_override`. In `clock_in` the capture happens BEFORE the geofence verdict
+  and `work_date`, so the punch, its verdict and the schedule are keyed on one store.
+* **Nothing is invented and nothing is refused.** A spelling the org does not declare is stored
+  exactly as typed and reported; a rep's punch is never blocked over a config gap, and an empty
+  vocabulary (a read that failed) rewrites nothing at all.
+* The REPORT is the existing `GET /commcalc/store-unmatched`, extended with the four capture tables
+  (its source list now carries an optional schema) rather than a sibling report. Live:
+  **house 9 spellings to map** (`T-7812`, `T-957`, `T-902`, `T21880`, `T-531`, `T3560`, …),
+  **LuxeLink 2**, Vzone and NY Logistics none.
+
+### §COMMCALC-70.4 What the lock holds
+
+`harness_store_code_capture.py` (43 checks) fails the build when ANY `insert`/`upsert` into
+`storeops.shifts` / `timelog` / `shift_templates` sits in a function that does not dereference the
+home — the scan is over CODE (`harnesslib.py_code_only`), it refuses to be vacuously green (§D2 holds the
+six writers as a DECLARED set and compares for equality, per `harness_subject_set_lock`: a writer
+that leaves names itself, and a NEW one fails until it is added deliberately — which is exactly when
+§D1 gets read), and the two sanctioned local wrappers are themselves checked for the dereference
+(§D4a), so naming them is not a hole. §A–§C hold the capture rule
+(declared spelling in any case, an address, idempotence, no guess, an empty index moves nothing) and
+the live kiosk regression; §E is the cross-tenant pass — each tenant captures against its own
+declarations and reaches nothing of another's.
+
+**The stored rows are NOT rewritten by this change.** Every reader already folds (§ACCOUNT-01), so
+no number moves; a one-time restamp is owner-approved data work, offered as SQL, never applied from
+code that could hide the gap.
+
+**Cross-references:** §ACCOUNT-01 (the read-side fold and the month that surfaced it) · §64 (store
+identity) · §285 / §13d (`flag_store_resolver`, the home extended here) · §19.18 (one fact, one
+home) · §COMMCALC-49.10 (every feature is for every tenant).
 
 ## §CORE-42. A GATE PROVED IN-PROCESS IS A CLAIM, NOT A MEASUREMENT (owner directive 2026-11-12)
 

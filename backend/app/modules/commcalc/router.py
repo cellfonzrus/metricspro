@@ -24385,9 +24385,19 @@ def delete_store_alias(alias_id: str, org_id: str = ORG_ID):
 # was MISSING (2026-08-06): the hourly B2B feed is where a store string FIRST enters a tenant, and
 # `_promote_feed_to_raw_sales` then copies it into raw_sales — so the one source that could show an
 # unknown store the moment it arrives was the one source not looked at.
+# (table, column) is a commcalc source; (table, column, schema) names another schema. The WORKFORCE
+# tables were added 2026-11-12 (owner: "this is a mapping issue the system shoudl eb smart enough to
+# cpature this fromt eh get go", index §COMMCALC-70) — they are where a store code is CAPTURED, and the
+# spellings only a human can map live there: 491 store_expenses rows and 123 shifts on codes the org
+# declares nowhere. This endpoint is already the house's "stores to map" diagnostic, so the sources
+# are extended rather than a sibling report built.
 _UNMATCHED_SRCS = [('raw_sales', 'store'), ('daily_sales_feed', 'store'), ('asset_ledger', 'store'),
                    ('rep_commissions', 'store'), ('raw_comp_report', 'business_address'),
-                   ('vip_paygo', 'dealer'), ('vip_invoices', 'location')]
+                   ('vip_paygo', 'dealer'), ('vip_invoices', 'location'),
+                   ('store_expenses', 'store_code'),
+                   ('shifts', 'store_code', 'storeops'),
+                   ('timelog', 'store_code', 'storeops'),
+                   ('shift_templates', 'store_code', 'storeops')]
 # Rows read per source in ONE request. The scan stays single-shot per source (this endpoint fans out
 # over seven tables; paginating each one would turn a diagnostic into a gateway timeout), but a scan
 # that hits the cap now SAYS SO — see `truncated` below.
@@ -24620,14 +24630,16 @@ def store_unmatched(period: str = "", org_id: str = ORG_ID):
     resolve = coa.store_resolver(client, org_id)
     pv = _pvariants(period) if str(period or '').strip() else None
     seen, scan = {}, {}
-    for table, col in _UNMATCHED_SRCS:
+    for _src in _UNMATCHED_SRCS:
+        table, col = _src[0], _src[1]
+        sch = _src[2] if len(_src) > 2 else 'commcalc'
         rows, narrowed = None, False
         if pv:
             # Try the narrowed read first; a source with no `period` column raises -> scan it whole
             # rather than dropping it (dropping it would understate the answer, which is the exact
             # class of defect this docstring is about).
             try:
-                rows = (client.schema('commcalc').table(table).select(col)
+                rows = (client.schema(sch).table(table).select(col)
                         .eq('org_id', org_id).in_('period', pv)
                         .order('id').limit(_UNMATCHED_SCAN_LIMIT).execute().data) or []
                 narrowed = True
@@ -24635,12 +24647,12 @@ def store_unmatched(period: str = "", org_id: str = ORG_ID):
                 rows = None
         if rows is None:
             try:
-                rows = (client.schema('commcalc').table(table).select(col)
+                rows = (client.schema(sch).table(table).select(col)
                         .eq('org_id', org_id).order('id')
                         .limit(_UNMATCHED_SCAN_LIMIT).execute().data) or []
             except Exception:
                 try:                      # no `id` column to order by -> unordered, still counted
-                    rows = (client.schema('commcalc').table(table).select(col)
+                    rows = (client.schema(sch).table(table).select(col)
                             .eq('org_id', org_id).limit(_UNMATCHED_SCAN_LIMIT).execute().data) or []
                 except Exception as e:
                     scan[table] = {'rows_scanned': 0, 'truncated': False, 'period_narrowed': False,
