@@ -119,6 +119,11 @@ Follow the house rules, which are not relaxed for security work:
   the people whose job it is. The probe measures both directions on purpose, and `LOCKED_OUT` is a
   finding, not a success.
 - **Draft PR**, duplicate check stated, index registered (`docs/SYSTEM_DATA_FLOW_INDEX.md`, same PR).
+  A scheduled run may start without the `mcp__github__*` tools (a routine stores no connectors). If
+  they are absent, use `gh api` against the REST endpoints — e.g.
+  `gh api -X POST repos/cellfonzrus/metricspro/pulls -f title=… -f head=… -f base=main -F draft=true`.
+  **Never let a missing tool become a reason to report a finding and ship no fix**; and never let it
+  become a reason to push to a branch other than a new one of your own.
 - **A permission or schema change is the owner's** — surface it, with the exact SQL, and never apply
   it yourself.
 
