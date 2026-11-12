@@ -765,6 +765,14 @@ fake.seed("storeops", "employees", [
     {"id": 45, "org_id": ORG, "employee_id": "E45", "name": "Priya Rep", "home_store": "S1",
      "pay_rate": 22.0, "is_active": True},
 ])
+# This org has NAMED the date its corrections start counting, which is what a tenant does to turn
+# the fold on. Without it nothing folds by design (§STOREOPS-07, harness_hours_correction §B0), so
+# an undated row here would make G1-G5 pass for the wrong reason.
+fake.store[("storeops", "payroll_hours_basis_config")] = [
+    {"org_id": ORG, "hours_basis_mode": "schedule_fallback", "count_manual_hours": True,
+     "corrections_effective_from": "2026-07-01"},
+]
+_hb_mod.invalidate_config()
 
 # G1-G5 REWRITTEN 2026-11-11 (§STOREOPS-07). They used to assert that `/payroll` never reads
 # `storeops.manual_hours` and that this panel therefore shows a correction `counted: false` and

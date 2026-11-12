@@ -140,7 +140,12 @@ def _manual(org, eid, day, hours, reason="didnt clock out"):
             "work_date": day, "hours": hours, "reason": reason}
 
 
-def _cfg(org, mode="schedule_fallback", manual=True, floor=None, corrections_floor=None):
+# A tenant that WANTS corrections counted declares the date they start counting; an undated org
+# folds nothing (see corrections_apply). So the default here is a declared date well before the
+# period under test, which is the shape of a tenant that has turned this on. §D11 covers the
+# undated org, so the default must never be None or that case stops being tested separately.
+def _cfg(org, mode="schedule_fallback", manual=True, floor=None,
+         corrections_floor="2026-10-01"):
     return {"org_id": org, "hours_basis_mode": mode, "pay_from_schedule_default": True,
             "count_manual_hours": manual, "clocked_basis_effective_from": floor,
             "corrections_effective_from": corrections_floor}
@@ -231,6 +236,27 @@ def run():
     check("D5 a correction BEFORE the floor is not applied — the clock figure stands (9.00)",
           rf is not None and rf.get("actual_hours") == 9.00,
           f"got {None if rf is None else rf.get('actual_hours')}")
+
+    # ── D11 — AN UNDATED ORG FOLDS NOTHING, and says why ─────────────────────────────────────────
+    # The reason this is a check and not a default: merging this code must not restate a single
+    # already-paid figure. An org that declares count_manual_hours but has named no start date gets
+    # exactly the figure it has today, and the drill-down carries the one home's own words for it.
+    STORE["payroll_hours_basis_config"] = [_cfg(NY, corrections_floor=None), _cfg(LUX),
+                                           _cfg(HOUSE, mode="clocked_only", floor="2026-10-04")]
+    HB.invalidate_config()
+    ny_undated = R.get_payroll(month=None, start=LO, end=HI, authorization="", org_id=NY,
+                               response=None)
+    ru = _row(ny_undated, "E276")
+    check("D11 an org with NO corrections date keeps today's figure (9.00, not 6.50)",
+          ru is not None and ru.get("actual_hours") == 9.00,
+          f"got {None if ru is None else ru.get('actual_hours')}")
+    check("D11b and it is not reported as a corrected basis",
+          ru is not None and not (ru.get("hours_by_basis") or {}).get(HB.CLOCKED_CORRECTED),
+          f"got {None if ru is None else ru.get('hours_by_basis')}")
+    _applies, _why = HB.corrections_apply(DAY, HB.resolve_config(_cfg(NY, corrections_floor=None)))
+    check("D11c the refusal names the date that is missing, not a generic 'off'",
+          _applies is False and _why and "corrections_effective_from" in _why,
+          f"applies={_applies} why={_why!r}")
 
     # ── D6 — EVERY TENANT, measured against its own declaration ──────────────────────────────────
     STORE["payroll_hours_basis_config"] = [_cfg(NY), _cfg(LUX),

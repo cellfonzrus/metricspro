@@ -71,6 +71,17 @@ HOUSE_ROW = {"hours_basis_mode": "clocked_only", "pay_from_schedule_default": Fa
 FALLBACK_ROW = {"hours_basis_mode": "schedule_fallback", "pay_from_schedule_default": True,
                 "count_manual_hours": True, "clocked_basis_effective_from": None}
 
+#: THE PRODUCTION ROWS ABOVE CARRY NO `corrections_effective_from`, because the column does not
+#: exist in production yet. That is deliberate and load-bearing: an undated org folds nothing, so
+#: deploying this restates no figure anybody has already been paid against (§B0). `dated()` is the
+#: shape of a tenant AFTER the owner names the date corrections start counting — which is the state
+#: every "the correction reaches the figure" check below is about.
+CORR_FROM = "2026-10-01"
+
+
+def dated(row, start=CORR_FROM):
+    return {**row, "corrections_effective_from": start}
+
 
 def cell(day, *, punch=None, scheduled=0.0, shift_actual=0.0, manual=()):
     """One `build_evidence` cell, built through the one home so the shape cannot drift."""
@@ -94,7 +105,7 @@ DAY = "2026-11-05"          # on/after every floor in play, so the floor is not 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("A. WHAT A CORRECTION MEANS — a delta on what was measured, never a replacement")
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-cfg_house = HB.resolve_config(HOUSE_ROW)
+cfg_house = HB.resolve_config(dated(HOUSE_ROW))
 
 # A1 — THE REPORTED SHAPE, from live LuxeLink data: E198 / 2026-10-28 / -2.50 "didnt clock out",
 # on a day the clock measured a full shift. Read as a replacement this pays MINUS 2.5 hours.
@@ -143,7 +154,20 @@ check("A8 a day with no evidence at all is still not_measured_unpaid",
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("B. THE DECLARATION IS HONOURED IN BOTH MODES, and a closed month is protected by a DATE")
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-cfg_fb = HB.resolve_config(FALLBACK_ROW)
+cfg_fb_undated = HB.resolve_config(FALLBACK_ROW)   # production today: no date, no fold
+cfg_fb = HB.resolve_config(dated(FALLBACK_ROW))
+
+# B0 — DEPLOYING THIS RESTATES NOTHING. The four rows above are production verbatim and none of
+# them names a corrections date, so every live tenant folds nothing until its owner names one. This
+# is the check that makes the merge a code change rather than a money change.
+for _label, _row in (("house", HOUSE_ROW), ("fallback", FALLBACK_ROW)):
+    _cfg0 = HB.resolve_config(_row)
+    _h0, _b0, _d0 = HB.resolve_day(cell(DAY, punch=9.0, manual=(-2.50,)), _cfg0)
+    check(f"B0 {_label} as it stands in production folds nothing (9.00 stands)",
+          _h0 == 9.0 and _b0 == HB.CLOCKED, f"got {_h0} ({_b0})")
+    check(f"B0 {_label} and the row carries the reason rather than dropping it silently",
+          bool(_d0.get("corrections_floor_reason")) and _d0.get("correction_applied") is False,
+          f"reason={_d0.get('corrections_floor_reason')!r} applied={_d0.get('correction_applied')}")
 
 # B1 — THE DEFECT. Three of the four live tenants are on `schedule_fallback` with
 # `count_manual_hours = true`, and `resolve_config` forced it to False, so their declaration could
@@ -157,7 +181,7 @@ h, basis, _ = HB.resolve_day(cell(DAY, punch=9.0, manual=(-2.50,)), cfg_fb)
 check("B2 a schedule_fallback tenant's correction reaches the figure", h == 6.50, f"got {h} ({basis})")
 
 # B3 — the declaration is honoured in BOTH directions: an org that says no gets no corrections.
-cfg_off = HB.resolve_config({**FALLBACK_ROW, "count_manual_hours": False})
+cfg_off = HB.resolve_config(dated({**FALLBACK_ROW, "count_manual_hours": False}))
 h, basis, _ = HB.resolve_day(cell(DAY, punch=9.0, manual=(-2.50,)), cfg_off)
 check("B3 an org that declares count_manual_hours FALSE still gets none", h == 9.0, f"got {h} ({basis})")
 
@@ -172,9 +196,20 @@ check("B4 and the row says why it was not corrected",
 h_post, _, _ = HB.resolve_day(cell("2026-11-11", punch=9.0, manual=(-2.50,)), cfg_floor)
 check("B4 a day ON the corrections floor is corrected (6.50)", h_post == 6.50, f"got {h_post}")
 
-# B5 — no floor declared means the declaration applies to every day (the shipped shape).
-check("B5 no corrections floor means no day is excluded",
-      HB.corrections_effective_from(cfg_fb) is None, f"got {HB.corrections_effective_from(cfg_fb)}")
+# B5 — AN UNSET DATE IS A REFUSAL. Rewritten 2026-11-11: this check previously asserted that an
+# absent date meant "every day in range is corrected", which is the permissive reading. On this
+# platform that reading restates 616 corrections over already-paid months on four tenants, three of
+# them already rebuilt by hand as payroll_approval adjustments. The date is now REQUIRED, so an
+# undated org folds nothing and says which date is missing.
+check("B5 an undated org has no corrections date",
+      HB.corrections_effective_from(cfg_fb_undated) is None,
+      f"got {HB.corrections_effective_from(cfg_fb_undated)}")
+_h_undated, _b_undated, _ = HB.resolve_day(cell(DAY, punch=9.0, manual=(-2.50,)), cfg_fb_undated)
+check("B5 and it folds NOTHING — today's figure stands (9.00)",
+      _h_undated == 9.0 and _b_undated == HB.CLOCKED, f"got {_h_undated} ({_b_undated})")
+_ok5, _why5 = HB.corrections_apply(DAY, cfg_fb_undated)
+check("B5 and the refusal names the missing date rather than reading as 'switched off'",
+      _ok5 is False and _why5 and "corrections_effective_from" in _why5, f"{_ok5} {_why5!r}")
 
 # B6 — the corrections floor is its OWN date, independent of the clocked-basis floor. The house org
 # has a clocked floor of 2026-10-04 already, and it must not silently become the corrections floor.
@@ -195,7 +230,7 @@ TENANTS = {
     "vzone (schedule_fallback)": FALLBACK_ROW,
 }
 for label, row in TENANTS.items():
-    cfg = HB.resolve_config(row)
+    cfg = HB.resolve_config(dated(row))
     h, _, _ = HB.resolve_day(cell(DAY, punch=9.0, manual=(-2.50,)), cfg)
     check(f"C1 {label}: its correction reaches its figure", h == 6.50, f"got {h}")
 

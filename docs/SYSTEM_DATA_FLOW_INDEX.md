@@ -44516,6 +44516,17 @@ said. **"Do not move money on deploy" now has its own control, and it is a DATE.
 
 - `corrections_effective_from` (per org) — days on/after it are corrected, days before it resolve
   exactly as they do today, and `corrections_floor_reason` tells a reader which.
+- **THE DATE IS REQUIRED. An unset date is a refusal, not a licence.** An org that has named no date
+  folds nothing, so landing this code restates not one already-paid figure, and the merge is a code
+  change rather than a money change. The permissive reading of an absent date — "correct every day
+  in range" — would have restated 616 corrections across months of closed periods on four tenants
+  the moment it deployed, three of them already rebuilt by hand (below), and it would have done so
+  because nobody had answered a question rather than because somebody chose it. This is the house
+  rule for a tenant's own declaration (owner directive 2026-10-30) applied to a date: nothing
+  declared means nothing identified, and the surface says so in words. Proved by
+  `harness_hours_correction_reaches_figure.py` §B0/§B5 and `harness_payroll_hours_basis.py` §B4c/d.
+- **Turning it on is one config row per tenant**, which is the owner's choice and his alone: set the
+  date and every day from it forward is corrected. No code change, no deploy (RULE TWO).
 - **Its OWN column, deliberately not `clocked_basis_effective_from`.** That date means "when this
   org's clocked-only basis began" and the house org already carries `2026-10-04` for it; reading the
   corrections fold off the same column would hand the house a fold date it never chose — the copied-

@@ -56,8 +56,15 @@ def section(t):
 
 
 DEFAULT = B.resolve_config(None)
+#: CLOCKED names its `corrections_effective_from` because, from §STOREOPS-07, the date is REQUIRED
+#: for a correction to fold at all: an org that has named none folds nothing, so that deploying the
+#: change restates no already-paid figure. This is therefore the shape of a tenant that has turned
+#: corrections on, which is what every fold check below is about. UNDATED_CLOCKED is the other side.
 CLOCKED = B.resolve_config({"hours_basis_mode": B.MODE_CLOCKED_ONLY,
-                            "pay_from_schedule_default": False})
+                            "pay_from_schedule_default": False,
+                            "corrections_effective_from": "2026-01-01"})
+UNDATED_CLOCKED = B.resolve_config({"hours_basis_mode": B.MODE_CLOCKED_ONLY,
+                                    "pay_from_schedule_default": False})
 
 
 def shift(day="2026-10-09", sched=9.0, act=0.0, eid="E1"):
@@ -130,6 +137,16 @@ check("B3 a tenant's count_manual_hours declaration survives BOTH modes, unoverw
       (DEFAULT["count_manual_hours"], CLOCKED["count_manual_hours"]), (True, True))
 check("B4 …and the thing that stops a deploy restating a closed month is a DATE, not the mode",
       (DEFAULT["corrections_effective_from"], B.corrections_effective_from(DEFAULT)), (None, None))
+# B4c THE DATE IS REQUIRED, so deploying §STOREOPS-07 restates nothing. An org that declares
+#     count_manual_hours but has named no start date folds no correction, and says which date is
+#     missing rather than reading as "switched off".
+check("B4c an org with no corrections date folds nothing",
+      B.resolve_day(B.build_evidence(punches=[punch(hours=9.0)],
+                                     manual_rows=[manual(hours=-2.50)]).get(("E1", "2026-10-09")),
+                    UNDATED_CLOCKED)[:2], (9.0, B.CLOCKED))
+check("B4d …and the refusal names the missing date",
+      ("corrections_effective_from" in (B.corrections_apply("2026-10-09", UNDATED_CLOCKED)[1] or "")),
+      True)
 check("B4b an org that declares count_manual_hours FALSE is obeyed in either mode",
       (B.resolve_config({"count_manual_hours": False})["count_manual_hours"],
        B.resolve_config({"count_manual_hours": False,
@@ -313,7 +330,7 @@ check("G11 a ticked employee's unmeasured day is still NOT counted as measured",
 
 section("H. the measurement question, asked on its own")
 check("H1 a correction is a measurement whatever the pay mode says",
-      B.measurement_state({"manual": 7.75, "manual_rows": 1}, DEFAULT),
+      B.measurement_state({"manual": 7.75, "manual_rows": 1}, CLOCKED),
       (B.CLOCKED_CORRECTED, 7.75))
 check("H2 a usable punch is a measurement", B.measurement_state(
       {"_raw_punches": [{"clock_out": "x", "hours": 8.5}]}, DEFAULT), (B.CLOCKED, 8.5))
@@ -755,8 +772,11 @@ def ec(cfg, ci="2026-10-09T09:45:00-04:00", hours=9.25, start=EC_START, sched=9.
 TRIM0 = B.resolve_config({"hours_basis_mode": B.MODE_CLOCKED_ONLY,
                           "early_clockin_rule": B.EARLY_FROM_SCHEDULE,
                           "early_clockin_grace_hours": 0.0})
+#: Dated for the same reason CLOCKED is: EC25 below is about a correction ADJUSTING a trimmed
+#: figure, which only happens once the org has named the date corrections start counting.
 TRIM15 = B.resolve_config({"hours_basis_mode": B.MODE_CLOCKED_ONLY,
-                           "early_clockin_rule": B.EARLY_FROM_SCHEDULE})
+                           "early_clockin_rule": B.EARLY_FROM_SCHEDULE,
+                           "corrections_effective_from": "2026-01-01"})
 
 # ── the shipped default moves nothing, which is the whole posture of this module ────────────────
 check("EC1 the house default is TODAY: an early clock-in pays as clocked",

@@ -393,12 +393,13 @@ def resolve_config(org_row=None, _pre_floor=False):
     .resolve_tax_config` — an org with no row, or a database where mig 1073 has not run, behaves
     exactly as the house default, which is exactly as today.
 
-    THE ONE THING THIS FUNCTION DECIDES RATHER THAN MERGES: `count_manual_hours` is forced FALSE in
-    `MODE_SCHEDULE_FALLBACK`. `GET /storeops/payroll` has never read `storeops.manual_hours`
-    (router.py ~:1929 reports those rows as deliberately NOT in payroll), so honouring the flag in
-    the default mode would fold 569 live correction rows into pay the moment this code deployed.
-    The default mode must be byte-identical to today; the corrections become payable when the org
-    turns clocked-only ON, which is the decision the owner makes, not one this module makes for him.
+    THIS FUNCTION NO LONGER OVERRIDES `count_manual_hours` (§STOREOPS-07, 2026-11-11). It used to
+    force the flag FALSE in `MODE_SCHEDULE_FALLBACK`, which meant three of four tenants had DECLARED
+    that corrections count and were answered FALSE — so 616 hand-typed corrections reached no figure
+    on any tenant. The concern behind the forcing was right ("do not move money on deploy") and it
+    now has a control that says so honestly: `corrections_effective_from`, a DATE, REQUIRED for any
+    fold. An org that has set no date folds nothing, so deploying this still restates nothing; an
+    org's own declaration is honoured rather than silently reversed.
     """
     eff = dict(DEFAULT_CONFIG)
     for f in _CONFIG_FIELDS:
@@ -463,7 +464,8 @@ def effective_from(cfg):
 def corrections_effective_from(cfg):
     """PURE: the ISO date on and after which a `manual_hours` correction is folded, or None.
 
-    None means NO FLOOR — every day in range is corrected. Its OWN column, never
+    None means NO FOLD AT ALL — see `corrections_apply`, which refuses an unset date rather than
+    reading it as permission to restate every corrected day. Its OWN column, never
     `clocked_basis_effective_from`: see the `DEFAULT_CONFIG` note on why sharing one date would hand
     the house org a fold date it never chose.
     """
@@ -490,13 +492,27 @@ def corrections_apply(day, cfg):
     rather than by silently leaving a correction out:
 
       · the org declared `count_manual_hours = false` — its own choice, honoured;
+      · the org has set NO `corrections_effective_from` — see below;
       · the day falls before this org's `corrections_effective_from`;
       · there is no correction to apply (the caller's own check, not this function's).
+
+    AN UNSET DATE IS A REFUSAL, NOT A LICENCE. The date is REQUIRED for a fold, because the
+    permissive reading of an absent date is "restate every corrected day in range", and on this
+    platform that is 616 corrections over months of already-paid periods on four tenants — three of
+    which were ALREADY rebuilt by hand as `payroll_approval` adjustments, so folding them counts one
+    human's correction twice. A figure may not start moving because nobody answered a question. This
+    is the house rule for a tenant's own declaration (owner directive 2026-10-30): nothing declared
+    means nothing identified, and the surface says so in words.
     """
     cfg = cfg if isinstance(cfg, dict) else resolve_config(None)
     if not cfg.get("count_manual_hours"):
         return False, ("This org is not set to count hand-entered corrections, so the figure is "
                        "what the clock and the schedule say.")
+    if not corrections_effective_from(cfg):
+        return False, (
+            "This org has not set the date its hand-entered corrections start counting toward pay, "
+            "so none of them is folded into a figure yet. Set `corrections_effective_from` for the "
+            "org and every day from that date forward is corrected.")
     if day_is_before_corrections_floor(day, cfg):
         return False, (
             f"This day ({_day(day)}) falls before {corrections_effective_from(cfg)}, the date this "
