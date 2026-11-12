@@ -6,6 +6,7 @@ import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { SetupNotice } from '@/lib/setupNotice'
+import { buildStoreMarket } from '@/lib/store-market'
 
 // Attendance Exceptions (owner directive 2026-08-06, verbatim): "time clock should show who were
 // scheduled and didn't clock in and also if somebody else clocked in instead of the scheduled."
@@ -112,11 +113,7 @@ export default function AttendanceExceptionsPage() {
 
   const empName = (id: string) => employees.find(e => e.employee_id === id)?.name || id
 
-  const mktOf = useMemo(() => {
-    const m: Record<string, string> = {}
-    for (const s of stores) if (s.store_code) m[s.store_code] = (s.market && String(s.market).trim()) ? s.market : NO_MARKET
-    return m
-  }, [stores])
+  const mktOf = useMemo(() => buildStoreMarket(stores), [stores])
   const storeOptions = useMemo(() => stores
     .filter(s => s.store_code)
     .map(s => ({ id: s.store_code, label: s.store_code, sublabel: s.address || s.market || undefined }))
@@ -131,7 +128,7 @@ export default function AttendanceExceptionsPage() {
     .map(e => ({ id: e.name, label: e.name, sublabel: e.email || undefined }))
     .sort((a, b) => a.label.localeCompare(b.label)), [employees])
 
-  const rowsWithMarket = useMemo(() => rows.map(r => ({ ...r, market: mktOf[r.store_code] || NO_MARKET })), [rows, mktOf])
+  const rowsWithMarket = useMemo(() => rows.map(r => ({ ...r, market: mktOf.marketOf(r.store_code) || NO_MARKET })), [rows, mktOf])
   const stdFiltered = useMemo(() => filterRows(rowsWithMarket, filt, {
     store: r => r.store_code, market: r => r.market, rep: r => r.employee_name || empName(r.employee_id), date: r => r.work_date,
   }), [rowsWithMarket, filt, employees])

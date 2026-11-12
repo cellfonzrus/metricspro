@@ -13,6 +13,7 @@ import DrillDownPanel, {
   DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
 } from '@/components/DrillDownPanel'
 import { narrowPanel, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
+import { buildStoreMarket, marketsFromRoster } from '@/lib/store-market'
 
 // The hours basis words, shown as the human phrase — the SAME display map the Payroll Report uses,
 // over the SAME server-composed basis. The decision and the sentence are the server's (§14y).
@@ -118,17 +119,16 @@ export default function StoreOpsReportsPage() {
     load(filt.period, filt.periodTo)
   }, [rangeReady, filt.period, filt.periodTo])
 
-  // store_code -> market
-  const mktOf: Record<string, string> = {}
-  stores.forEach(s => { if (s.store_code) mktOf[s.store_code] = s.market || '' })
-  const withMkt = rows.map(r => ({ ...r, market: mktOf[r.store] || '' }))
+  // store_code -> market, through the ONE browser home (§CORE-43): a row's `store` is free text
+  const mktOf = buildStoreMarket(stores)
+  const withMkt = rows.map(r => ({ ...r, market: mktOf.marketOf(r.store) }))
 
   const storeOptions = useMemo(() => stores
     .filter(s => s.store_code)
     .map(s => ({ id: s.store_code, label: s.store_code + (s.is_active === false ? ' (inactive)' : ''), sublabel: s.address || s.market || undefined }))
     .sort((a, b) => a.label.localeCompare(b.label)), [stores])
   const marketOptions = useMemo(() =>
-    Array.from(new Set(stores.map(s => s.market).filter(Boolean) as string[])).sort(), [stores])
+    marketsFromRoster(stores), [stores])
   const repOptions = useMemo(() => optionsFromRows(withMkt, { rep: r => r.name }).reps, [withMkt])
 
   // Filters narrow the range-loaded rows — tiles, both views, and the export all read from this SAME

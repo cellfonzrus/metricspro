@@ -15,6 +15,7 @@ import { narrowPanel, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { currentPeriodFromSettingsResponse, isFullCalendarMonth, monthRange, rangeLabel, stepPeriod, type PayPeriodSettings } from '../lib/pay-period'
 import { PAY_BASIS_LABEL, type PayBasis } from '../lib/pay-basis'
+import { buildStoreMarket, marketsFromRoster } from '@/lib/store-market'
 
 interface PayrollRow {
   employee_id: string; name: string; store: string; pay_rate: number
@@ -152,17 +153,13 @@ export default function PayrollPage() {
     }).catch(() => {})
   }, [])
 
-  const storeMarket = useMemo(() => {
-    const m: Record<string, string> = {}
-    for (const s of stores) if (s.store_code) m[s.store_code] = s.market || ''
-    return m
-  }, [stores])
+  const storeMarket = useMemo(() => buildStoreMarket(stores), [stores])
   const storeOptions = useMemo(() => stores
     .filter(s => s.store_code)
     .map(s => ({ id: s.store_code, label: s.store_code + (s.is_active === false ? ' (inactive)' : ''), sublabel: s.address || s.market || undefined }))
     .sort((a, b) => a.label.localeCompare(b.label)), [stores])
   const marketOptions = useMemo(() =>
-    Array.from(new Set(stores.map(s => s.market).filter(Boolean) as string[])).sort(), [stores])
+    marketsFromRoster(stores), [stores])
   const repOptions = useMemo(() => optionsFromRows(rows, {
     rep: r => r.name, repEmail: r => empEmail[r.employee_id],
   }).reps, [rows, empEmail])
@@ -172,7 +169,7 @@ export default function PayrollPage() {
   // from this FILTERED set, never the full load ("what you see is what exports"). With no filter active,
   // filterRows returns every row unchanged → totals stay byte-identical to before this change.
   const visibleRows = useMemo(() => filterRows(rows, filt, {
-    store: r => r.store, market: r => storeMarket[r.store] || '', rep: r => r.name,
+    store: r => r.store, market: r => storeMarket.marketOf(r.store), rep: r => r.name,
   }), [rows, filt, storeMarket])
 
   // Pay-visibility (mig 434 / PR #162): GET /storeops/payroll is a bare array, and a gated caller's

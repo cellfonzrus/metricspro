@@ -8,6 +8,7 @@ import type { ExportColumn } from '@/lib/export'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
 import type { EntityOption } from '@/components/EntityPicker'
+import { buildStoreMarket, type StoreMarketLookup } from '@/lib/store-market'
 
 // HR · Employee Database (owner directive 2026-07-29) — one exportable row per employee across the
 // StoreOps roster + HR onboarding intake + the Documents board. See the backend docstring
@@ -72,7 +73,7 @@ export default function EmployeeDatabasePage() {
 
   const [storeOpts, setStoreOpts] = useState<EntityOption[]>([])
   const [marketOpts, setMarketOpts] = useState<EntityOption[]>([])
-  const [storeToMarket, setStoreToMarket] = useState<Record<string, string>>({})
+  const [storeToMarket, setStoreToMarket] = useState<StoreMarketLookup>(() => buildStoreMarket([]))
   const [repOpts, setRepOpts] = useState<EntityOption[]>([])
   const [filter, setFilter] = useState<StandardFilterValue>(emptyStandardFilter())
 
@@ -97,17 +98,16 @@ export default function EmployeeDatabasePage() {
       setRevealOn(false)
 
       const stRows = (stores || []) as any[]
-      const s2m: Record<string, string> = {}
+
       const stOpts: EntityOption[] = []
       const mSet = new Map<string, string>()
       for (const s of stRows) {
         if (!s.store_code) continue
-        s2m[s.store_code] = s.market || ''
         const inactiveTag = s.is_active === false ? ' (inactive)' : ''
         stOpts.push({ id: s.store_code, label: (s.address ? `${s.store_code} — ${String(s.address).slice(0, 28)}` : s.store_code) + inactiveTag })
         if (s.market) { const k = s.market.trim().toLowerCase(); if (!mSet.has(k)) mSet.set(k, s.market.trim()) }
       }
-      setStoreToMarket(s2m)
+      setStoreToMarket(buildStoreMarket(stRows))
       setStoreOpts(stOpts.sort((a, b) => a.label.localeCompare(b.label)))
       setMarketOpts([...mSet.values()].sort().map(m => ({ id: m, label: m })))
       setRepOpts(rows.filter(r => r.employee_id).map(r => ({
@@ -122,7 +122,7 @@ export default function EmployeeDatabasePage() {
   // The currently FILTERED (store/market/employee) roster — what's on-screen AND what exports.
   const baseRows = useMemo(() => Object.values(maskedById), [maskedById])
   const filtered = useMemo(() => filterRows(baseRows, filter, {
-    store: r => r.home_store, market: r => storeToMarket[r.home_store] || '', rep: r => r.employee_id,
+    store: r => r.home_store, market: r => storeToMarket.marketOf(r.home_store), rep: r => r.employee_id,
   }), [baseRows, filter, storeToMarket])
 
   // Effective rows: revealed values merged in for whichever employees have been revealed (only when

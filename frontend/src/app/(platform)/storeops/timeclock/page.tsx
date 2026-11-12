@@ -10,6 +10,7 @@ import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib
 import { computeTotalScope, type TotalsCol, type TotalScope, type TotalsRow } from '@/lib/report-totals'
 import { SetupNotice } from '@/lib/setupNotice'
 import ScreenLink from '@/components/ScreenLink'
+import { buildStoreMarket } from '@/lib/store-market'
 
 // Time Clock admin (Part B / B1): review punches (clock-in/out, hours, selfie, GPS, face-match) and
 // add manual-hours adjustments. The employee-facing clock-in lives in the mobile /portal.
@@ -166,11 +167,7 @@ export default function TimeClockAdminPage() {
   // resolution path every sibling StoreOps report page uses (reports/page.tsx, payroll/page.tsx,
   // payroll-change-log/page.tsx), never a fresh commcalc.store_mapping join. A store with no market
   // set falls into an explicit "(no market)" bucket instead of being unfilterable/invisible.
-  const mktOf = useMemo(() => {
-    const m: Record<string, string> = {}
-    for (const s of stores) if (s.store_code) m[s.store_code] = (s.market && String(s.market).trim()) ? s.market : NO_MARKET
-    return m
-  }, [stores])
+  const mktOf = useMemo(() => buildStoreMarket(stores), [stores])
   const storeOptions = useMemo(() => stores
     .filter(s => s.store_code)
     .map(s => ({ id: s.store_code, label: s.store_code + (s.is_active === false ? ' (inactive)' : ''), sublabel: s.address || s.market || undefined }))
@@ -206,7 +203,7 @@ export default function TimeClockAdminPage() {
     router.push(`/storeops/payroll-change-log?employee_id=${encodeURIComponent(employeeId)}&start=${workDate}&end=${workDate}`)
   }
 
-  const rowsWithMarket = useMemo(() => rows.map(r => ({ ...r, market: mktOf[r.store_code] || NO_MARKET })), [rows, mktOf])
+  const rowsWithMarket = useMemo(() => rows.map(r => ({ ...r, market: mktOf.marketOf(r.store_code) || NO_MARKET })), [rows, mktOf])
   const visibleRows = useMemo(() => filterRows(rowsWithMarket, filt, {
     store: r => r.store_code, market: r => r.market, rep: r => r.employee_name || empName(r.employee_id),
   }), [rowsWithMarket, filt, employees])

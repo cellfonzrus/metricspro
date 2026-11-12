@@ -7,6 +7,7 @@ import ReportExportBar from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import type { EntityOption } from '@/components/EntityPicker'
+import { buildStoreMarket } from '@/lib/store-market'
 
 const inp: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const PL_TYPES = ['revenue', 'cogs', 'opex', 'other']
@@ -52,11 +53,11 @@ export default function JournalPage() {
     apiCached(`/api/v1/core/filter-options?org_id=${ORG_ID}`, LOOKUP).then((d: any) => setFopts(d || {})).catch(() => setFopts({}))
     api(`/api/v1/account/companies?org_id=${ORG_ID}`).then((d: any) => setCompanies(d.companies || [])).catch(() => setCompanies([]))
   }, [])
-  const storeMarket = useMemo(() => {
-    const m: Record<string, string> = {}
-    ;(fopts.stores || []).forEach((s: any) => { if (s.store && s.market) m[s.store] = s.market })
-    return m
-  }, [fopts])
+  // §CORE-43: a P&L scope key is a store ADDRESS as the ledger spelled it, so the lookup folds case
+  // and punctuation rather than comparing it letter-for-letter to the filter option's own spelling.
+  const storeMarket = useMemo(
+    () => buildStoreMarket((fopts.stores || []).map((s: any) => ({ address: s.store, market: s.market }))),
+    [fopts])
   const storeOpts: EntityOption[] = useMemo(() =>
     (fopts.stores || []).map((s: any) => ({ id: s.store, label: s.store, sublabel: s.market || undefined })), [fopts])
   const marketOpts: string[] = useMemo(() => fopts.markets || [], [fopts])
@@ -64,7 +65,7 @@ export default function JournalPage() {
   const matchRow = (r: Row) => {
     const sa = (r.store_address || '').trim()
     if (filt.stores.length && !filt.stores.includes(sa)) return false
-    if (filt.markets.length) { const mk = storeMarket[sa]; if (!mk || !filt.markets.includes(mk)) return false }
+    if (filt.markets.length) { const mk = storeMarket.marketOf(sa); if (!mk || !filt.markets.includes(mk)) return false }
     return true
   }
   const namedRows = rows.filter(r => r.account_line.trim())

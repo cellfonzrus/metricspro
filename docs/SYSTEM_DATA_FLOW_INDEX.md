@@ -47721,3 +47721,122 @@ Cross-references: §CORE-33 (the declaration this measures from outside, and the
 route it reached — the allowlist this dereferences) · §CORE-19.6 (the anon Data API grants, the same
 question asked of the database) · §19.18 (one fact, one home, dereferenced) · §22 (★ NO LOCKOUT ★) ·
 §CORE-34/35 (the gate index listing these jobs) · §19.25 (a failing harness fails CI).
+
+---
+
+## §CORE-43. THE BROWSER ANSWERS "WHICH MARKET IS THIS STORE IN?" IN ONE PLACE (reported 2026-11-12)
+
+Owner, 2026-11-12: *"payroll for luxlink shows 110571.59 for october but when you do per market it
+does not total up chicago is 41207 and Ny is 24966, where is the rest and which reps are not assigned
+a market"*.
+
+**MEASURED, by running the real producer against production.** `GET /storeops/payroll?month=2026-10`
+for LuxeLink: 35 rows, **scheduled pay $110,571.59** — his figure to the cent. The per-market view
+credited **Chicago $41,201.67**, **NY $24,966.83** and left **$44,403.09 under no market**, which
+splits into:
+
+| | amount | what it was |
+| --- | --- | --- |
+| 13 reps, 9 store spellings | **$37,760.23** | the roster's own codes IN CAPITALS — the time clock and schedule had written `CICERO` `LAWRENCE` `ARMITAGE` `NOSTRAND` `CHICAGO HEIGHTS` `BELMONT` `3352 26TH` `3735 26TH` `CERMARK` against `storeops.stores` declaring `Cicero` `lawrence` `Armitage` `Nostrand` `Chicago heights` `Belmont` `3352 26th` `3735 26th` `Cermark` |
+| 1 salaried manager | **$6,642.86** | `store = 'Unassigned'` — a Manager on $78,000 with `home_store` NULL, the explicit bucket `storeops/payroll_salary.py` creates by design. **A real data gap for the owner, not a code defect** |
+
+### CORE-43.1 Duplicate check (the build gate)
+
+| Question asked of the index | Answer | What was done |
+| --- | --- | --- |
+| Is there a canonical store→market resolution to extend? | **YES — §13a**, `core.scope.store_market_resolver` / `market_by_code` over the union index, case-, punctuation- and address-tolerant, fail-closed on ambiguity, CI-guarded by `harness_market_resolution_guard.py` | **Reused as the rule.** Nothing new was derived: the browser module below is its dereference, pinned to it by an equivalence test against LIVE production answers |
+| Then why a frontend module at all? | §13a's guard only ever scanned the **backend**. The pages hold a **span-scoped** roster (`GET /storeops/stores`) and must not fetch the whole org to answer a filter, so the fold has to happen where the rows are | A deliberate second implementation, kept honest by `store-market.equivalence.test.ts` rather than by argument |
+| Is there a shared browser helper already? | **PARTLY** — `lib/market-store-cascade.ts` narrows a store OPTION list to the picked markets. It never answered "which market is this row's store in" | Extended by composition, not forked: the cascade still owns the narrowing, this owns the resolution |
+| How many private copies existed? | **24**, in 24 screens | All 24 rewired; the lock below fails the build on a 25th |
+
+### CORE-43.2 The class, not the instance
+
+The instance is "LuxeLink's October payroll lost $44k of market attribution". The class is **a free-text
+store string compared LETTER FOR LETTER to a roster code**:
+
+```ts
+const m: Record<string, string> = {}
+for (const s of stores) if (s.store_code) m[s.store_code] = s.market || ''
+... filterRows(rows, filt, { market: r => m[r.store] || '' })
+```
+
+A row's `store` is whatever a feed, a time clock or a human put there — §13e makes two spellings of
+one store the NORMAL case, and `GET /storeops/payroll` stamps the store from `shifts.store_code` /
+`timelog.store_code` verbatim. So the row stays in every TOTAL and vanishes from every per-market
+view, and the filter shows a smaller, entirely plausible number. **Zero is a plausible-looking
+answer, which is why this class hides** (same lesson as §COMMCALC-49.10). It is the browser twin of
+the 2026-09-03 `1115 Liberty Ave` defect §13a was written for, and of the `b-1115` phantom store
+(§ACCOUNT-01) — a fold that does not fold.
+
+`closing/tender-recon-3way/page.tsx` had grown a FOURTH copy of the fold itself — its own
+code → address → leading-street-number ladder, lower-cased instead of squashed, so `104-08 Lefferts
+Blvd` and `10408 Lefferts Blvd` were different stores to it.
+
+### CORE-43.3 The one home, dereferenced
+
+**`frontend/src/lib/store-market.ts`** — pure, no React, no fetch:
+
+- `squashStore(v)` — the comparison form, mirroring `core.scope._squash`: accent-folded (the one
+  accent fold's rule, §ACCOUNT-01), upper-cased, every non-alphanumeric dropped.
+- `buildStoreMarket(roster)` → `{ marketOf(store), markets }`. Learns a market for each store CODE
+  and each ADDRESS spelling (`address` and `store_address` both), plus an unambiguous leading street
+  number as a last resort. **First market wins; a second, different market makes that key answer ''
+  for ever** — never an arbitrary winner. A key learned with no market stays known-and-marketless, so
+  it cannot borrow a neighbour's market through the number rule.
+- `marketsFromRoster(roster)` — the market OPTION list off the same roster the lookup binds, folded
+  so one market spelled two ways is one option (§13c's rule, in the browser).
+- **The roster is a REQUIRED argument. An empty roster identifies NOTHING** and the surface says so,
+  rather than falling back to another tenant's words (owner directive 2026-10-30). It folds; it never
+  guesses: `3738 26th Street` resolves to nothing, not to `3735 26th`.
+
+**The 24 screens now reading it** (each previously carried its own map): storeops `payroll`,
+`payroll-tax`, `payroll-change-log`, `salary-advances`, `employees`, `schedule`, `timeoff`,
+`shift-extensions`, `hours-budget`, `reports`, `attendance`, `timeclock`, `accountability`; `hr/employee-database`;
+closing `accessory-recon`, `bank-deposit`, `deposit-recon`, `epay-recon`, `expenses-report`,
+`tender-recon-3way`; accounts `pl`, `journal`, `balance-sheet`, `_components/PLPerStorePrint`.
+
+### CORE-43.4 The lock
+
+`frontend/src/lib/__tests__/store-market-one-home.test.ts`, a step of the `frontend-tests` job
+(§CORE-34/35), **fails the build** when: a source file assigns a market into a map keyed on
+`.store_code` / `.store` / `.home_store`; any file grows its own street-number market ladder; or one
+of the 24 named screens stops importing `buildStoreMarket`. It carries **negative controls** proving
+each rule can go red, and the red was demonstrated by re-introducing the old map in
+`storeops/payroll/page.tsx` before the PR.
+
+### CORE-43.5 Tests, and every tenant
+
+- `store-market.test.ts` — 32 cases: every capitalised October spelling, exact codes unchanged,
+  addresses with case/punctuation drift, the street-number rule and its ambiguity, accents, empty
+  roster, and **cross-tenant isolation** (LuxeLink's lookup cannot answer `B-1115`; the house
+  lookup cannot answer `CICERO`).
+- `store-market.equivalence.test.ts` — the browser lookup vs **`core.scope.store_market_resolver`
+  run against production** for all four tenants, over every store spelling their shifts, clock and
+  roster carry since 2026-08-01 plus the UPPER/lower variant of every code (fixture
+  `store-market.live.json`, GENERATED not typed). **One excused divergence, named**: `Cellular
+  Services`, a house-org roster row with a blank market which is a company and not a store (owner
+  2026-10-02) — the canonical union answers `NYC` for it only because `commcalc.store_mapping`
+  carries a market there, and no shift, punch or payroll row in production names it.
+- `payroll-market-regression.test.ts` — the reported defect itself, from the 35 rows the API served
+  (store + scheduled pay only, no employee name or rate): reproduces Chicago $41,201.67 / NY
+  $24,966.83 / $44,403.09 unattributed, then asserts $75,289.90 / $28,638.83 and that the only thing
+  left unattributed is the `Unassigned` salary row.
+
+### CORE-43.6 Not money, and what the owner still has to do
+
+No migration, no money moved: every figure and every total is byte-identical, only market
+ATTRIBUTION changes. The capitalised spellings were separately normalised in production the same
+evening by the time clock's write-side fix (§ACCOUNT-01 sibling), which repaired the instance; this
+section is the mechanism, so the next feed that spells a store its own way costs nothing.
+
+**Open for the owner:** give Jose Utrera (Manager, `E223`, $78,000) a `home_store`, or rule that a
+salaried manager rolls up to a market directly — $6,642.86 of October sits in the `Unassigned`
+bucket until then. **Deliberately NOT converged here:** the market OPTION lists on pages this PR did
+not otherwise touch still build their own `new Set(stores.map(s => s.market))` (commcalc/expenses,
+storeops/visits, accounts/companies, closing/_lib/ClosingPickupStatus) — resolution is fixed
+everywhere, enumeration on those four is follow-up.
+
+See also §13a (the canonical resolution this dereferences) · §13c (market enumeration) · §13e (two
+spellings of one store is the normal case) · §ACCOUNT-01 (the same fold defect on the backend's
+payroll authority) · §19.18 (one fact, one home, dereferenced) · §COMMCALC-49.10 (a default that is
+really one tenant's vocabulary).

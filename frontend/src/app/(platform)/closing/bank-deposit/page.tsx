@@ -7,6 +7,7 @@ import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 import { WorkflowNext } from '@/components/WorkflowNext'
+import { buildStoreMarket } from '@/lib/store-market'
 
 // ── BANK DEPOSIT — the banking STEP, its own screen (owner directive 2026-10-10) ────────────────
 //
@@ -91,11 +92,7 @@ export default function BankDepositPage() {
   // store list the cascade picker expands a market into (the designed mechanism — see
   // lib/market-store-cascade.ts) and the recon report has no market parameter of its own. Same
   // fold the reconciliation page beside this one already does, over the same rows.
-  const marketByCode = useMemo(() => {
-    const m: Record<string, string> = {}
-    for (const s of stores) if (s.store_code && s.market) m[s.store_code] = s.market
-    return m
-  }, [stores])
+  const marketByCode = useMemo(() => buildStoreMarket(stores), [stores])
   const fMarketsFold = useMemo(() => new Set(fMarkets.map(m => m.trim().toLowerCase())), [fMarkets])
 
   // The section vocabulary is the SERVER'S (deposit_recon.section_catalog) — this screen never
@@ -106,7 +103,7 @@ export default function BankDepositPage() {
   const rowsBySection = useMemo(() => {
     const out: Record<string, SecRow[]> = {}
     for (const day of data?.days || []) {
-      if (fMarketsFold.size && !fMarketsFold.has((marketByCode[day.store_code] || '').trim().toLowerCase())) continue
+      if (fMarketsFold.size && !fMarketsFold.has(marketByCode.marketOf(day.store_code).trim().toLowerCase())) continue
       const push = (r: SecRow) => { (out[r.section] ||= []).push(r) }
       for (const c of day.categories || []) {
         push({

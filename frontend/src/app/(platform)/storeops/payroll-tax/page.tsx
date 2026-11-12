@@ -9,6 +9,7 @@ import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { setupFailed } from '@/lib/setupNotice'
+import { buildStoreMarket, marketsFromRoster } from '@/lib/store-market'
 
 // Payroll with tax withholding (Part B / B3). Pulls raw inputs (clocked + manual hours, rate, W-4)
 // and computes FICA + federal + state withholding + net client-side. W-4 editable per employee; each
@@ -82,17 +83,13 @@ export default function PayrollTaxPage() {
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
 
-  const storeMarket = useMemo(() => {
-    const m: Record<string, string> = {}
-    for (const s of stores) if (s.store_code) m[s.store_code] = s.market || ''
-    return m
-  }, [stores])
+  const storeMarket = useMemo(() => buildStoreMarket(stores), [stores])
   const storeOptions = useMemo(() => stores
     .filter(s => s.store_code)
     .map(s => ({ id: s.store_code, label: s.store_code + (s.is_active === false ? ' (inactive)' : ''), sublabel: s.address || s.market || undefined }))
     .sort((a, b) => a.label.localeCompare(b.label)), [stores])
   const marketOptions = useMemo(() =>
-    Array.from(new Set(stores.map(s => s.market).filter(Boolean) as string[])).sort(), [stores])
+    marketsFromRoster(stores), [stores])
   const repOptions = useMemo(() => optionsFromRows(rows, {
     rep: r => r.name, repEmail: r => empEmail[r.employee_id],
   }).reps, [rows, empEmail])
@@ -102,7 +99,7 @@ export default function PayrollTaxPage() {
   // home_store before). Gross/Net badges + export re-sum from this filtered set. Empty filter = every
   // row unchanged → numbers stay byte-identical to before this change.
   const visibleRows = useMemo(() => filterRows(rows, filt, {
-    store: r => r.store, market: r => storeMarket[r.store] || '', rep: r => r.name,
+    store: r => r.store, market: r => storeMarket.marketOf(r.store), rep: r => r.name,
   }), [rows, filt, storeMarket])
 
   const lines = visibleRows.map(r => ({ ...r, pay: computePay(r.total_hours, r.pay_rate, r.settings) }))

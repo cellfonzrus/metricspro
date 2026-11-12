@@ -15,6 +15,7 @@ import { StalenessBanner } from '../_components/StalenessBanner'
 import { statementInfoSheet, statementSubtitle, type StatementMeta } from '../_components/statementExport'
 import { scopeDisplay, statementScopeDisplay } from '../_components/scopeFinancials'
 import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillExtraColumn } from '@/components/DrillDownPanel'
+import { buildStoreMarket } from '@/lib/store-market'
 
 const SEC: Record<string, string> = { asset: 'Assets', liability: 'Liabilities', equity: 'Equity' }
 
@@ -69,14 +70,14 @@ function BSInner() {
       .then(setData).catch(console.error).finally(() => setLoading(false))
   }, [period, scope, reloadKey, filtKey])   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const storeMarket = useMemo(() => {
-    const m: Record<string, string> = {}
-    ;(fopts.stores || []).forEach((s: any) => { if (s.store && s.market) m[s.store] = s.market })
-    return m
-  }, [fopts])
+  // §CORE-43: a P&L scope key is a store ADDRESS as the ledger spelled it, so the lookup folds case
+  // and punctuation rather than comparing it letter-for-letter to the filter option's own spelling.
+  const storeMarket = useMemo(
+    () => buildStoreMarket((fopts.stores || []).map((s: any) => ({ address: s.store, market: s.market }))),
+    [fopts])
   const storeOpts: EntityOption[] = useMemo(() =>
     scopes.filter((s: any) => String(s.scope_key || '').startsWith('store:'))
-      .map((s: any) => { const a = String(s.scope_key).slice('store:'.length); return { id: a, label: a, sublabel: storeMarket[a] || undefined } }),
+      .map((s: any) => { const a = String(s.scope_key).slice('store:'.length); return { id: a, label: a, sublabel: storeMarket.marketOf(a) || undefined } }),
     [scopes, storeMarket])
   const marketOpts: string[] = useMemo(() => fopts.markets || [], [fopts])
 

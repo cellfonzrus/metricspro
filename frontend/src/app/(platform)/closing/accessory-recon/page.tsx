@@ -6,6 +6,7 @@ import { ExportButtons, ExportPayload } from '@/lib/export'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 import DrillDownPanel, { useDrillTile, type DrillPanel } from '@/components/DrillDownPanel'
 import { DrillStat, STORE_DRILL_COLUMNS } from '../_lib/DrillStat'
+import { buildStoreMarket } from '@/lib/store-market'
 
 // Accessory reporting recon: what reps DECLARED as accessory sales on the daily closing sheet vs what
 // the sales transactions ACTUALLY show for that store/day. Catches reps entering wrong accessory numbers.
@@ -31,22 +32,18 @@ export default function AccessoryReconPage() {
   useEffect(() => { load() }, [date])
 
   const allRows: any[] = data?.rows || []
-  const marketByCode = useMemo(() => {
-    const m: Record<string, string> = {}
-    for (const s of pStores) if (s.store_code && s.market) m[s.store_code] = s.market
-    return m
-  }, [pStores])
+  const marketByCode = useMemo(() => buildStoreMarket(pStores), [pStores])
   const storesForCascade: StoreOpt[] = useMemo(() => {
     const seen = new Map<string, StoreOpt>()
     for (const r of allRows) {
-      if (r.store_code && !seen.has(r.store_code)) seen.set(r.store_code, { id: r.store_code, label: r.store_address || r.store_code, market: marketByCode[r.store_code] || null })
+      if (r.store_code && !seen.has(r.store_code)) seen.set(r.store_code, { id: r.store_code, label: r.store_address || r.store_code, market: marketByCode.marketOf(r.store_code) || null })
     }
     return [...seen.values()]
   }, [allRows, marketByCode])
   const selMarketsFold = useMemo(() => new Set(selMarkets.map(m => m.trim().toLowerCase())), [selMarkets])
   const rows = allRows.filter(r =>
     (!selStores.length || selStores.includes(r.store_code)) &&
-    (!selMarketsFold.size || selMarketsFold.has((marketByCode[r.store_code] || '').trim().toLowerCase())) &&
+    (!selMarketsFold.size || selMarketsFold.has(marketByCode.marketOf(r.store_code).trim().toLowerCase())) &&
     (!flaggedOnly || r.flag))
 
   function buildPayload(): ExportPayload {
@@ -55,7 +52,7 @@ export default function AccessoryReconPage() {
       filename: `accessory-recon_${date}`,
       sheets: [{ name: 'By store', rows, columns: [
         { header: 'Store', get: (r: any) => r.store_address },
-        { header: 'Market', get: (r: any) => marketByCode[r.store_code] || '' },
+        { header: 'Market', get: (r: any) => marketByCode.marketOf(r.store_code) },
         { header: 'Declared', get: (r: any) => r.declared, money: true },
         { header: 'Actual (sales)', get: (r: any) => r.actual, money: true },
         { header: 'Variance', get: (r: any) => r.variance, money: true },

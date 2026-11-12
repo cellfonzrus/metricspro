@@ -7,6 +7,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
 import type { StoreOpt } from '@/lib/market-store-cascade'
 import GoogleReviewsCard from '@/components/GoogleReviewsCard'
+import { buildStoreMarket } from '@/lib/store-market'
 
 interface Employee {
   id: number; employee_id: string | null; name: string; home_store: string | null
@@ -113,11 +114,7 @@ export default function EmployeesPage() {
     } catch (err: any) { setMsg('Merge failed: ' + (err?.message || err)) }
   }
 
-  const storeMarket = useMemo(() => {
-    const m: Record<string, string> = {}
-    for (const s of stores) if (s.store_code) m[s.store_code] = s.market || ''
-    return m
-  }, [stores])
+  const storeMarket = useMemo(() => buildStoreMarket(stores), [stores])
   const cascadeStores: StoreOpt[] = useMemo(() => stores
     .filter((s: any) => s.store_code)
     .map((s: any) => ({ id: s.store_code, label: s.store_code + (s.is_active === false ? ' (inactive)' : ''), market: s.market || undefined }))
@@ -127,7 +124,7 @@ export default function EmployeesPage() {
     .sort((a, b) => a.label.localeCompare(b.label)), [employees])
 
   const filtered = filterRows(employees, filt, {
-    rep: e => e.name, store: e => e.home_store || '', market: e => storeMarket[e.home_store || ''] || '',
+    rep: e => e.name, store: e => e.home_store || '', market: e => storeMarket.marketOf(e.home_store || ''),
   }).filter(e => {
     if (!showInactive && !e.is_active) return false
     if (search && ![e.name, e.home_store, e.role, e.email, e.epay_salesperson]

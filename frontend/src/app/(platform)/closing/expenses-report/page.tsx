@@ -8,6 +8,7 @@ import ReportShell from '@/components/ReportShell'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
+import { buildStoreMarket } from '@/lib/store-market'
 
 // Expenses report (RULE FOUR/FIVE) — every categorized Daily-Closing expense line (mig 506), by
 // category/store/period/rep, with the standard universal filter bar and full export set via
@@ -35,11 +36,7 @@ export default function ExpensesReportPage() {
   // roster this module already calls elsewhere, not a new kind of read.
   const [pStores, setPStores] = useState<any[]>([])
   useEffect(() => { apiCached('/api/v1/closing/stores', LOOKUP).then((s: any) => setPStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {}) }, [])
-  const marketByCode = useMemo(() => {
-    const m: Record<string, string> = {}
-    for (const s of pStores) if (s.store_code && s.market) m[s.store_code] = s.market
-    return m
-  }, [pStores])
+  const marketByCode = useMemo(() => buildStoreMarket(pStores), [pStores])
   const storesForCascade: StoreOpt[] = useMemo(
     () => pStores.filter((s: any) => s.store_code).map((s: any) => ({ id: s.store_code, label: s.store_address || s.store_code, market: s.market || null })),
     [pStores])
@@ -57,7 +54,7 @@ export default function ExpensesReportPage() {
 
   // Market joined onto each row (see marketByCode above) so the shared `filterRows` market-matching
   // (used by every other RULE FIVE surface) works here too, not just the store cascade widget.
-  const joinedRows = useMemo(() => rows.map(r => ({ ...r, market: marketByCode[r.store_code] || null })), [rows, marketByCode])
+  const joinedRows = useMemo(() => rows.map(r => ({ ...r, market: marketByCode.marketOf(r.store_code) || null })), [rows, marketByCode])
   const acc = useMemo(() => ({
     store: (r: any) => r.store_code, market: (r: any) => r.market, rep: (r: any) => r.employee_name, date: (r: any) => r.close_date,
   }), [])

@@ -7,6 +7,7 @@ import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
 import type { StoreOpt } from '@/lib/market-store-cascade'
+import { buildStoreMarket } from '@/lib/store-market'
 
 // Shift-extension request → District Manager approval workflow (mig 086). A manager files a request
 // to keep an employee past their scheduled end; the DM (or an admin) approves it IN-APP — the tick
@@ -65,11 +66,7 @@ export default function ShiftExtensionsPage() {
   // loaded, with markets) + employee(s) + a date range over the shift date. One filter state drives
   // BOTH tables and BOTH exports.
   const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
-  const storeMarket = useMemo(() => {
-    const m: Record<string, string> = {}
-    for (const s of stores) if (s.store_code) m[s.store_code] = s.market || ''
-    return m
-  }, [stores])
+  const storeMarket = useMemo(() => buildStoreMarket(stores), [stores])
   const cascadeStores: StoreOpt[] = useMemo(() => stores
     .filter((s: any) => s.store_code)
     .map((s: any) => ({ id: s.store_code, label: s.store_code, market: s.market || undefined }))
@@ -79,7 +76,7 @@ export default function ShiftExtensionsPage() {
   )).sort().map(n => ({ id: n, label: n })), [exts])
   const shown = useMemo(() => filterRows(exts, filt, {
     rep: x => x.employee_name || x.employee_id, store: x => x.store_code || '',
-    market: x => storeMarket[x.store_code || ''] || '', date: x => x.shift_date,
+    market: x => storeMarket.marketOf(x.store_code || ''), date: x => x.shift_date,
   }), [exts, filt, storeMarket])
 
   const pending = shown.filter(x => x.status === 'pending')

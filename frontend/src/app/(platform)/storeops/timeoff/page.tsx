@@ -9,6 +9,7 @@ import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
 import type { StoreOpt } from '@/lib/market-store-cascade'
+import { buildStoreMarket } from '@/lib/store-market'
 
 interface Request {
   id: number; employee_id: string; employee_name?: string
@@ -142,11 +143,7 @@ export default function TimeOffPage() {
     }
     return m
   }, [employees])
-  const storeMarket = useMemo(() => {
-    const m: Record<string, string> = {}
-    for (const s of stores) if (s.store_code) m[s.store_code] = s.market || ''
-    return m
-  }, [stores])
+  const storeMarket = useMemo(() => buildStoreMarket(stores), [stores])
   const cascadeStores: StoreOpt[] = useMemo(() => stores
     .filter(s => s.store_code)
     .map(s => ({ id: s.store_code, label: s.store_code, market: s.market || undefined }))
@@ -158,7 +155,7 @@ export default function TimeOffPage() {
   const visible = useMemo(() => filterRows(requests, filt, {
     rep: r => r.employee_name || empName(r.employee_id),
     store: r => empStore[String(r.employee_id)] || '',
-    market: r => storeMarket[empStore[String(r.employee_id)] || ''] || '',
+    market: r => storeMarket.marketOf(empStore[String(r.employee_id)]),
     date: r => r.start_date,
   }), [requests, filt, empStore, storeMarket])   // eslint-disable-line react-hooks/exhaustive-deps
 
