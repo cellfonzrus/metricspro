@@ -43826,6 +43826,66 @@ under an outage — stated here so nobody mistakes the floor for the repair. Cos
 below iOS 15.1 are dropped, which is every device Apple itself stopped supporting in 2021.
 
 
+### §CORE-29.3c THE TOOLCHAIN IS DECLARED, NOT "LATEST" — and that was the crash all along (2026-11-12)
+
+The owner reported the app crashing on open three times. The first two answers were wrong, and this
+is the right one. It did not come from reading the code, because **it cannot be found by reading the
+code**: nothing in this repository runs before the trap fires.
+
+**The evidence, from Apple's own crash report off the device:**
+
+```
+exception: EXC_BREAKPOINT (SIGTRAP)
+0  UIKitCore  ___UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption_block_invoke
+3  UIKitCore  -[UIApplication workspace:didCreateScene:withTransitionContext:completion:]
+24 UIKitCore  UIApplicationMain
+```
+
+UIKit hits a deliberate `brk 0` during scene creation, inside `UIApplicationMain`, **before Hermes
+evaluates a single line of JavaScript.** `bundleInfo.DTAppStoreToolsBuild: 27B52` — the binary was
+built with Xcode 27. The device is on iPhone OS 27.0.1.
+
+Apple requires an app to adopt the **UIScene lifecycle**, and from the iOS 27 SDK an app that has not
+is terminated at launch rather than permitted to run. **The trap is keyed to the SDK the binary was
+BUILT with, not to the iOS on the phone**: the same source built with Xcode 26 launches on that same
+handset, which is why build 9 (2026-09-16) worked and builds 13 and 14 did not. Expo SDK 52's iOS
+template does not adopt scenes.
+
+**Why it arrived without anyone changing anything.** Both iOS profiles in `mobile/eas.json` asked for
+`"image": "latest"`, so this app's toolchain moved whenever Expo's did, and nothing here recorded
+that it had. It moved to Xcode 27. **The same drift is the real cause of §CORE-29.3b**: the
+deployment-target failures that cost three builds at the end of October were not a dependency
+problem, which is what they were diagnosed as — they were the toolchain moving, surfacing at compile
+time instead of at launch. One fact explains both, and §CORE-29.3b's account of itself is incomplete
+without this.
+
+**What shipped:** `build.preview.ios.image` and `build.production.ios.image` pinned to
+`macos-sequoia-15.6-xcode-26.2`. Xcode 26 is simultaneously the last version without the trap and the
+floor Apple requires for App Store Connect uploads from 2026-04-28, so it is the one value that
+clears the trap and stays submittable.
+
+**What the lock refuses** (R7, four checks with negative controls): a shipping profile that does not
+pin, any profile naming a moving image (`latest`, `default`, `stable`), a pin that has drifted
+forward to Xcode 27, and — derived from `eas.json` and compared for equality per §CORE-10 — a NEW
+build profile appearing at all, so one cannot inherit a floating toolchain unnoticed. `development`
+is excused by name, not by silence, because it reaches no tester. Mutation-tested: returning
+`production` to `latest` reddens R7.2 and R7.3; adding an unpinned `staging` profile reddens R7.1.
+
+**This is a stay of execution, not the fix.** Apple will raise the minimum again, and a manifest-only
+`UIApplicationSceneManifest` does **not** satisfy UIKit's check — a real scene delegate is required —
+so scene adoption is not a config line that can be added to an SDK 52 app. The durable answer is the
+Expo SDK upgrade, whose template adopts the lifecycle, and it now has a deadline rather than a
+preference behind it. Delete the pin, `expo-build-properties`, `plugins/with-pod-deployment-floor.js`
+and pins R6.4–R6.16 together with that upgrade.
+
+**The lesson that generalises, and it is about method, not iOS.** Three diagnoses were offered from
+the repository alone and two were wrong, each one confidently argued and each one costing the owner a
+day. A crash that fires before the app's own code runs is invisible to every check this repository
+has — all of them are unit tests and source-text locks (§CORE-38.7) — and invisible to reading the
+code, however carefully. **The crash report should have been the first request, not the third.** When
+a report is "it crashes" and the platform holds the evidence, ask for the platform's evidence before
+reasoning from the source.
+
 ### §CORE-29.4 What the lock refuses
 
 - The rule losing its purity (an import in `running-bundle.ts`), which would end its CI proof.
