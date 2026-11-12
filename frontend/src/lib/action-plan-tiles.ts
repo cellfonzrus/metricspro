@@ -51,10 +51,21 @@ export interface PlanItem { severity: Sev; metric: string; title: string; detail
 export interface PlanConversion {
   boxes: number; billpays: number; rate: number; target: number; meets_target: boolean
 }
+/** WHAT A SCOPE IS TRENDING TO on one metric, as the server decided it (§COMMCALC-58). `projected`
+ *  is null when no day of the month has completed — a run rate off a part-day is not a trend — and
+ *  `kind` is then 'not_measured', never 'short'. Nothing here is re-derived on the screen: the
+ *  factor has one home and the Daily Targets page already prints its answer. */
+export interface PlanTrend {
+  projected: number | null
+  kind: 'on_track' | 'short' | 'no_target' | 'not_measured'
+  gap: number | null
+  elapsed?: number; days_in_month?: number; basis?: string; complete?: boolean
+}
 export interface PlanMetric {
   cat: string; label: string; unit: string
   target: number; achieved: number | null; need: number; pace: number; today_target: number
   setup_fee_mtd?: number
+  trend?: PlanTrend | null
 }
 export interface PlanKpi { kpi: string; label: string; target: number; actual: number; met: boolean }
 /** A KPI with a target but NO recorded value — reported by the backend, never counted as failing. */
@@ -465,4 +476,56 @@ export function tilesToSnapshot(tiles: Tile[]): SnapshotTile[] {
     money: t.money,
     note: t.note,
   }))
+}
+
+/** THE DETAIL, NARROWED TO THE FOCUSED METRICS — owner, 2026-11-12: "if one metric is slected from
+ *  the drop down it shoudl only hsow that metrics across all stores and all reps as filtered or all
+ *  reps and all stores if not filtered."
+ *
+ *  It lives here, beside `focused` and `buildTiles`, and reuses the SAME predicate: two ideas of
+ *  what "focused" means is how a tile row and the detail under it come to disagree.
+ *
+ *  What it narrows and what it deliberately does not:
+ *  - Store metric rows, store items and rep items are kept only where they are ABOUT a focused
+ *    metric, matched on the metric's own grain (`store:` vs `kpi:`) so a target category and a KPI
+ *    sharing a word cannot pick each other up.
+ *  - A rep's scored KPIs and the unmeasured ones are narrowed the same way, so focusing one KPI
+ *    shows that KPI's state rather than all of them.
+ *  - EVERY store and EVERY rep is kept. Focusing a metric is not a store filter: a store carrying
+ *    nothing about the focused metric must still appear, or its absence of a figure becomes an
+ *    absence of the store.
+ *  - The at-risk MONEY is never narrowed. A tier is earned across all of a rep's KPIs, so a payout
+ *    attributed to one of them would be a figure nobody computed.
+ *
+ *  An empty selection means "every declared metric" and returns the rows untouched. PURE. */
+export function focusPlan(stores: PlanStore[], selected: string[]): PlanStore[] {
+  const rows = stores || []
+  if (!selected || selected.length === 0) return rows
+  const want = new Set(selected)
+  const wantsStore = (key: string) => want.has(metricKey('store', key))
+  const wantsKpi = (key: string) => want.has(metricKey('kpi', key))
+  // A store item names a target category; a rep item names either a KPI or a store category it is
+  // failing against (the conversion item names `conversion`). Either grain being focused keeps it.
+  const wantsEither = (key: string) => wantsStore(key) || wantsKpi(key)
+  return rows.map(s => {
+    const reps = (s.reps || []).map(r => {
+      const c = r.commission
+      return {
+        ...r,
+        items: (r.items || []).filter(it => wantsEither(it.metric)),
+        commission: c ? {
+          ...c,
+          kpis: (c.kpis || []).filter(k => wantsKpi(k.kpi)),
+          kpis_no_data: (c.kpis_no_data || []).filter(k => wantsKpi(k.kpi)),
+          short_kpis: (c.kpis || []).filter(k => wantsKpi(k.kpi) && !k.met).map(k => k.label),
+        } : c,
+      }
+    })
+    return {
+      ...s,
+      metrics: (s.metrics || []).filter(m => wantsStore(m.cat)),
+      items: (s.items || []).filter(it => wantsEither(it.metric)),
+      reps,
+    }
+  })
 }

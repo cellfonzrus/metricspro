@@ -48,7 +48,7 @@ import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { tileSnapshotSheet } from '@/lib/tile-snapshot'
-import { targetState } from '@/lib/target-state'
+import { targetState, trendState, OUTLIER_COLOR } from '@/lib/target-state'
 import DateField from '@/components/DateField'
 import EntityPicker from '@/components/EntityPicker'
 import StandardFilterBar from '@/components/StandardFilterBar'
@@ -57,8 +57,8 @@ import DrillDownPanel, {
   DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
 } from '@/components/DrillDownPanel'
 import {
-  buildTiles, filterPlan, metricText, planMetrics, tilesToSnapshot, TILE_VIEWS,
-  type PlanItem, type PlanStore, type Tile, type TileSev, type TileView,
+  buildTiles, filterPlan, focusPlan, metricText, planMetrics, tilesToSnapshot, TILE_VIEWS,
+  type PlanItem, type PlanStore, type PlanTrend, type Tile, type TileSev, type TileView,
 } from '@/lib/action-plan-tiles'
 
 const dtext = (r: DrillRow, field: string) => {
@@ -79,7 +79,24 @@ interface PeerMeta {
   note?: string; error?: string
 }
 /** One category of the team roll-up as the server folded it (§CORE-17.3m). */
-interface TeamCat { monthly?: number | null; achieved_mtd?: number | null; need?: number | null }
+interface TeamCat {
+  monthly?: number | null; achieved_mtd?: number | null; need?: number | null
+  /** §COMMCALC-58 — the team's projection is the SUM of the stores' own, so `partial` says plainly
+   *  when stores nothing could project are missing from it, and `stores_not_trending` answers the
+   *  owner's "which stores are not trending towards the accessories goals" directly. */
+  trend?: {
+    projected?: number | null; kind?: string; gap?: number | null
+    stores_measured?: number; stores_not_trending?: string[]; stores_not_measured?: string[]
+    partial?: boolean
+  } | null
+  /** Which stores sit outside the pack on ONE stated rule (`month_trend.outliers`), decided on the
+   *  server so "highlighted in a different colour" means the same thing in the mailed copy. */
+  outliers?: {
+    measure?: string; median?: number | null; spread?: number | null; basis?: string
+    counted?: number; high?: string[]; low?: string[]
+    attainment_by_store?: Record<string, number>
+  } | null
+}
 interface Resp {
   period: string; today: string
   summary: { critical: number; warning: number; stores: number; commission_at_risk: number }
@@ -228,14 +245,30 @@ export default function ActionPlanPage() {
     return [...names].sort().map(n => ({ id: n, label: n }))
   }, [allStores])
 
+  // THE DETAIL IS NARROWED BY THE SAME FOCUS THE TILES USE (owner, 2026-11-12: "if one metric is
+  // slected from the drop down it shoudl only hsow that metrics across all stores and all reps").
+  // `focusPlan` is the one home's own predicate — the page holds no second idea of "focused".
   const detail = useMemo(() => {
     const keep = (it: PlanItem) => !hideOnTrack || it.severity !== 'good'
-    return stores.map(s => ({
+    return focusPlan(stores, focus).map(s => ({
       ...s,
       items: (s.items || []).filter(keep),
       reps: (s.reps || []).map(r => ({ ...r, items: (r.items || []).filter(keep) })),
     }))
-  }, [stores, hideOnTrack])
+  }, [stores, hideOnTrack, focus])
+  // WHICH STORES ARE OUTLIERS, read off the served roll-up — the rule is the server's one stated
+  // rule (`month_trend.outliers`, median-based), so the screen never decides who is an outlier. The
+  // lookup is per (store, category) because a store can be the stray on one metric and ordinary on
+  // another; one badge on the store would assert something the rule never measured.
+  const outlierSide = useMemo(() => {
+    const idx = new Map<string, 'high' | 'low'>()
+    for (const [cat, m] of Object.entries(data?.team_total?.categories || {})) {
+      for (const code of (m?.outliers?.high || [])) idx.set(`${cat}|${code}`, 'high')
+      for (const code of (m?.outliers?.low || [])) idx.set(`${cat}|${code}`, 'low')
+    }
+    return (code: string, cat: string) => idx.get(`${cat}|${code}`) || null
+  }, [data])
+
   const barValue = useMemo(() => ({ ...filt, period }), [filt, period])
 
   function buildPayload(): ExportPayload {
@@ -439,6 +472,7 @@ export default function ActionPlanPage() {
           .map(([cat, m]) => ({
             cat, label: labels[cat].label, unit: labels[cat].unit,
             target: Number(m?.monthly || 0), achieved: Number(m?.achieved_mtd || 0), need: Number(m?.need || 0),
+            trend: m?.trend || null, outliers: m?.outliers || null,
           }))
         if (!cats.length) return null
         return (
@@ -463,6 +497,53 @@ export default function ActionPlanPage() {
                   {(() => { const ts = targetState(a.target, a.need); return (
                     <div style={{ fontSize: 10, color: ts.color }}>{ts.kind === 'short' ? `${metricText(a.need, a.unit)} to go` : ts.label}</div>
                   ) })()}
+                  {/* TRENDING (owner 2026-11-12). The figure is the SERVER's, projected on the same
+                      window as "Trending Acc. $" on the Daily Targets screen. The stores nothing
+                      could project are named rather than quietly left out of the total. */}
+                  {(() => {
+                    const t = a.trend
+                    if (!t) return null
+                    const tv = trendState(t.kind, t.gap ?? null)
+                    return (
+                      <div style={{ marginTop: 4, borderTop: '1px dashed var(--border)', paddingTop: 4 }}>
+                        <div style={{ fontSize: 10, color: 'var(--text3)' }}>Trending to</div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: tv.color }}>
+                          {t.projected == null ? 'not measured' : metricText(t.projected, a.unit)}
+                        </div>
+                        <div style={{ fontSize: 10, color: tv.color }}>
+                          {tv.kind === 'short' && t.gap != null
+                            ? `${metricText(t.gap, a.unit)} short of the goal`
+                            : tv.label}
+                        </div>
+                        {t.partial && (
+                          <div style={{ fontSize: 10, color: 'var(--text3)' }}>
+                            a floor — {(t.stores_not_measured || []).length} store(s) could not be projected
+                          </div>
+                        )}
+                        {(t.stores_not_trending || []).length > 0 && (
+                          <div style={{ fontSize: 10, marginTop: 3 }}>
+                            <span style={{ color: tv.color, fontWeight: 600 }}>
+                              Not trending to {a.label}:
+                            </span>{' '}
+                            <span style={{ color: 'var(--text2)' }}>
+                              {(t.stores_not_trending || []).join(', ')}
+                            </span>
+                          </div>
+                        )}
+                        {/* THE OUTLIERS, on the server's one stated rule. Highlighted in their own
+                            colour because an outlier is not a verdict: the store furthest AHEAD of
+                            the pack is one too, so the pass-green and the behind-amber would both
+                            say something the rule never measured. */}
+                        {((a.outliers?.high || []).length > 0 || (a.outliers?.low || []).length > 0) && (
+                          <div style={{ fontSize: 10, marginTop: 3, color: OUTLIER_COLOR }}
+                               title={`Outside the pack by more than 2.5× its own spread of projected attainment (median ${a.outliers?.median ?? '—'}%, over ${a.outliers?.counted ?? 0} stores with a target).`}>
+                            {(a.outliers?.low || []).length > 0 && <>▼ {(a.outliers?.low || []).join(', ')} </>}
+                            {(a.outliers?.high || []).length > 0 && <>▲ {(a.outliers?.high || []).join(', ')}</>}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
                 </div>
               ))}
             </div>
@@ -530,8 +611,27 @@ export default function ActionPlanPage() {
                           <div style={{ fontSize: 11, color: 'var(--text3)' }}>{m.label}</div>
                           <div style={{ fontSize: 14, fontWeight: 700 }}>{metricText(m.achieved, m.unit)} <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>/ {metricText(m.target, m.unit)}</span></div>
                           {(() => { const ts = targetState(m.target, m.need); return (
-                            <div style={{ fontSize: 10, color: ts.color }}>{ts.kind === 'short' ? `${metricText(m.need, m.unit)} to go · ${metricText(m.pace, m.unit)}/day` : ts.label}</div>
+                            <div style={{ fontSize: 10, color: ts.color }}>{ts.kind === 'short' ? `${metricText(m.need, m.unit)} to go · ${metricText(m.pace, m.unit)}/day needed` : ts.label}</div>
                           ) })()}
+                          {/* THIS STORE'S OWN TREND, served (§COMMCALC-58). `pace` above is what it
+                              MUST do; this is what it is actually heading for. */}
+                          {(() => {
+                            const t: PlanTrend | null | undefined = m.trend
+                            if (!t) return null
+                            const tv = trendState(t.kind, t.gap)
+                            const flagged = outlierSide(s.store_code, m.cat)
+                            return (
+                              <div style={{ fontSize: 10, marginTop: 2, color: tv.color,
+                                            ...(flagged ? { borderLeft: `3px solid ${OUTLIER_COLOR}`, paddingLeft: 4 } : {}) }}>
+                                {t.projected == null
+                                  ? 'trend not measured'
+                                  : `trending to ${metricText(t.projected, m.unit)}`}
+                                {tv.kind === 'short' && t.gap != null ? ` · ${metricText(t.gap, m.unit)} short` : ''}
+                                {tv.kind === 'on_track' ? ' ✓' : ''}
+                                {flagged ? <span style={{ color: OUTLIER_COLOR, fontWeight: 700 }}>{flagged === 'high' ? ' ▲ outlier' : ' ▼ outlier'}</span> : null}
+                              </div>
+                            )
+                          })()}
                         </div>
                       ))}
                     </div>
