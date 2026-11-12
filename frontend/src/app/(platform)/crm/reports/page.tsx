@@ -175,9 +175,9 @@ export default function CrmReportsPage() {
         {([['conversion', 'Conversion & funnel'], ['source', 'Where leads come from'], ['activity', 'Rep activity']] as [TabKey, string][])
           .map(([k, l]) => (
             <button key={k} onClick={() => setTab(k)}
-                    style={{ ...btn, background: tab === k ? '#2563eb' : 'var(--surface)',
-                             borderColor: tab === k ? '#2563eb' : 'var(--border)',
-                             color: tab === k ? '#fff' : 'var(--text)' }}>{l}</button>
+                    style={{ ...btn, background: tab === k ? 'var(--c-bg-2563eb)' : 'var(--surface)',
+                             borderColor: tab === k ? 'var(--c-bg-2563eb)' : 'var(--border)',
+                             color: tab === k ? 'var(--c-fg-ffffff)' : 'var(--text)' }}>{l}</button>
           ))}
       </div>
 

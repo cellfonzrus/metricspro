@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
+import { rowStripe } from '@/lib/surface'
 
 // Carrier Commission File → Table. A carrier's commission/comp statement (the "comp_report") arrives in
 // different shapes per carrier. Upload an Excel/CSV here to see it as a clean TABLE (readable by the user)
@@ -93,7 +94,7 @@ export default function CarrierCommFilePage() {
             </tr></thead>
             <tbody>
               {body.slice(0, 300).map((r, ri) => (
-                <tr key={ri} style={{ borderTop: '1px solid var(--border)', background: ri % 2 ? 'var(--surface2)' : undefined }}>
+                <tr key={ri} style={{ borderTop: '1px solid var(--border)', background: rowStripe(ri) }}>
                   <td style={{ padding: '4px 8px', color: 'var(--text3)', borderRight: '1px solid var(--border)' }}>{ri + 1}</td>
                   {header.map((_, ci) => <td key={ci} style={{ padding: '4px 10px', borderRight: '1px solid var(--border)', whiteSpace: 'nowrap' }}>{String(r[ci] ?? '')}</td>)}
                 </tr>

@@ -279,7 +279,7 @@ export default function DiscrepancyPage() {
             <button key={t.key} onClick={() => { setStatusTab(t.key); setStoreFilter(''); setCompFilter('') }}
               style={{ padding: '8px 16px', borderRadius: 8, fontSize: 14, fontWeight: 600,
                 border: active ? `2px solid ${t.color}` : '1px solid var(--c-bg-e5e7eb)',
-                background: active ? `${t.color}10` : 'white', color: active ? t.color : 'var(--c-fg-374151)', cursor: 'pointer' }}>
+                background: active ? `${t.color}10` : 'var(--c-bg-ffffff)', color: active ? t.color : 'var(--c-fg-374151)', cursor: 'pointer' }}>
               {t.label} <span style={{ opacity: 0.7 }}>({tabCount(t.key)})</span>
             </button>
           )
@@ -352,7 +352,7 @@ export default function DiscrepancyPage() {
                   return (
                     <Fragment key={s.store}>
                       <tr onClick={() => setStoreFilter(storeFilter === s.store ? '' : s.store)}
-                        style={{ borderTop: '1px solid var(--c-bg-f3f4f6)', cursor: 'pointer', background: storeFilter === s.store ? '#eff6ff' : 'white' }}>
+                        style={{ borderTop: '1px solid var(--c-bg-f3f4f6)', cursor: 'pointer', background: storeFilter === s.store ? 'var(--c-bg-eff6ff)' : 'var(--c-bg-ffffff)' }}>
                         <td style={{ padding: '8px 16px', fontWeight: 500 }}>
                           {/* A store's gap is a figure a district manager acts on, so it opens to the
                               lines it is made of. The toggle stops the click bubbling to the row's own

@@ -127,7 +127,7 @@ export default function HRPeoplePage() {
       <div className="card" style={{ padding: 16, marginBottom: 16 }}>
         <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
           {(['new', 'existing'] as const).map(m => (
-            <button key={m} onClick={() => { setMode(m); setMsg('') }} style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, fontWeight: 600, cursor: 'pointer', background: mode === m ? 'var(--accent)' : 'var(--surface)', color: mode === m ? '#fff' : 'var(--text2)' }}>
+            <button key={m} onClick={() => { setMode(m); setMsg('') }} style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, fontWeight: 600, cursor: 'pointer', background: mode === m ? 'var(--accent)' : 'var(--surface)', color: mode === m ? 'var(--c-fg-ffffff)' : 'var(--text2)' }}>
               {m === 'new' ? '➕ New employee' : '✉️ Existing employee'}
             </button>
           ))}

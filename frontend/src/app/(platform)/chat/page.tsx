@@ -533,7 +533,7 @@ export default function ChatPage() {
                               <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 12px' }} onClick={() => decideApproval(m, 'deny')}>Deny</button>
                             </>
                           ) : (
-                            <span style={{ fontSize: 12, fontWeight: 700, color: m.approval.status === 'approved' ? '#16a34a' : m.approval.status === 'denied' ? '#dc2626' : 'var(--text3)' }}>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: m.approval.status === 'approved' ? 'var(--c-fg-16a34a)' : m.approval.status === 'denied' ? 'var(--c-fg-dc2626)' : 'var(--text3)' }}>
                               {m.approval.status === 'approved' ? '✔ Approved' : m.approval.status === 'denied' ? '✕ Denied' : m.approval.status}
                               {m.approval.decided_by_name ? ` · ${m.approval.decided_by_name}` : ''}
                             </span>

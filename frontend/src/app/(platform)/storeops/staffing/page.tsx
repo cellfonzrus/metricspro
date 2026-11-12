@@ -83,7 +83,7 @@ export default function StaffingHeatmapPage() {
         <div style={{ display: 'flex', background: 'var(--surface2)', padding: 3, borderRadius: 8, gap: 3, marginLeft: 'auto' }}>
           {VIEWS.map(v => (
             <button key={v.k} onClick={() => setView(v.k)} className="btn" style={{
-              fontSize: 12, background: view === v.k ? 'white' : 'transparent',
+              fontSize: 12, background: view === v.k ? 'var(--c-bg-ffffff)' : 'transparent',
               color: view === v.k ? 'var(--accent)' : 'var(--text2)', boxShadow: view === v.k ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
             }}>{v.label}</button>
           ))}

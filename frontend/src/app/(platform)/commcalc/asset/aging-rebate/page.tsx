@@ -4,6 +4,7 @@ import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
+import { rowStripe } from '@/lib/surface'
 
 // Devices still in Inventory Aging but with a rebate received → effectively sold, pull from inventory.
 // Each rebate is matched to a sale by IMEI; a rebate with NO matching sale is flagged to investigate.
@@ -93,7 +94,7 @@ export default function AgingRebatePage() {
                 </tr></thead>
                 <tbody>
                   {rows.map((r, i) => (
-                    <tr key={(r.esn_imei || '') + i} style={{ borderTop: '1px solid var(--border)', background: r.unmatched ? 'var(--c-bg-fff1f2)' : (i % 2 ? 'var(--surface2)' : undefined) }}>
+                    <tr key={(r.esn_imei || '') + i} style={{ borderTop: '1px solid var(--border)', background: r.unmatched ? 'var(--c-bg-fff1f2)' : (rowStripe(i)) }}>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.store || '—'}{r.market ? ` · ${r.market}` : ''}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.device_model || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 11, fontFamily: 'monospace' }}>{r.esn_imei || '—'}</td>

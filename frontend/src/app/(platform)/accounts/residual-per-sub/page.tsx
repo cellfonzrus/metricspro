@@ -7,6 +7,7 @@ import { SendReportButton } from '@/lib/send-report'
 import { captureChartPng } from '@/lib/chart-capture'
 import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
 import { RestrictedReport, useReportGrant, isForbidden, RESIDUAL_PER_SUB_GRANT } from '../_components/ReportGate'
+import { rowStripe } from '@/lib/surface'
 
 // Residual (MI+ATU) per subscriber per store, month over month, with a commission overlay — to see
 // the effect of lower commissions on the residual payout. Data: GET /account/residual-per-sub?months=.
@@ -244,7 +245,7 @@ export default function ResidualPerSubPage() {
             <span style={{ fontSize: 11, color: 'var(--text3)', marginRight: 4 }}>Market:</span>
             {markets.map(m => (
               <button key={m} onClick={() => toggle(selMarkets, m, setSelMarkets)}
-                className="btn" style={{ padding: '3px 9px', fontSize: 12, background: selMarkets.includes(m) ? 'var(--accent)' : 'var(--surface)', color: selMarkets.includes(m) ? 'white' : 'var(--text)' }}>{m}</button>
+                className="btn" style={{ padding: '3px 9px', fontSize: 12, background: selMarkets.includes(m) ? 'var(--accent)' : 'var(--surface)', color: selMarkets.includes(m) ? 'var(--c-fg-ffffff)' : 'var(--text)' }}>{m}</button>
             ))}
             {(selMarkets.length > 0 || selStores.length > 0) && <button className="btn" style={{ padding: '3px 9px', fontSize: 12 }} onClick={() => { setSelMarkets([]); setSelStores([]) }}>Clear</button>}
           </div>
@@ -253,7 +254,7 @@ export default function ResidualPerSubPage() {
               <span style={{ fontSize: 11, color: 'var(--text3)', marginRight: 4 }}>Store:</span>
               {stores.filter(s => !selMarkets.length || selMarkets.includes(s.market)).map(s => (
                 <button key={s.store} onClick={() => toggle(selStores, s.store, setSelStores)}
-                  className="btn" style={{ padding: '3px 9px', fontSize: 12, background: selStores.includes(s.store) ? 'var(--accent)' : 'var(--surface)', color: selStores.includes(s.store) ? 'white' : 'var(--text)' }}>{s.store.slice(0, 22)}</button>
+                  className="btn" style={{ padding: '3px 9px', fontSize: 12, background: selStores.includes(s.store) ? 'var(--accent)' : 'var(--surface)', color: selStores.includes(s.store) ? 'var(--c-fg-ffffff)' : 'var(--text)' }}>{s.store.slice(0, 22)}</button>
               ))}
             </div>
           )}
@@ -304,8 +305,8 @@ export default function ResidualPerSubPage() {
                   <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 12 }}>—</td>
                 </tr>
                 {rowsToShow.map((s, i) => (
-                  <tr key={s.store} style={{ background: i % 2 ? 'var(--c-bg-fafbfc)' : 'white' }}>
-                    <td style={{ padding: '6px 14px', fontSize: 12, position: 'sticky', left: 0, background: i % 2 ? 'var(--c-bg-fafbfc)' : 'white', borderBottom: '1px solid var(--border)' }}>
+                  <tr key={s.store} style={{ background: rowStripe(i) }}>
+                    <td style={{ padding: '6px 14px', fontSize: 12, position: 'sticky', left: 0, background: rowStripe(i), borderBottom: '1px solid var(--border)' }}>
                       {s.store}
                       {s.store_code && <span style={{ color: 'var(--text3)', fontSize: 10 }}> · {s.store_code}</span>}
                       <span style={{ color: 'var(--text3)', fontSize: 10 }}> · {s.market}</span>

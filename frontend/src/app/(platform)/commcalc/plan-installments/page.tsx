@@ -1033,7 +1033,7 @@ export default function PlanInstallmentsPage() {
                 ariaLabel="Trigger match value"
                 onChange={v => setDraft({ ...draft, trigger_match_value: v })} />
               {triggerCount && (
-                <span style={{ fontSize: 10.5, color: triggerCount.lines === 0 ? '#b45309' : 'var(--text3)' }}>
+                <span style={{ fontSize: 10.5, color: triggerCount.lines === 0 ? 'var(--c-fg-b45309)' : 'var(--text3)' }}>
                   {triggerCount.lines === 0
                     ? `⚠ matches nothing in the last ${planOpts?.window?.months || 3} months — no schedule would start`
                     : `${triggerCount.lines.toLocaleString()} sale line${triggerCount.lines === 1 ? '' : 's'} would trigger this schedule`}

@@ -6,6 +6,7 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { NoLedgerData } from '../../_shared/NoLedgerData'
+import { rowStripe } from '@/lib/surface'
 
 // URL slug -> backend group key + display config
 const GROUP_MAP: Record<string, { key: string; title: string; color: string; critical?: boolean; blurb: string }> = {
@@ -234,7 +235,7 @@ export default function ChargeGroupPage() {
                   return (
                   <tr key={c.category} onClick={() => setCatFilter(active ? '' : c.category)}
                       style={{ borderTop:'1px solid var(--border)', cursor:'pointer',
-                               background: active ? cfg.color+'18' : (i%2?'var(--surface2)':'transparent') }}>
+                               background: active ? cfg.color+'18' : (rowStripe(i)) }}>
                     <td style={{ padding:'8px 16px', fontSize:13, fontWeight: active?700:400 }}>
                       <span style={{ display:'inline-block', width:14, color:'var(--text3)' }}>{active?'▾':'▸'}</span>{c.category}
                     </td>
@@ -250,7 +251,7 @@ export default function ChargeGroupPage() {
               <div style={{ maxHeight:280, overflowY:'auto' }}>
                 <table style={{ width:'100%', borderCollapse:'collapse' }}><tbody>
                   {group.by_store.map((s,i) => (
-                    <tr key={s.store} style={{ borderTop:'1px solid var(--border)', background:i%2?'var(--surface2)':'transparent' }}>
+                    <tr key={s.store} style={{ borderTop:'1px solid var(--border)', background:rowStripe(i) }}>
                       <td style={{ padding:'8px 16px', fontSize:13 }}>{s.store}</td>
                       <td style={{ padding:'8px 16px', fontSize:12, color:'var(--text2)' }}>{s.market}</td>
                       <td style={{ padding:'8px 16px', fontSize:13, fontWeight:600, textAlign:'right' }}>{fmt(s.owed)}</td>
@@ -287,7 +288,7 @@ export default function ChargeGroupPage() {
                   {shownRows.length === 0 ? (
                     <tr><td colSpan={isAppeals?12:11} style={{ padding:24, textAlign:'center', color:'var(--text3)', fontSize:13 }}>No line items for this filter.</td></tr>
                   ) : shownRows.map((r,i) => (
-                    <tr key={r.id} style={{ borderTop:'1px solid var(--border)', background:i%2?'var(--surface2)':'transparent' }}>
+                    <tr key={r.id} style={{ borderTop:'1px solid var(--border)', background:rowStripe(i) }}>
                       <td style={{ padding:'8px 12px', fontSize:12 }}>{r.store||'—'}</td>
                       <td style={{ padding:'8px 12px', fontSize:12, color:'var(--text2)' }}>{r.market||'—'}</td>
                       <td style={{ padding:'8px 12px', fontSize:12 }}>{r.category||'—'}</td>

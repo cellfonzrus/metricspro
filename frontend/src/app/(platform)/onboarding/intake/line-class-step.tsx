@@ -243,7 +243,7 @@ export function LineClassStep({ instanceKey, who, analysis, canReanalyze, reanal
           {Object.values(shown.metrics?.buckets || {}).map(m => (
             <tr key={m.bucket} style={{ borderTop: '1px solid var(--border)', verticalAlign: 'top' }}>
               <td style={{ padding: '6px 4px' }}><b>{m.bucket.replace(/_/g, ' ')}</b><div style={{ ...note, fontSize: 11 }}>rule source: {m.source}{!m.applicable ? ' · marked not applicable' : ''}</div></td>
-              <td style={{ ...mono, padding: '6px 4px', textAlign: 'right', color: m.matched === 0 && m.applicable ? '#b45309' : 'inherit' }}>{num(m.matched)} lines</td>
+              <td style={{ ...mono, padding: '6px 4px', textAlign: 'right', color: m.matched === 0 && m.applicable ? 'var(--c-fg-b45309)' : 'inherit' }}>{num(m.matched)} lines</td>
               <td style={{ padding: '6px 4px' }}>
                 {m.matched > 0 ? <span style={note}>the current rule already matches — nothing to change</span>
                   : !m.applicable ? <span style={note}>not applicable for this business — left as is</span>

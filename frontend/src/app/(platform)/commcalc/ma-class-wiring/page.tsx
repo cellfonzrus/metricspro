@@ -431,7 +431,7 @@ export default function MaClassWiringPage() {
                 </tr></thead>
                 <tbody>
                   {income.class_swap.by_class.map((c: any) => (
-                    <tr key={c.product_class} style={{ borderTop: '1px solid var(--border)', background: c.leg === 'excluded' ? '#fafafa' : undefined }}>
+                    <tr key={c.product_class} style={{ borderTop: '1px solid var(--border)', background: c.leg === 'excluded' ? 'var(--c-bg-fafafa)' : undefined }}>
                       <td style={{ padding: '5px 8px', fontWeight: 600 }}>{c.product_class}</td>
                       <td style={{ padding: '5px 8px', color: 'var(--text2)' }}>{c.leg}</td>
                       <td style={{ padding: '5px 8px', textAlign: 'right' }}>{c.lines.toLocaleString()}</td>

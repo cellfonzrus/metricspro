@@ -90,8 +90,8 @@ export default function IntegrationsPage() {
           ].map(c => (
             <button key={c.k} onClick={() => setFilter(c.k as any)}
               style={{ fontSize: 12, fontWeight: 600, padding: '5px 12px', borderRadius: 999, cursor: 'pointer',
-                border: '1px solid var(--border)', background: filter === c.k ? 'var(--primary, #2563eb)' : 'var(--surface)',
-                color: filter === c.k ? '#fff' : 'var(--text2)' }}>{c.label}</button>
+                border: '1px solid var(--border)', background: filter === c.k ? 'var(--primary, var(--c-bg-2563eb))' : 'var(--surface)',
+                color: filter === c.k ? 'var(--c-fg-ffffff)' : 'var(--text2)' }}>{c.label}</button>
           ))}
         </div>
       )}
@@ -188,7 +188,7 @@ export default function IntegrationsPage() {
                 <button key={i} onClick={() => setStep(i)}
                   style={{ flex: 1, padding: '7px 8px', borderRadius: 8, cursor: 'pointer', textAlign: 'left',
                     border: '1px solid var(--border)', background: i === step ? 'var(--surface2)' : 'var(--surface)' }}>
-                  <div style={{ fontSize: 10.5, fontWeight: 700, color: i === step ? 'var(--primary, #2563eb)' : 'var(--text3)' }}>STEP {i + 1}</div>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, color: i === step ? 'var(--primary, var(--c-fg-2563eb))' : 'var(--text3)' }}>STEP {i + 1}</div>
                   <div style={{ fontSize: 12, fontWeight: 600 }}>{st.title}</div>
                 </button>
               ))}

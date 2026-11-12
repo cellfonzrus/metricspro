@@ -223,7 +223,7 @@ function Section({ s, open, setOpen }: { s: any; open: Record<string, boolean>; 
                     and the way back to the ledger. Only rendered when the backend attached it. */}
                 {l.commission_source && (
                   <div style={{ marginTop: 3, fontSize: 11.5, lineHeight: 1.45, color: 'var(--text3)', maxWidth: 620 }} data-commission-source={l.commission_source.source}>
-                    <span style={{ marginRight: 5, fontSize: 10, color: l.commission_source.source === 'ledger' ? '#3730a3' : '#065f46', background: l.commission_source.source === 'ledger' ? '#e0e7ff' : '#d1fae5', padding: '1px 5px', borderRadius: 999, whiteSpace: 'nowrap' }}>
+                    <span style={{ marginRight: 5, fontSize: 10, color: l.commission_source.source === 'ledger' ? 'var(--c-fg-3730a3)' : 'var(--c-fg-065f46)', background: l.commission_source.source === 'ledger' ? 'var(--c-bg-e0e7ff)' : 'var(--c-bg-d1fae5)', padding: '1px 5px', borderRadius: 999, whiteSpace: 'nowrap' }}>
                       {l.commission_source.source === 'ledger' ? 'from the Commission Ledger' : 'from the feed tables'}
                     </span>
                     {l.commission_source.words}{' '}

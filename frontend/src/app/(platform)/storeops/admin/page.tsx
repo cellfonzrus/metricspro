@@ -373,7 +373,7 @@ export default function StoreOpsAdminPage() {
             Pay", the same name as the HR tab where pay IS set, so the label sent people to the wrong screen
             (owner 2026-10-02, index §19.40). Pay lives on HR → Employees & Pay, linked above. */}
         {(['employees', 'stores'] as const).map(t => (
-          <button key={t} onClick={() => setTab(t)} style={{ padding: '7px 16px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, fontWeight: 600, cursor: 'pointer', background: tab === t ? 'var(--accent)' : 'var(--surface)', color: tab === t ? '#fff' : 'var(--text2)' }}>
+          <button key={t} onClick={() => setTab(t)} style={{ padding: '7px 16px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, fontWeight: 600, cursor: 'pointer', background: tab === t ? 'var(--accent)' : 'var(--surface)', color: tab === t ? 'var(--c-fg-ffffff)' : 'var(--text2)' }}>
             {t === 'employees' ? '👥 Employees' : '🏪 Stores'}
           </button>
         ))}

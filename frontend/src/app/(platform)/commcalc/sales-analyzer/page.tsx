@@ -172,7 +172,7 @@ export default function SalesAnalyzerPage() {
               <tbody>
                 {reps.map((r: any) => (
                   <tr key={r.rep_login || r.rep} onClick={() => setSelRep(selRep === r.rep_login ? '' : r.rep_login)}
-                      style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: selRep === r.rep_login ? 'var(--surface2,#eef2ff)' : undefined }}>
+                      style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: selRep === r.rep_login ? 'var(--surface2,var(--c-bg-eef2ff))' : undefined }}>
                     <td style={{ padding: '7px 12px', fontSize: 13 }}>{r.rep}</td>
                     <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13 }}>{r.cohort}</td>
                     <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13 }}>{r.retained}</td>
@@ -192,7 +192,7 @@ export default function SalesAnalyzerPage() {
               <span style={{ fontSize: 12, color: 'var(--text3)' }}>Loss:</span>
               {[['', 'All'], ['employee', '👤 Employee'], ['customer', '🙂 Customer'], ['mixed', '◐ Mixed']].map(([v, l]) => (
                 <button key={v} onClick={() => setLossFilter(v)} style={{ padding: '4px 10px', borderRadius: 14, border: '1px solid var(--border)',
-                  cursor: 'pointer', fontSize: 12, fontWeight: 600, background: lossFilter === v ? '#1E3A5F' : 'var(--surface)', color: lossFilter === v ? '#fff' : 'var(--text2)' }}>{l}</button>
+                  cursor: 'pointer', fontSize: 12, fontWeight: 600, background: lossFilter === v ? 'var(--c-bg-1e3a5f)' : 'var(--surface)', color: lossFilter === v ? 'var(--c-fg-ffffff)' : 'var(--text2)' }}>{l}</button>
               ))}
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1120 }}>

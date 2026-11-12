@@ -133,7 +133,7 @@ function LinksTab({ links, selId, setSelId, reload, onErr }: any) {
           <thead><tr><th style={th}>Sub</th><th style={th}>Kind</th><th style={th}>Status</th><th style={th}>Consent</th><th style={th}>Stores</th><th style={th}>Taxable</th><th style={th}></th></tr></thead>
           <tbody>
             {links.map((l: any) => (
-              <tr key={l.id} style={{ background: l.id === selId ? 'var(--surface2, #eef2ff)' : undefined }}>
+              <tr key={l.id} style={{ background: l.id === selId ? 'var(--surface2, var(--c-bg-eef2ff))' : undefined }}>
                 <td style={td}>{l.sub_name}</td>
                 <td style={td}>{l.sub_kind}</td>
                 <td style={td}>{l.status}</td>

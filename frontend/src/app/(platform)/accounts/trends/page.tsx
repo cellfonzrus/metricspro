@@ -159,7 +159,7 @@ export default function TrendsHubPage() {
         </label>
         {markets.length > 0 && <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           <span style={{ fontSize: 11, color: 'var(--text3)' }}>Market:</span>
-          {markets.map(m => <button key={m} className="btn" style={{ padding: '3px 9px', fontSize: 12, background: selMarkets.includes(m) ? 'var(--accent)' : 'var(--surface)', color: selMarkets.includes(m) ? 'white' : 'var(--text)' }} onClick={() => toggle(selMarkets, m, setSelMarkets)}>{m}</button>)}
+          {markets.map(m => <button key={m} className="btn" style={{ padding: '3px 9px', fontSize: 12, background: selMarkets.includes(m) ? 'var(--accent)' : 'var(--surface)', color: selMarkets.includes(m) ? 'var(--c-fg-ffffff)' : 'var(--text)' }} onClick={() => toggle(selMarkets, m, setSelMarkets)}>{m}</button>)}
         </div>}
         {(selMarkets.length > 0 || selStores.length > 0) && <button className="btn" style={{ padding: '3px 9px', fontSize: 12 }} onClick={() => { setSelMarkets([]); setSelStores([]) }}>Clear</button>}
       </div>
@@ -167,7 +167,7 @@ export default function TrendsHubPage() {
         <div className="card" style={{ padding: 12, marginBottom: 14, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', maxHeight: 96, overflowY: 'auto' }}>
           <span style={{ fontSize: 11, color: 'var(--text3)' }}>Store:</span>
           {allStores.filter(s => !selMarkets.length || selMarkets.includes(s.market)).map(s => (
-            <button key={s.store_code} className="btn" style={{ padding: '3px 9px', fontSize: 12, background: selStores.includes(s.store_code) ? 'var(--accent)' : 'var(--surface)', color: selStores.includes(s.store_code) ? 'white' : 'var(--text)' }} onClick={() => toggle(selStores, s.store_code, setSelStores)}>{String(s.store).slice(0, 20)}</button>
+            <button key={s.store_code} className="btn" style={{ padding: '3px 9px', fontSize: 12, background: selStores.includes(s.store_code) ? 'var(--accent)' : 'var(--surface)', color: selStores.includes(s.store_code) ? 'var(--c-fg-ffffff)' : 'var(--text)' }} onClick={() => toggle(selStores, s.store_code, setSelStores)}>{String(s.store).slice(0, 20)}</button>
           ))}
         </div>
       )}

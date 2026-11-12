@@ -71,27 +71,99 @@ export function roleOf(prop) {
 
 /** The property a literal at `index` is a value of — the nearest `name:` or `name=` before it. */
 export const PROP_BEFORE = /([A-Za-z][A-Za-z0-9_-]*)\s*[:=]/g
-export function propAt(src, index) {
-  const before = src.slice(Math.max(0, index - 200), index)
-  const all = [...before.matchAll(PROP_BEFORE)]
-  return all.length ? all[all.length - 1][1] : null
+
+// ——— which property is this literal the VALUE of ———————————————————————————————————————————————
+// REWRITTEN 2026-11-12 (index §CORE-37). Owner, of the Finance Dashboard expense grid: *"half of the
+// things are not visible on this screen and this [is] happening to a lot of other screens."* Every
+// other row was a white band with no label in it, because the row carried
+//
+//     background: ci % 2 ? 'var(--c-bg-fafbfc)' : 'white'
+//
+// — the FIRST branch converted to a token by this generator, the second left as a literal. In the
+// dark theme the token became #141b21 and the literal stayed white, while the label's colour was
+// `var(--text)`, near-white. White ink on a white band.
+//
+// WHY the generator skipped it, and why this is a mechanism fix rather than a screen fix. Role was
+// read by looking BACKWARDS from the literal for the nearest `name:` or `name=`:
+//   · a KEYWORD (`'white'`) counted only when a property colon sat IMMEDIATELY before it, so every
+//     keyword in a ternary branch — the second half of every striped row in the app — was invisible;
+//   · a HEX took the nearest `name:`/`name=` within 200 characters, which in
+//     `background: f === s.store ? '#eff6ff' : 'white'` is the COMPARISON `store =`, so the literal
+//     landed in the "ambiguous" bucket (837 of them) instead of being converted.
+// Both are the same mistake: *a literal's property cannot be found by looking backwards, because
+// what lies between them is an expression.* So the properties are parsed FORWARD into value ranges
+// and the literal is matched to the range that contains it — ternary branches, nested calls, arrays
+// and multi-line values included. One rule, every call site, no bucket of invisible cases.
+
+/** The span of source each `name:` owns as its value: from after the colon to the `,` / `;` / closer
+ *  that ends it, at depth 0. Ranges nest (an object inside a value), and `propOfValue` takes the
+ *  INNERMOST, which is the property the literal is actually the value of. */
+export function propRanges(src) {
+  const out = []
+  const re = /([A-Za-z][A-Za-z0-9_-]*)\s*:/g
+  let m
+  while ((m = re.exec(src))) {
+    const start = m.index + m[0].length
+    let depth = 0, i = start
+    for (; i < src.length; i++) {
+      const c = src[i]
+      if (c === '(' || c === '[' || c === '{') depth++
+      else if (c === ')' || c === ']' || c === '}') { if (depth === 0) break; depth-- }
+      else if (depth === 0 && (c === ',' || c === ';')) break
+      else if (depth === 0 && c === '\n') {
+        // A value may wrap, but only when the two halves cannot stand alone: the line so far ends on
+        // an operator, or the next line OPENS with one (the prettier-wrapped ternary,
+        // `background: active\n  ? …\n  : '#fef2f2'`). Otherwise the newline ends the value, which
+        // keeps a `prop:` whose closing punctuation is missing from swallowing the rest of the file.
+        // A continuation never starts with a letter, so `color:` on the next line always ends this one.
+        const tail = src.slice(start, i).trimEnd()
+        const next = src.slice(i + 1).match(/^\s*(\S)/)
+        const opens = next && '?:+-*/&|.=<>('.includes(next[1])
+        if (!/[?:,+\-*/&|(=<>]$/.test(tail) && !opens) break
+      }
+    }
+    out.push({ prop: m[1], start, end: i })
+  }
+  return out
 }
+
+/** The property whose value contains `index`, or null when the literal is not inside any value
+ *  (a bare colour in JSX text, a constant at module scope). */
+export function propOfValue(src, index, ranges = propRanges(src)) {
+  let best = null
+  for (const r of ranges) {
+    if (index >= r.start && index < r.end && (!best || r.start > best.start)) best = r
+  }
+  return best ? best.prop : null
+}
+
+/** Kept for callers that only have an index: the same answer, derived the same way. */
+export function propAt(src, index) { return propOfValue(src, index) }
+
 /** Every place a colour literal appears, with the role it resolves to (null = we cannot tell). */
 export function sites(files = sourceFiles()) {
   const out = []
   for (const f of files) {
     const src = readFileSync(f, 'utf8')
+    const ranges = propRanges(src)
     for (const m of src.matchAll(HEX))
-      out.push({ file: f, index: m.index, raw: m[0], colour: canon(m[0]), role: roleOf(propAt(src, m.index)) })
-    // A keyword is only a colour when it is DIRECTLY the value of a colour property, and only after a
-    // COLON: `type Lamp = 'green'` is a type, not a style. The looser
-    // "nearest property within 200 characters" rule is right for a hex, which is a colour wherever it
-    // appears, but `c.lamp !== 'green'` is a STATUS and converting it would have changed what the page
-    // compares — caught by the type checker on admin/control-box, so the rule here is strict.
+      out.push({ file: f, index: m.index, raw: m[0], colour: canon(m[0]),
+                 role: roleOf(propOfValue(src, m.index, ranges)) })
+    // A keyword is a colour only where it is the VALUE of a colour property — `type Lamp = 'green'`
+    // and `c.lamp !== 'green'` are a type and a STATUS, and converting them changed what the page
+    // compared (caught by the type checker on admin/control-box). The value-range rule says exactly
+    // that, and unlike the old "colon immediately before" test it also sees the keyword in a ternary
+    // branch, which is where the invisible rows were hiding.
     for (const m of src.matchAll(NAMED_RE)) {
-      const direct = src.slice(Math.max(0, m.index - 40), m.index).match(/([A-Za-z][A-Za-z0-9_-]*)\s*:\s*$/)
-      if (direct) out.push({ file: f, index: m.index, raw: m[0], colour: NAMED[m[1]], quoted: true,
-                             role: roleOf(direct[1]) })
+      // …and a keyword next to a COMPARISON is an operand, not a value. `boxShadow: lamp === 'red'
+      // ? … : 'none'` names a colour property and holds the word 'red', but the word is a STATUS the
+      // page compares — converting it changed what the comparison tested, and the type checker caught
+      // it on admin/control-box (twice now: once under the old rule, once under this one).
+      const before = src.slice(Math.max(0, m.index - 8), m.index)
+      const after = src.slice(m.index + m[0].length, m.index + m[0].length + 8)
+      if (/[=!]==?\s*$/.test(before) || /^\s*[=!]==?/.test(after)) continue
+      const role = roleOf(propOfValue(src, m.index, ranges))
+      if (role) out.push({ file: f, index: m.index, raw: m[0], colour: NAMED[m[1]], quoted: true, role })
     }
   }
   return out.sort((a, b) => (a.file === b.file ? a.index - b.index : a.file < b.file ? -1 : 1))

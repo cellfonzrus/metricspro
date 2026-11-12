@@ -230,8 +230,8 @@ export default function MdfEntitlementCoveragePage() {
       {/* The report's own verdict, in its own words — never re-worded here. */}
       {!loading && !data?.error && data?.reason &&
         <div className="card" style={{ padding: '10px 14px', marginBottom: 12, fontSize: 13,
-                                       background: data.verdict === 'failed' ? '#fee2e2' : data.verdict === 'passed' ? 'var(--surface2)' : '#e0e7ff',
-                                       color: data.verdict === 'failed' ? '#991b1b' : data.verdict === 'passed' ? 'var(--text2)' : '#3730a3' }}>
+                                       background: data.verdict === 'failed' ? 'var(--c-bg-fee2e2)' : data.verdict === 'passed' ? 'var(--surface2)' : 'var(--c-bg-e0e7ff)',
+                                       color: data.verdict === 'failed' ? 'var(--c-fg-991b1b)' : data.verdict === 'passed' ? 'var(--text2)' : 'var(--c-fg-3730a3)' }}>
           <b>{data.verdict === 'failed' ? '⚑' : data.verdict === 'passed' ? '✓' : '◻︎'}</b> {data.reason}
         </div>}
 

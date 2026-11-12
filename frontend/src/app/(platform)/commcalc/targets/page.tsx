@@ -72,6 +72,7 @@ function convColor(c?: ConvT) {
 }
 
 import { targetState } from '@/lib/target-state'
+import { rowStripe } from '@/lib/surface'
 export default function DailyTargetsPage() {
   const { period } = usePeriod()
   // The tenant's own target axis — the four built-ins plus every category it declared.
@@ -283,7 +284,7 @@ export default function DailyTargetsPage() {
                 const ac: CatMetrics = s.categories?.accessories
                 const setupMtd = Number((ac as any)?.setup_fee_mtd || 0)
                 const storeRow = (
-                  <tr key={s.store_code} style={{ borderBottom: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
+                  <tr key={s.store_code} style={{ borderBottom: '1px solid var(--border)', background: rowStripe(i) }}>
                     <td style={td}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         {(s.reps?.length > 0) && (
@@ -339,7 +340,7 @@ export default function DailyTargetsPage() {
                 // Reps who worked/sold at this store, just below its row — their MTD
                 // performance + conversion, so the store breaks down by person.
                 const repRows = (expanded[s.store_code] ? (s.reps || []) : []).map((rp: any) => (
-                  <tr key={s.store_code + ':' + rp.rep} style={{ borderBottom: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
+                  <tr key={s.store_code + ':' + rp.rep} style={{ borderBottom: '1px solid var(--border)', background: rowStripe(i) }}>
                     <td style={{ ...td, paddingLeft: 28 }}>
                       <div style={{ fontSize: 12, color: 'var(--text2)' }}>↳ {rp.rep}{rp.below_store && rp.conversion?.billpays > 0 ? ' ⚠️ below store' : ''}</div>
                       <div style={{ fontSize: 10, color: 'var(--text3)' }}>{fmtN(rp.upgrades, 0)} upg · {fmt(rp.accessories)} acc{rp.accessory_setup_fee ? ` (incl ${fmt(rp.accessory_setup_fee)} set-up fee)` : ''}</div>
@@ -379,7 +380,7 @@ export default function DailyTargetsPage() {
         <div style={{ display: 'flex', gap: 4, background: 'var(--surface2)', padding: 4, borderRadius: 10 }}>
           {(['store', 'rep'] as const).map(sc => (
             <button key={sc} className="btn" onClick={() => setScope(sc)} style={{
-              background: scope === sc ? 'white' : 'transparent',
+              background: scope === sc ? 'var(--c-bg-ffffff)' : 'transparent',
               color: scope === sc ? 'var(--accent)' : 'var(--text2)', fontSize: 13,
               boxShadow: scope === sc ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
             }}>{sc === 'store' ? 'Store' : 'By Rep'}</button>
@@ -497,7 +498,7 @@ export default function DailyTargetsPage() {
                   </thead>
                   <tbody>
                     {storeReps.map((rp, i) => (
-                      <tr key={rp.rep} style={{ borderBottom: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
+                      <tr key={rp.rep} style={{ borderBottom: '1px solid var(--border)', background: rowStripe(i) }}>
                         <td style={td}>
                           <span style={{ fontWeight: 600 }}>{rp.rep}</span>
                           {rp.below_store && rp.conversion?.billpays > 0 && <span style={{ color: 'var(--c-fg-dc2626)', fontSize: 11 }}> · ⚠️ below store</span>}
@@ -530,7 +531,7 @@ export default function DailyTargetsPage() {
                 {CATS.map(c => (
                   <button key={c.key} className="btn" onClick={() => setCalCat(c.key)} style={{
                     background: calCat === c.key ? 'var(--accent)' : 'transparent',
-                    color: calCat === c.key ? 'white' : 'var(--text2)', fontSize: 12, padding: '4px 10px',
+                    color: calCat === c.key ? 'var(--c-fg-ffffff)' : 'var(--text2)', fontSize: 12, padding: '4px 10px',
                   }}>{c.label}</button>
                 ))}
               </div>
@@ -555,7 +556,7 @@ export default function DailyTargetsPage() {
                       </td>
                       <td style={td}>{fmtN(d.hours, 1)}</td>
                       <td style={td}>{val(unit, cell?.base ?? 0)}</td>
-                      <td style={{ ...td, color: cell?.achieved == null ? 'var(--text3)' : (cell.achieved >= (cell.base ?? 0) ? 'var(--green)' : '#b45309') }}>
+                      <td style={{ ...td, color: cell?.achieved == null ? 'var(--text3)' : (cell.achieved >= (cell.base ?? 0) ? 'var(--green)' : 'var(--c-fg-b45309)') }}>
                         {cell?.achieved == null ? '—' : val(unit, cell.achieved)}
                       </td>
                     </tr>

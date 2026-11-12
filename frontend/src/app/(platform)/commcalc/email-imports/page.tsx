@@ -1157,7 +1157,7 @@ export default function EmailImportsPage() {
                     {/* With the login route switched off the stored last_status is the LAST attempt
                         made before it was closed — showing it as a live fault is the misleading error
                         that keeps people retrying. It is kept, but labelled as history. */}
-                    {s.last_status && <div style={{ color: routeOff(s) ? 'var(--text3)' : (s.last_pull_delivered === false ? '#9a3412' : 'var(--text3)'), background: (!routeOff(s) && s.last_pull_delivered === false) ? '#fff7ed' : undefined, borderRadius: 6, padding: (!routeOff(s) && s.last_pull_delivered === false) ? '3px 6px' : undefined, fontSize: 11, marginTop: 2, maxWidth: 240, whiteSpace: 'normal' }}>{routeOff(s) ? `Last attempt before the login was switched off: ${s.last_status}` : s.last_status}</div>}
+                    {s.last_status && <div style={{ color: routeOff(s) ? 'var(--text3)' : (s.last_pull_delivered === false ? 'var(--c-fg-9a3412)' : 'var(--text3)'), background: (!routeOff(s) && s.last_pull_delivered === false) ? 'var(--c-bg-fff7ed)' : undefined, borderRadius: 6, padding: (!routeOff(s) && s.last_pull_delivered === false) ? '3px 6px' : undefined, fontSize: 11, marginTop: 2, maxWidth: 240, whiteSpace: 'normal' }}>{routeOff(s) ? `Last attempt before the login was switched off: ${s.last_status}` : s.last_status}</div>}
                     {s.has_pull_diag && <button className="btn btn-secondary" style={{ fontSize: 11, padding: '1px 7px', marginTop: 4 }} onClick={() => openPullDiag(s)}>🔧 What the pull saw</button>}
                   </td>
                   <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>

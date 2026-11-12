@@ -120,7 +120,7 @@ export default function AtuOpportunityPage() {
   const tile = (label: string, value: string, sub: string, tone?: 'warn' | 'good') => (
     <div className="card" style={{ padding: '14px 16px', flex: '1 1 168px', minWidth: 168 }}>
       <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text3)', fontWeight: 700 }}>{label}</div>
-      <div style={{ fontSize: 25, fontWeight: 700, marginTop: 5, fontVariantNumeric: 'tabular-nums', color: tone === 'warn' ? '#b45309' : tone === 'good' ? '#0f766e' : 'var(--text)' }}>{value}</div>
+      <div style={{ fontSize: 25, fontWeight: 700, marginTop: 5, fontVariantNumeric: 'tabular-nums', color: tone === 'warn' ? 'var(--c-fg-b45309)' : tone === 'good' ? 'var(--c-fg-0f766e)' : 'var(--text)' }}>{value}</div>
       <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>
     </div>
   )

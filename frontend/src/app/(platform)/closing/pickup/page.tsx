@@ -439,8 +439,8 @@ export default function CashPickupPage() {
       <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-            <button className="btn" style={{ borderRadius: 0, border: 'none', fontSize: 12, background: !rangeMode ? 'var(--accent)' : 'transparent', color: !rangeMode ? 'white' : 'var(--text2)' }} onClick={() => setRangeMode(false)}>Day</button>
-            <button className="btn" style={{ borderRadius: 0, border: 'none', fontSize: 12, background: rangeMode ? 'var(--accent)' : 'transparent', color: rangeMode ? 'white' : 'var(--text2)' }} onClick={() => setRangeMode(true)}>Range</button>
+            <button className="btn" style={{ borderRadius: 0, border: 'none', fontSize: 12, background: !rangeMode ? 'var(--accent)' : 'transparent', color: !rangeMode ? 'var(--c-fg-ffffff)' : 'var(--text2)' }} onClick={() => setRangeMode(false)}>Day</button>
+            <button className="btn" style={{ borderRadius: 0, border: 'none', fontSize: 12, background: rangeMode ? 'var(--accent)' : 'transparent', color: rangeMode ? 'var(--c-fg-ffffff)' : 'var(--text2)' }} onClick={() => setRangeMode(true)}>Range</button>
           </div>
           {!rangeMode
             ? <input type="date" style={sel} value={date} onChange={e => setDate(e.target.value)} />
@@ -548,7 +548,7 @@ export default function CashPickupPage() {
                   <div
                     style={{
                       marginTop: 3, fontSize: 11,
-                      color: s.worked_source === 'actual' ? 'var(--text2)' : s.worked_source === 'scheduled' ? '#b45309' : 'var(--text3)',
+                      color: s.worked_source === 'actual' ? 'var(--text2)' : s.worked_source === 'scheduled' ? 'var(--c-fg-b45309)' : 'var(--text3)',
                       fontStyle: s.worked_source === 'none' ? 'italic' : 'normal',
                     }}
                     title={chipTitles([...(s.worked || []), ...(s.scheduled_only || [])])}
@@ -605,7 +605,7 @@ export default function CashPickupPage() {
                         {e.cash_sales == null ? <span style={{ color: 'var(--text3)' }}>—</span> : <>
                           <span style={{ fontWeight: collecting(e) === 'sales' ? 700 : 500 }}>{fmt(e.cash_sales)}</span>
                           <span style={{ display: 'block', fontSize: 10, fontWeight: 700, letterSpacing: 0.2, marginTop: 1,
-                            color: e.cash_sales_basis === 'pos' ? '#166534' : e.cash_sales_basis === 'declared' ? '#b45309' : 'var(--text3)' }}>
+                            color: e.cash_sales_basis === 'pos' ? 'var(--c-fg-166534)' : e.cash_sales_basis === 'declared' ? 'var(--c-fg-b45309)' : 'var(--text3)' }}>
                             {collecting(e) === 'sales' ? 'COLLECTING · ' : ''}
                             {e.cash_sales_basis === 'pos' ? 'POS' : e.cash_sales_basis === 'declared' ? 'DECLARED' : 'no bill-pay'}
                           </span>
@@ -717,7 +717,7 @@ export default function CashPickupPage() {
                           POS X-report cash for this store-day — same resolution as Cash Recon
                           (Management), compared at store-day grain against the declared cash total.
                           No X-report imported => an honest "no POS data", never a fake zero. */}
-                      <td style={{ ...cell, color: e.pos_status === 'mismatch' ? '#dc2626' : 'var(--text2)', fontWeight: e.pos_status === 'mismatch' ? 700 : 400 }}
+                      <td style={{ ...cell, color: e.pos_status === 'mismatch' ? 'var(--c-fg-dc2626)' : 'var(--text2)', fontWeight: e.pos_status === 'mismatch' ? 700 : 400 }}
                           title={e.pos_status === 'no_pos_data' ? 'No POS X-report for this store-day'
                             : `Store-day declared ${fmt(e.pos_declared_day)} vs POS ${fmt(e.pos_cash)} (Δ ${fmt(e.pos_delta)})`}>
                         {e.pos_cash == null ? <span style={{ color: 'var(--text3)', fontStyle: 'italic' }}>no POS data</span>

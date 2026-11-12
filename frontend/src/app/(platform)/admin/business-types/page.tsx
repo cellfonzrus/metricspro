@@ -144,7 +144,7 @@ export default function BusinessTypesPage() {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
           {data.verticals.map(v => (
             <button key={v.key} onClick={() => choose(v.key)}
-                    style={{ ...btn, fontWeight: v.key === pick ? 700 : 400, borderColor: v.key === pick ? 'var(--accent, #2563eb)' : 'var(--border)' }}>
+                    style={{ ...btn, fontWeight: v.key === pick ? 700 : 400, borderColor: v.key === pick ? 'var(--accent, var(--c-bg-2563eb))' : 'var(--border)' }}>
               {v.label}{v.is_default ? ' · default' : ''} <span style={{ color: 'var(--text3)' }}>({v.tenants ?? 0})</span>
             </button>
           ))}

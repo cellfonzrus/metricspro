@@ -269,7 +269,7 @@ export default function DlarVsPlatformPage() {
                       <td style={num}>{r.differing}</td>
                       <td style={num}>{r.undecidable || ''}</td>
                       <td style={{ ...num, fontWeight: r.unattributed ? 600 : 400,
-                        color: r.unattributed ? 'crimson' : undefined }}>{r.unattributed || ''}</td>
+                        color: r.unattributed ? 'var(--c-fg-dc143c)' : undefined }}>{r.unattributed || ''}</td>
                       <td style={{ ...td, color: 'var(--text2)', fontSize: 12 }}>
                         {r.vintage?.as_of || '—'}
                         {r.vintage?.upper_bound ? ' (≤)' : ''}

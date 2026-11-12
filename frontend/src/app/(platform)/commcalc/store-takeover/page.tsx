@@ -1963,7 +1963,7 @@ export default function StoreTakeoverPage() {
                               : '(none declared)')
                           : String(sw.value)}
                     </span>
-                    <span style={{ color: sw.basis === 'column_absent' ? '#92400e' : 'var(--text3)' }}>
+                    <span style={{ color: sw.basis === 'column_absent' ? 'var(--c-fg-92400e)' : 'var(--text3)' }}>
                       {sw.basis === 'declared'
                         ? <><b>yours</b> — {sw.answers}</>
                         : sw.basis === 'house_default'

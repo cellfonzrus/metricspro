@@ -5,6 +5,7 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { NoLedgerData } from '../_shared/NoLedgerData'
+import { rowStripe } from '@/lib/surface'
 
 type Bucket = 'matched' | 'underpaid' | 'overpaid' | 'no_expected' | 'no_hotsheet' | 'unmapped_type'
 type Item = {
@@ -243,7 +244,7 @@ export default function HotsheetReconPage() {
                 </tr></thead>
                 <tbody>
                   {items.slice(0, 1000).map((r, i) => (
-                    <tr key={i} style={{ borderTop: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
+                    <tr key={i} style={{ borderTop: '1px solid var(--border)', background: rowStripe(i) }}>
                       <td style={{ padding: '7px 12px', fontSize: 12 }}>{r.store || '—'}</td>
                       <td style={{ padding: '7px 12px', fontSize: 12 }}>{r.device_model || '—'}</td>
                       <td style={{ padding: '7px 12px', fontSize: 11, color: 'var(--text2)', fontFamily: 'monospace' }}>{r.imei || '—'}</td>

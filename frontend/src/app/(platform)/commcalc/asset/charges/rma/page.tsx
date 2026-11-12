@@ -5,6 +5,7 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { NoLedgerData } from '../../_shared/NoLedgerData'
+import { rowStripe } from '@/lib/surface'
 
 type Row = { id:number; store:string; market:string; esn_imei:string|null; phone_number:string|null
   device_model:string|null; status:string|null; date_sold:string|null; owed_to_vip:number|null
@@ -34,7 +35,7 @@ function RmaTable({ rows, showShort }: { rows: Row[]; showShort?: boolean }) {
         </tr></thead>
         <tbody>
           {rows.map((r,i) => (
-            <tr key={r.id} style={{ borderTop:'1px solid var(--border)', background:i%2?'var(--surface2)':'transparent' }}>
+            <tr key={r.id} style={{ borderTop:'1px solid var(--border)', background:rowStripe(i) }}>
               <td style={{ padding:'8px 12px', fontSize:12 }}>{r.store||'—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12, color:'var(--text2)' }}>{r.market||'—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12 }}>{r.device_model||'—'}</td>

@@ -515,7 +515,7 @@ export default function PayoutSchedulesPage() {
                     <td style={{ padding: '5px 8px', fontSize: 12 }}>{d.month_index}</td>
                     <td style={{ padding: '5px 8px', fontSize: 12 }}>{fmt(d.mrc_at_pay)}{d.mrc_source === 'product_catalog' && <span title="from per-product MRC catalog" style={{ marginLeft: 4, fontSize: 10, color: 'var(--c-fg-2563eb)' }}>catalog</span>}{d.mrc_source === 'none' && d.payout_kind === 'pct_mrc' && <span title="no MRC found — add one to the catalog" style={{ marginLeft: 4, fontSize: 10, color: 'var(--c-fg-b91c1c)' }}>no MRC</span>}</td>
                     <td style={{ padding: '5px 8px', fontSize: 12, fontWeight: 600 }}>{fmt(d.amount)}</td>
-                    <td style={{ padding: '5px 8px', fontSize: 12, color: d.status === 'paid' ? '#15803d' : d.status === 'withheld_unpaid' ? '#b91c1c' : '#b45309' }}>{d.status}</td>
+                    <td style={{ padding: '5px 8px', fontSize: 12, color: d.status === 'paid' ? 'var(--c-fg-15803d)' : d.status === 'withheld_unpaid' ? 'var(--c-fg-b91c1c)' : 'var(--c-fg-b45309)' }}>{d.status}</td>
                   </tr>
                 ))}
               </tbody>

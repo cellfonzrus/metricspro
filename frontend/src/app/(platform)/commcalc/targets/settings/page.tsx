@@ -4,6 +4,7 @@ import { api, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { SETUP_NOTICE } from '@/lib/setupNotice'
 import { useTargetAxis, declaredCats } from '@/lib/target-axis'
+import { rowStripe } from '@/lib/surface'
 
 interface TargetRow {
   store_code: string
@@ -300,7 +301,7 @@ export default function TargetSettingsPage() {
             </thead>
             <tbody>
               {filtered.map((r, i) => (
-                <tr key={r.store_code} style={{ borderBottom: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
+                <tr key={r.store_code} style={{ borderBottom: '1px solid var(--border)', background: rowStripe(i) }}>
                   <td style={td}><input type="checkbox" checked={selected.has(r.store_code)} onChange={() => toggleSel(r.store_code)} /></td>
                   <td style={td}>
                     <div style={{ fontWeight: 600 }}>{r.address || r.store_code}</div>

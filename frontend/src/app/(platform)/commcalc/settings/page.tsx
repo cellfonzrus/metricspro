@@ -4,6 +4,7 @@ import { api, apiDownload, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { usePosTerm } from '@/lib/report-labels'
 import EntityPicker from '@/components/EntityPicker'
+import { rowStripe } from '@/lib/surface'
 
 const DEFAULTS = {
   upgrade_flat: 20, premium_flat: 5, byod_flat: 3, byod_extra_spiff: 0,
@@ -372,7 +373,7 @@ export default function SettingsPage() {
       <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: 'var(--surface2)', padding: 4, borderRadius: 10, width: 'fit-content', flexWrap: 'wrap' }}>
         {tabs.map(t => (
           <button key={t.key} onClick={() => setActiveTab(t.key)} className="btn" style={{
-            background: activeTab === t.key ? 'white' : 'transparent',
+            background: activeTab === t.key ? 'var(--c-bg-ffffff)' : 'transparent',
             color: activeTab === t.key ? 'var(--accent)' : 'var(--text2)',
             boxShadow: activeTab === t.key ? '0 1px 3px rgba(0,0,0,0.1)' : 'none', fontSize: 13,
           }}>
@@ -459,7 +460,7 @@ export default function SettingsPage() {
                       ? `${(r.value * 100).toFixed(1)}%`
                       : `$${r.value.toFixed(2)}`
                     return (
-                      <tr key={r.id} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
+                      <tr key={r.id} style={{ borderBottom: '1px solid var(--border)', background: rowStripe(i) }}>
                         <td style={{ padding: '10px 14px' }}>
                           <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--accent)' }}>{r.comp_type}</span>
                         </td>
@@ -553,7 +554,7 @@ export default function SettingsPage() {
                     const promoPrice = parsePromoPrice(s.sample_desc)
                     const isAccessory = s.model.toLowerCase().includes('protect') || s.model.toLowerCase().includes('applecare')
                     return (
-                      <tr key={s.model} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)', opacity: isAccessory ? 0.6 : 1 }}>
+                      <tr key={s.model} style={{ borderBottom: '1px solid var(--border)', background: rowStripe(i), opacity: isAccessory ? 0.6 : 1 }}>
                         <td style={{ padding: '12px 14px', fontWeight: 700, color: 'var(--text3)', fontSize: 14 }}>
                           {i + 1}
                         </td>
@@ -566,7 +567,7 @@ export default function SettingsPage() {
                           <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 4 }}>units</span>
                         </td>
                         <td style={{ padding: '12px 14px' }}>
-                          <span style={{ fontWeight: 600, fontSize: 14, color: promoPrice === '—' ? 'var(--text3)' : '#059669' }}>
+                          <span style={{ fontWeight: 600, fontSize: 14, color: promoPrice === '—' ? 'var(--text3)' : 'var(--c-fg-059669)' }}>
                             {promoPrice}
                           </span>
                         </td>

@@ -6,6 +6,7 @@ import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
 import { SetupNotice } from '@/lib/setupNotice'
+import { rowStripe } from '@/lib/surface'
 
 // On-Inventory 3-Way Rebate Recon (OWNER DIRECTIVE 2026-07-28): the on-inventory report cross-checked
 // against (2) the IMEI rebate data already on each ledger row (asset_ledger.reimbursement/date — the
@@ -266,7 +267,7 @@ export default function OninvThreeWayReconPage() {
                     return (
                       <tr key={s.store} onClick={() => { setStoreFilter(active ? '' : s.store); }}
                         style={{ borderTop: '1px solid var(--border)', cursor: 'pointer',
-                                 background: active ? 'var(--accent)12' : (i % 2 === 0 ? 'transparent' : 'var(--surface2)') }}>
+                                 background: active ? 'var(--accent)12' : (rowStripe(i)) }}>
                         <td style={{ padding: '8px 12px', fontSize: 12, fontWeight: 600 }}>{s.store}</td>
                         <td style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text2)' }}>{s.market || '—'}</td>
                         <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right' }}>{s.device_count}</td>
@@ -319,7 +320,7 @@ export default function OninvThreeWayReconPage() {
                 </thead>
                 <tbody>
                   {filteredRows.slice(0, 1000).map((r, i) => (
-                    <tr key={(r.esn_imei || '') + i} style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
+                    <tr key={(r.esn_imei || '') + i} style={{ borderTop: '1px solid var(--border)', background: rowStripe(i) }}>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.store || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.device_model || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 11, fontFamily: 'monospace' }}>{r.esn_imei || <span style={{ color: 'var(--c-fg-dc2626)' }}>(blank)</span>}</td>

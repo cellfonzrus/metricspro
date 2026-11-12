@@ -409,8 +409,8 @@ export default function SalesComparisonPage() {
       {!loading && !data?.error && data?.expenses_meta?.measured &&
         (data.expenses_meta.base_carried_from || data.expenses_meta.compare_carried_from) &&
         <div className="card" style={{ padding: '10px 14px', marginBottom: 14, fontSize: 12,
-                                       color: data.expenses_meta.change_measured === false ? '#92400e' : 'var(--text2)',
-                                       background: data.expenses_meta.change_measured === false ? '#fffbeb' : undefined }}>
+                                       color: data.expenses_meta.change_measured === false ? 'var(--c-fg-92400e)' : 'var(--text2)',
+                                       background: data.expenses_meta.change_measured === false ? 'var(--c-bg-fffbeb)' : undefined }}>
           {data.expenses_meta.change_measured === false
             ? <>⚠︎ <b>The store-expense change cannot be measured.</b> Neither {baseLbl} nor {cmpLbl} has its own
                 entered expenses, so both inherit <b>{data.expenses_meta.base_carried_from}</b> — the two figures are
@@ -433,8 +433,8 @@ export default function SalesComparisonPage() {
          Object.keys(data.expenses_meta.compare_excluded || {}).length > 0 ||
          data.expenses_meta.labour_measured === false) &&
         <div className="card" style={{ padding: '10px 14px', marginBottom: 14, fontSize: 12,
-                                       color: data.expenses_meta.labour_measured === false ? '#92400e' : 'var(--text2)',
-                                       background: data.expenses_meta.labour_measured === false ? '#fffbeb' : undefined }}>
+                                       color: data.expenses_meta.labour_measured === false ? 'var(--c-fg-92400e)' : 'var(--text2)',
+                                       background: data.expenses_meta.labour_measured === false ? 'var(--c-bg-fffbeb)' : undefined }}>
           {data.expenses_meta.labour_measured === false
             ? <>⚠︎ <b>Part of the labour in this figure could not be measured.</b> Salary and commission are taken
                 from each month&apos;s own payroll rather than from the carried sheet, and for at least one month here

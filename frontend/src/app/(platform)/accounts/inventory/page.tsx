@@ -175,7 +175,7 @@ export default function InventoryValuesPage() {
       <div className="card" style={{ padding: 14, marginBottom: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <strong style={{ fontSize: 14 }}>🔌 {pos} portal connection</strong>
-          {sweep && <span style={{ fontSize: 12, color: sweep.last_status === 'ok' ? '#15803d' : sweep.last_status === 'error' ? '#b91c1c' : 'var(--text3)' }}>
+          {sweep && <span style={{ fontSize: 12, color: sweep.last_status === 'ok' ? 'var(--c-fg-15803d)' : sweep.last_status === 'error' ? 'var(--c-fg-b91c1c)' : 'var(--text3)' }}>
             {sweep.last_status ? `last: ${sweep.last_status}${sweep.last_run_at ? ' · ' + new Date(sweep.last_run_at).toLocaleString() : ''}` : 'never run'}
           </span>}
         </div>
@@ -291,7 +291,7 @@ export default function InventoryValuesPage() {
                   <td style={{ padding: '6px 12px', textAlign: 'right' }}>{r.report_value == null ? '—' : fmt(r.report_value)}</td>
                   <td style={{ padding: '6px 12px', textAlign: 'right' }}>{r.device_value == null ? '—' : fmt(r.device_value)}</td>
                   <td style={{ padding: '6px 12px', textAlign: 'right', color: 'var(--text2)' }}>{r.device_count || '—'}</td>
-                  <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600, color: r.delta == null ? 'var(--text3)' : Math.abs(r.delta) > 1 ? '#b45309' : '#15803d' }}>{r.delta == null ? '—' : fmt(r.delta)}</td>
+                  <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600, color: r.delta == null ? 'var(--text3)' : Math.abs(r.delta) > 1 ? 'var(--c-fg-b45309)' : 'var(--c-fg-15803d)' }}>{r.delta == null ? '—' : fmt(r.delta)}</td>
                   <td style={{ padding: '6px 12px', textAlign: 'right', color: 'var(--text2)' }}>{r.manual_value == null ? '—' : fmt(r.manual_value)}</td>
                   <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600 }}>
                     {r.effective == null ? '—' : fmt(r.effective)}

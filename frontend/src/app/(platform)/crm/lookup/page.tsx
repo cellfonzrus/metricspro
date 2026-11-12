@@ -172,7 +172,7 @@ export default function CustomerLookupPage() {
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                 {(data.suggested_actions || []).map(act => (
                   <div key={act.key} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 10, maxWidth: 340,
-                                              borderLeft: `3px solid ${act.severity === 'opportunity' ? '#16a34a' : '#6b7280'}` }}>
+                                              borderLeft: `3px solid ${act.severity === 'opportunity' ? 'var(--c-bg-16a34a)' : 'var(--c-bg-6b7280)'}` }}>
                     <div style={{ fontWeight: 600, fontSize: 13 }}>{act.label}</div>
                     <div style={{ fontSize: 12, color: 'var(--text2)', margin: '3px 0 8px' }}>{act.detail}</div>
                     {act.lead && <button onClick={() => startLead(act)} style={btn}>Start a lead</button>}

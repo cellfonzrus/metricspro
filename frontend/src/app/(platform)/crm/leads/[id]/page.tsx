@@ -240,7 +240,7 @@ export default function LeadDetailPage() {
             {tasks.filter(t => t.status === 'open' || t.status === 'missed').map(t => (
               <div key={t.id} style={{ borderBottom: '1px solid var(--border)', padding: '6px 0' }}>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>{t.title}</div>
-                <div style={{ fontSize: 11, color: t.status === 'missed' ? '#dc2626' : 'var(--text2)' }}>
+                <div style={{ fontSize: 11, color: t.status === 'missed' ? 'var(--c-fg-dc2626)' : 'var(--text2)' }}>
                   {fmtDateTime(t.due_at)} · {relTime(t.due_at)}{t.status === 'missed' ? ' · MISSED' : ''}
                 </div>
                 <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>

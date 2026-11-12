@@ -169,7 +169,7 @@ export default function BillPaymentsPage() {
                     <td style={td}>{r.store}</td><td style={td}>{r.date}</td>
                     <td style={{ ...td, textAlign: 'right' }}>{money(r.sales_amount)}</td><td style={{ ...td, textAlign: 'right' }}>{num(r.sales_count)}</td>
                     <td style={{ ...td, textAlign: 'right' }}>{money(r.feed_amount)}</td>
-                    <td style={{ ...td, textAlign: 'right', color: r.difference === null ? 'inherit' : r.difference === 0 ? '#15803d' : '#b45309' }}>{r.difference === null ? '—' : money(r.difference)}</td>
+                    <td style={{ ...td, textAlign: 'right', color: r.difference === null ? 'inherit' : r.difference === 0 ? 'var(--c-fg-15803d)' : 'var(--c-fg-b45309)' }}>{r.difference === null ? '—' : money(r.difference)}</td>
                     <td style={td}>{STATUS[r.status] || r.status}</td>
                   </tr>
                 ))}

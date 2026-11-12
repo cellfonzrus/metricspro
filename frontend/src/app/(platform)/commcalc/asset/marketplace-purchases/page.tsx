@@ -8,6 +8,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
 import type { StoreOpt } from '@/lib/market-store-cascade'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
+import { rowStripe } from '@/lib/surface'
 
 // Marketplace/handset-fulfillment purchase orders — the VidaPay "MA - Marketplace Handset
 // Fulfillment Orders" report (mod-commission's report-pull ingest), read here org-scoped via
@@ -267,7 +268,7 @@ export default function MarketplacePurchasesPage() {
                 </thead>
                 <tbody>
                   {rows.map((r, i) => (
-                    <tr key={r.id || i} style={{ borderTop: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : undefined }}>
+                    <tr key={r.id || i} style={{ borderTop: '1px solid var(--border)', background: rowStripe(i) }}>
                       <td style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>{r.date_ordered ? String(r.date_ordered).slice(0, 10) : '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>{r.date_filled ? String(r.date_filled).slice(0, 10) : '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>{r.date_shipped ? String(r.date_shipped).slice(0, 10) : '—'}</td>

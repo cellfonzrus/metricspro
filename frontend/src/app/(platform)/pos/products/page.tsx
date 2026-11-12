@@ -283,7 +283,7 @@ export default function PosProductsPage() {
             <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
               {(['Details', 'Summary'] as const).map(tab => (
                 <button key={tab} onClick={() => setFormTab(tab)}
-                  style={{ padding: '9px 16px', fontSize: 12, fontWeight: formTab === tab ? 700 : 400, color: formTab === tab ? 'var(--text)' : 'var(--text2)', background: formTab === tab ? 'var(--surface)' : 'transparent', border: 'none', borderBottom: formTab === tab ? '2px solid var(--accent, #3498db)' : '2px solid transparent', cursor: 'pointer' }}>
+                  style={{ padding: '9px 16px', fontSize: 12, fontWeight: formTab === tab ? 700 : 400, color: formTab === tab ? 'var(--text)' : 'var(--text2)', background: formTab === tab ? 'var(--surface)' : 'transparent', border: 'none', borderBottom: formTab === tab ? '2px solid var(--accent, var(--c-bg-3498db))' : '2px solid transparent', cursor: 'pointer' }}>
                   {tab}
                 </button>
               ))}

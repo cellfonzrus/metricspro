@@ -218,7 +218,7 @@ export default function AssetLendingPage() {
                             <td style={{ padding: '5px 8px', fontSize: 12 }}>{p.pay_date || '—'}</td>
                             <td style={{ padding: '5px 8px', fontSize: 12 }}>{p.period || '—'}</td>
                             <td style={{ padding: '5px 8px', fontSize: 12, fontWeight: 600 }}>{fmt(p.amount)}</td>
-                            <td style={{ padding: '5px 8px', fontSize: 12, color: p.funding_source === 'borrowed' ? '#b45309' : '#15803d' }}>{p.funding_source}</td>
+                            <td style={{ padding: '5px 8px', fontSize: 12, color: p.funding_source === 'borrowed' ? 'var(--c-fg-b45309)' : 'var(--c-fg-15803d)' }}>{p.funding_source}</td>
                             <td style={{ padding: '5px 8px', fontSize: 12 }}>{p.account_label || '—'}</td>
                             <td style={{ padding: '5px 8px', fontSize: 12 }}>{p.ref || '—'}</td>
                           </tr>
@@ -293,14 +293,14 @@ export default function AssetLendingPage() {
               </tr></thead>
               <tbody>
                 {rows.map(b => (
-                  <tr key={b.vip_payment_id} style={{ borderTop: '1px solid var(--border)', background: b.batch_type === 'pending' ? '#fffbeb' : undefined }}>
+                  <tr key={b.vip_payment_id} style={{ borderTop: '1px solid var(--border)', background: b.batch_type === 'pending' ? 'var(--c-bg-fffbeb)' : undefined }}>
                     <td style={{ padding: '6px 12px', fontSize: 13, fontWeight: 600 }}>{b.created_on}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12, color: 'var(--text2)' }}>{b.period || '—'}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12 }}>{b.batch_type === 'pending' ? <span style={{ color: 'var(--c-fg-b45309)', fontWeight: 600 }}>PENDING</span> : 'approved'}</td>
                     <td style={{ padding: '6px 12px', fontSize: 13, textAlign: 'right' }}>{b.invoice_count}</td>
                     <td style={{ padding: '6px 12px', fontSize: 13, textAlign: 'right', fontWeight: 600 }}>{fmt(b.amount)}</td>
                     <td style={{ padding: '6px 12px', fontSize: 13, textAlign: 'right', color: (b.amount_overdue || 0) > 0 ? 'var(--c-fg-b91c1c)' : 'var(--text3)' }}>{fmt(b.amount_overdue || 0)}</td>
-                    <td style={{ padding: '6px 12px', fontSize: 12, color: b.status === 'Failed' ? '#b91c1c' : 'var(--text2)' }}>{b.status || (b.batch_type === 'pending' ? 'open' : '')}</td>
+                    <td style={{ padding: '6px 12px', fontSize: 12, color: b.status === 'Failed' ? 'var(--c-fg-b91c1c)' : 'var(--text2)' }}>{b.status || (b.batch_type === 'pending' ? 'open' : '')}</td>
                   </tr>
                 ))}
                 {rows.length === 0 && <tr><td colSpan={7} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No lending batches{yearFilter ? ` in ${yearFilter}` : ''}.</td></tr>}

@@ -361,7 +361,7 @@ export default function VisionLinesPage() {
                         </button>
                         {verdict && (
                           <span style={{ marginLeft: 6, fontSize: 15, fontWeight: 700,
-                            color: verdict === 'in' ? '#16a34a' : '#f59e0b' }}>
+                            color: verdict === 'in' ? 'var(--c-fg-16a34a)' : 'var(--c-fg-f59e0b)' }}>
                             → counted {verdict.toUpperCase()}
                           </span>
                         )}

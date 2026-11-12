@@ -152,8 +152,8 @@ export default function VisionBehaviorPage() {
                       {e.coaching.slice(0, 2).map(c => (
                         <span key={c.rule_key} style={{
                           display: 'inline-block', marginRight: 6, padding: '2px 7px', borderRadius: 5,
-                          fontSize: 11.5, background: c.severity === 'flag' ? '#7f1d1d' : 'var(--surface)',
-                          color: c.severity === 'flag' ? '#fecaca' : 'var(--text2)',
+                          fontSize: 11.5, background: c.severity === 'flag' ? 'var(--c-bg-7f1d1d)' : 'var(--surface)',
+                          color: c.severity === 'flag' ? 'var(--c-fg-fecaca)' : 'var(--text2)',
                           border: '1px solid var(--border)',
                         }}>{c.label}</span>
                       ))}
@@ -186,7 +186,7 @@ function EmployeeDetail({ employee }: { employee: BehaviorEmployee }) {
           ? <div style={{ fontSize: 13, color: 'var(--text2)' }}>Nothing stands out for this period.</div>
           : employee.coaching.map(c => (
             <div key={c.rule_key} style={{ fontSize: 13, marginBottom: 6 }}>
-              <span style={{ color: c.severity === 'flag' ? '#f87171' : 'var(--text)' }}>
+              <span style={{ color: c.severity === 'flag' ? 'var(--c-fg-f87171)' : 'var(--text)' }}>
                 {c.severity === 'flag' ? '⚠️' : '•'} {c.label}
               </span>
               <span style={{ color: 'var(--text3)' }}> — on {Math.round(c.coverage * 100)}% of conversations</span>

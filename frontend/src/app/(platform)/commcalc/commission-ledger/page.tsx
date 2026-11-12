@@ -512,7 +512,7 @@ export default function CommissionLedgerPage() {
           <div style={{ display: 'flex', gap: 6, marginBottom: 14, alignItems: 'center' }}>
             {(['cat', 'rep'] as const).map(v => (
               <button key={v} onClick={() => setView(v)} style={{ ...inp, cursor: 'pointer', fontWeight: view === v ? 700 : 400,
-                background: view === v ? 'var(--accent,#2563eb)' : 'var(--surface)', color: view === v ? '#fff' : 'inherit' }}>
+                background: view === v ? 'var(--accent,var(--c-bg-2563eb))' : 'var(--surface)', color: view === v ? 'var(--c-fg-ffffff)' : 'inherit' }}>
                 {v === 'cat' ? 'By category' : 'By rep'}
               </button>
             ))}

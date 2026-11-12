@@ -7,6 +7,7 @@ import { TrendChart } from '@/components/TrendChart'
 import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import { governExport, capMessage } from '@/lib/export'
+import { rowStripe } from '@/lib/surface'
 
 const r2 = (n: number) => Math.round((n || 0) * 100) / 100
 const shortPeriod = (p: string) => {
@@ -732,7 +733,7 @@ export default function ExpensesPage() {
                     <div style={{ fontWeight: 400, opacity: 0.7, fontSize: 10 }}>{(s.address || '').substring(0, 18)}</div>
                     <button onClick={() => { setCopySource(cur => cur === s.store_code ? '' : s.store_code); setCommonOpen(false); setCopyTargets([]) }}
                       title={`Copy ${s.store_code}'s whole column onto other stores`}
-                      style={{ marginTop: 3, fontSize: 10, padding: '1px 6px', borderRadius: 5, cursor: 'pointer', border: '1px solid rgba(255,255,255,.5)', background: copySource === s.store_code ? 'white' : 'transparent', color: copySource === s.store_code ? 'var(--accent)' : 'white' }}>⧉ Copy</button>
+                      style={{ marginTop: 3, fontSize: 10, padding: '1px 6px', borderRadius: 5, cursor: 'pointer', border: '1px solid rgba(255,255,255,.5)', background: copySource === s.store_code ? 'var(--c-bg-ffffff)' : 'transparent', color: copySource === s.store_code ? 'var(--accent)' : 'var(--c-fg-ffffff)' }}>⧉ Copy</button>
                     <ResizeHandle onDown={e => cw.start(s.store_code, e)} onReset={() => cw.reset(s.store_code)} />
                   </th>
                 ))}
@@ -743,10 +744,10 @@ export default function ExpensesPage() {
               {cats.map((cat, ci) => {
                 const rowTotal = visStores.reduce((s, st) => s + getVal(st.store_code, cat.name), 0)
                 return (
-                  <tr key={cat.name} style={{ background: ci % 2 ? 'var(--c-bg-fafbfc)' : 'white' }}>
-                    <td style={{ padding: '6px 16px', fontSize: 13, fontWeight: 500, position: 'sticky', left: 0, background: ci % 2 ? 'var(--c-bg-fafbfc)' : 'white', borderBottom: '1px solid var(--border)' }}>
+                  <tr key={cat.name} style={{ background: rowStripe(ci) }}>
+                    <td style={{ padding: '6px 16px', fontSize: 13, fontWeight: 500, position: 'sticky', left: 0, background: rowStripe(ci), borderBottom: '1px solid var(--border)' }}>
                       {cat.name}
-                      <span style={{ marginLeft: 6, fontSize: 10, color: cat.type === 'Fixed' ? '#2563eb' : '#16a34a', background: cat.type === 'Fixed' ? '#dbeafe' : '#dcfce7', padding: '1px 5px', borderRadius: 999 }}>{cat.type}</span>
+                      <span style={{ marginLeft: 6, fontSize: 10, color: cat.type === 'Fixed' ? 'var(--c-fg-2563eb)' : 'var(--c-fg-16a34a)', background: cat.type === 'Fixed' ? 'var(--c-bg-dbeafe)' : 'var(--c-bg-dcfce7)', padding: '1px 5px', borderRadius: 999 }}>{cat.type}</span>
                       {isSystemCat(cat.name) && (
                         <span title="Auto-computed by the payroll run and inserted here — read-only. Edit it in the payroll run, not on this page."
                           style={{ marginLeft: 6, fontSize: 10, color: 'var(--c-fg-7c3aed)', background: 'var(--c-bg-f3e8ff)', padding: '1px 6px', borderRadius: 999, whiteSpace: 'nowrap' }}>🔒 auto — from payroll</span>

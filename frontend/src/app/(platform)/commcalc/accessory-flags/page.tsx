@@ -255,8 +255,8 @@ export default function AccessoryFlagsPage() {
                 <td style={{ ...cell, fontWeight: 600 }}>{money(r.ext_price)}</td>
                 <td style={cell}>
                   <span style={{ fontSize: 11, fontWeight: 600, padding: '1px 7px', borderRadius: 10,
-                    background: r.flag_reason === 'under' ? '#fef3c7' : '#fee2e2',
-                    color: r.flag_reason === 'under' ? '#92400e' : '#b42318' }}>
+                    background: r.flag_reason === 'under' ? 'var(--c-bg-fef3c7)' : 'var(--c-bg-fee2e2)',
+                    color: r.flag_reason === 'under' ? 'var(--c-fg-92400e)' : 'var(--c-fg-b42318)' }}>
                     {r.flag_reason === 'under' ? '▼ under' : '▲ over'}</span>
                 </td>
                 <td style={cell}><input type="number" style={{ ...sel, width: 100 }} value={amts[r.dedupe_key] ?? r.chargeback_amount}

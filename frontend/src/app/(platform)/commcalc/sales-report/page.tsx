@@ -31,6 +31,7 @@ import { useActiveCarrier } from '@/lib/auth-context'
 import { usePosTerm } from '@/lib/report-labels'
 import ScreenLink from '@/components/ScreenLink'
 import { sourceLabel } from '@/lib/sourceLabels'
+import { rowStripe } from '@/lib/surface'
 
 // Targeted super-admin org-resolution mitigation (see NEEDS CORE): the sales-report reads carry NO org_id
 // in the URL, so for a super-admin (whom the tenant middleware does NOT rewrite) the backend defaults to
@@ -591,7 +592,7 @@ export default function SalesReportPage() {
                     </thead>
                     <tbody>
                       {(unm.by_line || []).map((r: any, i: number) => (
-                        <tr key={i} style={{ borderTop: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : undefined }}>
+                        <tr key={i} style={{ borderTop: '1px solid var(--border)', background: rowStripe(i) }}>
                           <td style={{ padding: '5px 10px', whiteSpace: 'nowrap' }}>{r.store || '—'}</td>
                           <td style={{ padding: '5px 10px' }}><code style={{ fontSize: 11 }}>{r.department || '(blank)'}</code></td>
                           <td style={{ padding: '5px 10px' }}><code style={{ fontSize: 11 }}>{r.category || '(blank)'}</code></td>

@@ -480,7 +480,7 @@ export default function OnboardingIntakePage() {
                   return (
                     <div key={k} onClick={() => (done || k === step) && setStep(k)}
                       style={{ fontSize: 12, padding: '3px 6px', borderRadius: 6, cursor: done ? 'pointer' : 'default',
-                        background: k === step ? 'var(--accent,#2563eb)' : 'transparent', color: k === step ? '#fff' : done ? 'var(--text2)' : 'var(--text3)' }}>
+                        background: k === step ? 'var(--accent,var(--c-bg-2563eb))' : 'transparent', color: k === step ? 'var(--c-fg-ffffff)' : done ? 'var(--text2)' : 'var(--text3)' }}>
                       {k} {l}{done ? ' ✓' : ''}
                     </div>
                   )
@@ -538,14 +538,14 @@ export default function OnboardingIntakePage() {
                       {/* Stage C — the cross-check this commit ran (bill payments extracted / units activated but still on hand) */}
                       {r.note && <div style={{ ...note, fontSize: 11, color: 'var(--c-fg-b45309)', fontWeight: 600 }}>{r.note}</div>}
                       {/* 2.5a — the activation split of a landed sales export (or "not yet checked — open step 2.5a") */}
-                      {r.activation_note && <div style={{ ...note, fontSize: 11, color: r.activation_note.startsWith('activations:') ? 'var(--text2)' : '#b45309', fontWeight: 600, cursor: 'pointer' }} onClick={e => { e.stopPropagation(); openRow(r.instance_key, r.stage, '2.5a') }}>{r.activation_note}</div>}
+                      {r.activation_note && <div style={{ ...note, fontSize: 11, color: r.activation_note.startsWith('activations:') ? 'var(--text2)' : 'var(--c-fg-b45309)', fontWeight: 600, cursor: 'pointer' }} onClick={e => { e.stopPropagation(); openRow(r.instance_key, r.stage, '2.5a') }}>{r.activation_note}</div>}
                       {/* 2.5b — an invoice export's tender split beside the X-report per store-day, and Σ tax (owner 2026-09-21) */}
                       {r.tender_note && <div style={{ ...note, fontSize: 11, color: 'var(--text2)', fontWeight: 600, cursor: 'pointer' }} onClick={e => { e.stopPropagation(); openRow(r.instance_key, r.stage, '2.5b') }}>{r.tender_note}</div>}
                       {/* Stage D — how many other loaded reports this one is linked to by a common column */}
                       {shownLinks?.notes?.[r.instance_key] && <div style={{ ...note, fontSize: 11 }}>{shownLinks.notes[r.instance_key]}</div>}</td>
                     <td style={{ padding: '6px 4px' }}>{r.period || '—'}</td>
                     <td style={mono}>{money(r.our_total)}</td><td style={mono}>{money(r.file_total)}</td>
-                    <td style={{ ...mono, color: r.match === false ? '#ef4444' : r.match ? '#16a34a' : 'inherit' }}>{r.difference === null ? '—' : money(r.difference)}</td>
+                    <td style={{ ...mono, color: r.match === false ? 'var(--c-fg-ef4444)' : r.match ? 'var(--c-fg-16a34a)' : 'inherit' }}>{r.difference === null ? '—' : money(r.difference)}</td>
                     <td style={{ padding: '6px 4px' }}><Lamp status={r.status} />{(LAMP[r.status] || LAMP.not_started).label}</td>
                     <td style={{ padding: '6px 4px' }}>{r.verified_by || '—'}</td><td style={{ padding: '6px 4px', ...note }}>{r.verified_at ? r.verified_at.slice(0, 16).replace('T', ' ') : '—'}</td>
                   </tr>
@@ -685,8 +685,8 @@ export default function OnboardingIntakePage() {
             <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
               {(a.sign.options?.length ? a.sign.options : SIGN_OPTIONS).map(o => (
                 <button key={o.value} style={{ ...btn, padding: '10px 18px', borderWidth: 2,
-                  borderColor: signAnswer === o.value ? 'var(--accent,#2563eb)' : 'var(--border)',
-                  background: signAnswer === o.value ? 'var(--accent,#2563eb)' : 'var(--surface)', color: signAnswer === o.value ? '#fff' : 'var(--text)' }}
+                  borderColor: signAnswer === o.value ? 'var(--accent,var(--c-bg-2563eb))' : 'var(--border)',
+                  background: signAnswer === o.value ? 'var(--accent,var(--c-bg-2563eb))' : 'var(--surface)', color: signAnswer === o.value ? 'var(--c-fg-ffffff)' : 'var(--text)' }}
                   onClick={() => { const v = o.value as SignAnswer; setSignAnswer(v); persist('3.4', { sign_answer: v }); analyze({ sign: v, keepStep: true }) }}>{o.label}</button>
               ))}
               {a.sign.stored_answer && <span style={{ ...note, alignSelf: 'center' }}>Stored earlier for this carrier: <b>earned is {a.sign.stored_answer}</b></span>}

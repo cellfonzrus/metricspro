@@ -54,6 +54,7 @@ import { PrintFormatPicker } from '@/components/pos/PrintFormatPicker'
 // THE one way a receipt is SENT (§POS-09) — email and WhatsApp, shared by the completion modal and
 // the Sale Log reprint, so a counter can hand over yesterday's receipt too.
 import { SendReceiptPanel } from '@/components/pos/SendReceiptPanel'
+import { rowStripe } from '@/lib/surface'
 
 interface Product {
   id: string
@@ -1516,7 +1517,7 @@ export default function PosSalesPage() {
                       </td>
                     </tr>
                   ) : cart.map((item, idx) => (
-                    <tr key={idx} style={{ borderBottom: '1px solid var(--border)', background: idx % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
+                    <tr key={idx} style={{ borderBottom: '1px solid var(--border)', background: rowStripe(idx) }}>
                       {/* Product type and description are EDITABLE on the line (owner 2026-10-16).
                           They are the line's own wording — what prints on the receipt and lands in
                           pos.sale_items — so a correction here changes this sale only. The ✎ opens
@@ -1663,7 +1664,7 @@ export default function PosSalesPage() {
               <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
                 {tenders.map(t => ({ value: t.key, label: `${t.icon || ''} ${t.label}`.trim() })).map(m => (
                   <button key={m.value} onClick={() => setPaymentMethod(m.value)}
-                    style={{ background: paymentMethod === m.value ? 'var(--accent)' : 'var(--surface)', border: `1px solid ${paymentMethod === m.value ? 'var(--accent2)' : 'var(--border)'}`, color: paymentMethod === m.value ? 'white' : 'var(--text)', borderRadius: 6, padding: '6px 10px', fontSize: 11, cursor: 'pointer', fontWeight: paymentMethod === m.value ? 700 : 400 }}>
+                    style={{ background: paymentMethod === m.value ? 'var(--accent)' : 'var(--surface)', border: `1px solid ${paymentMethod === m.value ? 'var(--accent2)' : 'var(--border)'}`, color: paymentMethod === m.value ? 'var(--c-fg-ffffff)' : 'var(--text)', borderRadius: 6, padding: '6px 10px', fontSize: 11, cursor: 'pointer', fontWeight: paymentMethod === m.value ? 700 : 400 }}>
                     {m.label}
                   </button>
                 ))}
@@ -1680,7 +1681,7 @@ export default function PosSalesPage() {
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     {(selectedTender?.day_options || []).map(d => (
                       <button key={d} onClick={() => setTermsDays(d)}
-                        style={{ background: termsDays === d ? 'var(--accent)' : 'var(--surface)', border: `1px solid ${termsDays === d ? 'var(--accent2)' : 'var(--border)'}`, color: termsDays === d ? 'white' : 'var(--text)', borderRadius: 6, padding: '6px 10px', fontSize: 11, cursor: 'pointer', fontWeight: termsDays === d ? 700 : 400 }}>
+                        style={{ background: termsDays === d ? 'var(--accent)' : 'var(--surface)', border: `1px solid ${termsDays === d ? 'var(--accent2)' : 'var(--border)'}`, color: termsDays === d ? 'var(--c-fg-ffffff)' : 'var(--text)', borderRadius: 6, padding: '6px 10px', fontSize: 11, cursor: 'pointer', fontWeight: termsDays === d ? 700 : 400 }}>
                         Net {d}
                       </button>
                     ))}
@@ -1717,7 +1718,7 @@ export default function PosSalesPage() {
                   balance is a conversation at the counter, not a second tender on this screen. */}
               {amending ? (
                 <button onClick={saveSaleEdit} disabled={cart.length === 0 || amendSaving}
-                  style={{ width: '100%', background: cart.length === 0 ? 'var(--surface)' : 'var(--green)', border: cart.length === 0 ? '1px solid var(--border)' : 'none', color: cart.length === 0 ? 'var(--text3)' : 'white', borderRadius: 8, padding: 14, fontSize: 15, fontWeight: 700, cursor: cart.length === 0 || amendSaving ? 'not-allowed' : 'pointer', opacity: cart.length === 0 ? 0.6 : 1 }}>
+                  style={{ width: '100%', background: cart.length === 0 ? 'var(--surface)' : 'var(--green)', border: cart.length === 0 ? '1px solid var(--border)' : 'none', color: cart.length === 0 ? 'var(--text3)' : 'var(--c-fg-ffffff)', borderRadius: 8, padding: 14, fontSize: 15, fontWeight: 700, cursor: cart.length === 0 || amendSaving ? 'not-allowed' : 'pointer', opacity: cart.length === 0 ? 0.6 : 1 }}>
                   {amendSaving ? 'Saving...' : `💾 Save changes to #${amending.transaction_id ?? ''} — $${total.toFixed(2)}`}
                 </button>
               ) : (
@@ -1727,7 +1728,7 @@ export default function PosSalesPage() {
                   if (issues.length > 0) { setBlockIssues(issues); return }
                   setShowPayment(true)
                 }} disabled={cart.length === 0 || saving}
-                  style={{ width: '100%', background: cart.length === 0 ? 'var(--surface)' : 'var(--green)', border: cart.length === 0 ? '1px solid var(--border)' : 'none', color: cart.length === 0 ? 'var(--text3)' : 'white', borderRadius: 8, padding: 14, fontSize: 15, fontWeight: 700, cursor: cart.length === 0 ? 'not-allowed' : 'pointer', opacity: cart.length === 0 ? 0.6 : 1 }}>
+                  style={{ width: '100%', background: cart.length === 0 ? 'var(--surface)' : 'var(--green)', border: cart.length === 0 ? '1px solid var(--border)' : 'none', color: cart.length === 0 ? 'var(--text3)' : 'var(--c-fg-ffffff)', borderRadius: 8, padding: 14, fontSize: 15, fontWeight: 700, cursor: cart.length === 0 ? 'not-allowed' : 'pointer', opacity: cart.length === 0 ? 0.6 : 1 }}>
                   ✅ Process Sale — ${total.toFixed(2)}
                 </button>
               )}

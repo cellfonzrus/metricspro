@@ -389,7 +389,7 @@ export default function PayrollApprovalsPage() {
             ['Held', String(totals.held)]].map(([k, v]) => (
             <div key={k} style={{ ...card, padding: '10px 16px', minWidth: 120 }}>
               <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.06em', fontWeight: 700 }}>{k}</div>
-              <div style={{ fontSize: 19, fontWeight: 700, marginTop: 2, color: k === 'Held' && totals.held > 0 ? '#b45309' : 'var(--text1)' }}>{v}</div>
+              <div style={{ fontSize: 19, fontWeight: 700, marginTop: 2, color: k === 'Held' && totals.held > 0 ? 'var(--c-fg-b45309)' : 'var(--text1)' }}>{v}</div>
             </div>
           ))}
         </div>
@@ -398,7 +398,7 @@ export default function PayrollApprovalsPage() {
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
         {chips.map(([k, label, n]) => (
           <button key={k} onClick={() => setChip(k)} style={{ ...btn, fontSize: 12, padding: '4px 11px', borderRadius: 20,
-            background: chip === k ? 'var(--accent)' : 'var(--surface)', color: chip === k ? '#fff' : 'var(--text2)',
+            background: chip === k ? 'var(--accent)' : 'var(--surface)', color: chip === k ? 'var(--c-fg-ffffff)' : 'var(--text2)',
             border: chip === k ? 'none' : '1px solid var(--border)' }}>{label} ({n})</button>
         ))}
         <div style={{ flex: 1 }} />

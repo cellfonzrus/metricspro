@@ -91,7 +91,7 @@ export default function MaManualUpload() {
               {reports.map(r => (
                 <button key={r.report_key} onClick={() => { setReportKey(r.report_key); setStep(r.mapped ? 3 : 2) }}
                   className="card" style={{ textAlign: 'left', padding: 12, cursor: 'pointer',
-                    border: reportKey === r.report_key ? '2px solid var(--primary,#2563eb)' : '1px solid var(--border)' }}>
+                    border: reportKey === r.report_key ? '2px solid var(--primary,var(--c-bg-2563eb))' : '1px solid var(--border)' }}>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <b style={{ fontSize: 14 }}>{r.display_name}</b>
                     <MapBadge r={r} />
@@ -278,8 +278,8 @@ function UploadStep({ carrierId, report, setMsg, onRemap }: { carrierId: string;
         <div>
           <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: 4 }}>Mode</div>
           <div style={{ display: 'flex', gap: 6 }}>
-            <button className="btn" style={{ fontSize: 13, background: mode === 'append' ? '#2563eb' : 'var(--surface)', color: mode === 'append' ? '#fff' : 'inherit', border: '1px solid var(--border)' }} onClick={() => setMode('append')}>Append (dedup &amp; add)</button>
-            <button className="btn" style={{ fontSize: 13, background: mode === 'historical' ? '#2563eb' : 'var(--surface)', color: mode === 'historical' ? '#fff' : 'inherit', border: '1px solid var(--border)' }} onClick={() => setMode('historical')}>Historical (multi-month)</button>
+            <button className="btn" style={{ fontSize: 13, background: mode === 'append' ? 'var(--c-bg-2563eb)' : 'var(--surface)', color: mode === 'append' ? 'var(--c-fg-ffffff)' : 'inherit', border: '1px solid var(--border)' }} onClick={() => setMode('append')}>Append (dedup &amp; add)</button>
+            <button className="btn" style={{ fontSize: 13, background: mode === 'historical' ? 'var(--c-bg-2563eb)' : 'var(--surface)', color: mode === 'historical' ? 'var(--c-fg-ffffff)' : 'inherit', border: '1px solid var(--border)' }} onClick={() => setMode('historical')}>Historical (multi-month)</button>
           </div>
           <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, maxWidth: 340 }}>
             {mode === 'append'

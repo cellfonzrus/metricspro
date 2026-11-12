@@ -211,8 +211,8 @@ export default function CompTrendPage() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-            <button className="btn" style={{ borderRadius: 0, border: 'none', background: view === 'rep' ? 'var(--accent)' : 'transparent', color: view === 'rep' ? 'white' : 'var(--text2)' }} onClick={() => setView('rep')}>By rep</button>
-            <button className="btn" style={{ borderRadius: 0, border: 'none', background: view === 'account' ? 'var(--accent)' : 'transparent', color: view === 'account' ? 'white' : 'var(--text2)' }} onClick={() => setView('account')}>By account</button>
+            <button className="btn" style={{ borderRadius: 0, border: 'none', background: view === 'rep' ? 'var(--accent)' : 'transparent', color: view === 'rep' ? 'var(--c-fg-ffffff)' : 'var(--text2)' }} onClick={() => setView('rep')}>By rep</button>
+            <button className="btn" style={{ borderRadius: 0, border: 'none', background: view === 'account' ? 'var(--accent)' : 'transparent', color: view === 'account' ? 'var(--c-fg-ffffff)' : 'var(--text2)' }} onClick={() => setView('account')}>By account</button>
           </div>
           <label style={{ fontSize: 12, color: 'var(--text2)' }}>Window
             <select className="select" value={months} onChange={e => setMonths(parseInt(e.target.value))} style={{ marginLeft: 6 }}>
@@ -318,7 +318,7 @@ export default function CompTrendPage() {
               <tbody>
                 {totals.map((r: any) => (
                   <tr key={r.period} onClick={() => setMonthFilter(monthFilter === r.period ? '' : r.period)}
-                      style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: monthFilter === r.period ? 'var(--surface2,#eef2ff)' : undefined }}>
+                      style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: monthFilter === r.period ? 'var(--surface2,var(--c-bg-eef2ff))' : undefined }}>
                     <td style={{ padding: '7px 12px', fontSize: 13, fontWeight: 600 }}>{r.period}</td>
                     <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13 }}>{fmt(r.total_comp ?? r.residual)}</td>
                     <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: 'var(--c-fg-16794a)' }}>{fmt(r.components?.COMMISSION || 0)}</td>
@@ -357,7 +357,7 @@ export default function CompTrendPage() {
                     <td style={{ padding: '6px 12px', fontSize: 12 }}>{d.account_id || '—'}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12 }}>{d.business_name || d.store || '—'}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right' }}>{fmt(d.prev_residual)}</td>
-                    <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right', color: d.residual === 0 ? '#b91c1c' : undefined }}>{fmt(d.residual)}</td>
+                    <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right', color: d.residual === 0 ? 'var(--c-fg-b91c1c)' : undefined }}>{fmt(d.residual)}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right', color: 'var(--c-fg-b91c1c)', fontWeight: 600 }}>{fmt(d.delta)}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right' }}>{d.pct}%</td>
                     <td style={{ padding: '6px 12px', fontSize: 12 }}>{d.reason}</td>

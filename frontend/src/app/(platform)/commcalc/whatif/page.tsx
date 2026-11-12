@@ -6,6 +6,7 @@ import { isSuperAdmin } from '@/lib/rbac'
 import { TrendChart } from '@/components/TrendChart'
 import { WHATIF_GRANTS, RestrictedWhatIf, useWhatIfAccess, type WhatIfTabKey } from './_components/WhatIfGate'
 import { sourceLabel } from '@/lib/sourceLabels'
+import { rowStripe } from '@/lib/surface'
 
 const card = { padding: 18, borderRadius: 12 } as const
 const num = (v: any) => { const n = parseFloat(String(v).replace(/[^0-9.\-]/g, '')); return isFinite(n) ? n : 0 }
@@ -33,7 +34,7 @@ function TabBar({ tab, setTab, allowed }:
             style={{ padding: '8px 14px', borderRadius: 9, fontSize: 13, fontWeight: 600,
                      cursor: ok ? 'pointer' : 'not-allowed', opacity: ok ? 1 : 0.5,
                      border: '1px solid var(--border)', background: tab === k ? 'var(--accent)' : 'var(--surface)',
-                     color: tab === k ? '#fff' : 'var(--text2)' }}>{ok ? label : `🔒 ${label}`}</button>
+                     color: tab === k ? 'var(--c-fg-ffffff)' : 'var(--text2)' }}>{ok ? label : `🔒 ${label}`}</button>
         )
       })}
     </div>
@@ -52,7 +53,7 @@ function CarrierPicker({ carriers, carrierId, setCarrierId, mode }:
         {carriers.map(c => <option key={c.id} value={c.id}>{c.name}{c.is_default ? ' — default' : ''}</option>)}
       </select>
       <span style={{ fontSize: 12, padding: '3px 9px', borderRadius: 20, fontWeight: 600,
-        background: mode === 'boost' ? '#eef2ff' : '#ecfdf5', color: mode === 'boost' ? '#4338ca' : '#047857' }}>
+        background: mode === 'boost' ? 'var(--c-bg-eef2ff)' : 'var(--c-bg-ecfdf5)', color: mode === 'boost' ? 'var(--c-fg-4338ca)' : 'var(--c-fg-047857)' }}>
         {mode === 'boost' ? 'Boost engine (rates)' : 'Incentive-Plan engine'}
       </span>
     </div>
@@ -190,7 +191,7 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
           </tr></thead>
           <tbody>
             {comps.map((c, i) => (
-              <tr key={c.key} style={{ borderTop: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
+              <tr key={c.key} style={{ borderTop: '1px solid var(--border)', background: rowStripe(i) }}>
                 <td style={{ padding: '8px 14px', fontSize: 13, fontWeight: 500 }}>{c.label}
                   <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 11 }}> · {c.unit}{c.plan_name ? ` · ${c.plan_name}` : ''}</span></td>
                 {/* BASIS — only meaningful for a %-of-sales component; a flat $-per-unit rate is already
@@ -368,7 +369,7 @@ function ByodResidual({ carrierId }: { carrierId: string }) {
           <thead><tr style={{ background: 'var(--surface2)' }}>{['Period', 'Residual', 'Subs', 'Residual/sub', 'BYOD acts'].map(h =>
             <th key={h} style={{ textAlign: h === 'Period' ? 'left' : 'right', padding: '8px 14px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>{h}</th>)}</tr></thead>
           <tbody>{(data.series || []).map((s: any, i: number) => (
-            <tr key={s.period} style={{ borderTop: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
+            <tr key={s.period} style={{ borderTop: '1px solid var(--border)', background: rowStripe(i) }}>
               <td style={{ padding: '8px 14px', fontSize: 13 }}>{s.period}</td>
               <td style={{ padding: '8px 14px', fontSize: 13, textAlign: 'right', fontWeight: 600 }}>{fmt(s.residual)}</td>
               <td style={{ padding: '8px 14px', fontSize: 13, textAlign: 'right' }}>{(s.subs || 0).toLocaleString()}</td>
@@ -421,7 +422,7 @@ function AccessoryByod() {
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16 }}>
         <label style={{ fontSize: 13, color: 'var(--text2)' }}>Months:</label>
         {[3, 4, 6].map(m => <button key={m} onClick={() => setMonths(m)}
-          style={{ padding: '5px 12px', borderRadius: 7, fontSize: 12, cursor: 'pointer', border: '1px solid var(--border)', background: months === m ? 'var(--accent)' : 'var(--surface)', color: months === m ? '#fff' : 'var(--text2)' }}>{m}</button>)}
+          style={{ padding: '5px 12px', borderRadius: 7, fontSize: 12, cursor: 'pointer', border: '1px solid var(--border)', background: months === m ? 'var(--accent)' : 'var(--surface)', color: months === m ? 'var(--c-fg-ffffff)' : 'var(--text2)' }}>{m}</button>)}
         <span style={{ fontSize: 12, color: 'var(--text3)' }}>{data.n} store‑month points · {data.periods?.join(', ')}</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14, marginBottom: 18 }}>

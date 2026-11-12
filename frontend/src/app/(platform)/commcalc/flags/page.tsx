@@ -4,6 +4,7 @@ import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { SendReportButton } from '@/lib/send-report'
 import { ExportButtons, type ExportPayload } from '@/lib/export'
+import { rowStripe } from '@/lib/surface'
 
 const SEVERITY_COLORS: Record<string, string> = {
   CRITICAL: '#dc2626', HIGH: '#d97706', MEDIUM: '#2563eb', LOW: '#64748b',
@@ -314,7 +315,7 @@ export default function FlagsPage() {
               <tbody>
                 {rows.map(({ st, counts, total }, i) => (
                   <tr key={st} onClick={() => setFStore(fStore === st ? '' : st)}
-                    style={{ cursor: 'pointer', background: fStore === st ? '#eff6ff' : i % 2 ? '#fafbfc' : 'white', borderBottom: '1px solid var(--border)' }}>
+                    style={{ cursor: 'pointer', background: fStore === st ? 'var(--c-bg-eff6ff)' : rowStripe(i), borderBottom: '1px solid var(--border)' }}>
                     <td style={{ padding: '7px 10px', fontSize: 11, fontWeight: 600, position: 'sticky', left: 0, background: 'inherit' }}>{st.substring(0, 30)}</td>
                     {allTypes.map(t => (
                       <td key={t} style={{ padding: '7px 6px', fontSize: 12, textAlign: 'center', color: counts[t] ? 'var(--text)' : 'var(--text3)', fontWeight: counts[t] ? 700 : 400 }}>
@@ -372,7 +373,7 @@ export default function FlagsPage() {
                 </td></tr>
               ) : filtered.map((f, i) => (
                 <tr key={f.id || i} style={{
-                  background: (f.status && f.status !== 'open') ? 'var(--c-bg-f8fafc)' : i % 2 ? 'var(--c-bg-fafbfc)' : 'white',
+                  background: (f.status && f.status !== 'open') ? 'var(--c-bg-f8fafc)' : rowStripe(i),
                   borderBottom: '1px solid var(--border)',
                   opacity: (f.status && f.status !== 'open') ? 0.62 : 1,
                 }}>

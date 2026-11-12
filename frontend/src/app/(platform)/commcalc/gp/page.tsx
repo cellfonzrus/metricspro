@@ -12,6 +12,7 @@ import DrillDownPanel, {
   DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
 } from '@/components/DrillDownPanel'
 import { narrowPanel, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
+import { rowStripe } from '@/lib/surface'
 
 // WHERE THE SEVEN HEADLINE TILES CAME FROM (index §CORE-17.3r). Declaration:
 // commcalc/sales_margin_drilldown.py, folded over the SAME store rows and the SAME totals the
@@ -462,7 +463,7 @@ export default function GPReportPage() {
                 className="btn" style={{
                   fontSize: 12, padding: '4px 10px',
                   background: selMarkets.includes(m) ? 'var(--accent)' : 'var(--surface2)',
-                  color: selMarkets.includes(m) ? 'white' : 'var(--text2)',
+                  color: selMarkets.includes(m) ? 'var(--c-fg-ffffff)' : 'var(--text2)',
                 }}>
                 {m}
               </button>
@@ -482,7 +483,7 @@ export default function GPReportPage() {
           <div style={{ display: 'flex', background: 'var(--surface2)', padding: 3, borderRadius: 8, gap: 3 }}>
             {(['store', 'rep'] as const).map(v => (
               <button key={v} onClick={() => setView(v)} className="btn" style={{
-                background: view === v ? 'white' : 'transparent',
+                background: view === v ? 'var(--c-bg-ffffff)' : 'transparent',
                 color: view === v ? 'var(--accent)' : 'var(--text2)',
                 fontSize: 13, boxShadow: view === v ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
               }}>
@@ -497,7 +498,7 @@ export default function GPReportPage() {
           {view === 'store' && (
             <button className="btn btn-secondary" onClick={() => setShowLegs(v => !v)}
               title="Split the Commission column into 1st-month and M2–M12 legs"
-              style={{ fontSize: 12, background: showLegs ? 'var(--accent)' : undefined, color: showLegs ? 'white' : undefined }}>
+              style={{ fontSize: 12, background: showLegs ? 'var(--accent)' : undefined, color: showLegs ? 'var(--c-fg-ffffff)' : undefined }}>
               🧩 Legs
             </button>
           )}
@@ -511,7 +512,7 @@ export default function GPReportPage() {
               title={MONTH_COLS.length
                 ? `One column per month-of-life: ${monthKeys.map(k => monthLabels[k] || k).join(', ')}`
                 : 'No month-of-life on this period’s Commission column yet'}
-              style={{ fontSize: 12, background: showMonths ? 'var(--accent)' : undefined, color: showMonths ? 'white' : undefined }}>
+              style={{ fontSize: 12, background: showMonths ? 'var(--accent)' : undefined, color: showMonths ? 'var(--c-fg-ffffff)' : undefined }}>
               📅 Months
             </button>
           )}
@@ -637,7 +638,7 @@ export default function GPReportPage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
             <div style={{ fontSize: 13, fontWeight: 700 }}>📅 Commission by month-of-life — each month its own column</div>
             <button className="btn btn-secondary" onClick={() => setShowMonths(v => !v)}
-              style={{ fontSize: 11, background: showMonths ? 'var(--accent)' : undefined, color: showMonths ? 'white' : undefined }}>
+              style={{ fontSize: 11, background: showMonths ? 'var(--accent)' : undefined, color: showMonths ? 'var(--c-fg-ffffff)' : undefined }}>
               {showMonths ? 'Hide' : 'Show'} these columns per store
             </button>
           </div>
@@ -659,7 +660,7 @@ export default function GPReportPage() {
                   <th style={{ padding: '4px 8px' }}>Basis</th>
                   {monthKeys.map(k => (
                     <th key={k} style={{ padding: '4px 8px', textAlign: 'right',
-                                         color: k === unknownKey ? '#b45309' : undefined }}>
+                                         color: k === unknownKey ? 'var(--c-fg-b45309)' : undefined }}>
                       {monthLabels[k] || k}
                     </th>
                   ))}
@@ -678,7 +679,7 @@ export default function GPReportPage() {
                     </td>
                     {monthKeys.map(k => (
                       <td key={k} style={{ padding: '4px 8px', textAlign: 'right',
-                                           color: k === unknownKey && (b.months || {})[k] ? '#b45309' : undefined }}>
+                                           color: k === unknownKey && (b.months || {})[k] ? 'var(--c-fg-b45309)' : undefined }}>
                         {(b.months || {})[k] ? fmt((b.months || {})[k]) : '—'}
                       </td>
                     ))}
@@ -798,7 +799,7 @@ export default function GPReportPage() {
               </button>
               {/* 🏪 the owner's ask of 2026-10-15 — the same rungs, PER STORE, months side by side */}
               <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 10px',
-                background: legStores ? 'var(--accent)' : undefined, color: legStores ? 'white' : undefined }}
+                background: legStores ? 'var(--accent)' : undefined, color: legStores ? 'var(--c-fg-ffffff)' : undefined }}
                 title="One row per store, one column per month — which store's trailing legs are running down, and in which rung"
                 onClick={() => setLegStores(v => !v)}>
                 🏪 {legStores ? 'Hide' : 'Per store'}
@@ -925,7 +926,7 @@ export default function GPReportPage() {
                                   )
                                 })}
                                 <td style={{ padding: '3px 8px', textAlign: 'right',
-                                  color: s.delta == null ? 'var(--text3)' : (s.delta < 0 ? '#dc2626' : '#16a34a') }}
+                                  color: s.delta == null ? 'var(--text3)' : (s.delta < 0 ? 'var(--c-fg-dc2626)' : 'var(--c-fg-16a34a)') }}
                                   title={s.first && s.last ? `${s.first} → ${s.last}` : 'Seen in one complete month only — no trend'}>
                                   {s.delta == null ? '—' : `${fmt(s.delta)}${s.delta_pct == null ? '' : ` (${s.delta_pct}%)`}`}
                                 </td>
@@ -1083,8 +1084,8 @@ export default function GPReportPage() {
             </thead>
             <tbody>
               {rows.map((r, i) => (
-                <tr key={i} style={{ background: i % 2 === 1 ? 'var(--c-bg-fafbfc)' : 'white' }}>
-                  <td style={{ padding: '8px 14px', fontWeight: 500, fontSize: 12, position: 'sticky', left: 0, background: i % 2 === 1 ? 'var(--c-bg-fafbfc)' : 'white', borderBottom: '1px solid var(--border)' }}>
+                <tr key={i} style={{ background: rowStripe(i) }}>
+                  <td style={{ padding: '8px 14px', fontWeight: 500, fontSize: 12, position: 'sticky', left: 0, background: rowStripe(i), borderBottom: '1px solid var(--border)' }}>
                     <div>{r.store?.substring(0, 30)}</div>
                     <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 999, background: 'var(--c-bg-dbeafe)', color: 'var(--c-fg-1e40af)', fontWeight: 600 }}>
                       {r.market || '—'}

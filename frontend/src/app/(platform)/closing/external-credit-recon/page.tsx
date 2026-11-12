@@ -252,7 +252,7 @@ export default function CardSettlementReconPage() {
                     <td style={num}>{r.declared_amount === null ? '—' : fmt(r.declared_amount)}</td>
                     <td style={{ ...td, fontSize: 11, color: 'var(--text3)' }}>{BASIS_NOTE[r.declared_basis] || ''}</td>
                     <td style={num}>{r.settled_amount === null ? '—' : fmt(r.settled_amount)}</td>
-                    <td style={{ ...num, color: r.variance === null ? 'var(--text3)' : r.variance < 0 ? '#c0392b' : r.variance > 0 ? '#b7791f' : 'inherit' }}>
+                    <td style={{ ...num, color: r.variance === null ? 'var(--text3)' : r.variance < 0 ? 'var(--c-fg-c0392b)' : r.variance > 0 ? 'var(--c-fg-b7791f)' : 'inherit' }}>
                       {r.variance === null ? '—' : fmt(r.variance)}
                     </td>
                     <td style={{ ...td, color: badge.color, whiteSpace: 'nowrap' }}>{badge.label}</td>

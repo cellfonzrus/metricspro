@@ -114,8 +114,8 @@ export default function CrmSettingsPage() {
           You can view this setup but not change it — the “CRM” settings permission is needed.
         </div>
       )}
-      {msg && <div style={{ ...panel, borderColor: msg === 'Saved.' ? '#16a34a' : '#dc2626',
-                            color: msg === 'Saved.' ? '#16a34a' : '#dc2626', marginBottom: 12 }}>{msg}</div>}
+      {msg && <div style={{ ...panel, borderColor: msg === 'Saved.' ? 'var(--c-bg-16a34a)' : 'var(--c-bg-dc2626)',
+                            color: msg === 'Saved.' ? 'var(--c-fg-16a34a)' : 'var(--c-fg-dc2626)', marginBottom: 12 }}>{msg}</div>}
 
       {cfg && (
         <div style={{ ...panel, marginBottom: 14 }}>
@@ -161,9 +161,9 @@ export default function CrmSettingsPage() {
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
         {TABS.map(t => (
           <button key={t.key} onClick={() => { setTab(t.key); setDraft({}); setEditRow(null) }}
-                  style={{ ...btn, background: tab === t.key ? '#2563eb' : 'var(--surface)',
-                           borderColor: tab === t.key ? '#2563eb' : 'var(--border)',
-                           color: tab === t.key ? '#fff' : 'var(--text)' }}>
+                  style={{ ...btn, background: tab === t.key ? 'var(--c-bg-2563eb)' : 'var(--surface)',
+                           borderColor: tab === t.key ? 'var(--c-bg-2563eb)' : 'var(--border)',
+                           color: tab === t.key ? 'var(--c-fg-ffffff)' : 'var(--text)' }}>
             {t.label}
           </button>
         ))}

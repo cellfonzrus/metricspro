@@ -253,7 +253,7 @@ export default function KPIPage() {
         <div style={{ display: 'flex', background: 'var(--surface2)', padding: 3, borderRadius: 8, gap: 3 }}>
           {(['rep', 'store'] as const).map(v => (
             <button key={v} onClick={() => switchView(v)} className="btn" style={{
-              background: view === v ? 'white' : 'transparent',
+              background: view === v ? 'var(--c-bg-ffffff)' : 'transparent',
               color: view === v ? 'var(--accent)' : 'var(--text2)',
               fontSize: 13, boxShadow: view === v ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
             }}>
@@ -581,7 +581,7 @@ function ManualKpiSection({ period, stores }: { period: string; stores: any[] })
                       <button key={md} className="btn" onClick={() => setMode(m.key, md)} style={{
                         fontSize: 10, padding: '1px 6px',
                         background: (modes[m.key] || 'manual') === md ? 'var(--accent)' : 'var(--surface2)',
-                        color: (modes[m.key] || 'manual') === md ? 'white' : 'var(--text2)',
+                        color: (modes[m.key] || 'manual') === md ? 'var(--c-fg-ffffff)' : 'var(--text2)',
                       }}>{md}</button>
                     ))}
                   </div>

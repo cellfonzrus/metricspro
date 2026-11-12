@@ -252,7 +252,7 @@ export default function SpecialOrdersPage() {
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
                     {PAYMENT_METHODS.map(m => (
                       <button key={m.value} onClick={() => setPayMethod(m.value)}
-                        style={{ background: payMethod === m.value ? 'var(--accent)' : 'var(--surface)', border: `1px solid ${payMethod === m.value ? 'var(--accent2)' : 'var(--border)'}`, color: payMethod === m.value ? 'white' : 'var(--text)', borderRadius: 6, padding: '5px 9px', fontSize: 11, cursor: 'pointer' }}>
+                        style={{ background: payMethod === m.value ? 'var(--accent)' : 'var(--surface)', border: `1px solid ${payMethod === m.value ? 'var(--accent2)' : 'var(--border)'}`, color: payMethod === m.value ? 'var(--c-fg-ffffff)' : 'var(--text)', borderRadius: 6, padding: '5px 9px', fontSize: 11, cursor: 'pointer' }}>
                         {m.label}
                       </button>
                     ))}

@@ -696,7 +696,7 @@ export default function PosReportsPage() {
                         <td style={{ ...td, color: 'var(--c-fg-3498db)', fontWeight: 600 }}>{sale.transaction_id}</td>
                         <td style={{ ...td, color: 'var(--text2)' }}>{new Date(sale.created_at).toLocaleString()}</td>
                         <td style={td}>
-                          <span style={{ color: sale.status === 'completed' ? '#27ae60' : '#e74c3c', fontWeight: 600, textTransform: 'capitalize' }}>{sale.status}</span>
+                          <span style={{ color: sale.status === 'completed' ? 'var(--c-fg-27ae60)' : 'var(--c-fg-e74c3c)', fontWeight: 600, textTransform: 'capitalize' }}>{sale.status}</span>
                         </td>
                         <td style={{ ...td, color: 'var(--text2)', textTransform: 'capitalize' }}>{sale.receipt_type}</td>
                         <td style={td}>{sale.customer_name || '—'}</td>

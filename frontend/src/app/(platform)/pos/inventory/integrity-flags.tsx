@@ -123,7 +123,7 @@ export default function IntegrityFlags({ storeCode }: { storeCode: string }) {
             <div style={{ fontSize: 12, color: 'var(--text2)' }}>{money(s.open_cost)} at cost · {s.by_status.assigned || 0} awaiting verification</div>
           </div>
           {Object.entries(s.by_kind).map(([k, v]) => (
-            <div key={k} style={{ ...tile, cursor: 'pointer', outline: kindFilter === k ? '2px solid var(--accent, #3b82f6)' : 'none' }} onClick={() => setKindFilter(kindFilter === k ? '' : k)}>
+            <div key={k} style={{ ...tile, cursor: 'pointer', outline: kindFilter === k ? '2px solid var(--accent, var(--c-bg-3b82f6))' : 'none' }} onClick={() => setKindFilter(kindFilter === k ? '' : k)}>
               <div style={{ fontSize: 11, color: 'var(--text2)' }}>{s.labels[k] || k}</div>
               <div style={{ fontSize: 20, fontWeight: 700 }}>{v.count}</div>
               <div style={{ fontSize: 12, color: 'var(--text2)' }}>{money(v.cost)}</div>

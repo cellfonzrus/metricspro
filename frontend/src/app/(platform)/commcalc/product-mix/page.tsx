@@ -262,7 +262,7 @@ export default function ProductMixPage() {
             {cors.map((c, i) => (
               <div key={i} style={{ fontSize: 13, minWidth: 250 }}>
                 <span style={{ color: 'var(--text2)' }}>{c.label}</span>{' '}
-                <b style={{ color: c.r === null ? 'var(--text3)' : c.r < 0 ? '#991b1b' : '#166534' }}>
+                <b style={{ color: c.r === null ? 'var(--text3)' : c.r < 0 ? 'var(--c-fg-991b1b)' : 'var(--c-fg-166534)' }}>
                   {c.r === null ? 'not enough reps to say' : `r = ${c.r.toFixed(2)}`}
                 </b>
                 {c.r !== null && <span style={{ fontSize: 11, color: 'var(--text3)' }}> (n = {c.n})</span>}
@@ -286,8 +286,8 @@ export default function ProductMixPage() {
                   <span style={{ fontWeight: 700, minWidth: 92 }}>{p.store}</span>
                   <span style={{
                     fontSize: 11, padding: '1px 7px', borderRadius: 999, alignSelf: 'center',
-                    background: p.severity === 'critical' ? '#fee2e2' : '#fef3c7',
-                    color: p.severity === 'critical' ? '#991b1b' : '#92400e',
+                    background: p.severity === 'critical' ? 'var(--c-bg-fee2e2)' : 'var(--c-bg-fef3c7)',
+                    color: p.severity === 'critical' ? 'var(--c-fg-991b1b)' : 'var(--c-fg-92400e)',
                   }}>{p.severity}</span>
                   <span style={{ color: 'var(--text2)' }}>{p.detail}</span>
                 </div>
