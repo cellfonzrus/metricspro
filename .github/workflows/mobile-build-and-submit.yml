@@ -177,6 +177,57 @@ jobs:
             --non-interactive --wait \
             --message "${GITHUB_SHA::7} built from GitHub" 2>&1 | tee /tmp/build.log
 
+      # WHAT ACTUALLY BUILT IT — read out of the BINARY, not out of the config.
+      #
+      # The crash that cost the owner three days was a toolchain that moved while nothing recorded
+      # that it had: eas.json asked for `"image": "latest"`, and no build this repository ever made
+      # said what "latest" was that day. Build 14 was made with Xcode 27 and UIKit killed it inside
+      # `UIApplicationMain` before a line of JavaScript ran (index §CORE-29.3c).
+      #
+      # A pin in eas.json is a REQUEST. `DTXcode` in the built Info.plist is the ANSWER, and only the
+      # answer is evidence. So this reads the answer, records it, and REFUSES TO SUBMIT a binary
+      # built with anything other than the Xcode the pin asked for — because a submission cannot be
+      # recalled, and the failure it would cause is invisible until a tester's phone dies on launch.
+      - name: what actually built it
+        id: toolchain
+        if: steps.gate.outputs.ready == 'true' && !inputs.skip_build && inputs.platform == 'ios'
+        working-directory: mobile
+        env:
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          set -o pipefail
+          want="$(node -e 'const e=require("./eas.json");const i=(e.build[process.env.PROFILE]||{}).ios||{};const m=/xcode-(\d+)/.exec(i.image||"");process.stdout.write(m?m[1]:"")')"
+          if [ -z "$want" ]; then
+            echo "::error::build.$PROFILE.ios.image in mobile/eas.json names no Xcode version, so there is nothing to check this binary against. Pin it (index CORE-29.3c, harness R7)."
+            exit 1
+          fi
+          url="$(grep -oE 'https://expo\.dev/artifacts/eas/[A-Za-z0-9_.@-]+\.ipa' /tmp/build.log | tail -n 1)"
+          if [ -z "$url" ]; then
+            echo "::error::the build log carried no .ipa artifact URL, so the binary cannot be read"
+            exit 1
+          fi
+          work="$(mktemp -d)"
+          curl -fsSL -o "$work/app.ipa" "$url"
+          unzip -o -q "$work/app.ipa" 'Payload/*.app/Info.plist' -d "$work"
+          facts=/tmp/toolchain.txt
+          python3 scripts/binary-toolchain.py "$work" --expect-xcode "$want" | tee "$facts"
+          get() { grep -m1 "^$1=" "$facts" | cut -d= -f2-; }
+          {
+            echo "### What actually built this binary"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Xcode (read from the binary) | \`$(get XcodeMajor)\` — DTXcode \`$(get DTXcode)\`, build \`$(get DTXcodeBuild)\` |"
+            echo "| iOS SDK | \`$(get DTSDKName)\` (\`$(get DTPlatformVersion)\`) |"
+            echo "| Minimum iOS | \`$(get MinimumOSVersion)\` |"
+            echo "| Version / build number | \`$(get CFBundleShortVersionString)\` / \`$(get CFBundleVersion)\` |"
+            echo "| eas.json asked for Xcode | \`$want\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "dtxcode=$(get DTXcode)" >> "$GITHUB_OUTPUT"
+          echo "xcode_major=$(get XcodeMajor)" >> "$GITHUB_OUTPUT"
+          echo "sdkname=$(get DTSDKName)" >> "$GITHUB_OUTPUT"
+          echo "buildno=$(get CFBundleVersion)" >> "$GITHUB_OUTPUT"
+
       - name: send it to testers
         id: submit
         if: steps.gate.outputs.ready == 'true' && inputs.submit
@@ -192,10 +243,14 @@ jobs:
             --profile "${{ inputs.profile }}" \
             --latest --non-interactive 2>&1 | tee /tmp/submit.log
 
-      # Always runs, so a FAILED build says why somewhere readable. GitHub's job logs are not
-      # reachable from the cloud container that drives this repository (the Azure blob host is not in
-      # its network allowlist), which is why the result is mirrored to the summary and, when asked,
-      # posted as a comment.
+      # Always runs, so a FAILED build says why somewhere readable, and so the result reaches the
+      # issue rather than only a job summary nobody opens.
+      #
+      # CORRECTED 2026-11-12: an earlier version of this comment claimed GitHub's job logs were
+      # unreachable from the cloud container that drives this repository. They are reachable —
+      # `gh api repos/<o>/<r>/actions/jobs/<id>/logs` returns them. The claim was believed and cost a
+      # diagnosis step, so it is corrected here rather than quietly deleted. The mirroring still
+      # earns its place: the owner reads the issue, not the logs.
       - name: say what happened
         if: always() && steps.gate.outputs.ready == 'true'
         env:
@@ -209,8 +264,13 @@ jobs:
             echo "Platform \`${{ inputs.platform }}\`, profile \`${{ inputs.profile }}\`, commit \`${GITHUB_SHA::7}\`."
             echo
             echo "- build step: \`${{ steps.build.outcome }}\`"
+            echo "- toolchain check: \`${{ steps.toolchain.outcome }}\`"
             echo "- submit step: \`${{ steps.submit.outcome }}\`"
             echo
+            if [ -n "${{ steps.toolchain.outputs.dtxcode }}" ]; then
+              echo "Built with **Xcode ${{ steps.toolchain.outputs.xcode_major }}** (DTXcode \`${{ steps.toolchain.outputs.dtxcode }}\`, \`${{ steps.toolchain.outputs.sdkname }}\`), build number \`${{ steps.toolchain.outputs.buildno }}\` — read from the binary itself, not from eas.json."
+              echo
+            fi
             echo '```'
             if [ -s /tmp/build.log ]; then
               tail -n 40 /tmp/build.log
