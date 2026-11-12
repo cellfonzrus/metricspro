@@ -87,14 +87,21 @@ WHAT GETS NO PANEL HERE, AND WHICH RULING SAYS SO
   · **A FIGURE OVER ROWS NONE OF WHICH WERE COUNTED**, and a zero over them: refused by the one
     home's own `served_tiles` rule, dereferenced here and not copied.
 
-TWO LIVE DEFECTS — REPORTED, REPRODUCED, NOT REPAIRED, NO FIGURE MOVED
+ONE LIVE DEFECT LEFT — REPORTED, REPRODUCED, NOT REPAIRED (the first was FIXED, see below)
 ─────────────────────────────────────────────────────────────────────
- 1. **`storeops.manual_hours` NEVER REACHES THIS REPORT'S FIGURE.** 569 hand-entered correction rows
-    exist (37 house, 532 Luxelink) and `GET /storeops/payroll` deliberately does not read that table
-    (§14y records it; the router says so in its own comment). So a correction a manager typed on the
-    Time Clock screen is invisible to the Payroll Report, and this family therefore NEVER names that
-    relation: naming it would be a provenance claim about a read that did not happen. The panel names
-    what answered, and this docstring names what did not.
+ 1. **FIXED 2026-11-11 (§STOREOPS-07).** This read "`storeops.manual_hours` NEVER REACHES THIS
+    REPORT'S FIGURE" for four months, and it was the defect the owner reported: *"i just fixed the
+    hours in ny logistics , went in to check it still shows the old hours"*. By then there were
+    **616** correction rows (51 house, 565 LuxeLink; ±4,441h gross), eight of them typed in the ten
+    days before the report, and `GET /storeops/payroll` read none of them — on NY LOGISTICS, which
+    holds punches and not one shift row in its pay period, there was nothing a manager could type
+    that would move the figure at all.
+    `GET /storeops/payroll` now folds a correction through
+    `payroll_hours_basis.corrections_by_day`, so the relation IS named: a corrected day resolves
+    `clocked_corrected`, which `BASIS_RELATIONS` below already maps. A correction that is
+    legitimately NOT folded — the org declared `count_manual_hours = false`, or the day falls before
+    its `corrections_effective_from` — carries the one home's own sentence for why, so an uncounted
+    correction is never a blank. The provenance claim is now about a read that DID happen.
  2. **A MANAGER'S CORRECTION IS INDISTINGUISHABLE FROM THE SCHEDULE IT WAS TYPED OVER.** On this
     read a `clocked_corrected` day is a `shifts.actual_hours` edit — the same relation a
     `schedule_opt_in` day comes out of — so the two bases name ONE table and are told apart only by
@@ -120,6 +127,11 @@ TIME_CLOCK = _lineage.TIME_CLOCK
 #: THE SCHEDULE — an INTENTION, and also the relation a manager's hours correction is typed onto
 #: (`shifts.actual_hours`) on this read. Dereferenced, never spelled.
 SCHEDULE = _lineage.SCHEDULE
+#: HAND-ENTERED HOURS — the correction route a manager actually HAS (`storeops.manual_hours`, mig
+#: 045). Named here from 2026-11-11, because from that date this report READS it (§STOREOPS-07); for
+#: the four months before, naming it would have been a provenance claim about a read that did not
+#: happen, and the docstring above says so. Dereferenced from the lineage registry, never spelled.
+MANUAL_HOURS = _lineage.MANUAL_HOURS
 #: THE EMPLOYEE RECORD — where a person's pay rate and their pay basis live. Named on every MONEY
 #: row, because the gross cannot be read without it. A registry NAME constant as of this batch, with
 #: its one pre-existing literal copy (`account/liabilities_drilldown.EMPLOYEES`) re-keyed in the SAME
@@ -147,7 +159,13 @@ BASIS_RELATIONS = {
     _hb.MEASURED_ZERO: (TIME_CLOCK,),
     _hb.CLOCKED_RECONCILED: (TIME_CLOCK,),
     _hb.CLOCKED_OVERRIDE: (TIME_CLOCK,),
-    _hb.CLOCKED_CORRECTED: (SCHEDULE,),
+    #: A CORRECTED DAY NAMES ALL THREE, and that is the honest provenance rather than a tidier
+    #: single one. A correction is a DELTA (§STOREOPS-07), so the figure rests on whatever measured
+    #: the day — the clock, or the schedule when nothing did — PLUS the correction itself, which
+    #: lives in `manual_hours` or, in its older and now-unwritable spelling, in the shift row's own
+    #: `actual_hours`. A reader asking why the figure is not what the clock said has to be sent to
+    #: the corrections as well as to the clock. Same posture as CLOCKED_TRIMMED_TO_SCHEDULE below.
+    _hb.CLOCKED_CORRECTED: (TIME_CLOCK, SCHEDULE, MANUAL_HOURS),
     #: TRIMMED TO THE ROSTERED START (§STOREOPS-03) answers out of BOTH relations, and that is the
     #: honest provenance rather than a tidier single one: the punch is where the hours came from, and
     #: the schedule is where the start they were cut back to came from. A reader asking why the figure

@@ -215,6 +215,7 @@ Primary code homes:
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
 | STOREOPS-04 | **A punch says where it was made, and an off-site one reaches the board management already reads** | "the sales reps when they log in should capture the gos location so they are not clocking out at their homes and the geolocation when they clock out from somewhere else than their usual location which should match the store address should be reported as flag to the management" — the clock-IN had captured a fix since mig 045 and the clock-OUT captured nothing at all, the platform's one geofence decision had never judged a punch, and no store had coordinates to judge one against. Who owns "was this person at the store this record is for", for the clock-in, the clock-out and the DM store visit alike — and what stops "we could not tell" from being read as "they were not there"?
 | STOREOPS-05 | **The phone shows the week the TENANT declared, and whose shifts it shows is the server's answer** | "Make scheduling and hr with store vista and closing live in the app also" — the rota, time off and cover requests existed only on the web, and the phone had no schedule at all. The gates were already right (`gate_person_rows`, §14w) and the week start was already declared per tenant; what was missing was a surface. Who decides which seven days a week IS on a phone, and what stops a client-side filter from being mistaken for a permission? |
+| STOREOPS-07 | **A correction a human types reaches the figure, or nothing does** | "i just fixed the hours in ny logistics , went in to check it still shows the old hours , check and fix for good platform wide" — and nothing he could have typed could have moved those figures. **616 hand-typed corrections** sat in `storeops.manual_hours` (51 house, 565 LuxeLink; ±4,441h gross), eight of them filed in the ten days before the report, and no pay or hours path read that table at all. All four tenants had declared `count_manual_hours = true` and `resolve_config` forced it FALSE for the three on `schedule_fallback`. The one correction the figure DID honour, `shifts.actual_hours`, is written by nothing in the product — the frontend displays it in seven places and writes it in none. And the mig-914 RPC decided `correction > punch > schedule` in SQL, where it could read neither the corrections nor the declaration. Who owns "what are this person's paid hours that day", what does a correction MEAN when 2,249 of its hours are negative, and what stops a closed month restating the moment the fold is switched on? |
 | CORE-33 | **What an employee may reach is one declaration, and the API is what enforces it** | "on ny logistics Manan was able to go past [the clock-in screen] and also see the adjustment hours, this should not be allowed for any sales reps — this is universal across the board". The browser was the only gate: a menu row the viewer could see opened its whole subtree by URL, and the payroll writes behind those pages asked for no authority at all. Who decides what a surface's audience is, and what makes the API refuse a caller the menu would not offer it to? |
 | CORE-32 | **A guard that reads source code must be told f-strings exist** | Found by running the suite on a newer interpreter than CI's: the guard that stops our own setup internals reaching a customer was RED on Python 3.13 and GREEN on 3.11. PEP 701 stopped making an f-string one string token, so it had stopped seeing f-strings — and the same file held a SECOND reader of the same fact that had been taught the new shape. What proves a capability that depends on the interpreter, when CI pins one? |
 | CORE-34 | **A proof that cannot start is not a passing proof** | Four frontend proof programs were red, and not one of them was red about the thing it proves: three had each hand-rolled their own TypeScript compile and lost the `@/` path alias, and the fourth read a Python endpoint with a regex that a refactor had moved past. What compiles a frontend proof, what reads Python from one, and what stops the next proof writing a fifth copy of either? |
@@ -26170,6 +26171,7 @@ status word rather than a blank that reads as nil.
 | 13 | storeops |
 | 14 | storeops, hr |
 | STOREOPS-06 | storeops, hr |
+| STOREOPS-07 | storeops, commcalc, account |
 | 15z | commcalc |
 | 15v | storeops |
 | 16 | core |
@@ -44439,6 +44441,188 @@ Files: `mobile/app/(app)/hr/index.tsx` (**new**), `mobile/src/lib/hr-intake.ts` 
 `mobile/src/lib/hr-intake.test.ts` (**new**), `mobile/src/api/hr.ts` (**new**),
 `mobile/src/api/client.ts` (`apiUpload`), `mobile/src/modules/registry.ts`,
 `docs/SYSTEM_DATA_FLOW_INDEX.md`.
+
+## §STOREOPS-07. A CORRECTION A HUMAN TYPES REACHES THE FIGURE, OR NOTHING DOES (owner report 2026-11-11)
+
+Owner, 2026-11-11: *"i just fixed the hours in ny logistics , went in to check it still shows the old
+hours , check and fix for good platform wide"*.
+
+### STOREOPS-07.1 WHAT WAS MEASURED FIRST (production, read-only, 2026-11-11)
+
+| fact | measurement |
+| --- | --- |
+| corrections in `storeops.manual_hours` | **616** — 51 house, 565 LuxeLink; **±4,441 h gross, −172 h net**; 430 of them logged as deliberate `manual_hours_add` acts |
+| how recently they are typed | LuxeLink filed **8 in the ten days to 2026-11-06**, reasoned *"didnt clock out"*, *"didnt clock in"*, *"Subtract"* |
+| how many reached any figure | **none**, on any pay or hours path |
+| tenants that had DECLARED `count_manual_hours = true` | **4 of 4** — and `resolve_config` forced it FALSE for the three on `schedule_fallback` |
+| writers of `shifts.actual_hours`, the one correction the figure honoured | **none in the product** — the frontend displays it in 7 places, writes it in 0; 7 of 7,740 live rows carry it |
+| NY LOGISTICS shift rows in its current pay period (10/26–11/08) | **zero**, so its hours come straight off the clock: 11.61 / 40.85 / 44.08 / 81.50 h |
+
+So the reported instance is exact and complete: on NY LOGISTICS there was no shift row to edit, the
+corrections table was inert, and the figure came from the clock. **Nothing the owner could have typed
+could have moved those numbers.**
+
+### STOREOPS-07.2 THE CLASS, not the instance
+
+Paid hours for a (person, day) was derived in **TWO** places and only one of them could see the facts:
+
+1. `storeops/payroll_hours_basis.py` — the declared one home (§14y), which reads the config and the
+   corrections; and
+2. `storeops.payroll_month_rows` (migs 407 → 913 → 914) — **a second derivation in SQL**, deciding
+   `correction > closed punch > schedule` with no access to `storeops.manual_hours` and none to
+   `storeops.payroll_hours_basis_config`.
+
+The RPC answered on every call that named a month or a range — i.e. every call the Payroll Report,
+the StoreOps Reports hours tiles and the Hours Approval board make — so the one home was unreachable
+in production on exactly the surfaces people read. Two paths answering one question is the duplicate
+defect the index rules forbid, and this is what it costs.
+
+**The lock that would have caught it was switched off.** `harness_payroll_rpc_equivalence.py` exists
+precisely to prove the two paths byte-identical. It is pinned on `harness_unrun_pending.txt`, never
+runs in CI, and had rotted to **26 passed / 8 failed** on `main` — the fast path had stopped emitting
+the basis keys entirely. A lock nobody runs is not a lock (§CORE-34 says this about gates; it is true
+about equivalence proofs too).
+
+### STOREOPS-07.3 WHAT A CORRECTION MEANS — a DELTA, and the data is what settles it
+
+The one home's correction branch returned the summed `manual_hours` as the day's **whole figure**.
+Nothing on a pay path ever passed it a correction, which is why that never surfaced. It is wrong, and
+the live rows prove it rather than an opinion doing so:
+
+- **2,249 of the 4,441 corrected hours are NEGATIVE**, reasoned *"didnt clock out"* / *"Subtract"*. A
+  negative figure can only be an adjustment. Read as a replacement, LuxeLink's lone `-2.50` row on
+  E198 / 2026-10-28 pays that person **minus two and a half hours**.
+- The positive rows (*"didnt clock in"*) land on days nothing measured, where a delta on zero and a
+  replacement give the same answer — which is why that half always looked fine.
+
+**A delta is therefore the one reading that is right about every row in the table**, and it is applied
+in `resolve_day`'s `out()`, so it lands on whatever the evidence resolved: the punch, the reconciled
+pair, the trimmed punch, the DM's own `shifts.actual_hours` figure, or the schedule. A branch of its
+own is how you get a correction that works on a punched day and silently does nothing on a scheduled
+one. A manager OVERRIDE is explicitly `correctable=False` — it already IS a hand-set figure, and
+correcting it would apply one human's intent twice.
+
+**Floored at zero**, with the clamp STATED on the row (`correction_floored_at_zero`,
+`correction_floored_from`). This is the same rule `payroll_approval.decide` already enforces where an
+adjustment is TYPED (*"that adjustment would make payable hours negative"*) — a rule enforced only at
+the keyboard is not a rule about the figure. Live precedent: E282 was hand-corrected by −273.56 h
+against a 339.56 h runaway.
+
+### STOREOPS-07.4 THE DECLARATION IS HONOURED, AND A CLOSED MONTH IS PROTECTED BY A DATE
+
+`count_manual_hours` was forced FALSE in `schedule_fallback` mode so that applying §14y moved nobody's
+pay. That instinct was right and its expression was the defect: it overwrote what three tenants had
+said. **"Do not move money on deploy" now has its own control, and it is a DATE.**
+
+- `corrections_effective_from` (per org) — days on/after it are corrected, days before it resolve
+  exactly as they do today, and `corrections_floor_reason` tells a reader which.
+- **THE DATE IS REQUIRED. An unset date is a refusal, not a licence.** An org that has named no date
+  folds nothing, so landing this code restates not one already-paid figure, and the merge is a code
+  change rather than a money change. The permissive reading of an absent date — "correct every day
+  in range" — would have restated 616 corrections across months of closed periods on four tenants
+  the moment it deployed, three of them already rebuilt by hand (below), and it would have done so
+  because nobody had answered a question rather than because somebody chose it. This is the house
+  rule for a tenant's own declaration (owner directive 2026-10-30) applied to a date: nothing
+  declared means nothing identified, and the surface says so in words. Proved by
+  `harness_hours_correction_reaches_figure.py` §B0/§B5 and `harness_payroll_hours_basis.py` §B4c/d.
+- **Turning it on is one config row per tenant**, which is the owner's choice and his alone: set the
+  date and every day from it forward is corrected. No code change, no deploy (RULE TWO).
+- **Its OWN column, deliberately not `clocked_basis_effective_from`.** That date means "when this
+  org's clocked-only basis began" and the house org already carries `2026-10-04` for it; reading the
+  corrections fold off the same column would hand the house a fold date it never chose — the copied-
+  fact defect (§19.18) in one line.
+- `count_manual_hours` **left `_SWITCH_FIELDS`**, and the reason is why that tuple exists. It belonged
+  there only while the MODE forced its value. Dropping it now would take an org that explicitly
+  declared FALSE and hand it the house default TRUE on every pre-floor day — inventing a correction
+  the tenant said it did not want, through the one door the floor had left open. The clocked floor
+  gates the clocked-only switch; the corrections floor gates corrections; neither gates the other.
+
+Why dated at all rather than simply folded: three of the house corrections were **already hand-rebuilt
+as `payroll_approval` adjustments in October** (E029 +18.49, E043 −10.97, E282 −273.56, against six
+`manual_hours` rows each for the first two). Folding those retroactively would count one human's
+correction twice.
+
+### STOREOPS-07.5 THE ONE HOMES
+
+- **`storeops/payroll_hours_basis.resolve_day`** — *what are this person's paid hours that day*. The
+  correction delta, the zero floor, the basis word and the sentence for it. Unchanged as the one home;
+  what changed is that it is now REACHABLE.
+- **`storeops/payroll_hours_basis.corrections_apply(day, cfg)`** — *may a correction be folded into
+  THIS day for this org*. Returns `(applies, why_not)`, so an uncounted correction is never a bare
+  `false` on a screen. Asked by the drill-down and by `corrections_by_day` alike.
+- **`storeops/payroll_hours_basis.corrections_by_day(evidence, cfg, employee_rows)`** — *how much does
+  a correction MOVE this day*. For the one pay surface that sums a day out of SEVERAL rows
+  (`GET /storeops/payroll` iterates `shifts` AND `timelog`, because a punch counts at the store the
+  person actually stood in). **Not a second derivation**: it runs `resolve_day` twice over the same
+  cell, once as the org declared it and once with corrections suppressed, so the delta is the one
+  home's own arithmetic subtracted from itself. A day with nothing to apply is ABSENT, never a `0.0`,
+  so "nothing to apply" and "applied, and it came to nothing" stay different facts.
+- **`storeops/payroll_evidence.read_pay_evidence`** — still THE one read of a period's punches and
+  corrections. The pay path dereferences it rather than growing a second `manual_hours` query.
+
+### STOREOPS-07.6 WHAT WAS WIRED
+
+| reader | before | after |
+| --- | --- | --- |
+| `GET /storeops/payroll` (Payroll Report, Hours Approval board, over-hours) | RPC decided; corrections unread | one derivation; corrections folded at the store that day's evidence names |
+| `GET /storeops/payroll-by-store` | same RPC | same leg, same delta — the two still reconcile to the cent |
+| the actual-hours drill-down | printed every correction `counted: false` | asks `corrections_apply`; an uncounted one carries the one home's own reason |
+| the mig-914 RPC | answered the pay question | **retired from the pay path.** Not replaced by a cleverer RPC: the question needs per-(person, day) evidence and a config row, and an aggregate can carry neither |
+
+**The cost, stated:** a kiosk-heavy tenant's call reads its own shift rows plus up to 20,000 timelog
+rows again. For a PAY PERIOD — a week or a fortnight, which is what this report is asked for — that is
+hundreds of rows, not thousands; the RPC was written when the report was month-wide and basis-free. A
+correct figure that takes longer beats a fast figure that ignores a correction.
+
+### STOREOPS-07.65 WHAT THE SECURITY PASS FOUND (project rule 2026-10-30)
+
+A tenant-scoped read is where cross-tenant leakage lives, so the review that checks org-scoping also
+asks whose person a read is about. **It found one, pre-existing, on the surface this change already
+touches.**
+
+`GET /storeops/payroll/actual-hours-detail` applied the mig-434 PAY gate and asked **nothing** about
+whose person the `employee_id` names. So any signed-in person in the org could read **any**
+employee's day-by-day hours, their punches, the stores they stood in and every correction filed
+against them, simply by passing an id. Every sibling asks: `list_manual_hours` scopes with
+`scope_emp_ids`, and five person-keyed reads ask `gate_person_rows`. This one was missed.
+
+**It is the owner's own §CORE-33 ruling, one surface over** — *"on ny logistics Manan was able to go
+past [the clock-in screen] and also see the adjustment hours, this should not be allowed"*. The same
+fact about the same tenant, reached through a different door.
+
+Closed by dereferencing `gate_person_rows` (§14w) on the ROUTE, asked of a one-row list keyed on the
+employee being requested — no second rule and no copy of the span logic. The SHARED function stays
+ungated for in-process and harness callers, the same route-vs-function split the pay gate already
+uses. An UNRESTRICTED caller is unaffected and that is asserted (§D10c): gating a read must never
+take a drill-down away from the people whose job it is.
+
+Org-scoping itself was verified clean: every read on the new path is `.eq("org_id", org_id)`, and
+§D7 proves two orgs sharing an employee id each get their own correction. `read_pay_evidence` gained
+an `employee_ids` narrowing for the per-click drill-down, documented in its own docstring as **an
+optimisation and never a permission** — `org_id` is the boundary either way, so a caller cannot
+mistake a narrowed read for an authorisation it has not made.
+
+### STOREOPS-07.7 THE LOCK
+
+`backend/harness_hours_correction_reaches_figure.py` (+ its integration half,
+`harness_hours_correction_wiring.py`) — 50 checks, DB-free, **wired into CI, not pinned**:
+
+- **§A** the delta semantics, on the live shapes, including the negative row and the zero floor;
+- **§B** the declaration honoured in BOTH modes and in BOTH directions, and the dated floor;
+- **§C** every tenant against its own declaration; nothing declared is never another tenant's words;
+- **§D** the REAL handlers over an in-memory database: the reported defect, the pay that follows, the
+  basis word, by-store reconciliation, the floor, all three tenant shapes, **no leakage when two orgs
+  share an employee id**, a missing `manual_hours` table degrading to the uncorrected figure rather
+  than an error or a zero, a corrected day that also has a shift row counting once, and — §D10 —
+  the person gate above, driven through the real route with the one home's span answer stubbed, so
+  what is proved is that the ROUTE asks it rather than a second copy of the rule living in a test;
+- **§E1** *the pay path holds no second, SQL-side derivation* — fails the build if a `payroll_month_rows`
+  call returns;
+- **§E2** the `manual_hours` read count PINNED at 6 (all of it Time Clock CRUD, none on the pay path),
+  may only shrink, plus that the pay path still dereferences the one read and the one home's delta;
+- **§E3** `count_manual_hours` is never force-assigned `False` by the mode again;
+- **§E4** the delta rule has not left the one home.
+
 
 ## §COMMCALC-55. A SUCCESSFUL LOGIN IS RECOGNISED BY EVIDENCE, NEVER BY A GUESSED VOCABULARY (owner report 2026-11-05)
 

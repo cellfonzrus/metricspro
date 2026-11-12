@@ -76,7 +76,11 @@ from app.modules.storeops import payroll_hours_basis as _hb
 #: THE COLUMN LISTS, spelled ONCE. They are the superset of what `clock_variance_api._load` read and
 #: what `build_evidence` documents it takes, so neither caller narrows the other's evidence.
 PUNCH_SELECT = "employee_id,work_date,hours,clock_in,clock_out,store_code,auto_clocked_out"
-MANUAL_SELECT = "employee_id,work_date,hours,reason"
+#: `id` IS IN THE LIST because the actual-hours drill-down reaches its corrections through this read
+#: (§STOREOPS-07) and renders each row by its own id — both to key the payroll-change-log "edited"
+#: lookup and to let a reader delete the right one. A read that cannot name the row it returned
+#: forces its caller to go and fetch the row again, which is how a second read of one fact starts.
+MANUAL_SELECT = "id,employee_id,work_date,hours,reason"
 
 #: The tables this module is the one reader of, on the pay path. Named so the lock can assert that
 #: no other pay-path module reads them for a period.
@@ -111,11 +115,18 @@ def day_after(d) -> str:
         return s
 
 
-def _range_rows(client, table, select, org_id, col, lo, hi):
+def _range_rows(client, table, select, org_id, col, lo, hi, employee_ids=None):
     """Half-open `[lo, hi)` on `col`, org-scoped. A failure is REPORTED, never raised and never
-    silently empty — `{table, reason}`, the same shape `clock_variance_api._rows` reports."""
+    silently empty — `{table, reason}`, the same shape `clock_variance_api._rows` reports.
+
+    `employee_ids` narrows to those raw ids IN THE QUERY. It is an optimisation and never a
+    permission: the org scope above is the boundary, and a caller that needs fewer rows says so here
+    rather than reading the org and discarding most of it in Python.
+    """
     try:
         q = client.table(table).select(select).eq("org_id", org_id)
+        if employee_ids is not None:
+            q = q.in_("employee_id", [str(x) for x in employee_ids])
         if lo:
             q = q.gte(col, str(lo)[:10])
         if hi:
@@ -125,11 +136,17 @@ def _range_rows(client, table, select, org_id, col, lo, hi):
         return [], {"table": table, "reason": str(e)}
 
 
-def read_pay_evidence(client, org_id, lo, hi):
+def read_pay_evidence(client, org_id, lo, hi, employee_ids=None):
     """THE ONE READ of the period's punches and manual-hours corrections. `(rows, blockers)`.
 
     `rows` is `{"punches": [...], "manual": [...]}`; `blockers` is a list of `{table, reason}`.
     `[lo, hi)` is half-open — see `day_after`. `client` is already schema-scoped to `storeops`.
+
+    `employee_ids`, when given, narrows BOTH reads to those raw ids. It exists for the actual-hours
+    drill-down, which is one person and is called once per row-click: reading a tenant's whole
+    period to keep one employee's rows would be a real cost on a per-click endpoint. It is an
+    optimisation, NOT a permission — `org_id` is the boundary and is applied either way, and a
+    caller must not mistake a narrowed read for an authorisation check it has not made.
 
     This is deliberately NOT a shifts read. Every one of the four callers already holds the shifts it
     needs, each with its own column list and its own soft-delete and store filters, and those reads
@@ -145,8 +162,10 @@ def read_pay_evidence(client, org_id, lo, hi):
             blockers.append(err)
         return rows
 
-    punches = take(_range_rows(client, PUNCH_TABLE, PUNCH_SELECT, org_id, "work_date", lo, hi))
-    manual = take(_range_rows(client, MANUAL_TABLE, MANUAL_SELECT, org_id, "work_date", lo, hi))
+    punches = take(_range_rows(client, PUNCH_TABLE, PUNCH_SELECT, org_id, "work_date", lo, hi,
+                               employee_ids))
+    manual = take(_range_rows(client, MANUAL_TABLE, MANUAL_SELECT, org_id, "work_date", lo, hi,
+                              employee_ids))
     return {"punches": punches, "manual": manual}, blockers
 
 

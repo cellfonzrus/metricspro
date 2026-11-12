@@ -88,8 +88,8 @@ export default function ActualHoursDrilldown({ employeeId, name, start, end, onC
                 </div>
               ) : null}
               {data.total_manual_hours_not_in_payroll ? (
-                <div className="card" style={{ padding: '8px 14px' }} title="Manually entered hours — the payroll report never reads them, so these are NOT part of the report row's Actual Hrs">
-                  <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase' }}>Manual hours (not in payroll)</div>
+                <div className="card" style={{ padding: '8px 14px' }} title="Hand-entered corrections this tenant is not folding into pay — either it has not switched corrections on, or these days fall before the date it starts counting them. Hover a row below for which.">
+                  <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase' }}>Corrections not counted</div>
                   <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtN(data.total_manual_hours_not_in_payroll)}h</div>
                 </div>
               ) : null}
@@ -134,12 +134,27 @@ export default function ActualHoursDrilldown({ employeeId, name, start, end, onC
                       ))}
                     </td>
                     <td style={{ padding: '6px 8px' }}>
-                      {d.manual.length === 0 ? '—' : d.manual.map((m: any) => (
-                        <div key={m.id} style={{ opacity: 0.7 }} title="Not in the payroll total below — /payroll never reads manual hours adjustments">
-                          {m.hours > 0 ? '+' : ''}{fmtN(m.hours)}h — {m.reason} ✎
-                          <span style={{ color: 'var(--text3)', fontSize: 11 }}> (not in payroll total)</span>
-                        </div>
-                      ))}
+                      {/* A CORRECTION COUNTS NOW (§STOREOPS-07). This cell used to tell every
+                          reader "not in payroll total" and dim the row, which was true for four
+                          months and is the defect the owner reported. `counted` is the SERVER's
+                          answer, and when it is false the server also sends the reason — so an
+                          uncounted correction is never a bare strike-through. An older backend
+                          sends no `counted` key at all; treat that as the old behaviour rather
+                          than claiming a fold that did not happen. */}
+                      {d.manual.length === 0 ? '—' : d.manual.map((m: any) => {
+                        const counts = m.counted === true
+                        return (
+                          <div key={m.id} style={{ opacity: counts ? 1 : 0.6 }}
+                               title={counts
+                                 ? 'Folded into the Actual total for this day'
+                                 : (m.not_counted_reason || 'Not in the payroll total for this day')}>
+                            {m.hours > 0 ? '+' : ''}{fmtN(m.hours)}h — {m.reason} ✎
+                            {counts ? null : (
+                              <span style={{ color: 'var(--text3)', fontSize: 11 }}> (not counted)</span>
+                            )}
+                          </div>
+                        )
+                      })}
                     </td>
                     <td style={{ padding: '6px 8px', fontWeight: 700 }}>
                       {fmtN(d.actual_hours)}h
@@ -159,7 +174,7 @@ export default function ActualHoursDrilldown({ employeeId, name, start, end, onC
                 ⚠ Highlighted day(s) counted a scheduled shift AND a separate clock punch on the same
                 day — a known data artifact (schedule-created shift vs. kiosk punch identity mismatch),
                 not necessarily a real double shift. See {' '}
-                <a href="/storeops/payroll-change-log" style={{ color: 'var(--accent)' }}>the Payroll Change Log</a> for any manual corrections on this employee.
+                <a href="/storeops/payroll-change-log" style={{ color: 'var(--accent)' }}>the Payroll Change Log</a> for every change made to this employee&apos;s hours.
               </div>
             )}
           </>

@@ -32,7 +32,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 616 gates
+## Gated — 618 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -291,6 +291,8 @@ the Runs on column is how you can tell.
 | `harness_gp_totals_reconcile.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_grant_model.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_helpdesk_export.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_hours_correction_reaches_figure.py` | `tests.yml` | Proof harnesses, group 4 of 4 (`harness-suite-4`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_hours_correction_wiring.py` | `tests.yml` | Proof harnesses, group 4 of 4 (`harness-suite-4`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_hr_compensation_span_worked_store.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_hr_compliance_doc_filters.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_hr_employee_database.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
@@ -662,7 +664,7 @@ the Runs on column is how you can tell.
 | `pytest:integration` | `tests.yml` | Backend integration tests (`backend-integration`) | `pull_request`, `push`, `workflow_dispatch` |
 | `pytest:unit` | `tests.yml` | Backend unit tests (`backend-unit`) | `pull_request`, `push`, `workflow_dispatch` |
 
-## Declared unrun — 41 harnesses no workflow runs
+## Declared unrun — 40 harnesses no workflow runs
 
 Declared debt (`backend/harness_unrun_pending.txt`), which may only SHRINK. These
 files assert things, and nothing executes them, so they assert nothing today.
@@ -694,7 +696,6 @@ files assert things, and nothing executes them, so they assert nothing today.
 - `harness_onboarding_intake.py`
 - `harness_owner_rulings_k1_k3.py`
 - `harness_payout_accrual.py`
-- `harness_payroll_rpc_equivalence.py`
 - `harness_pl_rebate_presentation.py`
 - `harness_plan_custom_report_vocab.py`
 - `harness_pos_syscat_price.py`

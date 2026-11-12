@@ -278,11 +278,32 @@ DEFAULT_CONFIG = {
     "count_auto_clockout_punches": False,
     # Is an OPEN punch (no clock_out) a measurement? Never in the house default — there is no span.
     "count_open_punches": False,
-    # Do `manual_hours` rows count as corrections? TRUE in clocked-only mode, where they are the
-    # correction mechanism. In schedule-fallback mode this is forced FALSE by `resolve_config`,
-    # because folding 569 unread rows into pay would move money on apply — the one thing the
-    # default must not do.
+    # Do `manual_hours` rows count as corrections? YES — they are THE correction mechanism in both
+    # modes, and the only one a manager can actually reach (nothing in the product writes
+    # `shifts.actual_hours`; see `corrections_effective_from` below for the whole writeup).
+    #
+    # ⚠ THIS USED TO BE FORCED FALSE IN SCHEDULE-FALLBACK MODE, and that forcing was the defect
+    # (owner report 2026-11-11, §STOREOPS-07). All four live tenants had `count_manual_hours = true`
+    # in their own config row and three of them were on `schedule_fallback`, so their own
+    # declaration could not be read by anything — a setting the reader cannot reach is not a
+    # setting. The forcing existed to stop a deploy moving money, which is a real concern and now
+    # has its OWN control: `corrections_effective_from`, a DATE. A date protects a closed month
+    # without overwriting what the tenant said.
     "count_manual_hours": True,
+    # ON AND AFTER WHICH DATE a correction is folded into the figure. None = every day.
+    #
+    # WHY THIS EXISTS RATHER THAN A SWITCH. 616 corrections sit in `storeops.manual_hours` (51
+    # house, 565 LuxeLink; ±4,441h gross, −172h net), typed over months by managers who believed
+    # they were fixing payroll. Folding all of them at once restates closed months — and three of
+    # the house rows were already hand-rebuilt as `payroll_approval` adjustments in October, so
+    # folding those would count one correction twice. So the fold is dated: days on/after the floor
+    # are corrected, days before it resolve exactly as they do today, and a reader is TOLD which.
+    #
+    # ITS OWN COLUMN, deliberately NOT `clocked_basis_effective_from`. That date means "when this
+    # org's clocked-only basis began" and the house org already carries 2026-10-04 for it; reading
+    # the corrections fold off the same column would silently give the house a fold date it never
+    # chose, which is the copied-fact defect (§19.18) in one line.
+    "corrections_effective_from": None,
     # WHICH OF TWO COMPETING CLOCK RECORDS IS PAID (owner ruling 2026-10-10). Engages only when the
     # clock feed is switched on for the org, so the shipped default moves nothing.
     "clock_source_rule": RULE_NARROWEST_WINDOW,
@@ -316,7 +337,7 @@ DEFAULT_CONFIG = {
     #: 2026-10-04 and no other date appears anywhere in this package (RULE TWO).
     "clocked_basis_effective_from": None,
 }
-#: ★ THE THREE FIELDS THAT ARE THE CLOCKED-ONLY SWITCH ★, dropped when the pre-floor config is
+#: ★ THE FIELDS THAT ARE THE CLOCKED-ONLY SWITCH ★, dropped when the pre-floor config is
 #: built so they fall back to the HOUSE DEFAULT (i.e. to what this org did before it switched).
 #:
 #: MEASURED, AND IT IS WHY THIS TUPLE EXISTS. Forcing only `hours_basis_mode` back is NOT enough:
@@ -324,10 +345,19 @@ DEFAULT_CONFIG = {
 #: `schedule_fallback` + `pay_from_schedule_default = false` + nothing measured still resolves
 #: `not_measured_unpaid` = ZERO. A floor built on the mode alone therefore left Jun–Sep 2026 at
 #: $0.00 — the exact figure the floor exists to prevent — so the floor restores the whole switch,
-#: not one third of it. `pay_from_schedule_default` and `count_manual_hours` are the other two
-#: thirds; every OTHER field (the tolerances, the thresholds, the auto-clockout policy, the feed)
-#: is the org's own and is honoured unchanged on both sides of the floor.
-_SWITCH_FIELDS = ("hours_basis_mode", "pay_from_schedule_default", "count_manual_hours")
+#: not one part of it. `pay_from_schedule_default` is the other half; every OTHER field (the
+#: tolerances, the thresholds, the auto-clockout policy, the feed) is the org's own and is honoured
+#: unchanged on both sides of the floor.
+#:
+#: ⚠ `count_manual_hours` LEFT THIS TUPLE on 2026-11-11 (§STOREOPS-07), and the reason is exactly
+#: why the tuple exists at all. It belonged here only while the MODE forced its value — dropping a
+#: mode-derived field is how a pre-floor day is restored to what this org did before it switched. It
+#: is no longer mode-derived: it is the tenant's own declaration, with its own dated floor
+#: (`corrections_effective_from`). Dropping it here would take an org that explicitly declared
+#: FALSE and hand it the house default TRUE on every pre-floor day — inventing a correction the
+#: tenant said it did not want, through the one door the floor had left open. The clocked floor
+#: gates the clocked-only switch; the corrections floor gates corrections; neither gates the other.
+_SWITCH_FIELDS = ("hours_basis_mode", "pay_from_schedule_default")
 
 #: Where `resolve_config` stashes the SAME org row resolved in schedule-fallback mode, so a pre-floor
 #: day can be answered byte-identically to that mode WITHOUT re-reading the row — including the
@@ -363,12 +393,13 @@ def resolve_config(org_row=None, _pre_floor=False):
     .resolve_tax_config` — an org with no row, or a database where mig 1073 has not run, behaves
     exactly as the house default, which is exactly as today.
 
-    THE ONE THING THIS FUNCTION DECIDES RATHER THAN MERGES: `count_manual_hours` is forced FALSE in
-    `MODE_SCHEDULE_FALLBACK`. `GET /storeops/payroll` has never read `storeops.manual_hours`
-    (router.py ~:1929 reports those rows as deliberately NOT in payroll), so honouring the flag in
-    the default mode would fold 569 live correction rows into pay the moment this code deployed.
-    The default mode must be byte-identical to today; the corrections become payable when the org
-    turns clocked-only ON, which is the decision the owner makes, not one this module makes for him.
+    THIS FUNCTION NO LONGER OVERRIDES `count_manual_hours` (§STOREOPS-07, 2026-11-11). It used to
+    force the flag FALSE in `MODE_SCHEDULE_FALLBACK`, which meant three of four tenants had DECLARED
+    that corrections count and were answered FALSE — so 616 hand-typed corrections reached no figure
+    on any tenant. The concern behind the forcing was right ("do not move money on deploy") and it
+    now has a control that says so honestly: `corrections_effective_from`, a DATE, REQUIRED for any
+    fold. An org that has set no date folds nothing, so deploying this still restates nothing; an
+    org's own declaration is honoured rather than silently reversed.
     """
     eff = dict(DEFAULT_CONFIG)
     for f in _CONFIG_FIELDS:
@@ -405,9 +436,8 @@ def resolve_config(org_row=None, _pre_floor=False):
     except (TypeError, ValueError):
         pct = DEFAULT_CONFIG["min_punch_coverage_pct"]
     eff["min_punch_coverage_pct"] = max(0.0, min(100.0, pct))
-    if eff["hours_basis_mode"] == MODE_SCHEDULE_FALLBACK:
-        eff["count_manual_hours"] = False
     eff["clocked_basis_effective_from"] = _day(eff.get("clocked_basis_effective_from"))
+    eff["corrections_effective_from"] = _day(eff.get("corrections_effective_from"))
     if not _pre_floor:
         # THE PRE-FLOOR CONFIG, resolved from the SAME ROW with the mode forced to schedule-fallback.
         # It is built HERE, from the row, and not later from `eff`, because the forcing above is
@@ -429,6 +459,79 @@ def effective_from(cfg):
     """
     cfg = cfg if isinstance(cfg, dict) else resolve_config(None)
     return _day(cfg.get("clocked_basis_effective_from"))
+
+
+#: MEASUREMENT-ONLY RESOLUTION. A cfg carrying this key is being resolved to answer "was this day
+#: MEASURED", not "what is paid", so `corrections_apply` does not apply the PAY gates — neither the
+#: required date nor the floor. A human correction is always a measurement, whatever the org's pay
+#: dates say: a day somebody wrote down is a day somebody wrote down. Without this, a corrected day
+#: on an org that has set no date reads as UNMEASURED, and `salary_expense` falls back to the
+#: SCHEDULE for it — the same defect `measurement_state` already forces `count_manual_hours` to
+#: prevent, reappearing through the date instead of the switch. Only `measurement_state` sets it.
+CORRECTIONS_UNGATED_KEY = "_corrections_ungated_for_measurement"
+
+
+def corrections_effective_from(cfg):
+    """PURE: the ISO date on and after which a `manual_hours` correction is folded, or None.
+
+    None means NO FOLD AT ALL — see `corrections_apply`, which refuses an unset date rather than
+    reading it as permission to restate every corrected day. Its OWN column, never
+    `clocked_basis_effective_from`: see the `DEFAULT_CONFIG` note on why sharing one date would hand
+    the house org a fold date it never chose.
+    """
+    cfg = cfg if isinstance(cfg, dict) else resolve_config(None)
+    return _day(cfg.get("corrections_effective_from"))
+
+
+def day_is_before_corrections_floor(day, cfg):
+    """PURE: is this business date STRICTLY BEFORE this org's corrections floor?
+
+    False when there is no floor. False when the date is unknown — an undated cell keeps the
+    answer it has rather than being pushed to one side of a boundary it never named, which is the
+    same posture `day_is_before_floor` takes for the clocked-basis floor.
+    """
+    floor = corrections_effective_from(cfg)
+    d = _day(day)
+    return bool(floor and d and d < floor)
+
+
+def corrections_apply(day, cfg):
+    """PURE: `(applies, why_not)` — may a correction be folded into THIS day's figure for this org?
+
+    THE ONE HOME for that question. Three things can say no, and each of them says so in words
+    rather than by silently leaving a correction out:
+
+      · the org declared `count_manual_hours = false` — its own choice, honoured;
+      · the org has set NO `corrections_effective_from` — see below;
+      · the day falls before this org's `corrections_effective_from`;
+      · there is no correction to apply (the caller's own check, not this function's).
+
+    AN UNSET DATE IS A REFUSAL, NOT A LICENCE. The date is REQUIRED for a fold, because the
+    permissive reading of an absent date is "restate every corrected day in range", and on this
+    platform that is 616 corrections over months of already-paid periods on four tenants — three of
+    which were ALREADY rebuilt by hand as `payroll_approval` adjustments, so folding them counts one
+    human's correction twice. A figure may not start moving because nobody answered a question. This
+    is the house rule for a tenant's own declaration (owner directive 2026-10-30): nothing declared
+    means nothing identified, and the surface says so in words.
+    """
+    cfg = cfg if isinstance(cfg, dict) else resolve_config(None)
+    if not cfg.get("count_manual_hours"):
+        return False, ("This org is not set to count hand-entered corrections, so the figure is "
+                       "what the clock and the schedule say.")
+    if cfg.get(CORRECTIONS_UNGATED_KEY):
+        # Measurement-only resolution: the PAY gates below do not apply. See the key's own note.
+        return True, None
+    if not corrections_effective_from(cfg):
+        return False, (
+            "This org has not set the date its hand-entered corrections start counting toward pay, "
+            "so none of them is folded into a figure yet. Set `corrections_effective_from` for the "
+            "org and every day from that date forward is corrected.")
+    if day_is_before_corrections_floor(day, cfg):
+        return False, (
+            f"This day ({_day(day)}) falls before {corrections_effective_from(cfg)}, the date this "
+            f"org's hand-entered corrections start being folded into pay, so it is resolved exactly "
+            f"as it is today. Recomputing a closed month therefore restates nothing.")
+    return True, None
 
 
 def day_is_before_floor(day, cfg):
@@ -890,7 +993,44 @@ def resolve_day(cell, cfg, employee_row=None, day=None):
               "effective_from": effective_from(cfg_all),
               "pre_effective_from": pre_floor}
 
-    def out(hours, basis):
+    # ── THE CORRECTION, RESOLVED ONCE FOR EVERY BRANCH BELOW ────────────────────────────────────
+    # A `manual_hours` row is a **DELTA on what was measured**, never a replacement for it, and that
+    # is not a preference — it is what the live rows say. 2,249 of the 4,441 corrected hours on this
+    # estate are NEGATIVE, reasoned "didnt clock out" / "Subtract", and a negative figure can only
+    # be an adjustment: read as a replacement, a lone `-2.50` row pays somebody MINUS two and a half
+    # hours. The positive rows ("didnt clock in") land on days nothing measured, where a delta on
+    # zero and a replacement give the same answer — so the delta rule is the one reading that is
+    # right about every row in the table. (Before 2026-11-11 this branch RETURNED the sum as the
+    # day's whole figure; nothing on a pay path passed it a correction, which is why that never
+    # surfaced. §STOREOPS-07.)
+    #
+    # APPLIED IN `out`, not in a branch of its own, so it lands on whatever the evidence resolved —
+    # the punch, the reconciled pair, the trimmed punch, the DM's own `shifts.actual_hours` figure,
+    # or the schedule. A branch of its own is how you get a correction that works on a punched day
+    # and silently does nothing on a scheduled one.
+    _corr_rows = int(cell.get("manual_rows") or 0)
+    _corr_delta = _f(cell.get("manual")) if _corr_rows > 0 else 0.0
+    _corr_ok, _corr_why = corrections_apply(day, cfg)
+    detail["correction_hours"] = round(_corr_delta, 2) if _corr_rows else 0.0
+    detail["correction_applied"] = bool(_corr_rows and _corr_ok)
+    if _corr_rows and not _corr_ok:
+        detail["corrections_floor_reason"] = _corr_why
+    detail["corrections_effective_from"] = corrections_effective_from(cfg_all)
+
+    def out(hours, basis, correctable=True):
+        # A MANAGER OVERRIDE passes `correctable=False`: it already IS a hand-set figure for the
+        # day, so adding a correction on top of it would apply one human's intent twice.
+        if correctable and _corr_rows and _corr_ok:
+            raw = float(hours) + _corr_delta
+            if raw < 0:
+                # A correction may not drive a day's payable hours NEGATIVE. The same rule
+                # `payroll_approval.decide` already enforces where an adjustment is TYPED ("that
+                # adjustment would make payable hours negative") — stated here too, because a rule
+                # enforced only at the keyboard is not a rule about the figure.
+                detail["correction_floored_at_zero"] = True
+                detail["correction_floored_from"] = round(raw, 2)
+                raw = 0.0
+            hours, basis = raw, CLOCKED_CORRECTED
         if pre_floor:
             detail["floor_reason"] = (
                 f"This day ({day}) falls before {detail['effective_from']}, the date this org's "
@@ -914,12 +1054,18 @@ def resolve_day(cell, cfg, employee_row=None, day=None):
             "A manager set this day's payable hours by hand"
             + (f": {detail['override_reason']}" if detail["override_reason"] else "")
             + ". An override always out-ranks the clock-record rule.")
-        return out(_f(ov.get("hours")), CLOCKED_OVERRIDE)
+        return out(_f(ov.get("hours")), CLOCKED_OVERRIDE, correctable=False)
 
-    # 1. A HUMAN CORRECTION. `manual_hours` presence is the measurement (a correction may be
-    #    negative), and a DM's `shifts.actual_hours > 0` edit is the older spelling of the same act.
-    if cfg.get("count_manual_hours") and int(cell.get("manual_rows") or 0) > 0:
-        return out(_f(cell.get("manual")), CLOCKED_CORRECTED)
+    # 1. A DM'S OWN FIGURE FOR THE DAY. `shifts.actual_hours > 0` is the OLDER spelling of a human
+    #    correction and it is an ABSOLUTE: it is the number a DM typed for the day, so it outranks
+    #    the punch it corrects. A `manual_hours` row is the OTHER spelling and is a DELTA — it is
+    #    applied in `out` to whatever resolves below, including to this figure, so a day carrying
+    #    both applies each exactly once.
+    #
+    #    (NOTE: nothing in the product writes `shifts.actual_hours` — the whole frontend displays it
+    #    in seven places and writes it in none, and 7 of 7,740 live rows carry it. It is kept because
+    #    those seven rows are real and because the PATCH route still exists, not because it is a
+    #    correction route anybody has.)
     if _f(cell.get("shift_actual")) > 0:
         return out(_f(cell.get("shift_actual")), CLOCKED_CORRECTED)
 
@@ -1082,19 +1228,24 @@ def measurement_state(cell, cfg, day=None):
     `marketing/router`'s event payroll both dereference this instead of each deciding again.
     """
     cfg = dict(cfg if isinstance(cfg, dict) else resolve_config(None))
-    # A HUMAN CORRECTION IS ALWAYS A MEASUREMENT, whatever the pay mode says. `resolve_config`
-    # forces `count_manual_hours` off in schedule-fallback mode so that applying this change moves
-    # nobody's PAY — but "was this day measured" is a different question from "is this correction
-    # paid", and answering the first one with the second one's switch would make a corrected day
-    # look unmeasured and send the salary rollup back to the schedule.
+    # A HUMAN CORRECTION IS ALWAYS A MEASUREMENT, whatever the org's PAY settings say. "Was this
+    # day measured" is a different question from "is this correction paid", and answering the first
+    # with the second's controls makes a corrected day look unmeasured and sends the salary rollup
+    # back to the SCHEDULE. There are TWO such controls and both are neutralised here: the
+    # `count_manual_hours` switch, and (from §STOREOPS-07) the `corrections_effective_from` date,
+    # which is REQUIRED for a pay fold. The date caught `salary_expense` in CI on 2026-11-12 —
+    # `day_measurement` resolves `resolve_config(None)`, which names no date, so every corrected
+    # day read as unmeasured. One gate neutralised and the other forgotten is the same defect.
     cfg["count_manual_hours"] = True
+    cfg[CORRECTIONS_UNGATED_KEY] = True
     # …AND ON BOTH SIDES OF THE FLOOR. A pre-floor day is answered from `PRE_FLOOR_KEY`, so forcing
     # the flag only on the outer dict would make a CORRECTED pre-floor day read as unmeasured —
     # which is the exact defect the paragraph above exists to prevent, reappearing on one side of a
     # date boundary instead of everywhere.
     _pre = cfg.get(PRE_FLOOR_KEY)
     if isinstance(_pre, dict):
-        cfg[PRE_FLOOR_KEY] = {**_pre, "count_manual_hours": True}
+        cfg[PRE_FLOOR_KEY] = {**_pre, "count_manual_hours": True,
+                              CORRECTIONS_UNGATED_KEY: True}
     hours, basis, _detail = resolve_day(cell, cfg, None, day)
     if basis_is_measurement(basis):
         return basis, round(float(hours), 2)
@@ -1102,6 +1253,57 @@ def measurement_state(cell, cfg, day=None):
 
 
 # ── COVERAGE + THE INTERLOCK ─────────────────────────────────────────────────────────────────────
+def corrections_by_day(evidence, cfg, employee_rows=None):
+    """PURE: `{(raw employee_id, 'YYYY-MM-DD'): hours_this_correction_MOVES_the_figure}`.
+
+    THE ONE HOME for "how much does a hand-typed correction change this day", for the callers that
+    cannot simply take `resolve_day`'s answer because they sum a day out of SEVERAL rows.
+
+    WHY THIS EXISTS, AND WHY IT IS NOT A SECOND DERIVATION. `GET /storeops/payroll` is the one pay
+    surface that iterates `shifts` AND `timelog` and sums both — it has to, because a punch is
+    counted at the store the person actually stood in, which a shift-row loop cannot see
+    (`payroll_evidence`'s own note names this as the reason its four callers are not this one). Such
+    a caller already has the day's figure assembled from its own rows, so what it needs is the
+    DIFFERENCE a correction makes, not the day's total a second time. That difference is computed
+    HERE, by running `resolve_day` twice over the SAME cell — once as the org declared it and once
+    with corrections suppressed — so the delta is the one home's own arithmetic subtracted from
+    itself. There is no second rule to drift: change the correction rule and this moves with it.
+
+    A day with no correction, a day before the org's corrections floor and a day in an org that
+    declared `count_manual_hours = false` are all simply ABSENT from the result — never present as a
+    0.0, so a caller can tell "nothing to apply" from "applied, and it came to nothing".
+
+    `employee_rows` is accepted and passed through for the schedule opt-in, exactly as `coverage`
+    takes it, so a day that falls to the schedule is differenced against the same figure the caller
+    would otherwise have shown.
+    """
+    cfg = cfg if isinstance(cfg, dict) else resolve_config(None)
+    emp_by_id = {}
+    for e in (employee_rows or ()):
+        if (e or {}).get("employee_id") is not None:
+            emp_by_id[e["employee_id"]] = e
+    # Corrections suppressed, with the PRE-FLOOR config suppressed the same way — otherwise a
+    # pre-clocked-floor day would difference against a config that still folds corrections.
+    off = dict(cfg)
+    off["count_manual_hours"] = False
+    pre = off.get(PRE_FLOOR_KEY)
+    if isinstance(pre, dict):
+        off[PRE_FLOOR_KEY] = {**pre, "count_manual_hours": False}
+    out = {}
+    for key, cell in (evidence or {}).items():
+        if not isinstance(cell, dict) or int(cell.get("manual_rows") or 0) <= 0:
+            continue
+        eid = key[0] if isinstance(key, tuple) else None
+        emp = emp_by_id.get(eid)
+        day = key[1] if isinstance(key, tuple) and len(key) > 1 else cell.get("day")
+        corrected, _b, det = resolve_day(cell, cfg, emp, day)
+        if not det.get("correction_applied"):
+            continue
+        base, _b2, _d2 = resolve_day(cell, off, emp, day)
+        out[(eid, _day(day) or day)] = round(float(corrected) - float(base), 2)
+    return out
+
+
 def coverage(evidence, cfg, employee_rows=None):
     """PURE: how much of this period was actually MEASURED, per store-agnostic employee-day grain.
 
