@@ -47479,9 +47479,11 @@ answers "which store is this string?".**
 
 `harness_store_code_capture.py` (43 checks) fails the build when ANY `insert`/`upsert` into
 `storeops.shifts` / `timelog` / `shift_templates` sits in a function that does not dereference the
-home — the scan is over CODE (`harnesslib.py_code_only`), it refuses to be vacuously green (§D2
-requires the six writers still to be found), and the two sanctioned local wrappers are themselves
-checked for the dereference (§D4a), so naming them is not a hole. §A–§C hold the capture rule
+home — the scan is over CODE (`harnesslib.py_code_only`), it refuses to be vacuously green (§D2 holds the
+six writers as a DECLARED set and compares for equality, per `harness_subject_set_lock`: a writer
+that leaves names itself, and a NEW one fails until it is added deliberately — which is exactly when
+§D1 gets read), and the two sanctioned local wrappers are themselves checked for the dereference
+(§D4a), so naming them is not a hole. §A–§C hold the capture rule
 (declared spelling in any case, an address, idempotence, no guess, an empty index moves nothing) and
 the live kiosk regression; §E is the cross-tenant pass — each tenant captures against its own
 declarations and reaches nothing of another's.
