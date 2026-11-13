@@ -290,6 +290,81 @@ def _insert_leg_split_line(spec):
 
 _insert_leg_split_line(PL_SPEC)
 
+# ── THE PER-ORG P&L LINES — one home, dereferenced, never copied (owner ask 2026-11-13) ─────────
+# `PL_SPEC` above is the chart every tenant shares. Some lines, though, EXIST PER ORG because the
+# org declared them: the owner's 2026-11-13 ask — *"if we add another level the expense report should
+# automatically add they level"* — means a wages line per level `storeops.org_levels` holds, named in
+# that tenant's own words. A static list cannot carry a line a tenant invents after the deploy.
+#
+# So `build_inputs` DECLARES those rows on the inputs dict under `DYNAMIC_PL_SPEC`, as 6-tuples
+# (key, label, section, kind, grain, after), and every assembler builds its P&L from
+# `pl_spec_for(inputs)` instead of reading `PL_SPEC` directly. ONE home, dereferenced by both
+# callers (`engine.compute`, `statement_engine._assemble_scope`); the lock in
+# harness_overhead_level_lines.py fails the build if a P&L assembly goes back to reading `PL_SPEC`.
+#
+# `inputs` already carries non-cell side entries (`_unbooked_sales`, `_royalty_coverage`) and every
+# reader guards with `isinstance(ln, dict)`, so a LIST side entry is the established shape here.
+# No org declaring any ⇒ `pl_spec_for` returns `PL_SPEC` itself and every statement is
+# byte-identical, line for line.
+DYNAMIC_PL_SPEC = "_dynamic_pl_spec"
+
+
+def pl_spec_for(inputs=None):
+    """THE chart a P&L is assembled from: the shared `PL_SPEC` plus whatever lines THIS org
+    declared, each inserted immediately after its `after` anchor (appended when the anchor is
+    absent). Deterministic, de-duplicated, and never mutates `PL_SPEC`."""
+    extra = (inputs or {}).get(DYNAMIC_PL_SPEC) if isinstance(inputs, dict) else None
+    if not extra:
+        return PL_SPEC
+    spec = list(PL_SPEC)
+    have = {row[0] for row in spec}
+    for row in extra:
+        try:
+            key, label, section, kind, grain, after = row
+        except (TypeError, ValueError):
+            continue
+        if not key or key in have:
+            continue
+        have.add(key)
+        at = next((i for i, r in enumerate(spec) if r[0] == after), None)
+        cell = (key, label, section, kind, grain)
+        if at is None:
+            spec.append(cell)
+        else:
+            # After the anchor AND after any sibling already inserted behind it, so declared order
+            # (rank order, for the level lines) is preserved rather than reversed.
+            j = at + 1
+            while j < len(spec) and spec[j][0] in have and spec[j][0] not in {r[0] for r in PL_SPEC}:
+                j += 1
+            spec.insert(j, cell)
+    return spec
+
+
+def stores_in_inputs(inputs):
+    """Every store code/address any LINE CELL of `inputs` mentions — the one home for that walk.
+
+    `inputs` is not only line cells: it carries SIDE ENTRIES beside them (`_royalty_coverage`,
+    `_unbooked_sales`, and `DYNAMIC_PL_SPEC`, which is a LIST of declared chart rows). Both
+    assemblers used to walk the dict themselves and only ONE of them knew that — `engine`'s copy did
+    `ln["by_store"]` unguarded, which raises TypeError on a list side entry and would have taken the
+    whole persisted compute down for the first tenant to declare an org level. One home, so a side
+    entry added later cannot teach only half the readers."""
+    out = set()
+    for ln in (inputs or {}).values():
+        if isinstance(ln, dict):
+            out.update((ln.get("by_store") or {}).keys())
+    return out
+
+
+def pl_label_for(inputs=None):
+    """`PL_LABEL` extended with the per-org lines' labels. Same posture: no declarations ⇒ the
+    shared map itself."""
+    spec = pl_spec_for(inputs)
+    if spec is PL_SPEC:
+        return PL_LABEL
+    return {k: lbl for k, lbl, *_ in spec}
+
+
 PL_LABEL = {k: lbl for k, lbl, *_ in PL_SPEC}
 BS_LABEL = {k: lbl for k, lbl, *_ in BS_SPEC}
 # {line_key: section} — what a booking's SIGN on the line is decided from (ledger_pnl.line_sign, mig 1013)
@@ -2395,6 +2470,33 @@ def build_inputs(client, org_id, period):
                     add("overhead_comm", _st, _amt)
                 L["overhead_wages"]["label"] = _ovh_cfg["wages_label"]
                 L["overhead_comm"]["label"] = _ovh_cfg["commission_label"]
+                # ── ONE LINE PER ORG LEVEL (owner ask 2026-11-13) ─────────────────────────────
+                # "add a line in the expenses with the name dm salary and rm salary or mm salary ,
+                # if we add another level the expense report should automatically add they level
+                # and then divide the salary based on the people who report to them"
+                #
+                # The lines, their keys and their LABELS all come from `overhead_allocation`, which
+                # read them from THIS org's `storeops.org_levels`. Nothing here knows a level name,
+                # and no list of level names exists for it to fall back to — an org that declares
+                # none books exactly the one combined line it books today and the note says why.
+                #
+                # THE SAME CELLS, GROUPED. `wages_by_store` above is replaced, not supplemented:
+                # each dollar moves from the combined line onto its level's line, so the opex
+                # subtotal and net income do not move by one cent. The combined line keeps only the
+                # people whose level could not be identified.
+                _lv = _ovh.get("levels") or {}
+                _lv_rows = _oa.level_spec_rows(_lv.get("lines"))
+                if _lv_rows:
+                    L["overhead_wages"]["by_store"] = {}
+                    for _st, _amt in (_lv.get("combined_by_store") or {}).items():
+                        add("overhead_wages", _st, _amt)
+                    for _row, _line in zip(_lv_rows, _lv.get("lines") or []):
+                        L.setdefault(_row[0], {"by_store": {}, "company_wide": 0.0, "detail": {},
+                                               "detail_by_store": {}, "detail_company_wide": {}})
+                        L[_row[0]]["label"] = _row[1]
+                        for _st, _amt in (_line.get("by_store") or {}).items():
+                            add(_row[0], _st, _amt)
+                    L.setdefault(DYNAMIC_PL_SPEC, []).extend(_lv_rows)
                 # The gap between what the roster explains and what the tenant already types in by
                 # hand. REPORTED on the line, never acted on: the manual rows are the larger and
                 # more complete figure, so suppressing them on the strength of a smaller derived
@@ -2404,7 +2506,16 @@ def build_inputs(client, org_id, period):
                     key_of=lambda c: resolve_store(code2addr.get(_norm_store(c), _norm_store(c))))
                 _n = _oa.line_note(_ovh, _recon)
                 if _n:
-                    L["overhead_wages"]["note"] = _n
+                    # THE NOTE MUST RIDE A LINE THAT RENDERS. `overhead_wages` is `auto_opt`, so once
+                    # the per-level lines carry every dollar the combined line is DROPPED by
+                    # `engine._assemble` — and the note went with it, taking the manual-gap report and
+                    # the unallocated-pay report with it exactly when they are hardest to notice
+                    # missing. It is attached to the combined line when that line still books, and
+                    # otherwise to the FIRST per-level line, which is the one the box reads from.
+                    _note_key = ("overhead_wages" if (L["overhead_wages"].get("by_store")
+                                                      or L["overhead_wages"].get("company_wide"))
+                                 else (_lv_rows[0][0] if _lv_rows else "overhead_wages"))
+                    L[_note_key]["note"] = _n
     except Exception as e:
         _warn("overhead allocation skipped", e)
 

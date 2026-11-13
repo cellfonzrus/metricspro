@@ -573,10 +573,7 @@ def _scopes(inputs, companies, company_of, journal=None, matcher=None, profit_sc
     `centers.profit_center_scopes` tuples (`profit_center:<code>`, label, the center's stores, False),
     exactly the shape of a company scope. None / [] (every org without profit centers) ⇒ the list is
     byte-identical."""
-    all_stores = set()
-    for ln in inputs.values():
-        if isinstance(ln, dict):
-            all_stores.update((ln.get("by_store") or {}).keys())
+    all_stores = set(coa.stores_in_inputs(inputs))   # ONE home for "which stores do the lines name"
     for e in (journal or []):
         grain, store, _co = balance_sheet.entry_grain(e, matcher, company_of)
         if grain == "store" and store:
@@ -630,7 +627,9 @@ def _assemble_scope(client, org_id, period, inputs, journal, matcher,
     # twice. One grain in use ⇒ byte-identical to the plain routing.
     jscope, jmeta = balance_sheet.journal_grain_entries(
         journal, scope_key, stores_in_scope, matcher, company_of)
-    pl = engine._assemble(inputs, jscope, coa.PL_SPEC, coa.PL_LABEL, PL_SECTIONS,
+    # ONE home for the chart (§STOREOPS-09): `coa.pl_spec_for` adds the lines THIS org declared —
+    # a wages line per org level — on top of the shared `PL_SPEC`. Never `coa.PL_SPEC` directly.
+    pl = engine._assemble(inputs, jscope, coa.pl_spec_for(inputs), coa.pl_label_for(inputs), PL_SECTIONS,
                           scope_key, stores_in_scope, include_cw)
     prior_ni = engine._prior_accum_ni(client, org_id, scope_key, period)
     bs = engine._assemble(inputs, jscope, bs_spec(), bs_label(), BS_SECTIONS,

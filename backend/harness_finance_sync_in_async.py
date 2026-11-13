@@ -219,7 +219,13 @@ print("\n[5] MONEY PROOF — every non-transport function is AST-identical to or
 #   `note` — emitted only when coa set it, so every other line's payload is byte-identical. No
 #   arithmetic in _assemble changed. Proven by backend/harness_pl_commission_source.py.
 EXPECTED_DELTA = {
-    ENGINE: {"_narrate", "_assemble"},
+    # +`compute_and_store` 2026-11-13 (§STOREOPS-09): a ONE-LINE change, the chart argument of its
+    # `_assemble` call — `coa.PL_SPEC` -> `coa.pl_spec_for(inputs)`, so a P&L line the TENANT
+    # declared (a wages line per org level) can exist at all. It books nothing new and the house
+    # default declares nothing, so `pl_spec_for` hands back the SHARED `PL_SPEC` object itself and
+    # every snapshot is byte-identical. Locked both ways by harness_overhead_level_lines.py §6(c)
+    # (no caller may go back to `coa.PL_SPEC`) and §7 (object identity with no declarations).
+    ENGINE: {"_narrate", "_assemble", "compute_and_store"},
     RECON: {"_missed_days"},
     # get_pl (2026-09-26, index §4c): its body MOVED, unchanged, into the new `pl_single_month` (THE
     # single-month P&L read the month-range export loops); get_pl now returns it. JSON-identical for every
@@ -384,7 +390,14 @@ MONEY_MODULE_DELTA = {
                                "_squash_key", "_lead_num_key"},
                               {"_lcov_mod", "build_inputs.add_comm",
                                "is_side_entry", "statement_lines",
-                               "_wage_measurement", "wages_by_code"}),
+                               "_wage_measurement", "wages_by_code",
+                               "pl_spec_for", "pl_label_for",
+                               # +`stores_in_inputs` 2026-11-13: the "which stores do the lines
+                               # name" walk FACTORED OUT of engine.py and statement_engine.py, which
+                               # each kept their own copy — and engine's did not know `inputs` holds
+                               # non-cell side entries. Pure extraction, no arithmetic; locked by
+                               # harness_overhead_level_lines.py §6(f).
+                               "stores_in_inputs"}),
     f"{MOD}/account/autocompute.py": (set(), set()),
     f"{MOD}/account/statement_filter.py": (set(), {"unbound_spellings"}),
 }

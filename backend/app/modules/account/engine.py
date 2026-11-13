@@ -246,10 +246,9 @@ def compute_and_store(client, org_id, period):
     company_of, default_co, companies = coa.company_assignment(client, org_id)
     co_name = {c["id"]: c["name"] for c in companies}
 
-    # every store that appears in any line
-    all_stores = set()
-    for ln in inputs.values():
-        all_stores.update(ln["by_store"].keys())
+    # every store that appears in any line — ONE home (`coa.stores_in_inputs`), because `inputs`
+    # carries non-cell SIDE entries beside the line cells and this walk must know it.
+    all_stores = set(coa.stores_in_inputs(inputs))
 
     scopes = [("consolidated", "Consolidated (all companies)", None, True)]
     for c in companies:
@@ -274,7 +273,9 @@ def compute_and_store(client, org_id, period):
     for scope_key, scope_label, stores_in_scope, include_cw in scopes:
         jscope = _journal_for_scope(journal, scope_key, stores_in_scope)
         # P&L first (net income feeds retained earnings on the BS)
-        pl = _assemble(inputs, jscope, coa.PL_SPEC, coa.PL_LABEL,
+        # The chart comes from `coa.pl_spec_for(inputs)`, never from `coa.PL_SPEC` directly: lines a
+        # TENANT declared (one per org level, §STOREOPS-09) exist only on the inputs this org built.
+        pl = _assemble(inputs, jscope, coa.pl_spec_for(inputs), coa.pl_label_for(inputs),
                        [("Revenue", "revenue"), ("Cost of Goods Sold", "cogs"),
                         ("Operating Expenses", "opex"), ("Other", "other")],
                        scope_key, stores_in_scope, include_cw)

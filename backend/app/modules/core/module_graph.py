@@ -1259,6 +1259,13 @@ FACTS: dict[str, dict] = {
             'app/modules/storeops/clock_variance_api.py': ('_org_chain',),
             'app/modules/closing/router.py': ('org_chain',),
             'app/modules/storevisit/visit_plan_router.py': ('org_chain',),
+            # Added 2026-11-13 (§STOREOPS-09): the per-level overhead lines rest on the UNION RULE —
+            # "a higher level covers the union of everything beneath it" — which is exactly
+            # `org_chain.subtree_ids`, the tree's one DOWNWARD walk, added beside the existing
+            # upward `ancestors_of`. `overhead_allocation.gather` dereferences it instead of keeping
+            # the local stack-and-children walk it used to carry; `harness_overhead_level_lines.py`
+            # §6(e) fails the build if a second downward walk appears anywhere in storeops.
+            'app/modules/storeops/overhead_allocation.py': ('_oc',),
         },
     },
     'device_price_band': {
