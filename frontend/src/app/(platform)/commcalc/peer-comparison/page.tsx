@@ -62,7 +62,7 @@ function num(v: number | null | undefined, digits = 0): string {
 // How far behind the band median, as a colour. Ahead of median is not celebrated — the point of the
 // report is the gap, and colouring every leader green turns the table into a scoreboard.
 function gapColor(behind: boolean | undefined): string {
-  return behind ? 'var(--red, #dc2626)' : 'var(--text1)'
+  return behind ? 'var(--red)' : 'var(--text1)'
 }
 
 // The columns a peer store row carries beside its count, in the producer's own words.
@@ -330,8 +330,8 @@ export default function PeerComparisonPage() {
               : `${focus.gap_median > 0 ? '−' : focus.gap_median < 0 ? '+' : ''}${Math.abs(focus.gap_median).toFixed(2)}`}
             sub={focus.sentence || focus.reason || ''}
             icon={focus.verdict === 'behind' ? '🎯' : focus.verdict === 'ahead' ? '🏆' : '⚖︎'}
-            accent={focus.verdict === 'behind' ? 'var(--red, #dc2626)'
-              : focus.verdict === 'ahead' ? 'var(--green, #16a34a)' : undefined}
+            accent={focus.verdict === 'behind' ? 'var(--red)'
+              : focus.verdict === 'ahead' ? 'var(--green)' : undefined}
             delta={focus.measurable
               ? { value: `${focus.metric_label} vs peer median`, dir: focus.verdict === 'behind' ? 'down' : focus.verdict === 'ahead' ? 'up' : 'flat' }
               : undefined} />
@@ -346,7 +346,7 @@ export default function PeerComparisonPage() {
             </>} />
           <StatTile label="Behind their own band" value={num(focus.behind_count)}
             icon="⚠︎"
-            accent={focus.behind_count > 0 ? 'var(--red, #dc2626)' : undefined}
+            accent={focus.behind_count > 0 ? 'var(--red)' : undefined}
             sub={<>
               of {focus.stores_in_view} compared, on {String(focus.metric_label || '').toLowerCase()}
               <DrillTileLinks drills={peerDrill.dl('focus.behind', 'which stores')}
