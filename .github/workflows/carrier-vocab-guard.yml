@@ -921,6 +921,14 @@ on:
       - "backend/app/core/tenant_middleware.py"
       - "frontend/src/lib/pos-receipt.ts"
       - "frontend/src/lib/pos-config.ts"
+      - "backend/app/modules/pos/checkout_contract.py"
+      - "backend/harness_pos_checkout_contract.py"
+      - "backend/app/modules/pos/pos_config_effective.py"
+      - "mobile/src/modules/pos/checkout-body.ts"
+      - "mobile/src/modules/pos/checkout-body.test.ts"
+      - "mobile/src/modules/pos/checkout-contract.ts"
+      - "mobile/app/(app)/pos/checkout.tsx"
+      - "frontend/src/app/(platform)/pos/sales/page.tsx"
       - "frontend/src/components/pos/ReceiptTemplateSection.tsx"
       - "frontend/src/components/pos/PrintFormatPicker.tsx"
       - "backend/app/modules/pos/receipt_escpos.py"
@@ -2773,6 +2781,9 @@ jobs:
       - name: Run the register tender-vocabulary proof (ONE home for what a till may be paid with; the recon class asked of the house ladder, never mapped; what an org offers is its own declaration; a sale on terms owes its whole total on a declared date and no receipt calls it paid — index §POS-15)
         working-directory: backend
         run: python3 harness_pos_tender_vocabulary.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the checkout wire-contract proof (the keys pos.checkout reads are DECLARED and match the SQL that defines them; a till that misspells one is refused with the fix named; the tax pricing basis is declared once so two tills cannot price one sale differently — index §POS-20)
+        working-directory: backend
+        run: python3 harness_pos_checkout_contract.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the wholesale W-9 proof (ONE answer to "may I sell to this customer and is this sale taxable"; only a person confirms receipt; an admin override permits a TAXABLE sale and never an exemption; the customer's return link is a one-use credential that leaks nothing; one upload-format sniffer — index §POS-16)
         working-directory: backend
         run: python3 harness_pos_wholesale_w9.py | tee -a "$GITHUB_STEP_SUMMARY"
