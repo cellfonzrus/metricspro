@@ -13,7 +13,7 @@ import {
 import { useRouter } from 'expo-router'
 import { useQuery } from '@tanstack/react-query'
 
-import { checkoutDurable, type CartLine, type Payment } from '@/api/pos'
+import { checkoutDurable, resolveTax, type CartLine } from '@/api/pos'
 import { getAllowedStores } from '@/api/timeclock'
 import { queryClient } from '@/api/query'
 import {
@@ -24,6 +24,8 @@ import {
   setUnitPrice,
   useCart,
 } from '@/modules/pos/cart'
+import { buildCheckoutBody, type TaxContext } from '@/modules/pos/checkout-body'
+import { CHECKOUT_NO_TAX_RATE } from '@/modules/pos/checkout-contract'
 import { Body, Button, Card, EmptyState, H2, Screen } from '@/components/ui'
 import { OfflineBanner } from '@/components/OfflineBanner'
 import { colors, font, radius, spacing } from '@/theme'
@@ -43,7 +45,20 @@ export default function Checkout() {
   const stores = allowed.data?.stores ?? []
   const selectedStore = store ?? allowed.data?.home_store ?? stores[0] ?? null
 
-  const subtotal = cartSubtotal(cart)
+  // THE TAX THIS STORE CHARGES, from the server (§POS-20). The till asks; it does not work it out.
+  // `rate` arrives as a PERCENT and the money rule wants a fraction, so the conversion happens here
+  // once — the same conversion the web register makes.
+  const taxQ = useQuery({
+    queryKey: ['pos', 'tax', selectedStore],
+    queryFn: () => resolveTax(selectedStore as string),
+    enabled: Boolean(selectedStore),
+  })
+  const tax: TaxContext = {
+    taxRate: taxQ.data?.rate != null ? Number(taxQ.data.rate) / 100 : null,
+    taxMethod: String(taxQ.data?.pricing?.tax_method ?? 'sale_price'),
+    capEnabled: Boolean(taxQ.data?.pricing?.tax_cap_enabled),
+    capAmount: Number(taxQ.data?.pricing?.tax_cap_amount ?? 0),
+  }
 
   if (cart.length === 0)
     return (
@@ -52,25 +67,31 @@ export default function Checkout() {
       </Screen>
     )
 
+  // What this sale WOULD be. Built by the one home, so the figures on screen are the figures sent —
+  // a screen that totals the cart its own way is how a till comes to disagree with the server.
+  const preview = selectedStore
+    ? buildCheckoutBody({ storeCode: selectedStore, lines: cart, tender: method, tax })
+    : { body: null, refusal: 'Choose which store this sale is for.' as string }
+
+  const subtotal = preview.body?.sale.subtotal ?? cartSubtotal(cart)
+  const taxTotal = preview.body?.sale.tax_total ?? 0
+  const total = preview.body?.sale.total ?? subtotal
+
   const submit = async () => {
-    if (!selectedStore) {
-      Alert.alert('Select a store', 'Choose which store this sale is for.')
+    // The refusal is the builder's own sentence — the screen does not word a second one.
+    if (!preview.body) {
+      Alert.alert('Cannot ring this sale', preview.refusal)
       return
     }
     setBusy(true)
     try {
-      const payments: Payment[] = [{ method, amount: subtotal }]
-      const res = await checkoutDurable({
-        sale: { store_code: selectedStore, register_number: 1 },
-        items: cart,
-        payments,
-      })
+      const res = await checkoutDurable(preview.body)
       clearCart()
       queryClient.invalidateQueries({ queryKey: ['pos'] })
       if ('queued' in res) {
         Alert.alert('Saved offline', 'The sale will be completed automatically when you reconnect.')
       } else {
-        Alert.alert('Sale complete', `${money(subtotal)} · ${selectedStore}`)
+        Alert.alert('Sale complete', `${money(total)} · ${selectedStore}`)
       }
       router.back()
     } catch (e) {
@@ -153,10 +174,33 @@ export default function Checkout() {
             <Text style={styles.totalLabel}>Subtotal</Text>
             <Text style={styles.totalValue}>{money(subtotal)}</Text>
           </View>
-          <Body dim>Tax is calculated by the register at completion.</Body>
+          <View style={styles.totalRow}>
+            <Text style={styles.totalLabel}>
+              {tax.taxRate != null ? `Tax (${(tax.taxRate * 100).toFixed(3).replace(/\.?0+$/, '')}%)` : 'Tax'}
+            </Text>
+            <Text style={styles.totalValue}>{money(taxTotal)}</Text>
+          </View>
+          <View style={styles.totalRow}>
+            <Text style={styles.totalLabel}>Total</Text>
+            <Text style={styles.totalValue}>{money(total)}</Text>
+          </View>
+          {/* A taxable sale with no rate charges nothing, and that is not recoverable after the
+              customer leaves — so it is said out loud rather than shown as a quiet $0.00. */}
+          {taxQ.data && taxQ.data.scope === 'none' && <Body dim>{CHECKOUT_NO_TAX_RATE}</Body>}
+          {taxQ.data && taxQ.data.scope !== 'none' && taxQ.data.scope !== 'store' && (
+            <Body dim>This store has no rate of its own — charging the {taxQ.data.scope} rate.</Body>
+          )}
+          {/* The one thing the phone will not price. Shown before the button is pressed. */}
+          {preview.refusal && <Body dim>{preview.refusal}</Body>}
         </Card>
 
-        <Button title={`Charge ${money(subtotal)}`} variant="success" loading={busy} onPress={submit} />
+        <Button
+          title={`Charge ${money(total)}`}
+          variant="success"
+          loading={busy}
+          disabled={!preview.body}
+          onPress={submit}
+        />
       </ScrollView>
       </KeyboardAvoidingView>
     </Screen>

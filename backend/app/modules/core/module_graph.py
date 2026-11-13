@@ -2240,7 +2240,10 @@ FACTS: dict[str, dict] = {
         "question": ("Did the source actually SEND this figure, or is this a zero we wrote down? And "
                      "which source field feeds which column?"),
         "homes": ('app/modules/commcalc/portal_cell.py',),
-        "index": ('COMMCALC-16',),
+        # COMMCALC-71 — `total` vs `total_all`: whether a derived total of absent parts is a partial
+        # sum or absent is a property of what the parts ARE, so it lives here as two named readings
+        # rather than as a flag the caller passes.
+        "index": ('COMMCALC-16', 'COMMCALC-71'),
         "locks": ('harness_portal_cell.py', 'harness_kpi_registry_lock.py', 'harness_kpi_vintage.py'),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {

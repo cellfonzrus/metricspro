@@ -84,7 +84,29 @@ SERVER_DEFAULTS: dict[str, object] = {
     "w9_blank_form_url": "",
     "receipt_remit_routing_number": "",
     "receipt_remit_account_number": "",
+    # HOW A TILL PRICES LINE TAX (§POS-20, owner 2026-11-12). Declared here because a SECOND till
+    # arrived: the phone register could not price a sale without knowing these, and reading them
+    # through its own copy of the precedence rule is the duplicate this module exists to prevent.
+    # `GET /pos/tax-codes/resolve` now answers them alongside the rate, so every till asks once and
+    # holds no second opinion.
+    #
+    # THE VALUES MIRROR `frontend/src/lib/pos-config.ts` EXACTLY, which was their only home until
+    # now — so declaring them here changes no price on any existing till. Pinned key by key by
+    # `harness_pos_checkout_contract.py` §D, which fails the build if the two drift.
+    "tax_applied_on": "post_discount",
+    "tax_method": "sale_price",
+    "tax_cap_enabled": False,
+    "tax_cap_amount": 0,
 }
+
+#: The tax-pricing keys a till must know to compute a line the way every other till would. Named as
+#: a set so `GET /pos/tax-codes/resolve` and the harness read one list rather than two.
+TAX_PRICING_KEYS = ("tax_applied_on", "tax_method", "tax_cap_enabled", "tax_cap_amount")
+
+#: The one `tax_method` a till cannot price without the product's COST. A till that does not carry
+#: cost must refuse the sale rather than price it differently — see
+#: mobile/src/modules/pos/checkout-contract.CHECKOUT_TAX_METHOD_UNPRICEABLE.
+TAX_METHOD_NEEDS_COST = "cost_based"
 
 #: Which disclaimer targets mean "print on a POS receipt" — the browser's own rule, stated once.
 POS_DISCLAIMER_TARGETS = ("pos", "both")

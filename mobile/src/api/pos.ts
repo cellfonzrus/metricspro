@@ -27,16 +27,30 @@ export type Product = {
   is_active?: boolean
 }
 
-export type CartLine = {
-  product_id: string
-  short_name: string
-  quantity: number
-  unit_price: number
-  list_price?: number
-  is_taxable?: boolean
-}
+// The cart line and the wire body both live with the contract, so the translation between the
+// phone's field names and `pos.checkout`'s has exactly one home (§POS-18).
+export type { CartLine } from '@/modules/pos/checkout-contract'
+import type { CheckoutWireBody } from '@/modules/pos/checkout-body'
+import type { CartLine } from '@/modules/pos/checkout-contract' 
 
-export type Payment = { method: string; amount: number }
+/** THE server's answer about tax at one store (§POS-18): the rate AND how it is applied. The till
+ *  holds no second opinion about either — `GET /pos/tax-codes/resolve` is the declared single source
+ *  of truth, and `rate` is a PERCENT (8.875), not a fraction. `scope: 'none'` means no rate applies,
+ *  which the screen says out loud rather than charging a silent $0. */
+export type TaxResolution = {
+  store_code: string | null
+  market: string | null
+  scope: 'store' | 'market' | 'org' | 'none'
+  rate: number | null
+  pricing: {
+    tax_applied_on?: string
+    tax_method?: string
+    tax_cap_enabled?: boolean
+    tax_cap_amount?: number
+  }
+  needs_product_cost: boolean
+  warning: string | null
+}
 
 export type RegisterSession = {
   id: string
@@ -55,6 +69,11 @@ export function searchProducts(params: { search?: string; system_category?: stri
   return api.get<{ products: Product[] }>(`${BASE}/products?${q.toString()}`)
 }
 
+/** The rate and pricing basis that apply at ONE store. Every till asks this; none works it out. */
+export function resolveTax(store_code: string) {
+  return api.get<TaxResolution>(`${BASE}/tax-codes/resolve?store_code=${encodeURIComponent(store_code)}`)
+}
+
 export function getCatalog() {
   return api.get<{ departments: any[]; categories: any[]; system_categories?: any[] }>(`${BASE}/catalog`)
 }
@@ -64,11 +83,15 @@ export function getRegisterSession(store_code: string, register_number = 1) {
   return api.get<RegisterSession>(`${BASE}/register/session?${q.toString()}`)
 }
 
-export type CheckoutBody = {
-  sale: { store_code?: string; register_number?: number; customer_id?: string | null; note?: string | null }
-  items: CartLine[]
-  payments: Payment[]
-}
+/** The checkout wire body. Its shape is NOT declared here: it is whatever
+ *  `modules/pos/checkout-body.buildCheckoutBody` emits, which is proved against
+ *  `backend/app/modules/pos/checkout_contract.py` by that module's own test and by
+ *  `backend/harness_pos_checkout_contract.py`.
+ *
+ *  It used to be declared here, loosely — `{ store_code?, register_number?, note? }` with
+ *  `CartLine[]` items and `{ method, amount }` payments — and every one of those field names was
+ *  one `pos.checkout` does not read. A type that permits the wrong shape is not a type. */
+export type CheckoutBody = CheckoutWireBody
 
 export function checkout(body: CheckoutBody) {
   return api.post<{ sale: unknown }>(`${BASE}/sales/checkout`, body)
@@ -77,7 +100,7 @@ export function checkout(body: CheckoutBody) {
 /** Durable checkout: replayed from the offline queue if the network is down (atomic RPC → safe). */
 export async function checkoutDurable(body: CheckoutBody): Promise<{ queued: true } | { sale: unknown }> {
   if (getOnline()) return checkout(body)
-  const total = body.items.reduce((s, l) => s + l.unit_price * l.quantity, 0)
+  const total = body.sale.total
   await enqueue({
     kind: 'pos.checkout',
     label: `Sale ${body.items.length} item(s) · $${total.toFixed(2)}`,
