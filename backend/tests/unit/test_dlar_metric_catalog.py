@@ -70,14 +70,32 @@ def test_non_selling_days_is_the_new_spelling_of_the_column_we_already_had():
         "a second column for the same fact is the divergence this rule forbids"
 
 
-def test_activations_total_lands_under_its_own_name_not_as_a_guess_at_gross_adds():
-    """OWNER DECISION PENDING 2026-11-10: whether the portal's `activations_total` means what we
-    called gross adds. Until he answers, it lands as its OWN column and `gross_adds` keeps asking
-    for the field it was declared with. Missing beats wrong on a figure reps are scored against
-    (§19.26) — a guess here would restate every store's KPI row."""
-    assert any(r[0] == "activations_total" for r in ds.STORE_FIELDS)
-    gross = [r for r in ds.STORE_FIELDS if r[0] == "gross_adds"][0]
-    assert "activations_total" not in gross[2:]
+def test_renamed_gross_adds_field_is_a_spelling_not_a_second_column():
+    """OWNER RULED 2026-11-12 (asked 2026-11-10): the portal's `activations_total` is the same
+    measurement we call gross adds. So it is a SPELLING on the one column, never a second column
+    beside it — the same rule `non_selling_days` already follows. The old spelling stays declared so
+    a month the portal still spells the old way keeps landing, and `_pick` prefers whichever one
+    actually carries a figure."""
+    gross = [r for r in ds.STORE_FIELDS if r[0] == "gross_adds"]
+    assert len(gross) == 1
+    assert "activations_total" in gross[0][2:]
+    assert "gross_activation_quantity" in gross[0][2:]
+    assert not any(r[0] == "activations_total" for r in ds.STORE_FIELDS)
+    assert "activations_total" not in cat.by_key()
+
+
+def test_total_activations_is_both_parts_or_neither_never_a_partial_sum():
+    """A column named Total Activations is gross adds PLUS upgrades. Folding the rename in while the
+    total summed only the parts that arrived would have made it report gross adds ALONE as the total,
+    with upgrades silently excluded — an understatement that reads like a measurement. `upgrades` has
+    no successor in the arriving fields, so absent is the honest answer."""
+    both = ds.normalize_store({"activations_total": "7", "upgrades": "3"})
+    assert both["total_acts"] == 10
+    assert ds.normalize_store({"activations_total": "7"})["total_acts"] is None
+    assert ds.normalize_store({"upgrades": "3"})["total_acts"] is None
+    assert ds.normalize_store({"gross_activation_quantity": "7", "upgrades": "3"})["total_acts"] == 10
+    # the rename must also reach the arrival check, or an absent total looks unexplained
+    assert "activations_total" in ds.STORE_DERIVED_FROM
 
 
 # ── THE CATALOG IS DERIVED, NOT COPIED ──────────────────────────────────────────────────────────
@@ -147,7 +165,7 @@ def test_optional_columns_are_exactly_the_ones_a_migration_has_yet_to_add():
     assert set(cat.OPTIONAL_COLUMNS).isdisjoint(cat.REQUIRED_COLUMNS)
     assert set(cat.OPTIONAL_COLUMNS) | set(cat.REQUIRED_COLUMNS) == set(cat.select_columns())
     # every brand-new column is optional; nothing pre-existing became optional
-    for key in ("activations_total", "total_trade_ins", "starlink_activations", "yoy_percent_change"):
+    for key in ("byod_total", "total_trade_ins", "starlink_activations", "yoy_percent_change"):
         assert key in cat.OPTIONAL_COLUMNS
     for key in ("atu", "protect_pct", "total_acts", "zero_selling_days"):
         assert key in cat.REQUIRED_COLUMNS

@@ -81,7 +81,7 @@ interface PeerMeta {
 /** One category of the team roll-up as the server folded it (§CORE-17.3m). */
 interface TeamCat {
   monthly?: number | null; achieved_mtd?: number | null; need?: number | null
-  /** §COMMCALC-71 — the team's projection is the SUM of the stores' own, so `partial` says plainly
+  /** §COMMCALC-72 — the team's projection is the SUM of the stores' own, so `partial` says plainly
    *  when stores nothing could project are missing from it, and `stores_not_trending` answers the
    *  owner's "which stores are not trending towards the accessories goals" directly. */
   trend?: {
@@ -614,7 +614,7 @@ export default function ActionPlanPage() {
                           {(() => { const ts = targetState(m.target, m.need); return (
                             <div style={{ fontSize: 10, color: ts.color }}>{ts.kind === 'short' ? `${metricText(m.need, m.unit)} to go · ${metricText(m.pace, m.unit)}/day needed` : ts.label}</div>
                           ) })()}
-                          {/* THIS STORE'S OWN TREND, served (§COMMCALC-71). `pace` above is what it
+                          {/* THIS STORE'S OWN TREND, served (§COMMCALC-72). `pace` above is what it
                               MUST do; this is what it is actually heading for. */}
                           {(() => {
                             const t: PlanTrend | null | undefined = m.trend

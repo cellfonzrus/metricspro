@@ -93,7 +93,7 @@ check("B4 a computed scope with NO goal is 'unset' — checked BEFORE any pass c
       re.search(r"if \(m <= 0\)[\s\S]{0,120}kind: 'unset'", ts) is not None
       and ts.index("kind: 'unset'") < ts.index("kind: 'met'"))
 # SCOPED TO `targetState`'s OWN BODY. It was a whole-file count until 2026-11-12, when the sibling
-# trend verdict (§COMMCALC-71) moved in beside this one — which is exactly where it belongs, since a
+# trend verdict (§COMMCALC-72) moved in beside this one — which is exactly where it belongs, since a
 # trend is the same kind of fact about the same goal and needs the same refusal to call the absence
 # of a target a pass. A whole-file count would have forced that sibling to live somewhere else, and
 # "the gate made me put the second copy in another file" is how this vocabulary drifted apart the

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ONE ANSWER TO "WHAT IS THIS MONTH TRENDING TO", AND IT CANNOT UN-WIRE. Index §COMMCALC-71.
+"""ONE ANSWER TO "WHAT IS THIS MONTH TRENDING TO", AND IT CANNOT UN-WIRE. Index §COMMCALC-72.
 
 DB-free. Reads the source, so it fails the build the moment a caller stops dereferencing the home
 or a second copy of the arithmetic appears — which is the only part of a design fix that lasts

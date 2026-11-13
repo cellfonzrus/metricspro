@@ -209,7 +209,8 @@ Primary code homes:
 | COMMCALC-67 | **The fields a report's date window is typed into are declared too** | §COMMCALC-66's first tick (2026-11-10 22:00) answered the question it was built to ask: "the page's date fields are StartDate, EndDate" — while this module's date step had always typed into `BeginDate`/`EndDate`, a name written into a string of browser JavaScript where no report could declare it. A report now declares both facts about its window in one row: whether an interval is set first (comp's "Summarize by") and which two fields carry the dates. `DATE_FILTERS` becomes that declaration, read through the one homes `date_window_plan` / `date_window_fields` / `date_window_interval`; `_set_daily_range` becomes the single `_set_date_window(page, begin, end, routine)` over the shared `_put_date_fields`, so a report with no interval goes straight to its fields and is never asked for a control it has not got; and no field name appears in the JavaScript at all. Comp's behaviour is unchanged — and because ITS page has still never been measured, correcting it when the 23:30 leg reports is a row here rather than an edit to a string. |
 | COMMCALC-68 | **A report's own verdict belongs on the report's own row** | Found while trying to read WHY comp had never landed a row: `commcalc.report_definitions` carries `sweep_last_status` and `sweep_last_detail` PER REPORT, a user-visible surface already READS them (`router._setup_documents` sets a report's `urgent` flag and `auto_error` text from exactly those two columns) — and nothing had ever written them. NULL on every row of every tenant, so a report whose automatic pull failed every night showed as not urgent, with no error, on the surface built to show precisely that. Every leg wrote the ONE shared `epay_sweep_config.last_detail` instead, overwritten by whichever leg ran last: comp runs at 23:30 America/New_York, the transaction-detail leg every thirty minutes, so comp's sentence was erased within half an hour, every night — which is why three rounds of diagnosis read the transaction report's failures and reasoned about comp. The class: a run that pulls N reports and records ONE verdict cannot say which report it is about, for any N > 1. `run_epay_sweep` now records an outcome keyed by the report it belongs to, at each point where that key is in scope (success, failure, unresolved report id, and the deferred zero the ledger refuses to vouch for); `EpayPortalError` carries `per_report` so the all-failed case still gives each row its reason; `epay_sweep.registry_key_of` is the ONE home for which registry row a sweep key belongs to, replacing three inline re-derivations that invented a row name for any report declaring none; and the new `report_status` module is the one writer, fitting each sentence through `core.status_detail.fit` because a sweep's conclusion is written LAST. |
 | COMMCALC-69 | **A setting the reader cannot reach is not a setting that says nothing** | §COMMCALC-68's first night paid for itself: comp's own row said "0 rows, and nothing has landed for 33 day(s)", and the window it had asked the portal for was `2026-11-10..2026-11-10` — ONE day, against a `refresh_days` of 14 sitting in its own registry row. The reader asked for two columns migration 1042 (written 2026-10-03 for this exact defect, surfaced for approval, never applied) never added; PostgREST refused the whole select with 42703, and the handler re-read three columns, dropping `refresh_days`, `sweep_hour`, `sweep_minute`, `sweep_timezone` and `sweep_next_run_at` with the two that were genuinely absent. So an in-arrears carrier report was asked for today, every night, correctly returned nothing, and was recorded as a quiet source — no control was ever broken, which is why §COMMCALC-64/-66/-67's controls all took and still nothing landed. A column-block ladder, the shape §4b.1 has forbidden since 2026-09-22, which escaped its lock only because the column lists were named constants and the scan resolved literals. Both closed: the reader probes each optional column through `column_tolerant.present_columns` and reports `config_columns_missing`; `harness_any_columns_lock.py` now folds a named constant to its value before judging a TRY-FALLBACK, and carries g14/g15 so it cannot stop. The column itself is the owner's to apply — migration 1042 is money-touching by its own note. |
-| COMMCALC-71 | **A month-to-date figure is trended in ONE place, and an outlier is not a verdict** | "it shoudl also show trending and which stores are not trending towards the accessories goals … the outloers shoudl be highlighted in a different color". The projection was ALREADY HERE, inline TWICE in the Executive MTD report and already on two screens as "Trending Acc. $", so the third copy the action plan wanted was factored instead — and the draft of that home re-derived three more facts (`feed_period`'s month parsing, month length and open/closed) and the division itself (`demand_projection.velocity`) before the duplicate check caught them. What may a trend say when no day of the month has completed, what may it say when there is no target, and who may be called an outlier when four stores are the whole distribution? |
+| COMMCALC-71 | **A renamed figure is one column with two spellings — and a total of named parts is all of them or none** | The owner answered the question §COMMCALC-60 left open: the portal's `activations_total` IS the measurement we call gross adds. So it becomes a SPELLING on the one column, never a second column beside it, and the old spelling stays declared so a month spelled the old way keeps landing. Folding it in uncovered a second defect in the same line: `total_acts` (gross adds + upgrades) was summed with `portal_cell.total`, which adds up only the parts that arrived — right for alternative spellings of one figure, wrong for two different figures being added, because the new spelling alone would have been reported as the TOTAL with upgrades silently excluded. `total_all` is the both-parts-or-neither sum, and which of the two a caller wants is now a declared choice rather than a default. |
+| COMMCALC-72 | **A month-to-date figure is trended in ONE place, and an outlier is not a verdict** | "it shoudl also show trending and which stores are not trending towards the accessories goals … the outloers shoudl be highlighted in a different color". The projection was ALREADY HERE, inline TWICE in the Executive MTD report and already on two screens as "Trending Acc. $", so the third copy the action plan wanted was factored instead — and the draft of that home re-derived three more facts (`feed_period`'s month parsing, month length and open/closed) and the division itself (`demand_projection.velocity`) before the duplicate check caught them. What may a trend say when no day of the month has completed, what may it say when there is no target, and who may be called an outlier when four stores are the whole distribution? |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -7876,7 +7877,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Reconciled paid hours**, and the sentence saying why | the window the two clock records agree on (house default), or the ruling read literally, or ours alone — declared per org | `payroll_hours_basis.reconcile_clock_records`. Measured 2026-10-09 across 16 pairs: today 146.42h/$2,156.45 · literal 143.63h/$2,113.60 · house default 142.98h/$2,102.63 (§14z) |
 | **Employees a payroll run would price at $0.00** | an active hourly employee with no `pay_rate` | `clock_variance.employees_without_rate` → `payroll_run_gate`, which REFUSES and names them. Measured 2026-10-10: 13 of 46 house hourly employees (§14z) |
 | **Who needs improvement — by metric, by store, or by sales rep?** | the verdicts the action-plan endpoint already reached (a category's severity from `targets_engine.build_action_items`, a KPI's pass/fail AND what nothing fed from `kpi_failing.evaluate`, at-risk dollars from the calculated commission rows), grouped three ways | `frontend/src/lib/action-plan-tiles.ts` — `planMetrics` reads THIS tenant's declared axis off the payload and `buildTiles` takes it as a REQUIRED argument, so nothing declared means no tiles rather than house words. A tile's figure is the CARDINALITY of the list it prints (never a re-summed target, achieved or need — that fold stays `targets_drilldown.team_totals`'), and a metric nothing fed reads `not measured` with no figure at all. Lock: `harness_action_plan_tiles.py` (§COMMCALC-57) |
-| **Is this store going to FINISH the month on target, and who is not?** | the month-to-date figure the targets engine already summed, carried across the month at the rate it was earned | `commcalc/month_trend.py` — `month_window` (the completed-days divisor, "completed" being strictly before the plan's own as-of day), `factor`, `project`, `verdict`, `trend_of`, `outliers`. The SAME window and factor behind "Trending Acc. $" on Daily Targets and "Trending Acc. Sales" on Executive MTD, which were two inline copies until 2026-11-12. Served per category by `targets_engine.compute_scope`, summed per team by `aggregate_stores`. Lock: `harness_month_trend_one_home.py` (§COMMCALC-71) |
+| **Is this store going to FINISH the month on target, and who is not?** | the month-to-date figure the targets engine already summed, carried across the month at the rate it was earned | `commcalc/month_trend.py` — `month_window` (the completed-days divisor, "completed" being strictly before the plan's own as-of day), `factor`, `project`, `verdict`, `trend_of`, `outliers`. The SAME window and factor behind "Trending Acc. $" on Daily Targets and "Trending Acc. Sales" on Executive MTD, which were two inline copies until 2026-11-12. Served per category by `targets_engine.compute_scope`, summed per team by `aggregate_stores`. Lock: `harness_month_trend_one_home.py` (§COMMCALC-72) |
 
 - **Which of my stores is running down, and in which month-of-life rung?** — ONE home `commcalc/commission_leg_store_trend` (`pivot` / `partial_months` / `totals_row` / `ties_to` / `ladder_public`), a PURE pivot of `router._commission_leg_trend_compute`'s own money; the rungs are `commission_legs.months_present`'s, from the DATA. Lock `harness_commission_leg_store_trend.py` (76). Live 2026-10-15, house org, May–Sep complete months: 28 stores, every month ties exactly; company **−$25,534.27 / −19.4%** of which M1 is only −3.7% — M2–M12 −17.9% and the Unlabelled rung **−50.6%**; `1710 W 4th St` −46.1% with its M1 −38.9% (shrinking now) against `117 E Burnside Ave` whose **M1 moved 0.0%** while M2–M12 fell 35.9% and **M4 fell $594.60** (a cohort lost four months ago) — §COMMCALC-12.
 - **Where is the M2–M12 commission on the P&L, and which store's trailing legs are running down?** — the commission line is shown in TWO parts: the money this month's own activations earned, and `account/ma_store_pnl.CARRIER_COMM_TRAILING_LINE` ("Carrier commissions & incentives — M2–M12 (trailing legs, activated in an earlier month)"), an `auto_opt` revenue line INSERTED into `coa.PL_SPEC` beside the line it divides. ONE home for the split: `ma_store_pnl.split_leg_bookings`, re-pointing the trailing-rung dollars of bookings that already exist — the rung is the booking's OWN (`ma_commission_bookings` / `ma_tx_bookings` emit a lockstep `legs` tag from the `ma_field_leg` / `month_leg_of` call they already make), the bucket is `commission_legs.bucket_for_leg`, the switch is `pl_carrier_comm_leg_split` (mig `1086`, house answer ON). **Every P&L total is identical to the cent either way** — both halves are revenue lines of one section — and `harness_prospect_eval.py` §V2 (`no_total_moved`) asserts it by name. Per STORE with every uploaded month side by side: `prospect_eval.commission_leg_store_months`, which is §COMMCALC-12's own pivot fed by the prospect's uploads (no second pivot, no second money path). Today's only caller is the Store Takeover Evaluation; the live P&L is excused in writing — §COMMCALC-15.5. — §COMMCALC-15.
@@ -26372,6 +26373,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-69 | commcalc |
 | COMMCALC-70 | commcalc, storeops |
 | COMMCALC-71 | commcalc |
+| COMMCALC-72 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -31713,7 +31715,8 @@ feeds which column*. PURE, stdlib only, no portal knowledge, no vendor word (RUL
 |---|---|
 | `measured(v)` | THE parse. Absent / blank / `n/a` → `None`; a cell that SAYS `'0'` → `0.0`; `'1,061'`, `'66.67%'` and `'0% / 71.43%'` all understood |
 | `rate(v)` · `count(v)` | the two named readings, deliberately identical in behaviour — the distinction is what the caller MEANS, not how the text is read |
-| `total(*parts)` | a derived total of parts the source did not send is **absent**, not zero (`total_acts`) |
+| `total(*parts)` | a derived total of parts the source did not send is **absent**, not zero. Use it when the parts are alternative SPELLINGS of one measurement — any one of them answers |
+| `total_all(*parts)` | the same sum, absent unless **every** part arrived. Use it when the parts are DIFFERENT measurements being added up, where a missing part understates the total and the understatement reads like a figure somebody observed (`total_acts` = gross adds + upgrades — §COMMCALC-71) |
 | `as_int(v)` | an INT column gets an int or `None`, never a float Postgres rejects (22P02) |
 | `field_arrival(records, declared)` | `missing` / `blank` / `consumed` / `unconsumed` / `shape_changed`, one entry per FIELD (alternative spellings are ONE field, so a reader that accepts two is not missing the one it did not get) |
 
@@ -47336,10 +47339,10 @@ spellings, which is what a feed mapping is made of.
 ### COMMCALC-60.4 WHAT WAS NOT GUESSED
 
 `activations_total` appeared in the same run in which `gross_activation_quantity` stopped arriving,
-so it is the likely successor to `gross_adds`. It is landed **under its own name** and is NOT declared
-as a spelling of `gross_adds`: that figure is what reps are scored against, and §19.26 (missing beats
-wrong on a money gate) applies. Owner decision requested 2026-11-10; until it lands, both columns are
-visible side by side and the answer is one declared spelling away.
+so it was the likely successor to `gross_adds` — but "likely" is not a basis for restating a figure
+stores are scored against, so it landed **under its own name** and the question went to the owner
+(§19.26, missing beats wrong). **ANSWERED 2026-11-12: it is the same measurement.** It is now a
+SPELLING of `gross_adds` and the separate column is gone — see §COMMCALC-71.
 
 `non_selling_days` needed no decision — it is the same measurement under a new name, so it is a
 SPELLING on the existing column and not a second column. A second column for one fact is the
@@ -47368,16 +47371,19 @@ zero."* Proved by `test_one_tenants_rows_never_reach_another_tenants_read` and
 
 ### COMMCALC-60.7 Locked
 
-`backend/harness_dlar_metric_catalog.py` — 35 checks, DB-free, run by the lock-harness job of
+`backend/harness_dlar_metric_catalog.py` — 40 checks, DB-free, run by the lock-harness job of
 `.github/workflows/carrier-vocab-guard.yml`. It fails the build on: a declared column the catalog
 cannot name; the `select(...)` literal returning to either reader (kept as an armed negative control);
 either reader no longer dereferencing the catalog; the frontend carrying a `storeKey:` map again; the
 scored set being restated instead of read from `kpi_failing`; any of the 21 fields going undeclared;
-`non_selling_days` becoming a second column; `activations_total` being folded into `gross_adds`; a
+`non_selling_days` becoming a second column; the gross-adds rename becoming a second column again or
+its new spelling being dropped (§H, RE-AIMED 2026-11-12 when the owner answered — see §COMMCALC-71); a
 carrier name in the module; an optional column read without the per-column probe.
 
-Plus `backend/tests/unit/test_dlar_metric_catalog.py` (13) and
-`backend/tests/integration/test_dlar_store_metrics_endpoint.py` (8).
+Plus `backend/tests/unit/test_dlar_metric_catalog.py` (15) and
+`backend/tests/integration/test_dlar_store_metrics_endpoint.py` (8). Its "unapplied column"
+and cross-tenant cases moved off `activations_total` on 2026-11-12 (§COMMCALC-71) — the column they
+used as the example is no longer one.
 
 **Two stale pins RE-AIMED, not relaxed** (the fourth time this pattern has appeared — §19.18).
 `harness_portal_cell.py` §C1/C3/E1/E2/F3 used the September 2026 record capture as "a record carrying
@@ -47680,6 +47686,124 @@ code that could hide the gap.
 identity) · §285 / §13d (`flag_store_resolver`, the home extended here) · §19.18 (one fact, one
 home) · §COMMCALC-49.10 (every feature is for every tenant).
 
+## §COMMCALC-71. A RENAMED FIGURE IS ONE COLUMN WITH TWO SPELLINGS — AND A TOTAL OF NAMED PARTS IS ALL OF THEM OR NONE (owner ruling 2026-11-12)
+
+### §COMMCALC-71.1 The question, and the answer
+
+§COMMCALC-60 declared 20 store-DLAR columns the carrier portal had been sending unread, and left ONE
+question open rather than guess at it: the portal's `activations_total` arrived in the same run in
+which `gross_activation_quantity` stopped, so it looked like the successor to `gross_adds` — but
+restating a figure stores are scored against on a resemblance is exactly what §19.26 forbids. It
+landed under its own name, both columns visible side by side, and the question went to the owner.
+
+The 2026-11-11 01:00 sweep turned the resemblance into evidence: across all 28 November stores
+`gross_adds` was NULL in 28/28 while `activations_total` carried a figure in 25/28 (max 28). **The
+owner answered on 2026-11-12: it is the same measurement.**
+
+### §COMMCALC-71.2 THE CLASS
+
+A source renaming a field is not a new measurement, and the platform must not grow a column for it.
+One fact, one home (§19.18) is the same rule at the column grain that §COMMCALC-60 applied to the
+metric catalog: two columns answering "how many gross activations" would drift, and every surface
+downstream would have to choose between them. `non_selling_days` had already been settled this way,
+with no decision needed, because nobody had to be asked whether a rename was a rename.
+
+What made this one a question rather than a rename was only that the figure is SCORED. So the rule is
+not "fold renames in quietly" — it is: a rename is a spelling, and where the figure is scored, the
+spelling is the owner's to declare, not the reader's to infer.
+
+### §COMMCALC-71.3 The change, stated exactly
+
+- `dlar_sweep.STORE_FIELDS` — `("gross_adds", COUNT, "activations_total",
+  "gross_activation_quantity")`. **New spelling FIRST**, so it wins where both arrive; the old one is
+  retained, so a month the portal still spells the old way keeps landing. `_pick` already prefers the
+  first spelling that CARRIES a value, so neither a blank nor a measured zero falls through.
+- the standalone `("activations_total", COUNT, "activations_total")` entry is **deleted**. The stored
+  column is left in place by migration 1118 and simply stops being written — dropping it would be a
+  destructive migration for no gain. It leaves the catalog, the read and the KPI page on its own,
+  because all three are DERIVED from this declaration (§COMMCALC-60) rather than listing columns.
+- `STORE_DERIVED_FROM` gains `activations_total`, so the arrival check follows the rename and an
+  absent `total_acts` stays explained.
+- `declared_source_fields()` now dedupes a derived-from field against **every spelling** of an
+  already-declared group, not against the group as a whole. This was latent: the moment `gross_adds`
+  grew a second spelling, the singleton stopped matching the pair and the field was listed twice —
+  which pushed its own name past the status line's "+8 more" cut, so the sentence about a renamed
+  field stopped naming the field.
+
+### §COMMCALC-71.4 The second defect, found by making the first fix
+
+`total_acts` is gross adds **plus** upgrades, and it was summed with `portal_cell.total`, which adds
+up only the parts the source sent. That is the right rule for parts that are alternative SPELLINGS of
+one measurement — any one of them answers. It is the wrong rule for two DIFFERENT measurements being
+added up, and the difference only bites when one of them goes missing.
+
+Fold the rename in and leave the sum partial, and `total_acts` would have begun reporting gross adds
+ALONE as the total, with upgrades silently excluded — an understatement that looks like a figure
+somebody observed. `upgrades` has no successor in the arriving fields, so the honest answer today is
+ABSENT, which is also what the column read before the rename was folded. **The fix does not change a
+single stored figure; it stops the fold from changing one.**
+
+`portal_cell.total_all(*parts)` is the both-parts-or-neither sum (§COMMCALC-16.2). Both functions now
+exist and which one a caller wants is a declared choice at the call site rather than a default:
+
+| the parts are | use | because |
+|---|---|---|
+| alternative spellings of ONE measurement | `total` | any one of them answers the question |
+| DIFFERENT measurements being added up | `total_all` | a missing part understates the total, and the understatement is indistinguishable from a measurement |
+
+### §COMMCALC-71.5 Not money, and not a scored KPI — checked, not assumed
+
+`raw_dlar_store` is read by `product_mix`, `flags` / `kpi_failing`, `dlar_metric_catalog`,
+`dlar_vs_platform`, `peer_comparison`, `custom_report`, `feed_period` and the router. It is **not**
+read by `commission_engine.py`, `payout_accrual.py` or `installment_engine.py`, and `gross_adds` /
+`total_acts` are **not** in `kpi_failing.STORE_KPI_COLUMNS` (`atu`, `protect_pct`, `byod_pct`,
+`family_plan_pct`, `tmr3`, `aal_conversion`). So this restates a REPORTED figure, not a paid one, and
+it is not a money-touching change. Stated here because an earlier reply in the thread that asked the
+owner for this ruling said the figure was one reps are paid on; that was wrong, and the ruling is
+right either way.
+
+### §COMMCALC-71.6 EVERY TENANT (project rule 2026-10-30)
+
+A field spelling is a statement about the FEED's shape, byte-identical for every org, and carries no
+tenant's vocabulary — so the §COMMCALC-49.10 trap (a house default that is really one tenant's words)
+cannot arise. The declaration is read the same way for every org that has store-DLAR rows, and an org
+with none is told so by `has_rows` / `note` exactly as before.
+
+### §COMMCALC-71.7 Locked
+
+Pins RE-AIMED, not relaxed — their subject moved, so each was rewritten to assert the ruling and the
+negative control was kept:
+
+- `harness_dlar_metric_catalog.py` §H (40 checks) — H1 the rename is a SPELLING and there is no
+  second column; H2 the OLD spelling is still read; H3 the rename reaches `STORE_DERIVED_FROM`;
+  H4 `total_acts` is assigned from `total_all`, by source; H5 `total_all` is absent on a missing part
+  while `total` is not. §J3 moved off the column that no longer exists.
+- `harness_portal_cell.py` (55 checks) — §F3/F4 now pin the PRECEDENCE: a record carrying both
+  spellings reads the preferred one (134, not 61) and `total_acts` follows (163). §D1 names the group
+  by its preferred spelling, and **§D1b is new**: a field is named ONCE, which is the dedupe above.
+  §G2 asserts the status line names the group that stopped arriving.
+- `backend/tests/unit/test_dlar_metric_catalog.py` — the "lands under its own name" test is replaced
+  by `test_renamed_gross_adds_field_is_a_spelling_not_a_second_column` and
+  `test_total_activations_is_both_parts_or_neither_never_a_partial_sum`.
+- `backend/tests/integration/test_dlar_store_metrics_endpoint.py` — three cases used
+  `activations_total` as their example of a brand-new column (the unapplied-migration case, the
+  served-columns case, the cross-tenant case). It is no longer a column, so each moved to
+  `byod_total`, and the served-columns case now asserts the spelling is NOT served on its own. CI
+  caught this, not the local run: `pytest tests/unit` passes it, `pytest tests -m integration`
+  does not — run both.
+
+### §COMMCALC-71.8 NOT done here
+
+The three sibling feeds §COMMCALC-65.5 pins (`vip_sweep`, `b2b_sweep`, `report_pull`) are untouched,
+as is the rep grain's own set of 20 arriving-but-unread fields (§COMMCALC-60.8). No migration: nothing
+is created, dropped or backfilled, and the now-unwritten `activations_total` column keeps its NULLs.
+
+Cross-references: §COMMCALC-60 (the catalog this declaration drives, and the question it left open) ·
+§COMMCALC-16 (`portal_cell`, the one home this adds a function to) · §COMMCALC-65 (the write-side
+tolerance that lets a declaration change land without emptying a period) · §19.26 (missing beats
+wrong) · §19.18 (one fact, one home, dereferenced) · §COMMCALC-49.10 (absent is not zero).
+
+
 ## §CORE-42. A GATE PROVED IN-PROCESS IS A CLAIM, NOT A MEASUREMENT (owner directive 2026-11-12)
 
 Owner, verbatim: *"create a testng agent who deciatedly is checking the data leakage, unwanted access
@@ -47783,7 +47907,7 @@ question asked of the database) · §19.18 (one fact, one home, dereferenced) ·
 
 ---
 
-## §COMMCALC-71. A MONTH-TO-DATE FIGURE IS TRENDED IN ONE PLACE, AND AN OUTLIER IS NOT A VERDICT (owner ask 2026-11-12)
+## §COMMCALC-72. A MONTH-TO-DATE FIGURE IS TRENDED IN ONE PLACE, AND AN OUTLIER IS NOT A VERDICT (owner ask 2026-11-12)
 
 Owner, of the Daily Action Plan's team-total block:
 
@@ -47794,7 +47918,7 @@ Owner, of the Daily Action Plan's team-total block:
 > stores and all reps as filtered or all reps and all stores if not filtered. the outloers shoudl be
 > highlighted in a different color"
 
-### COMMCALC-71.1 THE DUPLICATE CHECK, which changed what was built
+### COMMCALC-72.1 THE DUPLICATE CHECK, which changed what was built
 
 **The projection was already here, written inline TWICE** in `router.py`'s Executive MTD report —
 `trend_factor = (dim / elapsed)`, once for the whole month and once for a date range inside it — and
@@ -47817,7 +47941,7 @@ is worth recording because the draft looked perfectly reasonable:
 `router._is_open_month` is the cautionary tale cited in the code: its own copy of the third one
 mapped `'2026-07'` to January, so July read as a closed month and the report took the wrong source.
 
-### COMMCALC-71.2 THE RULE, unchanged from the callers that established it
+### COMMCALC-72.2 THE RULE, unchanged from the callers that established it
 
 ```
 projected month-end = (month-to-date ÷ days COMPLETED) × days the month holds
@@ -47841,7 +47965,7 @@ counts only completed days, so a store with a strong today reads slightly ahead 
 rate. This is inherited deliberately: it is what the existing "Trending Acc. $" figure does, and one
 basis both screens share is worth more than two bases that are each defensible.
 
-### COMMCALC-71.3 THE FOUR STATES a trend verdict may take
+### COMMCALC-72.3 THE FOUR STATES a trend verdict may take
 
 | kind | when | and NEVER |
 |---|---|---|
@@ -47860,7 +47984,7 @@ second answer. When stores nothing could project are missing from it the block r
 `partial: true` and the screen says *"a floor — N store(s) could not be projected"*, because a total
 that silently omits rows is overstating its evidence.
 
-### COMMCALC-71.4 WHO IS AN OUTLIER — one stated rule, on the server
+### COMMCALC-72.4 WHO IS AN OUTLIER — one stated rule, on the server
 
 `month_trend.outliers` decides it, and the screen never does:
 
@@ -47881,7 +48005,7 @@ that silently omits rows is overstating its evidence.
 - It is flagged per **(store, metric)**: a store can be the stray on one metric and ordinary on
   another, so one badge on the store would assert something the rule never measured.
 
-### COMMCALC-71.5 THE SCREEN
+### COMMCALC-72.5 THE SCREEN
 
 | the owner's words | what the screen does |
 |---|---|
@@ -47900,7 +48024,7 @@ still appear, or its missing figure becomes a missing store. **The at-risk money
 because a tier is earned across all of a rep's KPIs and a payout attributed to one of them would be
 a figure nobody computed.
 
-### COMMCALC-71.6 LOCKED
+### COMMCALC-72.6 LOCKED
 
 `backend/harness_month_trend_one_home.py` — **82 checks, 8 negative controls**, CI job *"One
 month-end projection, one outlier rule (lock)"* on `tests.yml`. It fails the build if:
@@ -47924,11 +48048,11 @@ categories, its own targets, and that no tenant's trend or outlier block names a
 store), `frontend/src/lib/__tests__/trend-state.test.ts` (7) and the `focusPlan` cases in
 `action-plan-tiles.test.ts` (6).
 
-### COMMCALC-71.7 What this does NOT do
+### COMMCALC-72.7 What this does NOT do
 
 - **No new figure, endpoint, table or migration.** The trend is the month-to-date the engine already
   summed, carried forward by the factor two screens already used.
-- **It does not fix the known bias in §COMMCALC-71.2** (today's sales over yesterday's days). Doing
+- **It does not fix the known bias in §COMMCALC-72.2** (today's sales over yesterday's days). Doing
   so would move the live "Trending Acc. $" figure, which is a separate, deliberate decision.
 - **It does not trend a KPI.** The axis here is the declared target categories; a rep KPI is a rate
   or a count scored against a threshold, not a month-to-date that accumulates.

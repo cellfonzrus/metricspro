@@ -51,7 +51,7 @@ export interface PlanItem { severity: Sev; metric: string; title: string; detail
 export interface PlanConversion {
   boxes: number; billpays: number; rate: number; target: number; meets_target: boolean
 }
-/** WHAT A SCOPE IS TRENDING TO on one metric, as the server decided it (§COMMCALC-71). `projected`
+/** WHAT A SCOPE IS TRENDING TO on one metric, as the server decided it (§COMMCALC-72). `projected`
  *  is null when no day of the month has completed — a run rate off a part-day is not a trend — and
  *  `kind` is then 'not_measured', never 'short'. Nothing here is re-derived on the screen: the
  *  factor has one home and the Daily Targets page already prints its answer. */

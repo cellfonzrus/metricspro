@@ -25,7 +25,7 @@ from app.modules.commcalc.calculator import safe_float
 from app.modules.closing.metric_catalog import figure_unit as _figure_unit
 # WHO IS THIS PERSON is one fact with one home (§CORE-08) — pure, so this engine stays pure.
 from app.modules.core import person_identity as _person_identity
-# WHAT A MONTH-TO-DATE FIGURE IS TRENDING TO — one home (§COMMCALC-71), the same window and factor
+# WHAT A MONTH-TO-DATE FIGURE IS TRENDING TO — one home (§COMMCALC-72), the same window and factor
 # the Executive MTD report's "Trending Acc. $" has always used. Pure, so this engine stays pure.
 from app.modules.commcalc import month_trend as _month_trend
 
@@ -490,7 +490,7 @@ def compute_scope(
             'pace': maybe_round(cat, pace),
             'open_days_left': days_left,
             # WHAT THIS CATEGORY IS TRENDING TO, and whether that reaches the target. The window and
-            # the factor are `month_trend`'s (§COMMCALC-71) — the SAME ones behind "Trending Acc. $"
+            # the factor are `month_trend`'s (§COMMCALC-72) — the SAME ones behind "Trending Acc. $"
             # on the Daily Targets screen, so the two figures cannot disagree. `None` when the month
             # cannot be identified or no day has completed: a run rate off a part-day is not a trend.
             'trend': (_month_trend.trend_of(achieved_mtd, monthly, _trend_period, today=today,

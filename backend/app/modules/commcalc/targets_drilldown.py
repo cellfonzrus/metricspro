@@ -499,7 +499,7 @@ def cat_block(row, cat):
     for m in (row.get("metrics") or ()):
         if (m or {}).get("cat") == cat:
             # The action plan's own field names for the same three figures — plus the served
-            # trend (§COMMCALC-71), which the team fold needs: the team's projection is the SUM of
+            # trend (§COMMCALC-72), which the team fold needs: the team's projection is the SUM of
             # the stores' own projections, so dropping it here would have made the team total
             # silently un-trendable while every store row carried one.
             return {"monthly": m.get("target"), "achieved_mtd": m.get("achieved"),

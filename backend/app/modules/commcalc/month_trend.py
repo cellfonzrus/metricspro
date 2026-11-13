@@ -25,7 +25,7 @@ Also here, for the same one-home reason, is what makes a store an OUTLIER (`outl
 "highlight the outliers in a different colour" has to mean the same thing on every surface that
 highlights, and a rule written per screen is a rule nobody can argue with.
 
-Index: §COMMCALC-71.
+Index: §COMMCALC-72.
 """
 from __future__ import annotations
 

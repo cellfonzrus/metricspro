@@ -211,7 +211,7 @@ describe('the standard filters and the send bar are on the screen', () => {
 })
 
 // ── TRENDING, WHO IS NOT TRENDING, AND THE OUTLIER COLOUR (owner ask 2026-11-12) ─────────────────
-// Every figure here is SERVED (§COMMCALC-71). These cases prove the screen prints what it was given
+// Every figure here is SERVED (§COMMCALC-72). These cases prove the screen prints what it was given
 // and, just as importantly, refuses to print a figure it was not given.
 describe('the team total says what it is trending to', () => {
   it('prints the projection, the shortfall and the stores not trending BY NAME', async () => {

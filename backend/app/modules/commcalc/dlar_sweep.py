@@ -293,7 +293,13 @@ STORE_FIELDS = (
     ("salesforce_id",         TEXT,  "id"),
     ("address",               TEXT,  "address"),
     ("location",              TEXT,  "name"),
-    ("gross_adds",            COUNT, "gross_activation_quantity"),
+    # THE SOURCE RENAMED THIS FIELD, and the owner ruled it the same measurement (2026-11-12,
+    # asked 2026-11-10). `activations_total` arrived in the same run `gross_activation_quantity`
+    # stopped, and the 2026-11-11 01:00 sweep settled it as evidence rather than inference: across
+    # all 28 stores `gross_adds` was NULL in 28/28 while `activations_total` carried a figure in
+    # 25/28. NEW SPELLING FIRST, old one retained so a month the portal still spells the old way
+    # keeps landing. ONE COLUMN — a rename is a spelling, never a second column (§COMMCALC-60).
+    ("gross_adds",            COUNT, "activations_total", "gross_activation_quantity"),
     ("pay_now_acts",          COUNT, "prepaid_activations"),
     ("pay_later_acts",        COUNT, "postpaid_activations"),
     ("total_upgrades",        COUNT, "upgrades"),
@@ -326,12 +332,11 @@ STORE_FIELDS = (
     # diagnostic was for. Our column takes the SOURCE's own spelling wherever one exists, because a
     # translation is one more fact that can be got wrong for no gain.
     #
-    # `activations_total` is DELIBERATELY its own column and NOT a spelling of `gross_adds`. It
-    # appeared in the same run in which `gross_activation_quantity` stopped arriving, so it is the
-    # likely successor — but "likely" is not a basis for restating a figure reps are scored against.
-    # Owner decision requested 2026-11-10; until it lands, both columns are visible and the answer
-    # is one declared spelling away.
-    ("activations_total",     COUNT, "activations_total"),
+    # (`activations_total` was briefly its own column here while the owner decision was open. It is
+    # now declared as a SPELLING of `gross_adds` above — see that entry. The stored column is left in
+    # place by migration 1118 and simply stops being written; dropping it would be a destructive
+    # migration for no gain, and it falls out of the catalog on its own because the catalog is
+    # DERIVED from this declaration.)
     ("auxiliary_device_acts", COUNT, "auxiliary_device_acts"),
     ("swaps_total",           COUNT, "swaps_total"),
     ("rpl_count",             COUNT, "rpl_count"),
@@ -388,7 +393,8 @@ REP_FIELDS = (
 # A derived column is declared with the SOURCE fields it is derived FROM, so the arrival check covers
 # it too: `total_acts` is the sum of two source fields and `boost_app_pct` is a quotient of two, and
 # both used to go silently absent with the fields under them.
-STORE_DERIVED_FROM = ("gross_activation_quantity", "upgrades")
+# `total_acts` is gross adds PLUS upgrades, so it tracks the gross-adds rename too (2026-11-12).
+STORE_DERIVED_FROM = ("activations_total", "gross_activation_quantity", "upgrades")
 REP_DERIVED_FROM = ("boost_ready_bounty", "prepaid_activations")
 
 FIELD_MAPS = {"dlar": STORE_FIELDS, "advocate": REP_FIELDS}
@@ -403,10 +409,16 @@ def declared_source_fields(report_key):
         group = tuple(row[2:])
         if group and group not in out:
             out.append(group)
+    # A derived-from field that is ALREADY read under some column's declaration is not a second
+    # field. Matching on the whole group was enough while every spelling stood alone, but the moment
+    # `gross_adds` grew a second spelling (2026-11-12) the singleton stopped matching the pair and
+    # the field was listed twice — which pushed its own name past the status line's "+N more" cut.
+    seen = {k for g in out for k in g}
     extra = {"dlar": STORE_DERIVED_FROM, "advocate": REP_DERIVED_FROM}.get(report_key) or ()
     for key in extra:
-        if (key,) not in out:
+        if key not in seen:
             out.append((key,))
+            seen.add(key)
     return tuple(out)
 
 
@@ -454,10 +466,19 @@ def normalize_store(rec):
     row = shape(rec, STORE_FIELDS)
     row["store_code"] = ""          # the carrier publishes no platform store code; joined via address
     # raw_dlar_store.total_acts is an INT column (migration 002), and a total of fields the portal did
-    # not send is ABSENT, not zero: `portal_cell.total` returns None when neither part arrived, which
-    # is the difference between "this store sold nothing" and "nobody told us what it sold".
-    row["total_acts"] = _cell.as_int(_cell.total(_pick(rec, ("gross_activation_quantity",)),
-                                                 _pick(rec, ("upgrades",))))
+    # not send is ABSENT, not zero: `portal_cell.total_all` returns None unless both parts arrived,
+    # which is the difference between "this store sold nothing" and "nobody told us what it sold".
+    # BOTH PARTS OR NEITHER (2026-11-12). This used to be `portal_cell.total`, which sums the parts
+    # that arrived — right for "how much did we see", wrong for a column called Total Activations,
+    # because a sum of two NAMED quantities with one of them missing is not that sum. It mattered the
+    # moment `gross_activation_quantity` was renamed: fold the new spelling in and leave this a
+    # partial sum, and `total_acts` would have started reporting gross adds alone as the TOTAL, with
+    # upgrades silently excluded — an understatement that looks like a measurement. `upgrades` has no
+    # successor in the arriving fields, so the honest answer today is ABSENT (§19.26), which is also
+    # what it read before the rename was folded.
+    row["total_acts"] = _cell.as_int(_cell.total_all(
+        _pick(rec, ("activations_total", "gross_activation_quantity")),
+        _pick(rec, ("upgrades",))))
     return row
 
 

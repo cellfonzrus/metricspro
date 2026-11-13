@@ -268,7 +268,7 @@ def test_the_sibling_endpoint_survives_an_empty_catalog_too(wired, api_client, o
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-# THE TREND, SERVED PER TENANT AGAINST THAT TENANT'S OWN TARGET (owner ask 2026-11-12, §COMMCALC-71)
+# THE TREND, SERVED PER TENANT AGAINST THAT TENANT'S OWN TARGET (owner ask 2026-11-12, §COMMCALC-72)
 #
 # THE WINDOW IS RELATIVE TO THE PLAN'S OWN "AS OF" DAY, not to the wall clock. `AS_OF` is 20 October
 # inside `PERIOD` = October 2026, so from this plan's point of view October is the month in progress

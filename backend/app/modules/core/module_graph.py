@@ -1571,7 +1571,7 @@ FACTS: dict[str, dict] = {
             # The report's endpoint reads the device-line test directly, so the look-back counts the
             # same lines the two ordering screens do.
             'app/modules/commcalc/router.py': ('_devvocab', '_dp'),
-            # The month-end trend home (§COMMCALC-71, 2026-11-12). `dim / elapsed` IS "how many per
+            # The month-end trend home (§COMMCALC-72, 2026-11-12). `dim / elapsed` IS "how many per
             # window-unit", so it asks here rather than dividing again — which is what leaves ONE
             # division behind every projected figure in the tree. Its own window is in DAYS, the
             # unit rule above allowing it beside the two callers that count days and the one that
@@ -2206,7 +2206,7 @@ FACTS: dict[str, dict] = {
             # closed" and `month_days` for the calendar it is judged against; it owns neither.
             'app/modules/commcalc/pay_data_quality.py': ('_fp',),
             'app/modules/commcalc/router.py': ('_feed_period', 'sales_recon'),
-            # §COMMCALC-71 — the month-end trend home reads `period_month_year` for either spelling,
+            # §COMMCALC-72 — the month-end trend home reads `period_month_year` for either spelling,
             # `month_days` for the month's length and `month_state` for "is this month still in
             # progress". Its first draft re-derived all three, and `router._is_open_month`'s own copy
             # of the third is why July once read as a closed month: this is the fact the whole
@@ -2234,7 +2234,7 @@ FACTS: dict[str, dict] = {
                      "naming nobody below four measured figures, because \"highlight the outliers in "
                      "a different colour\" has to mean one rule rather than one per screen."),
         "homes": ('app/modules/commcalc/month_trend.py',),
-        "index": ('COMMCALC-71',),
+        "index": ('COMMCALC-72',),
         "locks": ('harness_month_trend_one_home.py',),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
@@ -2284,7 +2284,10 @@ FACTS: dict[str, dict] = {
         "question": ("Did the source actually SEND this figure, or is this a zero we wrote down? And "
                      "which source field feeds which column?"),
         "homes": ('app/modules/commcalc/portal_cell.py',),
-        "index": ('COMMCALC-16',),
+        # COMMCALC-71 — `total` vs `total_all`: whether a derived total of absent parts is a partial
+        # sum or absent is a property of what the parts ARE, so it lives here as two named readings
+        # rather than as a flag the caller passes.
+        "index": ('COMMCALC-16', 'COMMCALC-71'),
         "locks": ('harness_portal_cell.py', 'harness_kpi_registry_lock.py', 'harness_kpi_vintage.py'),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
