@@ -757,13 +757,31 @@ def wages_by_store(client, org_id, period):
     see derive_wage_cells. Store = shift.store_code (fallback employee home_store), mapped
     store_code → store_address. Returns {} if StoreOps has no employees/shifts for the month.
     Pre-mig-416 schema (no pay_basis columns) degrades to the pure-hourly select → byte-identical."""
+    return _wage_measurement(client, org_id, period, None)
+
+
+def wages_by_code(client, org_id, period):
+    """THE SAME measurement as `wages_by_store`, keyed by the shift's own `store_code` instead of the
+    canonical store ADDRESS — for a reader that books in code space (the GP report, index
+    §ACCOUNT-02). ONE derivation, two key spaces: `derive_wage_cells` already takes the
+    code→address map as an argument, so handing it an EMPTY map keys each cell by its own code. A
+    reverse address→code lookup is what this exists to avoid: it is many-to-one (§ACCOUNT-01's
+    fold), so inverting it would pay one measurement to two codes."""
+    return _wage_measurement(client, org_id, period, {})
+
+
+def _wage_measurement(client, org_id, period, code2addr):
+    """I/O core of `wages_by_store` / `wages_by_code` — one read, one derivation, one refusal.
+    `code2addr=None` means "read the org's canonical map" (the address space the P&L books in);
+    an explicit map (including `{}`) is used as handed over."""
     pm, py = parse_period(period)
     if not pm or not py:
         return {}
     month = f"{py:04d}-{pm:02d}"
     nxt = f"{py + 1:04d}-01-01" if pm == 12 else f"{py:04d}-{pm + 1:02d}-01"
     so = client.schema("storeops")
-    code2addr = store_code_to_address(client, org_id)
+    if code2addr is None:
+        code2addr = store_code_to_address(client, org_id)
     # ANY SUBSET OF COLUMNS (§4b.1, 2026-09-22): the roster is read whole and derive_wage_cells takes
     # the salary columns (migs 416/417) when they are present — a pre-416 schema is still hourly-only,
     # exactly as before, and no other column's absence can hide them. Same rows, same money.
@@ -2231,9 +2249,15 @@ def build_inputs(client, org_id, period):
     #: (index §14y, owner directive 2026-10-12) — the estimate is then NOT booked, and the statement
     #: SAYS SO instead of carrying a silent $0.00 that reads like a counted figure.
     _wage_refusal = None
+    #: THE MEASUREMENT, kept so the note below can be CHECKED against the entered figures that
+    #: suppressed it (owner report 2026-11-12, §ACCOUNT-02) — the same dict the branches below book
+    #: from, never a second read of it. `None` means it was never read (the org-grain authoritative
+    #: path does not need it to book) and is NOT the same fact as "read, and it measured nothing".
+    _wage_cells = None
     if has_payroll_gross and _grain == "store":
         try:
-            for st, amt in wages_by_store(client, org_id, period).items():
+            _wage_cells = wages_by_store(client, org_id, period)
+            for st, amt in _wage_cells.items():
                 if st in payroll_auth_stores:
                     continue                    # this store's own entry is authoritative
                 if st is None:
@@ -2256,7 +2280,8 @@ def build_inputs(client, org_id, period):
             L["wages"]["label"] = "Gross Payroll"
     else:
         try:
-            for st, amt in wages_by_store(client, org_id, period).items():
+            _wage_cells = wages_by_store(client, org_id, period)
+            for st, amt in _wage_cells.items():
                 add("wages", st, amt)
         except _payevid.EvidenceRefused as e:
             _wage_refusal = str(e)
@@ -2280,6 +2305,25 @@ def build_inputs(client, org_id, period):
         # `wages_by_store` above used, so the note and the money cannot disagree about what was
         # measured. DISPLAY-ONLY here: this block still moves no figure.
         _cov_ev = _lcov.load_hours_evidence(client, org_id, period, _cov_shifts) or {}
+        # ENTERED vs MEASURED (owner report 2026-11-12, §ACCOUNT-02). An entered payroll row
+        # SUPPRESSES this estimate, so the two figures can diverge without limit and no surface said
+        # so: LuxeLink October booked $54,044.69 against $105,109.69 measurable. The measurement is
+        # the one `_wage_cells` above already holds — re-read ONLY on the org-grain authoritative
+        # path, which never needed it to book. A refusal stays a refusal: `None` is handed over and
+        # the comparison reports that it was not checked, never a $0.00 agreement.
+        _measured_by_key = None
+        if _wage_cells is None and not _wage_refusal:
+            try:
+                _wage_cells = wages_by_store(client, org_id, period)
+            except Exception as e:
+                _warn("entered-vs-measured salary check skipped — no measurement", e)
+        if _wage_cells is not None:
+            _measured_by_key = {}
+            for _mk, _mv in _wage_cells.items():
+                _rk = resolve_store(_norm_store(_mk)) if _mk else None
+                if not _rk:
+                    continue                    # company-wide pay pairs with no store's entry
+                _measured_by_key[_rk] = round(_measured_by_key.get(_rk, 0.0) + safe_float(_mv), 2)
         _cov = _lcov.labour_coverage(
             [s.get("store_code") for s in _cov_stores], exp_rows, _cov_shifts,
             acct_cfg.get("payroll_expense_names_list") or [], period,
@@ -2287,7 +2331,12 @@ def build_inputs(client, org_id, period):
             active_codes=[s.get("store_code") for s in _cov_stores
                           if s.get("is_active") is not False],
             hours_basis_cfg=_cov_ev.get("cfg"), evidence=_cov_ev.get("evidence"),
-            hours_interlock=_cov_ev.get("interlock"))
+            hours_interlock=_cov_ev.get("interlock"),
+            measured_by_code=_measured_by_key,
+            # The P&L books its store lines by canonical ADDRESS, so the entered rows are folded
+            # into that space with the SAME key_of this function books with (§ACCOUNT-01's one fold)
+            # rather than a second spelling of it.
+            measured_key_of=lambda c: resolve_store(code2addr.get(_norm_store(c), _norm_store(c))))
         # Only the NOTE is attached to the line. The full per-store coverage report is served by the
         # GP payload (`labour_coverage`), which is where a reader drills; putting a nested dict on an
         # inputs line would ride into every snapshot for no gain.

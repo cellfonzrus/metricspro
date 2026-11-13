@@ -25015,11 +25015,26 @@ def _compute_gp(client, org_id, period, market=""):
         # `storeops/payroll_evidence.period_evidence`, reached through this report's own loader —
         # never a punch query here. `None` (a failed read) keeps the pre-2026-10-12 shape.
         _lc_ev = _lcov.load_hours_evidence(client, org_id, period, _lc_month) or {}
+        # ENTERED vs MEASURED (owner report 2026-11-12, §ACCOUNT-02) — the SIBLING of the P&L's own
+        # check, wired here in the same change rather than left for the next report to rediscover.
+        # This report has no wage estimate of its own, so its '-Expenses' column shows the ENTERED
+        # salary and nothing else: if that figure is a stale copy of the platform's measurement, the
+        # gross profit above is wrong by the gap and no banner said so. `coa.wages_by_code` is the
+        # ONE measurement `coa.wages_by_store` makes, keyed in THIS report's space — never a second
+        # derivation here, and a refusal (`EvidenceRefused`) hands over None, which the comparison
+        # reports as NOT CHECKED rather than as agreement.
+        _lc_measured = None
+        try:
+            from app.modules.account import coa as _coa_wages
+            _lc_measured = _coa_wages.wages_by_code(client, org_id, period)
+        except Exception as e:
+            print(f'WARN gp entered-vs-measured salary check skipped: {e}')
         result['labour_coverage'] = _lcov.labour_coverage(
             _lc_codes, expenses, _lc_month, _lc_names, period,
             carried_from=_exp_carried_from, active_codes=_lc_active,
             hours_basis_cfg=_lc_ev.get('cfg'), evidence=_lc_ev.get('evidence'),
-            hours_interlock=_lc_ev.get('interlock'))
+            hours_interlock=_lc_ev.get('interlock'),
+            measured_by_code=_lc_measured)
         # Labour booked by BOTH routes: the GP row deducts `rep_pay` (rep_commissions) SEPARATELY
         # from `exp_total`, so a commission-named expense row is the same dollars twice. The owner
         # ruled on 2026-09-08 that rep_commissions is the authoritative route, so the report above
