@@ -33,6 +33,7 @@ from app.modules.commcalc import data_lineage_registry as lineage
 from app.modules.core import report_drilldown as rd
 from app.modules.storeops import payroll_hours_basis as hb
 from app.modules.storeops import payroll_hours_drilldown as phd
+from app.modules.storeops import pay_visibility as pv
 from app.modules.storeops import scheduled_hours_drilldown as shd
 
 PASS, FAIL = [], []
@@ -268,6 +269,20 @@ check("B1 the fixture really holds the four shapes this family has to tell apart
       == {hb.CLOCKED, hb.SCHEDULE_OPT_IN, hb.CLOCKED_CORRECTED}
       and not phd._pays(PAY_ROWS[2]) and not phd._pays(PAY_ROWS[4])
       and phd._pays(PAY_ROWS[0]) and len(PAY_ROWS[3]["hours_by_basis"]) == 2)
+# THE EMPLOYER BURDEN IS THE PRODUCER'S, HERE TOO (§STOREOPS-08, 2026-11-12). The route stamps
+# `employer_tax` / `employer_cost` onto every row it serves, through the HR Payroll Expenses page's
+# own tax rule, so the fixture is passed through that SAME function rather than carrying hand-typed
+# burden figures — a hand-typed one would prove the panel against a number the product never serves.
+from app.modules.storeops import payroll_employer_cost as empcost       # noqa: E402
+from app.modules.storeops.payroll_expenses import resolve_tax_config     # noqa: E402
+_BURDEN = empcost.employer_cost_rows(PAY_ROWS, resolve_tax_config(None), {})
+PAY_ROWS = _BURDEN["rows"]
+check("B2 the fixture's burden is the PRODUCER'S own: every paid row carries an employer tax and a "
+      "cost, and the unpaid rows carry neither — so the panels below are proved against what the "
+      "route actually serves",
+      all(("employer_tax" in r) == empcost.carries_pay(r, empcost.ACTUAL_PAY) for r in PAY_ROWS)
+      and _BURDEN["totals"]["employer_cost"] > _BURDEN["totals"]["actual_pay"] > 0,
+      _BURDEN["totals"])
 TOT = phd.period_totals(PAY_ROWS)
 PP = phd.payroll_drilldowns(PAY_ROWS)
 
@@ -297,6 +312,30 @@ ctl("C3b control: a row's hours tampered with while the report's figure stands i
     "report disagreeing with its own evidence",
     rd.tie_out(TOT["actual_hours"],
                phd.payroll_drilldowns(_tampered)["actual_hours"]["rows"])["ties"] is False)
+# ── THE EMPLOYER BURDEN PANELS (§STOREOPS-08) ───────────────────────────────────────────────────
+check("C1t THE TWO BURDEN FIGURES ARE PANELS OF THIS FAMILY, not a second catalogue — same row "
+      "grain, same keys, same fold (§CORE-17.3l)",
+      {"employer_tax", "employer_cost"} <= set(PP)
+      and PP["employer_tax"]["figure"]["amount"] == rd.money(TOT["employer_tax"])
+      and PP["employer_cost"]["figure"]["amount"] == rd.money(TOT["employer_cost"]))
+check("C1u COST IS PAY PLUS TAX AND NOTHING ELSE — the panel's own figure, checked against the two "
+      "panels beside it, so a benefit or an overhead could not be folded in unnoticed",
+      rd.money(TOT["employer_cost"]) == rd.money(TOT["actual_pay"] + TOT["employer_tax"]),
+      (TOT["employer_cost"], TOT["actual_pay"], TOT["employer_tax"]))
+check("C1v A TAX FIGURE NAMES THE RATES AND THE CAPS IT WAS READ WITH — a wage alone cannot produce "
+      "it, so the row's provenance includes the company's tax settings and the booked-run ledger",
+      all({phd.PAYROLL_TAX_CONFIG, phd.PAYROLL_TAX_LEDGER} <= set(r.get("sources") or ())
+          for r in PP["employer_tax"]["rows"] if r.get("amount") is not None),
+      PP["employer_tax"]["rows"][0])
+check("C1w ABSENCE IS NEVER ZERO ON A COST EITHER — the person nothing measured is shown without a "
+      "burden figure and reports the producer's own reason, never $0.00",
+      all(r.get("amount") is None and r.get("reason") for r in PP["employer_cost"]["rows"]
+          if (r.get("label") or "").startswith("Nothing measured")),
+      [r for r in PP["employer_cost"]["rows"] if (r.get("label") or "").startswith("Nothing")])
+check("C1x AND A PAY-GATED CALLER IS SERVED NEITHER BURDEN PANEL — not a panel of $0.00s",
+      not ({"employer_tax", "employer_cost"}
+           & set(phd.payroll_drilldowns(PAY_ROWS, can_see_pay=False))))
+
 _ah = PP["actual_hours"]
 _nothing = row(_ah, "Nothing measured · S-2")
 check("C4 A PERSON NOTHING MEASURED IS SHOWN WITHOUT A FIGURE, NAMES NO RELATION AND IS NOT COUNTED "
@@ -367,8 +406,14 @@ check("C10 EVERY DRILL ROW CARRIES THE PERSON-AND-STORE KEY the screens narrow o
           for p in PP.values() for r in p["rows"]))
 check("C11 AN EMPTY PERIOD DRILLS TO NOTHING rather than to panels asserting a tie against zero",
       phd.payroll_drilldowns([]) == {} and phd.payroll_drilldowns(None) == {})
-_unmeasured_period = [dict(r, actual_hours=0.0, actual_pay=0.0, hours_by_basis={})
-                      for r in PAY_ROWS]
+# Re-run through the PRODUCER, not patched by hand: a row the route serves for an unmeasured period
+# carries no burden key either, and a fixture that kept a stale one would be proving the panel
+# against a row the product cannot produce.
+_unmeasured_period = empcost.employer_cost_rows(
+    [{k: v for k, v in dict(r, actual_hours=0.0, actual_pay=0.0, hours_by_basis={}).items()
+      if k not in ("employer_tax", "employer_cost", "employer_tax_scheduled",
+                   "employer_cost_scheduled", "tax_fica_ss", "tax_medicare", "tax_futa", "tax_suta")}
+     for r in PAY_ROWS], resolve_tax_config(None), {})["rows"]
 _UP = phd.payroll_drilldowns(_unmeasured_period)
 check("C12 A PERIOD NOTHING MEASURED AT ALL IS SERVED NO *WORKED* PANEL — its 0.0 h is a zero over "
       "rows none of which were counted, which ties 0 against 0 and would read as 'we checked, nobody "
@@ -384,9 +429,11 @@ print("\n== D. PAY VISIBILITY — a gated caller is served NO money panel, not a
 # `pay_visibility.strip_pay` DELETES the money keys from a gated caller's rows. A panel folded over
 # such rows would publish $0.00 as a measurement of somebody's pay, which is exactly the lie
 # strip-not-zero exists to prevent.
-STRIPPED = [{k: v for k, v in r.items()
-             if k not in ("pay_rate", "scheduled_pay", "actual_pay", "salary_period_pay")}
-            for r in PAY_ROWS]
+# STRIPPED THROUGH THE REAL STRIPPER, not a key list typed here (2026-11-12). This used to name the
+# four keys itself, which made it a SECOND copy of `pay_visibility`'s rule: when the route grew the
+# employer-burden keys, the hand-typed list did not, and this fixture quietly stopped being a gated
+# caller's rows. The one home is asked instead, so a new money key is covered the day it is added.
+STRIPPED = pv.strip_pay([dict(r) for r in PAY_ROWS])[0]
 #: MEASURED OVER ROWS THAT DO CARRY THEIR MONEY, DELIBERATELY. Folded over STRIPPED rows the money
 #: figures have no counted row at all and the one home's own refusal withholds them anyway — so a
 #: lock measured there would stay GREEN with the gate deleted, which is the "lock that reads the form
@@ -700,6 +747,12 @@ _EXPECTED = {
      frozenset({lineage.SCHEDULE, lineage.EMPLOYEE_ROSTER})),
     ("person_pay_period_row", rd.UNIT_MONEY,
      frozenset(_CLOCK_AND_PLAN | {lineage.EMPLOYEE_ROSTER})),
+    # THE EMPLOYER BURDEN (§STOREOPS-08) — the SAME row and the same unit, with two more relations on
+    # it: a tax is not readable from a wage, so the company's own rates and the booked-run ledger are
+    # part of its provenance. Both burden panels share one grain, which is why ONE entry covers them.
+    ("person_pay_period_row", rd.UNIT_MONEY,
+     frozenset(_CLOCK_AND_PLAN | {lineage.EMPLOYEE_ROSTER, lineage.PAYROLL_TAX_CONFIG,
+                                  lineage.PAYROLL_TAX_LEDGER})),
     # HOURS BUDGET — ONE store-and-work-week row, one unit, one provenance. One grain, and that is
     # the report.
     ("store_work_week_row", rd.UNIT_HOURS, frozenset({lineage.SCHEDULE})),
@@ -707,9 +760,9 @@ _EXPECTED = {
 _extra, _missing = sorted(MEASURED - _EXPECTED), sorted(_EXPECTED - MEASURED)
 check("I1 THE GRAIN COUNT IS MEASURED AND THE SET IS COMPARED FOR EQUALITY — every panel's unit and "
       "provenance are read off the panel, collected as a SET so two panels that really are one grain "
-      "collapse, and checked against the declared five. A bound on the SIZE would stay green while "
+      "collapse, and checked against the declared six. A bound on the SIZE would stay green while "
       "one grain vanished and another took its place, so a lost grain NAMES ITSELF here",
-      MEASURED == _EXPECTED and len(MEASURED) == 5
+      MEASURED == _EXPECTED and len(MEASURED) == 6
       and len({s for s in ROW_SHAPE.values()}) == 2,
       "extra=%s missing=%s" % (_extra, _missing))
 ctl("I1a control: the equality is not vacuous — dropping one declared grain is reported BY NAME, and "

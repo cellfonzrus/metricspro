@@ -116,10 +116,33 @@ def compute_payroll_tax(hours_by_employee_store: Dict[str, Dict[str, float]],
                          rates: Dict[str, float],
                          tax_cfg: dict,
                          ytd_taxable_before: Optional[Dict[str, Dict[str, float]]] = None) -> dict:
-    """Per-employee employer payroll tax for one period, split across the stores the employee worked
-    (proportional to each store's wage share — same attribution style as pto_accrual.compute_pto).
+    """Per-employee employer payroll tax for one period, from HOURS × rate.
 
-    ytd_taxable_before: {employee_id: {"ss": hrs$, "futa": $, "suta": $}} — TAXABLE wages already
+    THE HOURS DOOR. It converts (hours × rate) into wages and delegates to
+    `compute_payroll_tax_from_wages`, which owns the cap ladder and the per-store split. The split was
+    always "proportional to each store's wage share", so this conversion is the whole of what the
+    hours shape adds and the arithmetic below is byte-identical to what this function used to do
+    itself (proved in `harness_payroll_employer_cost.py` t1-t3).
+
+    WHY A SECOND DOOR EXISTS (2026-11-12). The payroll report knows WAGES and not always hours: a
+    salaried employee is served a 0-hour row carrying their period pay, and through this door such a
+    person is taxed on $0.00. One rule, two input shapes — never two rules."""
+    wages_by_employee_store = {
+        eid: {s: float(h or 0) * float((rates or {}).get(eid, 0.0))
+              for s, h in (by_store or {}).items()}
+        for eid, by_store in (hours_by_employee_store or {}).items()
+    }
+    return compute_payroll_tax_from_wages(wages_by_employee_store, tax_cfg, ytd_taxable_before)
+
+
+def compute_payroll_tax_from_wages(wages_by_employee_store: Dict[str, Dict[str, float]],
+                                    tax_cfg: dict,
+                                    ytd_taxable_before: Optional[Dict[str, Dict[str, float]]] = None) -> dict:
+    """THE ONE employer payroll-tax rule: FICA SS + Medicare + FUTA + SUTA on WAGES, per employee,
+    split across the stores those wages were earned at (proportional to each store's wage share —
+    same attribution style as pto_accrual.compute_pto).
+
+    ytd_taxable_before: {employee_id: {"ss": $, "futa": $, "suta": $}} — TAXABLE wages already
     counted toward each cap in EARLIER periods of the SAME calendar year (0 default = a mid-year first
     run, or a tenant that has never run this before, correctly treats every wage-base as untouched).
 
@@ -147,10 +170,8 @@ def compute_payroll_tax(hours_by_employee_store: Dict[str, Dict[str, float]],
         d["suta"] += suta
         d["total"] += (ss + medicare + futa + suta)
 
-    for eid in sorted(hours_by_employee_store or {}):
-        by_store_hours = hours_by_employee_store.get(eid) or {}
-        rate = float(rates.get(eid, 0.0))
-        wages_by_store = {s: float(h) * rate for s, h in by_store_hours.items()}
+    for eid in sorted(wages_by_employee_store or {}):
+        wages_by_store = {s: float(w or 0) for s, w in (wages_by_employee_store.get(eid) or {}).items()}
         total_wages = sum(wages_by_store.values())
         if total_wages <= 0:
             continue

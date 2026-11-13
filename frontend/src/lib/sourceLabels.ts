@@ -96,6 +96,11 @@ const SOURCE_LABEL: Record<string, string> = {
   store_borrowing_payments: 'inter-store borrowing paybacks',
   inventory_aging_device: 'inventory aging (per device)',
   employees: 'employee records',
+  // THE EMPLOYER BURDEN'S OWN TWO SOURCES (§STOREOPS-08) — the company's declared tax rates and
+  // wage bases, and what payroll runs have already booked against those bases this year. A payroll
+  // tax figure cannot be read from a wage alone, so both are named on its drill rows.
+  payroll_tax_config: 'your payroll tax settings',
+  payroll_tax_ledger: 'payroll runs already booked this year',
   payroll_settings: 'payroll withholding setup',
   store_lease: 'store lease & insurance setup',
   // The targets family (§CORE-17.3m). A TARGET is a number somebody typed into a settings screen,

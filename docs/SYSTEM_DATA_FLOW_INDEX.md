@@ -44750,6 +44750,96 @@ mistake a narrowed read for an authorisation it has not made.
 - **§E4** the delta rule has not left the one home.
 
 
+
+---
+
+## §STOREOPS-08. WHAT A PAY PERIOD COSTS THE COMPANY, BESIDE WHAT IT PAYS (owner ask 2026-11-12)
+
+Owner, 2026-11-12: *"in the payroll report add anopthe rtil for the payroll tax paid for that period
+and a another tile shows the total of payroll and payroll tax as a cost of payroll to teh company"*.
+
+### STOREOPS-08.1 Duplicate check (the build gate)
+
+| Question asked of the index | Answer | What was done |
+| --- | --- | --- |
+| Is there already an employer payroll-tax rule? | **YES** — `storeops/payroll_expenses.compute_payroll_tax` (mig 404): FICA SS + Medicare + FUTA + SUTA at the org's declared rates, with PER-EMPLOYEE CUMULATIVE CALENDAR-YEAR wage-base caps and a per-store split by wage share. The HR Payroll Expenses page books from it; the P&L carries what it books | **Reused as THE rule.** No second formula: the tiles resolve through it |
+| Could the payroll report call it as it stood? | **NO** — its only door took `hours × rate`, and `GET /storeops/payroll` serves a SALARIED person a 0-hour row carrying their period pay (`payroll_salary.py`). Measured live: three LuxeLink employees, **$16,607.15** in October 2026, would have been taxed on $0.00 | The one home grew `compute_payroll_tax_from_wages`; the hours door converts and DELEGATES, so the cap ladder and the per-store split stayed in exactly one place |
+| Is there already a place these figures should appear? | **YES** — the payroll report's tile strip and its drill-down catalogue (§CORE-17.3x), one person-and-pay-period row | Two panels ADDED to that catalogue rather than a second one built: same grain, same keys, same fold (§CORE-17.3l) |
+| Is there already a "did the report pay this row" predicate? | **PARTLY** — `payroll_hours_drilldown._pays` folded the paying allowlist itself | Moved into the one home as `payroll_hours_basis.row_is_paid`; the drill-down and the new producer both dereference it (§19.18) |
+| Should the payroll-expense ITEMS (workers comp, UI) be added too? | **NO, deliberately** — they have their own page and their own additive P&L line, and folding them in here would double-count them. The panel note says so | Nothing added |
+
+### STOREOPS-08.2 What it is
+
+`storeops/payroll_employer_cost.py` (PURE) carries the one home's tax answer onto the rows
+`GET /storeops/payroll` already serves, adding per row: `employer_tax` (with the four legs
+`tax_fica_ss` / `tax_medicare` / `tax_futa` / `tax_suta`), `employer_cost` = pay + tax, and the same
+pair on the SCHEDULED basis (`employer_tax_scheduled` / `employer_cost_scheduled`) — because the
+report prints scheduled pay beside actual and the owner's own figure that day was the scheduled one.
+It spells no rate, no wage base and no dollar. The route reads the config and the year-to-date caps
+through `_employer_tax_inputs`, which reads the SAME table and uses the SAME year rule as
+`_payex_gather`, so the report and the HR page cannot disagree about a cap.
+
+**LIVE, October 2026, every tenant** (actual-pay basis; each panel ties to the cent):
+
+| tenant | actual pay | employer tax | cost of payroll |
+| --- | --- | --- | --- |
+| LuxeLink | $108,204.53 | $11,841.36 | $120,045.89 |
+| Cellfonz R Us | $72,905.30 | $7,983.05 | $80,888.35 |
+| NY LOGISTICS | $20,160.28 | $2,196.41 | $22,356.69 |
+| Vzone | $20,449.79 | $1,849.74 | $22,299.53 |
+
+### STOREOPS-08.3 Absence is never zero, and the gate withholds the burden too
+
+A row the report did not pay carries NO cost key — `payroll_employer_cost.carries_pay` is the
+predicate, bound by identity by the drill-down, and it is **not** the hours question: a salaried row
+has no hours basis at all, while a `$0.00` with nothing measured behind it is the §CORE-17.3i row and
+is not counted. A **pay-gated** caller (mig 434) has the money keys deleted BEFORE the burden is
+computed, so no burden key is produced, the two tiles do not render and neither panel is served —
+never a $0.00. The four burden keys are in `pay_visibility.PAY_FIELDS` as well, so any other surface
+stripping these rows strips them. `payroll_tax_config.enabled = false` answers empty from the one
+home, and the response says so (`X-Payroll-Tax-Enabled`) rather than printing a free payroll.
+
+### STOREOPS-08.4 The honest limit, stated on the panel
+
+The annual wage bases are consumed by payroll runs that have been BOOKED (`storeops.payroll_tax_ledger`).
+**No tenant has ever booked one** (0 rows, measured 2026-11-12), so every period starts with the caps
+untouched and FUTA / state unemployment here are an **upper bound rather than a settlement**. That is
+the HR page's own behaviour on a first run, inherited from the same home rather than re-decided, and
+every burden panel's note says it in words. The two relations are named on every burden row —
+`payroll_tax_config` ("your payroll tax settings") and `payroll_tax_ledger` ("payroll runs already
+booked this year"), registered in the lineage registry and in `frontend/src/lib/sourceLabels.ts`.
+
+### STOREOPS-08.5 A pre-existing defect this exposed, and FIXED rather than excused
+
+`payroll_hours_drilldown._actual_pay` asked the HOURS question of a MONEY figure, so it blanked a
+salaried person's pay — the panel's evidence was SHORT of its own figure by **$16,607.15** on
+LuxeLink and **$3,860.68** on the house org for October 2026, and the tie-out correctly reported the
+disagreement on both tenants. The report's totals were never wrong; its evidence was. Fixed in the
+same PR, for the same reason the new panels are: the money question is `carries_pay`. All four
+tenants' pay panels now tie.
+
+### STOREOPS-08.6 Where it shows, and the tests
+
+Both screens of the family get the tiles (§CORE-17.3l — a tile on one of two screens reading one
+endpoint is the next divergence): the **Payroll Report** strip (`storeops/payroll/page.tsx`, grid now
+wrapping rather than pinned to four columns) and the **StoreOps Reports → Hours & Payroll** strip.
+Both fold through `storeops/lib/payroll-cost-tiles.employerTotals` over the rows ON SCREEN, so the
+store / market / employee filters narrow the figures, and both export the two columns (RULE FOUR).
+
+Proofs: `backend/harness_payroll_employer_cost.py` (22 checks — the two tax doors' equivalence, the
+cap ladder, the salaried row, absence-is-not-zero, the gated row, purity, no rate of its own);
+`harness_batch24_drilldown.py` extended to **114 checks** (the two panels, the provenance, the gate,
+the grain census) and its `STRIPPED` fixture now dereferences `pay_visibility` instead of naming the
+money keys itself — a second copy of the strip rule which had already gone stale;
+`frontend/src/app/(platform)/storeops/lib/__tests__/payroll-cost-tiles.test.ts` (8).
+
+💰 Books nothing, writes nothing, moves no money: every hours and pay figure is byte-identical and
+the burden is display-only. No migration.
+
+See also §14y (the hours basis one home) · §CORE-17.3x (the payroll drill-down family) ·
+§CORE-17.3i (absence is never zero) · §19.44 / mig 434 (pay visibility) · §19.18 (one fact, one home,
+dereferenced) · §CORE-43 (the market attribution fix shipped alongside).
+
 ## §COMMCALC-55. A SUCCESSFUL LOGIN IS RECOGNISED BY EVIDENCE, NEVER BY A GUESSED VOCABULARY (owner report 2026-11-05)
 
 The owner signed in to the carrier owners portal by hand, from his phone, and sent the screenshot.

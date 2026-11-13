@@ -87,6 +87,7 @@ from app.modules.storeops import attendance_exceptions as _attn
 # field, which relation and which rows a figure was folded from, and the shared home in
 # `core/report_drilldown` builds every panel, so no endpoint here holds a panel shape of its own.
 from app.modules.storeops import payroll_hours_drilldown as _phd
+from app.modules.storeops import payroll_employer_cost as _empcost
 from app.modules.storeops import scheduled_hours_drilldown as _shd
 from app.modules.core import portal_secret as _psec   # THE credential-column registry (index §CORE-03)
 # THE write-side store-code home (index §COMMCALC-70): every store code this module STORES is
@@ -1638,6 +1639,49 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
     return sorted(rows, key=lambda x: x["name"])
 
 
+def _employer_tax_inputs(org_id: str, lo, hi):
+    """The two facts the employer-tax rule needs besides the wages: the org's tax CONFIG and the
+    wages each employee has already had taxed toward each annual cap EARLIER in the same calendar
+    year. Both are read exactly the way `_payex_gather` reads them — the same table, the same
+    year-to-date rule — so the payroll report's tax and the HR Payroll Expenses page's tax cannot
+    disagree about a cap.
+
+    `lo` is the pay period's first day, so "earlier in the year" means the ledger's monthly periods
+    BEFORE the month `lo` falls in. A period inside a month the ledger has not booked therefore
+    starts with the caps untouched, which is the same (documented) behaviour the HR page has on a
+    first run and the honest one: the ledger is written when a payroll run is pressed, and a report
+    may not invent wages nobody has booked.
+
+    NEVER BREAKS THE REPORT. A missing table or a failed read degrades to the code-default config and
+    empty year-to-date, never an error — the same tolerance the HR page's own reads have."""
+    tax_org_row = None
+    try:
+        rows = sb().table("payroll_tax_config").select("*").eq("org_id", org_id).limit(1).execute().data or []
+        tax_org_row = rows[0] if rows else None
+    except Exception:
+        tax_org_row = None
+    tax_cfg = payex_resolve_tax_config(tax_org_row)
+
+    ytd: dict = {}
+    try:
+        month = str(lo)[:7]
+        year = month.split("-")[0]
+        hist = (sb().table("payroll_tax_ledger")
+                .select("employee_id,ss_taxable_wages,futa_taxable_wages,suta_taxable_wages")
+                .eq("org_id", org_id).gte("period", f"{year}-01").lt("period", month).execute().data) or []
+        for h in hist:
+            eid = h.get("employee_id")
+            if not eid:
+                continue
+            d = ytd.setdefault(eid, {"ss": 0.0, "futa": 0.0, "suta": 0.0})
+            d["ss"] += float(h.get("ss_taxable_wages") or 0)
+            d["futa"] += float(h.get("futa_taxable_wages") or 0)
+            d["suta"] += float(h.get("suta_taxable_wages") or 0)
+    except Exception:
+        ytd = {}
+    return tax_cfg, ytd
+
+
 @router.get("/payroll")
 def get_payroll_route(month: str = None, start: str = None, end: str = None,
                        authorization: str = Header(default=""), org_id: str = ORG_ID,
@@ -1659,6 +1703,30 @@ def get_payroll_route(month: str = None, start: str = None, end: str = None,
     allowed = _payvis.can_see_pay(authorization or "", org_id, client=get_supabase())
     if not allowed:
         rows, _ = _payvis.strip_pay(rows)
+    # WHAT THIS PERIOD COSTS THE COMPANY (owner 2026-11-12, §STOREOPS-08) — additive keys on each
+    # row: the employer-side tax on that person's pay, and pay + tax. The RULE is the HR Payroll
+    # Expenses page's own (`payroll_expenses.compute_payroll_tax_from_wages`), resolved through
+    # `payroll_employer_cost`; nothing about it is spelled here or recomputed.
+    #
+    # AFTER THE GATE, DELIBERATELY. A gated caller's rows have had their pay keys deleted by the line
+    # above, and a row with no pay key is given no cost key — so the burden cannot hand back by
+    # subtraction what `pay_visibility` just withheld. The keys are in `PAY_FIELDS` as well, so any
+    # other surface stripping these rows strips them too.
+    #
+    # NEVER BREAKS PAYROLL. The hours, the pay and the totals are untouched by this block; if the
+    # config or ledger read fails the rows are served exactly as before, without the two new keys.
+    try:
+        _lo, _hi = _resolve_range(month, start, end)
+        _tax_cfg, _ytd = _employer_tax_inputs(org_id, _lo, _hi)
+        _cost = _empcost.employer_cost_rows(rows, _tax_cfg, _ytd)
+        rows = _cost["rows"]
+        if response is not None:
+            try:
+                response.headers["X-Payroll-Tax-Enabled"] = "true" if _cost["tax_enabled"] else "false"
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"WARN storeops/payroll employer cost unavailable: {e}")
     if response is not None:
         try:
             response.headers["X-Can-See-Pay-Rates"] = "true" if allowed else "false"

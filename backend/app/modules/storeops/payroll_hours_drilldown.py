@@ -119,6 +119,7 @@ Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §CORE-17.3x.
 from app.modules.commcalc import data_lineage_registry as _lineage
 from app.modules.core import report_drilldown
 from app.modules.storeops import payroll_hours_basis as _hb
+from app.modules.storeops import payroll_employer_cost as _empcost
 
 #: THE TIME CLOCK — the one relation that records an hour somebody actually worked. DEREFERENCED from
 #: the lineage registry, which is the one home for that fact (§CORE-17.3t re-keyed the last literal
@@ -138,6 +139,11 @@ MANUAL_HOURS = _lineage.MANUAL_HOURS
 #: commit — naming a fact is half a design fix and deleting every copy is the half that keeps getting
 #: skipped here (§19.18).
 EMPLOYEE_ROSTER = _lineage.EMPLOYEE_ROSTER
+#: THE EMPLOYER TAX RATES AND WAGE BASES, and what earlier periods already consumed of those bases.
+#: An employer-burden figure is not readable from a wage alone, so both are named on its rows.
+#: Dereferenced from the lineage registry, never spelled.
+PAYROLL_TAX_CONFIG = _lineage.PAYROLL_TAX_CONFIG
+PAYROLL_TAX_LEDGER = _lineage.PAYROLL_TAX_LEDGER
 
 SCHEMA = "storeops"
 
@@ -186,10 +192,11 @@ MEASURED_BASES = _hb.MEASURED_BASES
 
 #: THE FIGURES A PAY-GATED CALLER IS NOT SERVED AT ALL. Not zeroed, not blanked — absent, exactly as
 #: `pay_visibility.strip_pay` treats the columns they come from.
-MONEY_KEYS = ("scheduled_pay", "actual_pay")
+MONEY_KEYS = ("scheduled_pay", "actual_pay", "employer_tax", "employer_cost")
 HOURS_KEYS = ("scheduled_hours", "actual_hours")
 #: Every figure this family serves, in the order both screens print them.
-SERVED_KEYS = ("scheduled_hours", "actual_hours", "scheduled_pay", "actual_pay")
+SERVED_KEYS = ("scheduled_hours", "actual_hours", "scheduled_pay", "actual_pay",
+               "employer_tax", "employer_cost")
 
 
 # ── NOTES — in the words the screens already use, and the coverage warning on every hours panel ──
@@ -230,6 +237,28 @@ _SCHEDULED_PAY_NOTE = _ROW_NOTE + (
     "the employee record the rate was read from. A salaried person's row is not hours multiplied by "
     "a rate at all — it carries their pay basis, and the report's own salary note where it has one.")
 
+_TAX_BASIS_NOTE = (
+    " The RATES AND WAGE BASES ARE THIS COMPANY'S OWN, read from its payroll tax settings — this "
+    "panel applies no rate of its own and is the SAME rule the Payroll Expenses page books from. The "
+    "annual wage bases (Social Security, FUTA, state unemployment) are consumed by payroll runs that "
+    "have been BOOKED: where none has been booked for an earlier period of this year, every base "
+    "starts the period untouched, so FUTA and state unemployment here are an upper bound rather than "
+    "a settlement. The sources list names the settings the rates came from and the ledger the caps "
+    "were read from, so you can see which of the two you are looking at.")
+
+_EMPLOYER_TAX_NOTE = _ROW_NOTE + (
+    " The EMPLOYER's own payroll tax on what this period paid — Social Security, Medicare, FUTA and "
+    "state unemployment, the company's cost and not a deduction from anybody's pay. It is computed "
+    "on each person's ACTUAL pay beside it, so the two columns tie; the scheduled-pay equivalent "
+    "travels on every row as well.") + _TAX_BASIS_NOTE
+
+_EMPLOYER_COST_NOTE = _ROW_NOTE + (
+    " WHAT THIS PAY PERIOD COST THE COMPANY: each person's actual pay PLUS the employer tax on it, "
+    "which is the figure a labour cost is actually carried at. It is a sum of the two figures beside "
+    "it and nothing else — no allocation, no overhead, no benefit and no payroll-expense item (those "
+    "have their own page and their own P&L line, and adding them here would double-count them). A "
+    "person shown without a pay figure is shown without a cost figure and is not counted.") + _TAX_BASIS_NOTE
+
 _ACTUAL_PAY_NOTE = _ROW_NOTE + _BASIS_NOTE + _COVERAGE_NOTE + (
     " Each row names both the relation its hours came from AND the employee record its rate came "
     "from, because the money cannot be read without the two together. A salaried person's figure is "
@@ -259,11 +288,19 @@ def _bases(r):
     return tuple(_basis_tally(r).keys())
 
 
-def _pays(r):
-    """PURE: did ANY basis that may become paid hours carry hours for this person? The allowlist is
-    the one home's, so a basis nobody has ruled on reads as not payable here exactly as it does
-    there."""
-    return any(b in PAYING_BASES for b in _bases(r))
+#: DID THIS ROW'S PERIOD PRODUCE PAID HOURS — the ONE home's own row-level rule, bound BY IDENTITY.
+#: It was folded here from the allowlist until 2026-11-12; `payroll_employer_cost` now needs the same
+#: answer, so the fold moved into `payroll_hours_basis.row_is_paid` and both dereference it rather
+#: than keeping a copy each (§19.18). A basis nobody has ruled on still reads as not payable.
+_pays = _hb.row_is_paid
+
+
+#: WHICH ROWS THE BURDEN WAS PUT ON — the producer's own predicate, bound by identity
+#: (`payroll_employer_cost.carries_pay`). It is NOT `_pays`: a salaried person is paid by a period
+#: allocation and carries no hours basis at all, so the hours question would blank a figure the
+#: company really does owe tax on (measured: three LuxeLink employees, $16,607.15, October 2026).
+#: Binding the producer's own predicate is what keeps this panel's rows and its figure one fold.
+_burden_counts = _empcost.carries_pay
 
 
 def _actual_hours(r):
@@ -274,9 +311,40 @@ def _actual_hours(r):
 
 
 def _actual_pay(r):
-    """PURE: the money those hours produced, blank on exactly the rows the hours are blank on — a
-    person with no measured hours has no measured pay either, and a $0.00 would be a wage claim."""
-    return (r or {}).get("actual_pay") if _pays(r) else None
+    """PURE: the money the report paid this person, blank where the report paid nothing — a $0.00
+    there would be a wage claim about somebody nothing was measured for (§CORE-17.3i).
+
+    THE MONEY QUESTION IS NOT THE HOURS QUESTION, and this read used to ask the hours one (a defect
+    found 2026-11-12 while adding the burden panels, and fixed here rather than only for the new
+    figures — the same question asked twice, answered two ways, is the defect the index rules
+    forbid). A SALARIED person is paid by a period allocation and carries no hours basis at all, so
+    `_pays` blanked a figure the report really does pay: measured live, this panel's evidence was
+    SHORT of its own figure by $16,607.15 on LuxeLink and $3,860.68 on the house org for October
+    2026, and the tie-out correctly said so on both — the report's total was never wrong, its
+    evidence was. The producer's own predicate is bound instead."""
+    return (r or {}).get("actual_pay") if _burden_counts(r, _empcost.ACTUAL_PAY) else None
+
+
+def _employer_tax(r):
+    """PURE: the employer tax the producer put on this row, blank wherever the producer put none —
+    a person the report did not pay has no burden either, and a $0.00 would say the company employed
+    them for nothing. The figure is the producer's; nothing is computed here."""
+    return (r or {}).get("employer_tax") if _burden_counts(r, _empcost.ACTUAL_PAY) else None
+
+
+def _employer_cost(r):
+    """PURE: pay + employer tax, as the producer served it. Blank on exactly the rows above."""
+    return (r or {}).get("employer_cost") if _burden_counts(r, _empcost.ACTUAL_PAY) else None
+
+
+def _burden_relations(r):
+    """PURE: an employer-burden figure's provenance — whatever answered for the hours, the employee
+    record the rate came from, AND the two relations the tax itself was read out of: the company's
+    own rates/wage bases, and what earlier booked runs consumed of those bases. A wage alone cannot
+    produce this number, so naming only the wage's relations would be a false provenance.
+
+    NOTHING AT ALL on a row with no figure (§CORE-17.3i)."""
+    return (_pay_relations(r) + (PAYROLL_TAX_CONFIG, PAYROLL_TAX_LEDGER)) if _pays(r) else ()
 
 
 #: WHICH "WE CANNOT MEASURE THIS" ANSWER A ROW REPORTS WHEN IT HAS MORE THAN ONE, strongest first.
@@ -370,6 +438,10 @@ def _fields(r):
         "pay basis": r.get("pay_basis") or None,
         "salary note": r.get("salary_note") or None,
         "prorated period": r.get("salary_prorated") or None,
+        # THE OTHER BASIS, carried rather than hidden: the report prints scheduled pay beside actual,
+        # so a reader comparing the two needs the burden on each. The producer's own figures.
+        "employer tax on scheduled pay": r.get("employer_tax_scheduled"),
+        "cost of scheduled pay": r.get("employer_cost_scheduled"),
     }
 
 
@@ -439,6 +511,18 @@ def catalogue(*, can_see_pay=True):
                  value=_actual_pay, column="actual_pay", tables=_pay_relations,
                  reason=_unmeasured_reason, unit=report_drilldown.UNIT_MONEY,
                  note=_ACTUAL_PAY_NOTE),
+            # THE EMPLOYER BURDEN (owner 2026-11-12, §STOREOPS-08). Two more figures over the SAME
+            # person-and-pay-period row at the SAME grain — which is why they belong in this
+            # catalogue rather than in a second one (§CORE-17.3l: the grain decides the family).
+            dict(common, key="employer_tax", total="employer_tax", label="Payroll tax (employer)",
+                 value=_employer_tax, column="actual_pay", tables=_burden_relations,
+                 reason=_unmeasured_reason, unit=report_drilldown.UNIT_MONEY,
+                 note=_EMPLOYER_TAX_NOTE),
+            dict(common, key="employer_cost", total="employer_cost",
+                 label="Cost of payroll to the company",
+                 value=_employer_cost, column="actual_pay", tables=_burden_relations,
+                 reason=_unmeasured_reason, unit=report_drilldown.UNIT_MONEY,
+                 note=_EMPLOYER_COST_NOTE),
         ]
     return tuple(out)
 

@@ -586,6 +586,24 @@ def basis_pays_hours(basis):
     return basis in PAYING_BASES
 
 
+def row_is_paid(row):
+    """PURE: did THIS payroll row's period produce paid hours at all — i.e. did any basis that may
+    become paid hours carry hours for this person?
+
+    THE ROW-LEVEL FORM OF `basis_pays_hours`, and the one home for it (2026-11-12, §STOREOPS-08).
+    `payroll_hours_drilldown` has asked this question since batch 24 by folding the producer's own
+    `hours_by_basis` tally against the allowlist above; `payroll_employer_cost` has to ask exactly the
+    same question, because a row the report did not pay must not be given an employer-cost figure
+    either (§CORE-17.3i: absence is never zero). Two copies of that fold would be two answers to one
+    question, so it lives here and both dereference it.
+
+    READS THE PRODUCER'S OWN TALLY AND NOTHING ELSE. A zero-hour entry does not count — the router
+    drops those before it picks a row's dominant basis, and this agrees with it. A row with no tally
+    at all is NOT paid, which is the same fail-closed posture the allowlist itself has."""
+    tally = (row or {}).get("hours_by_basis") or {}
+    return any(basis_pays_hours(b) for b, hrs in tally.items() if hrs)
+
+
 def basis_is_measurement(basis):
     """PURE: is this basis a MEASUREMENT of the day (as opposed to the schedule, or nothing)?
 

@@ -14,6 +14,7 @@ import DrillDownPanel, {
 } from '@/components/DrillDownPanel'
 import { narrowPanel, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
 import { buildStoreMarket, marketsFromRoster } from '@/lib/store-market'
+import { employerTotals } from '../lib/payroll-cost-tiles'
 
 // The hours basis words, shown as the human phrase — the SAME display map the Payroll Report uses,
 // over the SAME server-composed basis. The decision and the sentence are the server's (§14y).
@@ -42,6 +43,28 @@ const PAYROLL_DRILL_COLUMNS: DrillExtraColumn[] = [
 ]
 
 const chip: React.CSSProperties = { padding: '5px 10px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)', cursor: 'pointer' }
+
+// ONE TILE, DEFINED ONCE AT MODULE SCOPE. It used to be declared inside the page component, which
+// re-created the component type on every render (`react-hooks/static-components`): React then
+// remounted every tile on each keystroke in the filter bar, and the lint ratchet counted one finding
+// per tile — so adding the two burden tiles (§STOREOPS-08) would have turned the gate red for a
+// reason that was never about them. Hoisted instead of pinned upward: the drill handle it needs is
+// an ordinary prop now.
+function Tile({ label, value, drillKey, drillLabel, drill }: {
+  label: string; value: string; drillKey?: string; drillLabel?: string
+  drill: ReturnType<typeof useDrillTile>
+}) {
+  return (
+    <div className="card" style={{ padding: '12px 16px', minWidth: 130 }}>
+      <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2 }}>{value}</div>
+      {drillKey && (
+        <DrillTileLinks drills={drill.dl(drillKey, drillLabel || 'the rows behind this figure')}
+          open={drill.open} onToggle={drill.toggle} />
+      )}
+    </div>
+  )
+}
 
 export default function StoreOpsReportsPage() {
   // RULE FIVE (§3d) core filters: period is now an arbitrary date RANGE (owner 2026-07-25: "need time
@@ -172,8 +195,16 @@ export default function StoreOpsReportsPage() {
     })
     return out
   }, [panels, shownPeople])
+  // THE EMPLOYER BURDEN (owner 2026-11-12, §STOREOPS-08) — the SAME two figures the Payroll Report
+  // shows, over the SAME rows from the SAME endpoint, through the SAME shared fold. This strip is
+  // the other half of that family (§CORE-17.3l), so it gets the feature rather than being left a
+  // version behind: a tile that exists on one of two screens reading one endpoint is the next
+  // divergence. `available` is false for a pay-gated caller and on an older backend, and the tiles
+  // then do not render rather than reading $0.00.
+  const burden = useMemo(() => employerTotals(visibleRows), [visibleRows])
   const folded: Record<string, number> = {
     scheduled_hours: tot.sh, actual_hours: tot.ah, scheduled_pay: tot.sp, actual_pay: tot.ap,
+    employer_tax: burden.tax, employer_cost: burden.cost,
   }
   const tileValue = (k: string): number => {
     const n = folded[k] || 0
@@ -244,18 +275,6 @@ export default function StoreOpsReportsPage() {
   const empCols = canSeePay ? empColsAll : empColsAll.filter(c => !PAY_COLS.has(c.header))
   const storeCols = canSeePay ? storeColsAll : storeColsAll.filter(c => !PAY_COLS.has(c.header))
 
-  const Tile = ({ label, value, drillKey, drillLabel }:
-    { label: string; value: string; drillKey?: string; drillLabel?: string }) => (
-    <div className="card" style={{ padding: '12px 16px', minWidth: 130 }}>
-      <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
-      <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2 }}>{value}</div>
-      {drillKey && (
-        <DrillTileLinks drills={payrollDrill.dl(drillKey, drillLabel || 'the rows behind this figure')}
-          open={payrollDrill.open} onToggle={payrollDrill.toggle} />
-      )}
-    </div>
-  )
-
   function setRange(start: string, end: string) {
     setFilt(f => ({ ...f, period: start, periodTo: end }))
   }
@@ -325,15 +344,19 @@ export default function StoreOpsReportsPage() {
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
         <Tile label="Scheduled Hrs" value={tileValue('scheduled_hours').toFixed(1)}
-          drillKey="scheduled_hours" drillLabel="the shifts behind these hours" />
+          drillKey="scheduled_hours" drillLabel="the shifts behind these hours" drill={payrollDrill} />
         <Tile label="Actual Hrs" value={tileValue('actual_hours').toFixed(1)}
-          drillKey="actual_hours" drillLabel="the people behind these hours, and what measured them" />
+          drillKey="actual_hours" drillLabel="the people behind these hours, and what measured them" drill={payrollDrill} />
         {canSeePay && <Tile label="Scheduled Pay" value={fmt(tileValue('scheduled_pay'))}
-          drillKey="scheduled_pay" drillLabel="the people behind this pay" />}
+          drillKey="scheduled_pay" drillLabel="the people behind this pay" drill={payrollDrill} />}
         {canSeePay && <Tile label="Actual Pay" value={fmt(tileValue('actual_pay'))}
-          drillKey="actual_pay" drillLabel="the people behind this pay" />}
+          drillKey="actual_pay" drillLabel="the people behind this pay" drill={payrollDrill} />}
+        {canSeePay && burden.available && <Tile label="Payroll Tax (employer)" value={fmt(tileValue('employer_tax'))}
+          drillKey="employer_tax" drillLabel="the people behind this tax, and the settings it was read with" drill={payrollDrill} />}
+        {canSeePay && burden.available && <Tile label="Cost of Payroll" value={fmt(tileValue('employer_cost'))}
+          drillKey="employer_cost" drillLabel="the people behind this cost" drill={payrollDrill} />}
         {/* A cardinality, not a fold — no panel (§CORE-17.3x). */}
-        <Tile label="Employees" value={String(visibleRows.length)} />
+        <Tile label="Employees" value={String(visibleRows.length)} drill={payrollDrill} />
       </div>
 
       {/* ONE renderer for whichever figure is open — the one home's panel, never a shape of ours. */}
