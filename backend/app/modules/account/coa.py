@@ -340,6 +340,22 @@ def pl_spec_for(inputs=None):
     return spec
 
 
+def stores_in_inputs(inputs):
+    """Every store code/address any LINE CELL of `inputs` mentions — the one home for that walk.
+
+    `inputs` is not only line cells: it carries SIDE ENTRIES beside them (`_royalty_coverage`,
+    `_unbooked_sales`, and `DYNAMIC_PL_SPEC`, which is a LIST of declared chart rows). Both
+    assemblers used to walk the dict themselves and only ONE of them knew that — `engine`'s copy did
+    `ln["by_store"]` unguarded, which raises TypeError on a list side entry and would have taken the
+    whole persisted compute down for the first tenant to declare an org level. One home, so a side
+    entry added later cannot teach only half the readers."""
+    out = set()
+    for ln in (inputs or {}).values():
+        if isinstance(ln, dict):
+            out.update((ln.get("by_store") or {}).keys())
+    return out
+
+
 def pl_label_for(inputs=None):
     """`PL_LABEL` extended with the per-org lines' labels. Same posture: no declarations ⇒ the
     shared map itself."""

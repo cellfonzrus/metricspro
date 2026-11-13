@@ -573,10 +573,7 @@ def _scopes(inputs, companies, company_of, journal=None, matcher=None, profit_sc
     `centers.profit_center_scopes` tuples (`profit_center:<code>`, label, the center's stores, False),
     exactly the shape of a company scope. None / [] (every org without profit centers) ⇒ the list is
     byte-identical."""
-    all_stores = set()
-    for ln in inputs.values():
-        if isinstance(ln, dict):
-            all_stores.update((ln.get("by_store") or {}).keys())
+    all_stores = set(coa.stores_in_inputs(inputs))   # ONE home for "which stores do the lines name"
     for e in (journal or []):
         grain, store, _co = balance_sheet.entry_grain(e, matcher, company_of)
         if grain == "store" and store:

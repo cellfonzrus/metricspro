@@ -391,7 +391,13 @@ MONEY_MODULE_DELTA = {
                               {"_lcov_mod", "build_inputs.add_comm",
                                "is_side_entry", "statement_lines",
                                "_wage_measurement", "wages_by_code",
-                               "pl_spec_for", "pl_label_for"}),
+                               "pl_spec_for", "pl_label_for",
+                               # +`stores_in_inputs` 2026-11-13: the "which stores do the lines
+                               # name" walk FACTORED OUT of engine.py and statement_engine.py, which
+                               # each kept their own copy — and engine's did not know `inputs` holds
+                               # non-cell side entries. Pure extraction, no arithmetic; locked by
+                               # harness_overhead_level_lines.py §6(f).
+                               "stores_in_inputs"}),
     f"{MOD}/account/autocompute.py": (set(), set()),
     f"{MOD}/account/statement_filter.py": (set(), {"unbound_spellings"}),
 }

@@ -514,6 +514,48 @@ check("RULE TWO still holds in the extended module: no tenant, org id, store or 
       not any(t in OA.lower() for t in ("luxelink", "854f6d7b", "cermark", "nostrand", "vzone",
                                         "ny logistics")))
 
+# §6(f) — A SIDE ENTRY ON `inputs` IS NOT A LINE CELL, and the walk that reads them has ONE home.
+# The regression this caught: `coa.DYNAMIC_PL_SPEC` is a LIST, and `engine.compute_and_store` had
+# its OWN copy of the "every store any line mentions" walk doing `ln["by_store"]` with no guard —
+# so the persisted Accounts compute would raise TypeError for the first tenant to declare an org
+# level, while the on-demand statement, whose copy WAS guarded, answered fine. Two readers of one
+# dict, one of them not knowing its shape. Now `coa.stores_in_inputs` is the only walk and both
+# dereference it.
+import ast as _ast
+
+_SIDE_INPUTS = {
+    "wages": {"by_store": {"1 A St": 1000.0}},
+    "overhead_wages_l1": {"by_store": {"2 B Ave": 500.0}},
+    "_royalty_coverage": {"by_store": {}, "reports": 0},          # an existing DICT side entry
+    coa.DYNAMIC_PL_SPEC: [("overhead_wages_l1", "Market salaries", "opex", "auto_opt",
+                           "store", "overhead_wages")],           # the new LIST side entry
+}
+check("§6(f) the one home walks the LINE CELLS and steps over every side entry, dict or list "
+      "(the regression, replayed)",
+      coa.stores_in_inputs(_SIDE_INPUTS) == {"1 A St", "2 B Ave"})
+check("§6(f) …and answers for an empty or absent inputs dict rather than raising",
+      coa.stores_in_inputs({}) == set() and coa.stores_in_inputs(None) == set())
+
+
+def _own_inputs_walk(path):
+    """A hand-rolled `for <x> in inputs.values()` — the copy this lock forbids."""
+    tree = _ast.parse(open(path).read())
+    return [n for n in _ast.walk(tree)
+            if isinstance(n, _ast.For) and isinstance(n.iter, _ast.Call)
+            and isinstance(n.iter.func, _ast.Attribute) and n.iter.func.attr == "values"
+            and isinstance(n.iter.func.value, _ast.Name) and n.iter.func.value.id == "inputs"]
+
+
+_EN = os.path.join(HERE, "app/modules/account/engine.py")
+_SE = os.path.join(HERE, "app/modules/account/statement_engine.py")
+check("§6(f) LOCK: NEITHER account engine keeps its own walk over inputs.values() any more — a "
+      "second copy is how one reader came not to know the dict's shape",
+      _own_inputs_walk(_EN) == [] and _own_inputs_walk(_SE) == [])
+check("§6(f) LOCK: both engines dereference the one home, and it is defined exactly once",
+      "coa.stores_in_inputs(" in open(_EN).read()
+      and "coa.stores_in_inputs(" in open(_SE).read()
+      and COA_SRC.count("def stores_in_inputs") == 1)
+
 print()
 print("checks run: %d   failures: %d" % (CHECKS, FAIL))
 print("ALL PROOFS HOLD" if not FAIL else "PROOFS FAILED")

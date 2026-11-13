@@ -246,10 +246,9 @@ def compute_and_store(client, org_id, period):
     company_of, default_co, companies = coa.company_assignment(client, org_id)
     co_name = {c["id"]: c["name"] for c in companies}
 
-    # every store that appears in any line
-    all_stores = set()
-    for ln in inputs.values():
-        all_stores.update(ln["by_store"].keys())
+    # every store that appears in any line — ONE home (`coa.stores_in_inputs`), because `inputs`
+    # carries non-cell SIDE entries beside the line cells and this walk must know it.
+    all_stores = set(coa.stores_in_inputs(inputs))
 
     scopes = [("consolidated", "Consolidated (all companies)", None, True)]
     for c in companies:
