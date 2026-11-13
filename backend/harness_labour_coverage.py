@@ -595,8 +595,13 @@ near("G3 the Σ of the input expense rows is untouched",
 # than rendering a store as measured off evidence the one home refused. It is a verdict, not a
 # figure — and this axis is about DOLLARS, which is why the key list grows here and G4b below still
 # finds nothing that books one.
+# `entered_vs_measured` ADDED 2026-11-12 (index §ACCOUNT-02): the ENTERED salary against the salary
+# the platform MEASURES. It carries two dollar TOTALS, which is why this key list grows again — but
+# they are a COMPARISON of two figures already on screen, not a figure this report books: §J below
+# proves it nets nothing and that G1–G3's totals are untouched with the comparison wired in.
 ok("G4 the report carries states and evidence only — no key that books a dollar",
-   sorted(g_rep.keys()), ["allocated_names", "carried_from", "counts", "detail", "gaps",
+   sorted(g_rep.keys()), ["allocated_names", "carried_from", "counts", "detail",
+                          "entered_vs_measured", "gaps",
                           "hours_interlock", "note", "period", "scanned", "states"])
 ok("G4-i …and that verdict key carries no amount of any kind",
    [k for k in (g_rep.get("hours_interlock") or {}) if "amount" in k or "pay" in k or "wage" in k],
@@ -610,6 +615,99 @@ ok("G5 load_shift_hours degrades to [] on an unreadable feed (never a fabricated
 ok("G6 …and on an unparseable period", lc.load_shift_hours(None, "org", "nonsense"), [])
 ok("G7 …and it accepts BOTH house period spellings via the ONE shared parser",
    lc.load_shift_hours(None, "org", "August 2026"), [])
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# §J  ENTERED vs MEASURED — a frozen COPY of a measurement must not outrank it in silence.
+#
+# OWNER REPORT 2026-11-12 (Sanjot): *"in the accoutn module i diod the compute but the expenses are
+# not showing correctly , they shoudl include the salaries"*. LuxeLink October 2026 booked
+# $54,044.69 of salary against $105,109.69 measurable from the same month's hours and punches. The
+# Expenses sheet's "fill salaries" button had COPIED a payroll figure into an `Employee Salaries`
+# row per store; a payroll row CONFERS authority, which SUPPRESSES the measurement — so the copy
+# froze and outranked the fact it was copied from, and nothing on any surface said so.
+#
+# The LIVE figures below were measured on production 2026-11-12 (`coa.wages_by_store` and
+# `commcalc.store_expenses`, org 854f6d7b-…): they are the regression, not an illustration.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+J_ENTERED = {"Belmont": 166.50, "Utica": 90.00, "3735 26th": 85.25, "Diversey": 6033.26,
+             "Grand": 5280.44, "957": 4523.53, "7812": 3452.18}
+J_MEASURED = {"Belmont": 7339.70, "Utica": 3699.24, "3735 26th": 6138.41, "Diversey": 11856.90,
+              "Grand": 11593.68, "957": 4523.53, "7812": 3452.18}
+j = lc.entered_vs_measured(J_ENTERED, J_MEASURED)
+ok("J1 the live October divergence is REPORTED, worst first",
+   [s["store_key"] for s in j["stores"]],
+   ["Belmont", "Grand", "3735 26th", "Diversey", "Utica"])
+near("J2 …and the understated total is the sum of those gaps", j["total_understated"], 28972.48)
+near("J3 …with nothing overstated", j["total_overstated"], 0.0)
+ok("J4 the two stores that still agree to the cent are NOT findings",
+   [s for s in ("957", "7812") if s in {x["store_key"] for x in j["stores"]}], [])
+ok("J5 every row carries BOTH figures, so a reader never has to trust one",
+   sorted(j["stores"][0].keys()), ["direction", "entered", "gap", "measured", "store_key"])
+ok("J6 the verdict says it was measured", j["verdict"], lc.VERDICT_MEASURED)
+
+# AN ABSENCE IS NOT AN AGREEMENT (§19.50 / §CORE-17) — three of them, each with its own reason.
+j_none = lc.entered_vs_measured(J_ENTERED, None)
+ok("J7 no measurement handed over -> NOT CHECKED, and the totals are None not 0.0",
+   [j_none["verdict"], j_none["total_understated"], j_none["total_overstated"]],
+   [lc.VERDICT_NOT_MEASURED, None, None])
+ok("J7a …and the note says so in words, so no screen can render it as agreement",
+   "NOT CHECKED" in (j_none["note"] or ""), True)
+j_carried = lc.entered_vs_measured(J_ENTERED, J_MEASURED, carried_from="September 2026")
+ok("J8 a CARRIED month is not reported as a stale entry (§COMMCALC-23 already says it in full)",
+   [j_carried["verdict"], j_carried["total_understated"]], [lc.VERDICT_NOT_MEASURED, None])
+j_unmeas = lc.entered_vs_measured({"Belmont": 166.50}, {"Utica": 10.0})
+ok("J9 a store with an entry and NO measurement is listed, never compared against an implied zero",
+   [j_unmeas["unmeasured_keys"], j_unmeas["stores"], j_unmeas["total_overstated"]],
+   [["Belmont"], [], 0.0])
+
+# MATERIALITY is a POLICY rate and floor (never a tenant's vocabulary), and it cuts both ways.
+ok("J10 a cent of rounding residue between two derivations is not a finding",
+   lc.entered_vs_measured({"a": 7339.69}, {"a": 7339.70})["stores"], [])
+ok("J11 a few percent of drift on a month still being clocked is not a finding",
+   lc.entered_vs_measured({"a": 7000.0}, {"a": 7200.0})["stores"], [])
+ok("J12 …and the floor can be opened right up by a caller that wants every cent",
+   lc.entered_vs_measured({"a": 7000.0}, {"a": 7200.0}, tolerance_pct=0.0)["stores"][0]["gap"],
+   200.0)
+ok("J13 an entry ABOVE the measurement is reported too, in its own direction and total",
+   [lc.entered_vs_measured({"a": 9000.0}, {"a": 7339.70})["stores"][0]["direction"],
+    lc.entered_vs_measured({"a": 9000.0}, {"a": 7339.70})["total_overstated"]],
+   [lc.OVERSTATED, 1660.30])
+ok("J14 a store MEASURED but never entered is not this check's finding (the states own that)",
+   lc.entered_vs_measured({}, J_MEASURED)["stores"], [])
+
+# RULE TWO / §COMMCALC-49.10 — the ENTERED side reads the TENANT's own payroll names, and a flat
+# allocation is excluded by the ruling this module already made (`allocated_names`), not a second one.
+J_ROWS = [{"store_code": "Belmont", "expense_name": "Employee Salaries", "amount": 166.50,
+           "source_key": None},
+          {"store_code": "Belmont", "expense_name": "DM Salaries", "amount": 1275.00,
+           "source_key": None},
+          {"store_code": "Belmont", "expense_name": "Rent / Lease", "amount": 3550.00,
+           "source_key": None}]
+ok("J15 the accumulator sums the org's OWN payroll names and nothing else",
+   lc.payroll_expense_by_key(J_ROWS, PAYROLL_NAMES), {"Belmont": 1441.50})
+ok("J16 nothing declared means nothing identified — never another tenant's words",
+   [lc.payroll_expense_by_key(J_ROWS, []), lc.payroll_expense_by_key(J_ROWS, ["Staff Wages"])],
+   [{}, {}])
+ok("J17 …and the reader's key space is the reader's, folded once by its own key_of",
+   lc.payroll_expense_by_key(J_ROWS, PAYROLL_NAMES, key_of=lambda c: "5601 W Belmont Ave"),
+   {"5601 W Belmont Ave": 1441.50})
+ok("J18 `entered_amounts` DEREFERENCES the one accumulator (no second predicate)",
+   lc.entered_amounts(J_ROWS, PAYROLL_NAMES), lc.payroll_expense_by_key(J_ROWS, PAYROLL_NAMES))
+
+# TOTAL-PRESERVING with the comparison wired in — the §G claim, re-proven on the report that now
+# carries it. The comparison must change no state, no gap and no dollar of the report around it.
+j_before_exp = [dict(r) for r in july_exp]
+j_rep = lc.labour_coverage(JULY_CODES, july_exp, july_shifts, PAYROLL_NAMES, "July 2026",
+                           measured_by_code={c: 9999.0 for c in JULY_CODES})
+ok("J19 wiring a measurement in changes no state the report had without one",
+   j_rep["states"], g_rep["states"])
+ok("J20 …and no gap", j_rep["gaps"], g_rep["gaps"])
+ok("J21 …and mutates no input row", july_exp, j_before_exp)
+ok("J22 …and the comparison itself books nothing: no key names a dollar it could post",
+   [k for k in sorted(j_rep["entered_vs_measured"].keys())
+    if k in ("booked_instead", "netted", "suppressed", "amount")], [])
+ok("J23 the report's note CARRIES the finding, so the banner cannot be silent about it",
+   "LESS than the hours and punches measure" in (j_rep["note"] or ""), True)
 
 # ── report ────────────────────────────────────────────────────────────────────────────────────
 print("=" * 78)

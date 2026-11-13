@@ -1549,8 +1549,17 @@ def resolve_tax_code(store_code: str = "", org_id: str = ORG_ID):
         except Exception:
             market = ""
     hit, scope = _resolve_tax(codes, sc, market)
+    # THE PRICING BASIS, answered beside the rate (§POS-20, owner 2026-11-12). A till needs both to
+    # compute a line: the rate, and how the rate is applied. The phone register had neither and sent
+    # a sale with no money on it at all. Resolved through the ONE config home, so no till carries a
+    # copy of the store-override → org-default → declared-default precedence.
+    _rows = _pos_settings_rows(client, org_id, sc)
+    pricing = {k: _poscfg.effective(_rows, k, sc) for k in _poscfg.TAX_PRICING_KEYS}
     return {"store_code": sc or None, "market": market or None, "scope": scope,
             "rate": (hit or {}).get("rate"), "tax_code": hit,
+            "pricing": pricing,
+            # A till that cannot price this basis must refuse the sale, not price it its own way.
+            "needs_product_cost": pricing.get("tax_method") == _poscfg.TAX_METHOD_NEEDS_COST,
             "warning": ("No tax rate applies to this store — a taxable sale would charge $0."
                         if scope == "none" else None)}
 
@@ -2150,7 +2159,7 @@ def tender_types(store_code: str = "", org_id: str = ORG_ID):
 
 @router.get("/device-conditions")
 def device_conditions(org_id: str = ORG_ID):
-    """The vocabularies the inventory screen draws its two dropdowns from (index §POS-18).
+    """The vocabularies the inventory screen draws its two dropdowns from (index §POS-20).
 
     OWNER ASK 2026-10-31: *"cpo is certified pre owned is adifferent device than new , imnei is
     unique"*. Both lists were written down twice before this — a `CHECK` constraint on
@@ -2930,7 +2939,7 @@ def update_receipt_template(template_id: str, body: dict,
 from app.modules.pos import sale_receipt as _sr
 from app.modules.pos import pos_config_effective as _poscfg
 from app.modules.pos import tender_vocabulary as _tender
-from app.modules.pos import device_condition as _devcond        # 2026-10-31 — THE device condition vocabulary (§POS-18; pure)
+from app.modules.pos import device_condition as _devcond        # 2026-10-31 — THE device condition vocabulary (§POS-20; pure)
 from app.modules.pos import inventory_integrity as _inv         # THE unit-status vocabulary, dereferenced not restated
 from app.modules.pos import wholesale_w9 as _w9
 from app.modules.pos import receipt_escpos as _escpos

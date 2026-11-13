@@ -100,6 +100,21 @@ def total(*parts):
     return sum(vals)
 
 
+def total_all(*parts):
+    """The sum of the parts, or None unless EVERY part arrived. PURE.
+
+    `total` is right when the parts are alternative spellings of one measurement — any one of them
+    answers. It is WRONG when the parts are different measurements being added up, because then a
+    missing part silently understates the total and the understatement looks like a figure somebody
+    observed. `total_acts = gross adds + upgrades` is that case: when the source renamed its gross-adds
+    field and stopped sending `upgrades`, `total` would have reported gross adds alone as the total.
+    Absent is the honest answer; §COMMCALC-49.10 is the same rule at the single-cell grain."""
+    vals = [measured(p) for p in parts]
+    if not vals or any(v is None for v in vals):
+        return None
+    return sum(vals)
+
+
 def as_int(v):
     """A measurement bound for an INTEGER column → int, or None. Postgres rejects '0.0' for an int
     column (22P02), and `None` must survive as None rather than becoming a 0."""

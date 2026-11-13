@@ -151,8 +151,12 @@ check("C5 a field is named by its PREFERRED spelling when it does go missing",
 
 print("\nD. a rename names itself")
 fa_oct = pc.field_arrival([OCT_STORE], ds.declared_source_fields("dlar"))
-check("D1 the fields that stopped arriving are named",
-      {"gross_activation_quantity", "upgrades"} <= set(fa_oct["missing"]), fa_oct["missing"])
+check("D1 the fields that stopped arriving are named (the gross-adds group by its preferred "
+      "spelling, because EVERY spelling of it went missing — see C5)",
+      {"activations_total", "upgrades"} <= set(fa_oct["missing"]), fa_oct["missing"])
+check("D1b a field is named ONCE, even when a column derives from one of its alternative spellings",
+      len(fa_oct["missing"]) == len(set(fa_oct["missing"])),
+      [f for f in fa_oct["missing"] if fa_oct["missing"].count(f) > 1])
 check("D2 the fields the portal sends that nothing reads are named — the new spelling is in here",
       {"activation_quantity", "upgrade_quantity"} <= set(fa_oct["unconsumed"]), fa_oct["unconsumed"])
 check("D3 a field that arrives EMPTY is reported as blank, not as missing",
@@ -202,8 +206,11 @@ check("F2 ... with exactly the same values",
       {k: (got_rep.get(k), v) for k, v in expect_rep.items() if got_rep.get(k) != v})
 expect_store_full = {
     "salesforce_id": "166111", "store_code": "", "address": "1800 Great Neck rd",
-    "location": "Cellular Services dot net llc", "gross_adds": 61.0, "pay_now_acts": 58.0,
-    "pay_later_acts": 3.0, "total_upgrades": 29.0, "total_acts": 90, "psa_projected": 28.0,
+    # gross_adds is 134, not the 61 under the OLD spelling: this record carries both spellings and
+    # the owner ruled them the same measurement (2026-11-12), so the PREFERRED one wins and there is
+    # no separate `activations_total` column. total_acts follows at 134 + 29 = 163.
+    "location": "Cellular Services dot net llc", "gross_adds": 134.0, "pay_now_acts": 58.0,
+    "pay_later_acts": 3.0, "total_upgrades": 29.0, "total_acts": 163, "psa_projected": 28.0,
     "family_plan_pct": 66.67, "tmr3": 62.5, "aal_conversion": 2.56, "protect_pct": 100.0,
     "atu": 66.67, "byod_pct": 33.33, "port_pct": 66.67, "conversion_rate": 3.85,
     "acc_attach_rate": 416.67, "avg_first_mrc": 52.67, "sales_target": 25.0,
@@ -211,7 +218,7 @@ expect_store_full = {
     # the figures declared 2026-11-10 — each read by the SAME rule as every count/rate above, which
     # is the property this check exists to hold: a wider declaration must not change how any of it
     # is read.
-    "activations_total": 134.0, "auxiliary_device_acts": 8.0, "swaps_total": 9.0, "rpl_count": 2.0,
+    "auxiliary_device_acts": 8.0, "swaps_total": 9.0, "rpl_count": 2.0,
     "starlink_activations": 5.0, "starlink_sales": 6.0, "total_trade_ins": 11.0,
     "value_trade_ins": 7.0, "upgrade_value_trade_ins": 3.0, "offer_trade_ins": 1.0,
     "trade_in_unlocked_activations": 4.0, "byod_total": 21.0, "byod_unlocked_activations": 12.0,
@@ -243,7 +250,8 @@ res = {"period": "October 2026", "written": {"raw_dlar_store": 28, "raw_dlar_rep
        "vintage": {}, "fields": {"dlar": fa_oct}}
 line = ds.status_sentence(res)
 check("G1 a portal-field change is NOT an OK run", line.startswith("⚠ PARTIAL"), line[:40])
-check("G2 the line names the field that stopped arriving", "gross_activation_quantity" in line)
+check("G2 the line names the field that stopped arriving — by its PREFERRED spelling, since the "
+      "whole gross-adds group went missing (see C5)", "'activations_total' NOT SENT" in line)
 check("G3 the line names where the new spelling is", "activation_quantity" in line)
 check("G4 a healthy run is still OK",
       ds.status_sentence({"period": "September 2026",

@@ -69,7 +69,6 @@ LABELS = {
     # activations
     "total_acts":                   ("Total Activations", "activations"),
     "gross_adds":                   ("Gross Adds", "activations"),
-    "activations_total":            ("Activations Total (source)", "activations"),
     "pay_now_acts":                 ("Pay-Now Activations", "activations"),
     "pay_later_acts":               ("Pay-Later Activations", "activations"),
     "total_upgrades":               ("Upgrades", "activations"),
