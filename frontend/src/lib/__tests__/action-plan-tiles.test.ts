@@ -19,7 +19,7 @@
 //    (`_targets_dd.team_totals`) and the page reads that fold.
 import { describe, it, expect } from 'vitest'
 import {
-  buildTiles, planMetrics, filterPlan, tilesToSnapshot, metricKey,
+  buildTiles, planMetrics, filterPlan, focusPlan, tilesToSnapshot, metricKey,
   type PlanStore, type TileView,
 } from '@/lib/action-plan-tiles'
 import { emptyStandardFilter } from '@/lib/standard-filters'
@@ -348,5 +348,92 @@ describe('tilesToSnapshot — what the Send bar mails', () => {
     expect(hs.value).toBe('1 of 1 behind')
     expect(hs.measured).toBe(false)            // this report compares no two periods
     expect(hs.note).toContain('9 Harbor Rd')
+  })
+})
+
+// ── FOCUSING ONE METRIC NARROWS THE WHOLE SCREEN, NOT JUST THE TILES ─────────────────────────────
+// Owner, 2026-11-12: "if one metric is slected from the drop down it shoudl only hsow that metrics
+// across all stores and all reps as filtered or all reps and all stores if not filtered."
+//
+// The narrowing is HERE, beside `focused` and `buildTiles`, so the tiles and the detail cannot
+// disagree about what "focused" means — two predicates for one word is how they drift.
+describe('focusPlan narrows the detail to the focused metrics', () => {
+  const PLAN: PlanStore[] = [{
+    store_code: 'B-1', address: '1 A St', market: 'Queens',
+    conversion: { boxes: 4, billpays: 20, rate: 20, target: 25, meets_target: false },
+    metrics: [
+      { cat: 'boxes', label: 'Boxes', unit: 'count', target: 100, achieved: 40, need: 60, pace: 6, today_target: 4 },
+      { cat: 'accessories', label: 'Accessories', unit: 'dollars', target: 1000, achieved: 200, need: 800, pace: 50, today_target: 30 },
+    ],
+    items: [
+      { severity: 'critical', metric: 'boxes', title: 'Behind on Boxes', detail: '60 to go.' },
+      { severity: 'warning', metric: 'accessories', title: 'Behind on Accessories', detail: '$800 to go.' },
+    ],
+    reps: [{
+      rep: 'Khan, Abid', below_store: true,
+      conversion: { boxes: 1, billpays: 9, rate: 11, target: 25, meets_target: false },
+      items: [
+        { severity: 'warning', metric: 'familyplan', title: 'Short on Family Plan', detail: '20 vs 45.' },
+        { severity: 'warning', metric: 'accessories', title: 'Behind on Accessories', detail: 'rep gap.' },
+      ],
+      commission: {
+        tier: 0.75, kpis_met: 0, total_kpis: 2, subtotal: 100, total_payout: 75, at_risk: 25,
+        short_kpis: ['Family Plan'], t100: 1, t75: 1, kpis_no_data: [],
+        kpis: [
+          { kpi: 'familyplan', label: 'Family Plan', target: 45, actual: 20, met: false },
+          { kpi: 'atu', label: 'ATU', target: 3, actual: 4, met: true },
+        ],
+      },
+    }],
+    commission_at_risk: 25, counts: { critical: 1, warning: 2 },
+  }]
+
+  it('an empty selection changes nothing at all', () => {
+    expect(focusPlan(PLAN, [])).toEqual(PLAN)
+  })
+
+  it('one store category keeps that metric, its items and the rep items about it', () => {
+    const out = focusPlan(PLAN, [metricKey('store', 'accessories')])
+    expect(out[0].metrics.map(m => m.cat)).toEqual(['accessories'])
+    expect(out[0].items.map(i => i.metric)).toEqual(['accessories'])
+    expect(out[0].reps[0].items.map(i => i.metric)).toEqual(['accessories'])
+    // the KPI block is about other metrics entirely, so it goes quiet rather than showing all of them
+    expect(out[0].reps[0].commission?.kpis).toEqual([])
+  })
+
+  it('one KPI keeps that KPI and the rep items about it, and no store category', () => {
+    const out = focusPlan(PLAN, [metricKey('kpi', 'familyplan')])
+    expect(out[0].metrics).toEqual([])
+    expect(out[0].items).toEqual([])
+    expect(out[0].reps[0].items.map(i => i.metric)).toEqual(['familyplan'])
+    expect(out[0].reps[0].commission?.kpis.map(k => k.kpi)).toEqual(['familyplan'])
+    expect(out[0].reps[0].commission?.short_kpis).toEqual(['Family Plan'])
+  })
+
+  it('EVERY store and EVERY rep is kept — focusing a metric is not a store filter', () => {
+    // The owner's words: "across all stores and all reps as filtered or all reps and all stores if
+    // not filtered". A store that carries nothing about the focused metric still appears, so its
+    // absence is visible rather than the store vanishing.
+    const out = focusPlan(PLAN, [metricKey('kpi', 'readyapp')])
+    expect(out).toHaveLength(1)
+    expect(out[0].reps).toHaveLength(1)
+    expect(out[0].items).toEqual([])
+  })
+
+  it('the at-risk money is NOT narrowed — it is the rep\'s whole commission either way', () => {
+    // Narrowing a payout to one KPI would invent a figure: the tier is earned over all of them.
+    const out = focusPlan(PLAN, [metricKey('kpi', 'familyplan')])
+    expect(out[0].reps[0].commission?.at_risk).toBe(25)
+    expect(out[0].commission_at_risk).toBe(25)
+  })
+
+  it('an unmeasured KPI stays visible when it is the focused one', () => {
+    const plan: PlanStore[] = [{
+      ...PLAN[0],
+      reps: [{ ...PLAN[0].reps[0], commission: { ...PLAN[0].reps[0].commission!, kpis: [],
+        kpis_no_data: [{ kpi: 'readyapp', label: 'Ready App', target: 65 }] } }],
+    }]
+    const out = focusPlan(plan, [metricKey('kpi', 'readyapp')])
+    expect(out[0].reps[0].commission?.kpis_no_data?.map(k => k.kpi)).toEqual(['readyapp'])
   })
 })

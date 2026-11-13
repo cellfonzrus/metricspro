@@ -65,3 +65,56 @@ export function targetState(monthly: unknown, need: unknown): TargetState {
   }
   return { kind: 'met', label: '✓ target met', color: GREEN, passing: true }
 }
+
+// ── THE TREND VERDICT — "is this scope going to FINISH the month on target" ───────────────────────
+// Owner, 2026-11-12, of the action plan's team total: "it shoudl also show trending and which stores
+// are not trending towards the accessories goals".
+//
+// It lives beside `targetState` because it is the same kind of fact about the same goal, and because
+// the four-state honesty above is exactly what a trend needs too: "nothing could be projected" and
+// "no goal was set" must not render as the state that means "you will make it".
+//
+// THE ARITHMETIC IS NOT HERE. The projection and this verdict are decided by the server
+// (`commcalc/month_trend`, index §COMMCALC-72) — the same window and factor that have always
+// produced "Trending Acc. $" on the Daily Targets screen. A second copy in TypeScript would be a
+// third answer to one question, and the mailed copy would stop agreeing with the screen.
+export type TrendVerdict = 'on_track' | 'short' | 'no_target' | 'not_measured'
+
+/** "Will not finish" is a different fact from "behind today", so it gets its own colour. */
+const RED = '#b91c1c'
+
+/**
+ * Words and a colour for a verdict the SERVER reached. `gap` is passed for the caller's own
+ * rendering, in the metric's own units.
+ *
+ * An unrecognised kind is `not_measured`, never a pass: a server that grows a fifth state must not
+ * be able to make this screen claim a scope is fine.
+ */
+export type TrendStateOf = Omit<TargetState, 'kind'> & { kind: TrendVerdict }
+
+export function trendState(kind: unknown, gap: unknown): TrendStateOf {
+  const k = String(kind || '')
+  if (k === 'on_track') {
+    return { kind: 'on_track', label: '✓ trending to finish', color: GREEN, passing: true }
+  }
+  if (k === 'short') {
+    // The phrase is the caller's, because only the caller knows the unit the gap is in.
+    return { kind: 'short', label: '', color: RED, passing: false }
+  }
+  if (k === 'no_target') {
+    return { kind: 'no_target', label: 'no target set', color: NEUTRAL, passing: false }
+  }
+  void gap
+  return { kind: 'not_measured', label: 'trend not measured', color: NEUTRAL, passing: false }
+}
+
+/**
+ * THE colour a highlighted outlier gets — "the outloers shoudl be highlighted in a different color"
+ * (owner, 2026-11-12). One constant, so "a different colour" means one thing on every surface.
+ *
+ * Deliberately neither the pass green nor the behind amber: the store furthest AHEAD of its pack is
+ * an outlier too, and colouring it as a failure (or as a success) would assert something the rule
+ * never measured. WHICH stores are outliers is the server's answer (`month_trend.outliers`), on one
+ * stated, median-based rule.
+ */
+export const OUTLIER_COLOR = '#7c3aed'

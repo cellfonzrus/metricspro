@@ -25,6 +25,9 @@ from app.modules.commcalc.calculator import safe_float
 from app.modules.closing.metric_catalog import figure_unit as _figure_unit
 # WHO IS THIS PERSON is one fact with one home (§CORE-08) — pure, so this engine stays pure.
 from app.modules.core import person_identity as _person_identity
+# WHAT A MONTH-TO-DATE FIGURE IS TRENDING TO — one home (§COMMCALC-72), the same window and factor
+# the Executive MTD report's "Trending Acc. $" has always used. Pure, so this engine stays pure.
+from app.modules.commcalc import month_trend as _month_trend
 
 
 def name_key(name) -> str:
@@ -397,6 +400,7 @@ def compute_scope(
     round_counts: bool = False,
     month_end: date | None = None,
     catalog: list[dict] | None = None,
+    period: str | None = None,
 ):
     """Compute per-category target numbers + a day-by-day calendar for one scope.
 
@@ -443,6 +447,12 @@ def compute_scope(
     # anywhere else would be a second answer to "which days is this".
     _evidence: dict = {}
 
+    # WHICH MONTH IS BEING COMPUTED, for the trend window. `period` when the caller named it;
+    # otherwise the canonical spelling of `month_end`'s own month, which IS the month this call is
+    # about. With neither, the month is genuinely unknown and every trend reads not-measured rather
+    # than being projected across a month nobody identified.
+    _trend_period = period or (f"{month_end.year:04d}-{month_end.month:02d}" if month_end else None)
+
     categories = {}
     for cat in _axis:
         monthly = float(monthly_by_cat.get(cat, 0) or 0)
@@ -479,6 +489,13 @@ def compute_scope(
             'today_target': maybe_round(cat, today_target),
             'pace': maybe_round(cat, pace),
             'open_days_left': days_left,
+            # WHAT THIS CATEGORY IS TRENDING TO, and whether that reaches the target. The window and
+            # the factor are `month_trend`'s (§COMMCALC-72) — the SAME ones behind "Trending Acc. $"
+            # on the Daily Targets screen, so the two figures cannot disagree. `None` when the month
+            # cannot be identified or no day has completed: a run rate off a part-day is not a trend.
+            'trend': (_month_trend.trend_of(achieved_mtd, monthly, _trend_period, today=today,
+                                            unit=_units[cat])
+                      if _trend_period else None),
         }
 
     # Device SET-UP FEE (MTD) — the set-up-fee portion of the accessories achieved, exposed SEPARATELY
@@ -880,10 +897,40 @@ def aggregate_stores(store_rows: list[dict]) -> dict:
         acc = {'unit': _agg_units.get(cat, 'count'), 'monthly': 0.0, 'achieved_mtd': 0.0, 'need': 0.0,
                'today_target': 0.0, 'pace': 0.0, 'base_today': 0.0, 'setup_fee_mtd': 0.0,
                'stores_with_target': 0, 'stores_on_track': 0}
+        # WHO IS NOT TRENDING TO FINISH — the owner's second question, answered in the same pass
+        # that totals the figures. The team projection is the SUM of each store's own projection
+        # (each store projected on its own window by `month_trend`), never the team's achieved
+        # re-divided: a second division would be a second answer, and the stores do not all share
+        # one window. A store nothing could project is counted as such, never as short, and
+        # `trend_partial` says plainly that the total is missing those stores.
+        _tr_sum = 0.0
+        _tr_measured = 0
+        _tr_short: list[str] = []
+        _tr_unmeasured: list[str] = []
+        # WHO IS OUT OF THE PACK, on ONE stated rule (`month_trend.outliers`) rather than a rule
+        # written per screen. The measure is PROJECTED ATTAINMENT — where this store is heading as a
+        # percentage of its own target — because a raw figure would only rediscover which stores are
+        # big. A store with no target, or none that could be projected, is absent from the
+        # distribution rather than at the bottom of it.
+        _attain_by_code: dict[str, float] = {}
         for r in rows:
             m = ((r.get('categories') or {}).get(cat) or {})
             if not m:
                 continue
+            _code = str(r.get('store_code') or '')
+            _t = m.get('trend') or {}
+            _tp = _t.get('projected')
+            if _tp is None:
+                if _code:
+                    _tr_unmeasured.append(_code)
+            else:
+                _tr_sum += safe_float(_tp)
+                _tr_measured += 1
+                if _t.get('kind') == 'short' and _code:
+                    _tr_short.append(_code)
+                if _code and safe_float(m.get('monthly')) > 0:
+                    _attain_by_code[_code] = round(
+                        100.0 * safe_float(_tp) / safe_float(m.get('monthly')), 1)
             monthly = safe_float(m.get('monthly'))
             achieved = safe_float(m.get('achieved_mtd'))
             acc['monthly'] += monthly
@@ -911,6 +958,31 @@ def aggregate_stores(store_rows: list[dict]) -> dict:
         acc['setup_fee_mtd'] = round(acc['setup_fee_mtd'], 2)
         acc['need_net'] = round(max(0.0, acc['monthly'] - acc['achieved_mtd']), dec)
         acc['attainment_pct'] = attainment_pct(acc['monthly'], acc['achieved_mtd'])
+        _tr_proj = round(_tr_sum, dec) if _tr_measured else None
+        _tv = _month_trend.verdict(_tr_proj, acc['monthly'])
+        acc['trend'] = {
+            'projected': _tr_proj,
+            'kind': _tv['kind'],
+            'gap': (round(_tv['gap'], dec) if _tv['gap'] is not None else None),
+            'target': acc['monthly'],
+            'stores_measured': _tr_measured,
+            'stores_not_trending': sorted(_tr_short),
+            'stores_not_measured': sorted(_tr_unmeasured),
+            # The total leaves out the stores nothing could project, so it is a FLOOR, not the
+            # team's trend. A surface that prints it without saying so is overstating its evidence.
+            'partial': bool(_tr_unmeasured),
+        }
+        _ol = _month_trend.outliers(list(_attain_by_code.values()))
+        acc['outliers'] = {
+            'measure': 'projected_attainment_pct',
+            'median': _ol['median'],
+            'spread': _ol['spread'],
+            'basis': _ol['basis'],
+            'counted': _ol['counted'],
+            'high': sorted(c for c, v in _attain_by_code.items() if v in set(_ol['high'])),
+            'low': sorted(c for c, v in _attain_by_code.items() if v in set(_ol['low'])),
+            'attainment_by_store': _attain_by_code,
+        }
         cats[cat] = acc
 
     # Area conversion = Σboxes ÷ Σbill-pays across the span (a ratio of sums, never a mean of ratios —

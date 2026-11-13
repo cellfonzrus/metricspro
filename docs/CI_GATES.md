@@ -29,11 +29,11 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `module-graph-guard.yml` | 2 | `pull_request`, `push`, `workflow_dispatch` |
 | `org-scope-guard.yml` | 19 | `pull_request`, `push`, `workflow_dispatch` |
 | `security.yml` | 15 | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
-| `tests.yml` | 15 | `pull_request`, `push`, `workflow_dispatch` |
+| `tests.yml` | 16 | `pull_request`, `push`, `workflow_dispatch` |
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 621 gates
+## Gated — 622 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -380,6 +380,7 @@ the Runs on column is how you can tell.
 | `harness_module_graph_guard.py` | `module-graph-guard.yml` | What else answers this question? (`impact`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_month_focus.py` | `carrier-vocab-guard.yml` | Customer master proof (DB-free, the real functions) (`customer-master-proof`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_month_leg_resolution.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_month_trend_one_home.py` | `tests.yml` | One month-end projection, one outlier rule (lock) (`month-trend-one-home-lock`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_mpc_confirm_creates.py` | `tests.yml` | Proof harnesses, group 2 of 4 (`harness-suite-2`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_multi_handset_day.py` | `carrier-vocab-guard.yml` | Several handsets to one buyer lock (DB-free, the real detector) (`multi-handset-one-buyer-lock`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_multifile_docs.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
