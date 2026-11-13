@@ -473,6 +473,7 @@ the Runs on column is how you can tell.
 | `harness_portal_session_health.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_portal_totp.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_portout_fraud.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_pos_checkout_contract.py` | `carrier-vocab-guard.yml` | POS receipts — one renderer, one declared format (DB-free, the real router) (`pos-receipt-render-proof`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_pos_grants_lock.py` | `security.yml` | PII functions stay switched off (migration lock) (`pos-pii-grants`) | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
 | `harness_pos_held_sale.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_pos_onboarding.py` | `tests.yml` | Proof harnesses, group 2 of 4 (`harness-suite-2`) | `pull_request`, `push`, `workflow_dispatch` |
