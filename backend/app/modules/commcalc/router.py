@@ -29,13 +29,14 @@ from app.modules.commcalc import pay_data_quality as _pdq   # 2026-10-06 — THE
 from app.modules.commcalc import device_reimb_recon as _drr   # 2026-10-08 — ePay-paid vs distributor-claimed device reimbursement (index §19.52; pure)
 from app.modules.commcalc import carrier_device_money as _cdm   # THE device-financing dollars per device (index §COMMCALC-44)
 from app.modules.commcalc import report_status   # 2026-11-10 — THE per-report sweep verdict writer (index §COMMCALC-68)
+from app.modules.commcalc import month_trend as _month_trend   # 2026-11-12 — THE "what is this month trending to" window, factor and verdict (index §COMMCALC-72)
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
 from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
 from app.modules.commcalc import daily_incentive as _daily_incentive   # 2026-10-10 — THE daily-incentive shapes (mig 1072); every rule is a config row (index §74)
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
 from app.modules.commcalc import peer_comparison as _peercmp   # 2026-10-08 — THE peer traffic-band comparison (index §59)
 from app.modules.commcalc import product_mix as _pmix       # 2026-10-09 — THE device price mix / port discipline (index §62)
-from app.modules.commcalc import manager_report_card as _mrcard   # 2026-10-08 — THE DM / market-manager report card (index §59.9; pure)
+from app.modules.commcalc import manager_report_card as _mrcard   # 2026-10-08 — THE DM / market-manager report card (index §59.10; pure)
 from app.modules.commcalc import accessory_target_plan as _accplan   # 2026-10-09 — THE accessory company-goal allocation (index §61; pure)
 from app.modules.commcalc import accessory_order_catalog as _aocat  # 2026-10-30 — THE accessory ORDERING vocabulary (index §COMMCALC-49.12; pure)
 from app.modules.commcalc import accessory_order_plan as _aop          # 2026-10-29 — THE accessory ORDER plan (index §COMMCALC-49; pure)
@@ -27597,6 +27598,7 @@ def _peer_comparison_payload(client, org_id, period, rows, *, resolve_market=Non
 
 @router.get("/peer-comparison")
 def peer_comparison(period: str = "", bands: str = "", markets: str = "", metric: str = "",
+                    focus_markets: str = "", focus_stores: str = "",
                     authorization: str = Header(default=""), org_id: str = ORG_ID):
     """PEER SALES COMPARISON — stores of comparable foot traffic, ranked on what they do with it.
 
@@ -27618,6 +27620,14 @@ def peer_comparison(period: str = "", bands: str = "", markets: str = "", metric
     `bands` = comma-separated bill-payment cut-offs (the lower bound of each band) overriding the house
     cuts for this call; `markets` filters; `metric` picks which gap the "lagging" list ranks on. The read
     is RBAC store-scoped exactly like every other sales report.
+
+    `focus_markets` / `focus_stores` (owner ask 2026-11-12, index §59.10) are the SUBJECT, not a filter.
+    They name the market or store the tiles hold up against the OTHER stores in its own traffic
+    band(s); the comparison set is NOT narrowed by them, because narrowing it is precisely what would
+    destroy the comparison — filter the report to one market and that market becomes its own band
+    median, which tells its manager he is average. They are applied AFTER the RBAC keyset, over the
+    payload this request is already serving, so a store outside this user's scope is not in the rows
+    and cannot be focused; a name that reaches no row comes back under `focus.subject.unknown`.
     """
     require_org(org_id)
     client = sb()
@@ -27671,7 +27681,55 @@ def peer_comparison(period: str = "", bands: str = "", markets: str = "", metric
 
     out["stores"] = opt_stores
     out["markets"] = opt_markets
+    # THE CASCADE ROSTER for the shared market/store picker (§3d): every in-scope store WITH its
+    # market, so picking a market narrows the store list to that market's stores. One list, derived
+    # from the same scoped rows the options above are — never a second roster read.
+    out["store_options"] = [{"store": s, "market": (resolve_market(s) or "")} for s in opt_stores]
     out["source_meta"] = {"sales": meta, "rows": len(rows), "cells": len(cells)}
+
+    # ── THE SUBJECT (index §59.10) ────────────────────────────────────────────────────────────────
+    # Computed over the payload AS SERVED — after the keyset and the market narrowing above — so the
+    # tiles can only ever compare stores this caller was already allowed to read. The band, the
+    # median, the verdict and the sentence are all `peer_comparison`'s own; nothing is re-derived.
+    out["focus"] = _peercmp.focus(
+        out,
+        stores=[s.strip() for s in (focus_stores or "").split(",") if s.strip()],
+        markets=[m.strip() for m in (focus_markets or "").split(",") if m.strip()],
+        metric=metric)
+    out["params"] = dict(out.get("params") or {},
+                         focus_stores=out["focus"]["subject"]["stores"],
+                         focus_markets=out["focus"]["subject"]["markets"])
+
+    # WHO IS ACCOUNTABLE for the subject — the org tree's own answer, read in bulk through THE walk
+    # (`storeops/org_chain.dm_by_store`). Only read when something is actually focused, so an
+    # unfocused load pays nothing for it. A tree that cannot be read, and a store the tree names no
+    # manager for, are DIFFERENT facts and are reported as such: a blank manager and "there is no
+    # manager" look identical on a tile and only one of them is the owner's to fix.
+    if out["focus"]["subject"]["stores"]:
+        from app.modules.storeops import org_chain as _org_chain
+        dms, no_dm, tree_error = {}, [], None
+        try:
+            from app.modules.storeops.router import org_chain_inputs
+            chain = _org_chain.dm_by_store(**org_chain_inputs(org_id))
+            upper = {str(k or "").strip().upper(): v for k, v in (chain or {}).items()}
+            for st in out["focus"]["subject"]["stores"]:
+                names = _org_chain.dm_names(upper.get(str(st).strip().upper()) or {})
+                if names:
+                    for n in names:
+                        dms.setdefault(n, []).append(st)
+                else:
+                    no_dm.append(st)
+        except Exception as e:
+            dms, no_dm = {}, []
+            tree_error = f"the org tree could not be read ({type(e).__name__}: {e})"
+        total = len(out["focus"]["subject"]["stores"])
+        out["focus"]["accountable"] = {
+            "dms": [{"name": n, "stores": sorted(v)} for n, v in sorted(dms.items())],
+            "no_dm": sorted(no_dm), "stores": total, "error": tree_error,
+            # The two facts stay apart: a tree that could not be READ is not a tree that names
+            # nobody, and only the second one is fixed in the org chart.
+            "note": (tree_error or _org_chain.dm_gap_sentence(len(no_dm), total)),
+        }
     # WHERE EVERY FIGURE ON THIS SCREEN CAME FROM (§CORE-17.3u). Attached LAST, over the payload this
     # request is actually serving — after the RBAC keyset and the market filter above — so a panel can
     # only ever fold rows the caller was already served. The declaration is pure and takes nothing but
@@ -33105,7 +33163,7 @@ def get_target_calendar(
 
     result = targets_engine.compute_scope(monthly, hours_by_day, actuals_by_day, today,
                                           round_counts=True, month_end=month_end,
-                                          catalog=catalog)
+                                          catalog=catalog, period=period)
     result.update({
         'period': period, 'scope': scope, 'store_code': store_code,
         'rep': rep_arg, 'monthly_targets': monthly, 'rep_share': round(rep_share, 4),
@@ -33457,7 +33515,7 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
             _declared_for(declared_by_store, code))
         res = targets_engine.compute_scope(monthly, hours_by_day, actuals_by_day, today,
                                            round_counts=True, month_end=end - _timedelta(days=1),
-                                           catalog=catalog)
+                                           catalog=catalog, period=period)
         # Untargeted store (only reachable via include_untargeted): keep it only when it has real
         # achieved actuals — else it's just noise. Targeted stores always pass.
         if sum(monthly.values()) <= 0:
@@ -33891,7 +33949,7 @@ async def get_manager_report_cards(period: str, today: str = "",
                                    stores: Optional[List[str]] = Query(default=None),
                                    markets: Optional[List[str]] = Query(default=None),
                                    authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """MANAGER REPORT CARDS (owner 2026-10-08, index §59.9) — what was assigned to each district
+    """MANAGER REPORT CARDS (owner 2026-10-08, index §59.10) — what was assigned to each district
     manager, store by store, with the system's own check-off of whether it was met; and the same card
     one level up, where the rows are the DMs beneath that manager so they are accountable too.
 
@@ -33949,7 +34007,8 @@ async def get_manager_report_cards(period: str, today: str = "",
                           # the card module imports nothing, so the axis is read here, from its one
                           # home, and handed in.
                           axis=targets_engine.target_axis(_target_catalog(sb(), org_id)))
-    note = _mrcard.coverage_note(cards.get('coverage'))
+    from app.modules.storeops import org_chain as _oc_sentence
+    note = _mrcard.coverage_note(cards.get('coverage'), _oc_sentence.dm_gap_sentence)
     # WHAT WAS ASSIGNED, AND WHERE EACH NUMBER CAME FROM (§CORE-17.3m). Each card's own roll-up
     # opens to the stores ON that card; a market manager's opens to the DMs beneath them, with the
     # stores the org tree places under none of them listed WITHOUT a figure (unattributable is not
@@ -35363,8 +35422,13 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
     mo, yr = _month_year(period)
     dim = _calendar.monthrange(yr, mo)[1] if (1 <= mo <= 12 and yr) else 30
     open_m = _is_open_month(period)
-    elapsed = max(1, _today.day - 1) if open_m else dim
-    trend_factor = (dim / elapsed) if elapsed else 1.0
+    # WHAT A MONTH-TO-DATE FIGURE IS TRENDING TO HAS ONE HOME (§COMMCALC-72). This was the FIRST of
+    # two inline copies of `dim / elapsed` in this file, and the Daily Targets screen prints its
+    # answer as "Trending Acc. $" — so a third copy for the action plan would have been a third
+    # answer to one question. Factored, both copies rewired, no figure moves.
+    _tw = _month_trend.month_window(period, today=_today)
+    elapsed = _tw['elapsed']
+    trend_factor = _month_trend.factor(_tw)
 
     # ── DATE RANGE (owner 2026-08-11) — an optional [from, to] window INSIDE the month being viewed.
     #    Parsed defensively: a malformed date is treated as "not supplied" (never 500 a report over a
@@ -35392,10 +35456,12 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
         no_overlap = eff_from > eff_to
         # Trending divisor = COMPLETE days inside the window. For the open month "complete" still means
         # strictly before today (today is in progress), exactly as the MTD divisor does.
-        last_complete = min(eff_to, _today - _timedelta(days=1)) if open_m else eff_to
-        elapsed = 0 if no_overlap else max(0, (last_complete - eff_from).days + 1)
-        elapsed = max(1, elapsed)
-        trend_factor = (dim / elapsed) if elapsed else 1.0
+        # The SECOND copy, now the same home asked for a span instead of the whole month. It applies
+        # the identical rule — "complete" is strictly before today for an open month — which is why
+        # the range and the month cannot drift apart.
+        _tw = _month_trend.month_window(period, today=_today, span_from=eff_from, span_to=eff_to)
+        elapsed = _tw['elapsed']
+        trend_factor = _month_trend.factor(_tw)
     rng_from_s = eff_from.isoformat() if (rng_on and eff_from) else None
     rng_to_s = eff_to.isoformat() if (rng_on and eff_to) else None
     undated_excluded = 0
@@ -38321,7 +38387,7 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
             _declared_for(declared_by_store, code))
         res = targets_engine.compute_scope(monthly, hours_by_day, actuals_by_day, today,
                                            round_counts=True, month_end=month_end,
-                                           catalog=catalog)
+                                           catalog=catalog, period=period)
         store_conv = targets_engine.scope_conversion(actuals, code, None, today)
         store_items = targets_engine.build_action_items(res, store_conv, include_categories=True)
         # THE PEER GAP, dereferenced — the item is built in `peer_comparison`, keyed on the store code
@@ -38347,7 +38413,12 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
                             'pace': m.get('pace', 0), 'today_target': m.get('today_target', 0),
                             # device set-up fee portion of accessory achieved (0 for non-accessory cats),
                             # reported separately (owner directive 2026-07-17).
-                            'setup_fee_mtd': m.get('setup_fee_mtd', 0)})
+                            'setup_fee_mtd': m.get('setup_fee_mtd', 0),
+                            # WHAT THIS STORE IS TRENDING TO on this category, and whether that
+                            # reaches the target (§COMMCALC-72). Served, never re-derived on the
+                            # screen: the factor already has one home and the Daily Targets page
+                            # prints its answer, so a client-side copy would be a third.
+                            'trend': m.get('trend')})
 
         rep_plans = []
         for rep_name in targets_engine.reps_in_scope(shifts, actuals, code):

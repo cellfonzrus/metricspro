@@ -15,6 +15,8 @@ What this file is for, section by section:
   §G  "lagging" has ONE definition, and the sentence it produces is arguable
   §H  the caveats — the three configuration facts a reader would otherwise mistake for performance
   §I  THE UN-WIRE LOCK — every cell field this module reads must still exist in `_sales_cell_agg`
+  §L  THE SUBJECT (§59.10) — a market or store against its band peers: the peer median EXCLUDES the
+      subject, the comparison set is never narrowed, and the un-wire lock on both
 """
 import sys
 
@@ -530,6 +532,102 @@ ck("K9 the screen reads the same assembly (one caller is not a shared home)",
 ck("K10 … and the assembly reads the feed for nobody: its rows are the caller's",
    "_sales_rows_union(" not in _src.split("def _peer_comparison_payload", 1)[1]
                                    .split("\n@router.", 1)[0])
+
+
+
+# ── §L  THE SUBJECT — one market or store against the stores it competes with (§59.10) ─────────────
+print("\n§L  the subject, against its band peers")
+# A four-store estate in ONE band, two markets. NJ 0.10 / 0.20 (median 0.15); NY 0.40 / 0.30
+# (median 0.35). The band median INCLUDING NJ is 0.25 — so if the peer median were the band median,
+# NJ's gap would read 0.10 instead of the 0.20 it actually is against the stores it competes with.
+def _fcell(store, boxes, billpay):
+    return {"store": store, "box_count": boxes, "accessory_rev": 0.0,
+            "_prem": {f"{store}p{i}" for i in range(boxes)}, "_port": set(), "_byod": set(),
+            "_upg": set(), "_swap": set(), "_dev_tablet": set(), "_aal": set(),
+            "_billpay_exec": {f"{store}b{i}" for i in range(billpay)}}
+
+
+_FMKT = {"N-1": "NJ", "N-2": "NJ", "Y-1": "NY", "Y-2": "NY"}
+_FCELLS = {s: _fcell(s, bx, bp) for s, bp, bx in
+           (("N-1", 100, 10), ("N-2", 100, 20), ("Y-1", 100, 40), ("Y-2", 100, 30))}
+_FOUT = P.build(_FCELLS, resolve_market=lambda s: _FMKT.get(s, ""), period="2026-11")
+_FOC = P.focus(_FOUT, markets=["NJ"])
+
+ck("L1 the subject is the market's own stores, out of the rows in view",
+   _FOC["subject"]["stores"] == ["N-1", "N-2"] and _FOC["subject"]["kind"] == "market")
+ck("L2 THE PEER MEDIAN EXCLUDES THE SUBJECT — the whole point of the comparison",
+   _FOC["bands"][0]["peer_median"] == 0.35, _FOC["bands"][0]["peer_median"])
+ck("L3 … and it is NOT the per-store band median, which includes the store (0.25 here)",
+   _FOUT["rows"][0]["gaps"]["boxes_per_billpay"]["band_median"] == 0.25)
+ck("L4 the peer best and the peer who holds it are named",
+   (_FOC["bands"][0]["peer_best"], _FOC["bands"][0]["peer_leader"]) == (0.40, "Y-1"))
+ck("L5 the composite gap is the median of the subject's own per-band gaps",
+   _FOC["gap_median"] == 0.20 and _FOC["verdict"] == "behind")
+ck("L6 the subject NEVER narrows the comparison set",
+   [r["store"] for r in _FOUT["rows"]] == ["Y-1", "Y-2", "N-2", "N-1"] and len(_FOUT["rows"]) == 4)
+ck("L7 who is behind is READ from `lagging()`, not decided a second time",
+   {b["store"] for b in _FOC["behind"]}
+   == {x["store"] for x in P.lagging(_FOUT)} & {"N-1", "N-2"})
+ck("L8 the coaching sentence is `prompt_sentence`'s, never re-worded",
+   all(b["prompt"] == P.prompt_sentence(b) for b in _FOC["behind"]))
+
+# Honesty. Each of these would otherwise render as a plausible zero.
+ck("L9 nothing picked is not the estate compared with itself",
+   P.focus(_FOUT)["measurable"] is False and P.focus(_FOUT)["gap_median"] is None
+   and bool(P.focus(_FOUT)["reason"]))
+_ALL = P.focus(_FOUT, markets=["NJ", "NY"])
+ck("L10 a subject that fills the band has NO peer, and says so rather than scoring 0",
+   _ALL["measurable"] is False and _ALL["bands"][0]["peer_median"] is None
+   and _ALL["bands"][0]["peer_stores"] == 0 and bool(_ALL["bands"][0]["note"]))
+ck("L11 a store that reached no row is reported unknown, not silently dropped",
+   P.focus(_FOUT, stores=["N-1", "NOPE"])["subject"]["unknown"] == ["NOPE"])
+_UNB = P.build(dict(_FCELLS, **{"N-3": _fcell("N-3", 7, 0)}),
+               resolve_market=lambda s: dict(_FMKT, **{"N-3": "NJ"}).get(s, ""), period="2026-11")
+ck("L12 a subject store with no traffic is named apart, never folded in as a zero",
+   P.focus(_UNB, markets=["NJ"])["not_banded"] == ["N-3"]
+   and P.focus(_UNB, markets=["NJ"])["stores_in_view"] == 2)
+ck("L13 a measure nobody reported is `not_measured`, never a 0% gap",
+   P.focus(_FOUT, markets=["NJ"], metric="family_plan_pct")["verdict"] == "not_measured")
+ck("L14 an undeclared metric falls back to the DECLARED default, never ranks on a stray column",
+   P.focus(_FOUT, markets=["NJ"], metric="made_up")["metric"] == P.DEFAULT_GAP_METRIC)
+ck("L15 every metric the picker offers can be focused (derived from the declaration)",
+   all(P.focus(_FOUT, markets=["NJ"], metric=k)["metric"] == k for k, _l, _h in P.GAP_METRICS))
+ck("L16 the gap direction is taken from the declaration, not assumed upward",
+   P._gap_toward_behind(1.0, 3.0, True) == 2.0 and P._gap_toward_behind(1.0, 3.0, False) == -2.0)
+ck("L17 a store pick WINS over a market pick — the narrower pick is the subject",
+   P.focus(_FOUT, markets=["NJ"], stores=["N-1"])["subject"]["stores"] == ["N-1"])
+ck("L18 a market name is matched case-insensitively (a tenant's spellings differ by feed)",
+   P.focus(_FOUT, markets=["nj"])["subject"]["stores"] == ["N-1", "N-2"])
+
+# RULE TWO / every-tenant: the module holds no market name, store code or band cut of its own.
+_fsrc = open(P.__file__).read()
+_fbody = _fsrc.split("def focus(", 1)[1].split("\ndef ", 1)[0]
+ck("L19 the comparison holds NO tenant vocabulary and reaches no sale line",
+   not any(t in _fbody for t in ("contract_type", "department", "daily_sales_feed", "Boost",
+                                 "Cellfonz", "Luxelink", "LuxeLink", "Vzone", "NJ", "NY")))
+ck("L20 … and no median, band or gap of its own: all four are dereferenced",
+   all(t in _fbody for t in ("_median(", "lagging(", "prompt_sentence(", "_metric_decl(")))
+ck("L21 the metrics come from the ONE declaration, so a new one is covered the day it is declared",
+   "GAP_METRICS" in _fsrc.split("def _metric_decl", 1)[1].split("\ndef ", 1)[0])
+
+# THE UN-WIRE LOCK for the endpoint: the subject must stay a spotlight applied AFTER the keyset.
+_ep = _src.split('@router.get("/peer-comparison")', 1)[1].split("\n# ═", 1)[0]
+ck("L22 the endpoint hands the subject to the ONE home, computing nothing itself",
+   "_peercmp.focus(" in _ep and "_median(" not in _ep)
+ck("L23 … over the payload AS SERVED, so the RBAC keyset is applied first",
+   _ep.index("rows = [r for r in rows if _keep(") < _ep.index("_peercmp.focus("))
+ck("L24 the subject does NOT reach the row filter (it is a spotlight, never a narrowing)",
+   "focus_stores" not in _ep.split("def _keep", 1)[1].split("rows = [r for r in rows", 1)[0]
+   and "focus_markets" not in _ep.split("def _keep", 1)[1].split("rows = [r for r in rows", 1)[0])
+ck("L25 the cascade roster carries each store's market, so a store pick can narrow to a market",
+   '"store_options"' in _ep and '"market": (resolve_market(s)' in _ep)
+ck("L26 the org tree is read through THE walk, and only when something is focused",
+   "_org_chain.dm_by_store(" in _ep and "org_chain_inputs(" in _ep
+   and 'if out["focus"]["subject"]["stores"]:' in _ep)
+ck("L27 the DM-gap sentence is dereferenced from its one home, never worded here",
+   "dm_gap_sentence(" in _ep and "no district manager" not in _ep)
+ck("L28 a tree that could not be READ and a tree that names nobody stay different facts",
+   '"error": tree_error' in _ep and "could not be read" in _ep)
 
 
 print("\n" + "=" * 70)

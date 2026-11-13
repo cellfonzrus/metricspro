@@ -6,7 +6,10 @@ import ReportShell from '@/components/ReportShell'
 import DrillDownPanel, {
   DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
 } from '@/components/DrillDownPanel'
-import { MultiSelect } from '@/lib/multiselect'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import StatTile from '@/components/StatTile'
+import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
+import type { StoreOpt } from '@/lib/market-store-cascade'
 
 // PEER SALES COMPARISON — owner directive 2026-10-08: compare stores that have SIMILAR BILL PAYMENTS,
 // because bill payments measure the people walking through the door. Inside a traffic band the
@@ -23,8 +26,17 @@ import { MultiSelect } from '@/lib/multiselect'
 // its tile — from commcalc/sales_outcome_drilldown.py, folded over the SAME per-store rows the table
 // below prints, out of the same sales relations.
 //
+// THE MARKET / STORE PICKER IS A SUBJECT, NOT A FILTER (owner ask 2026-11-12, index §59.10). Picking
+// NJ does NOT narrow the table to NJ: it would destroy the comparison, because every band would then
+// hold NJ stores only and the band median would become NJ's own — the screen would tell the DM he is
+// average. So the pick is a SPOTLIGHT: the tiles at the top hold the selection against the OTHER
+// stores in its own traffic band(s), and the table below keeps every store in scope. The peer median
+// on those tiles EXCLUDES the selection's own stores for the same reason; the per-store band median
+// in the table still includes the store, and the two carry different names.
+//
 // THIS PAGE IS SERVER-FOLDED AND IS DELIBERATELY *NOT* NARROWED. Every filter on it — the month, the
-// ranked metric, the band cut-offs and the market picker — is a QUERY PARAMETER (see `load` below),
+// ranked metric, the band cut-offs and the market / store subject — is a QUERY PARAMETER (see `load`
+// below),
 // so the server folds again on every change and each panel follows its figure by construction. There
 // is no browser fold here and `lib/drill-narrow` must not appear in this file;
 // `harness_batch21_drilldown.py` §G fails the build in BOTH directions if that changes.
@@ -50,7 +62,7 @@ function num(v: number | null | undefined, digits = 0): string {
 // How far behind the band median, as a colour. Ahead of median is not celebrated — the point of the
 // report is the gap, and colouring every leader green turns the table into a scoreboard.
 function gapColor(behind: boolean | undefined): string {
-  return behind ? 'var(--red, #dc2626)' : 'var(--text1)'
+  return behind ? 'var(--red)' : 'var(--text1)'
 }
 
 // The columns a peer store row carries beside its count, in the producer's own words.
@@ -65,6 +77,60 @@ const PEER_DRILL_COLUMNS: DrillExtraColumn[] = [
     sortValue: (r: DrillRow) => Number(r.fields?.['peers in band'] ?? 0) },
 ]
 
+// THE SUBJECT PAYLOAD, as the server serves it (§59.10). Typed rather than read through `any`: these
+// are the figures a manager is held to account on, and a renamed field must fail the type-check here
+// rather than render an empty tile that reads as "nothing to answer for".
+type FocusBand = {
+  band: number
+  label: string | null
+  subject_stores: number
+  peer_stores: number
+  subject_median: number | null
+  peer_median: number | null
+  peer_best: number | null
+  peer_leader: string | null
+  gap_to_peer_median: number | null
+  gap_to_peer_best: number | null
+  comparable: boolean
+  verdict: 'behind' | 'ahead' | 'level' | 'not_measured'
+  note: string | null
+}
+type FocusSubject = {
+  kind: 'market' | 'store' | 'estate'
+  label: string
+  stores: string[]
+  markets: string[]
+  unknown: string[]
+}
+type FocusAccountable = {
+  dms: { name: string; stores: string[] }[]
+  no_dm: string[]
+  stores: number
+  error: string | null
+  note: string | null
+}
+type FocusPayload = {
+  subject: FocusSubject
+  metric: string
+  metric_label: string
+  higher_is_better: boolean
+  measurable: boolean
+  reason: string | null
+  stores_in_view: number
+  peer_stores: number
+  not_banded: string[]
+  not_banded_reason: string | null
+  gap_median: number | null
+  verdict: 'behind' | 'ahead' | 'level' | 'not_measured'
+  behind: { store: string; prompt?: string }[]
+  behind_count: number
+  bands: FocusBand[]
+  peer_basis: string
+  composite_basis: string
+  sentence: string
+  accountable?: FocusAccountable
+}
+
 const SEV_STYLE: Record<string, { bg: string; fg: string; icon: string }> = {
   cannot_answer: { bg: 'var(--c-bg-e0e7ff)', fg: 'var(--c-fg-3730a3)', icon: '◻︎' },
   understated: { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', icon: '⚠︎' },
@@ -72,24 +138,34 @@ const SEV_STYLE: Record<string, { bg: string; fg: string; icon: string }> = {
 }
 
 export default function PeerComparisonPage() {
-  const [period, setPeriod] = useState(thisMonth())
-  const [selMarkets, setSelMarkets] = useState<string[]>([])
+  // ONE filter state for the shared bar (§3d): the month, and the market / store SUBJECT. The two
+  // module-specific controls (the ranked metric, the band cut-offs) ride in the bar's `right` slot —
+  // the core set is extended, never substituted.
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter(thisMonth()))
   const [metric, setMetric] = useState('')
   const [bands, setBands] = useState('')          // '' = the tenant's / house cuts
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
 
+  const period = filt.period && filt.period.length === 7 ? filt.period : thisMonth()
+  const selMarkets = filt.markets
+  const selStores = filt.stores
+
   const load = useCallback(() => {
     setLoading(true)
     const qs = new URLSearchParams({ period })
-    if (selMarkets.length) qs.set('markets', selMarkets.join(','))
+    // `focus_*`, NEVER `markets` — see the note at the top of this file. The subject is served as a
+    // spotlight over the whole in-scope estate; sending it as the narrowing parameter would be the
+    // defect the backend's own §59.10 header names.
+    if (selMarkets.length) qs.set('focus_markets', selMarkets.join(','))
+    if (selStores.length) qs.set('focus_stores', selStores.join(','))
     if (metric) qs.set('metric', metric)
     if (bands.trim()) qs.set('bands', bands.trim())
     api(`/api/v1/commcalc/peer-comparison?${qs.toString()}${orgParam()}`)
       .then(setData)
       .catch(e => setData({ error: String(e?.message || e) }))
       .finally(() => setLoading(false))
-  }, [period, selMarkets, metric, bands])
+  }, [period, selMarkets, selStores, metric, bands])
   useEffect(() => { load() }, [load])
 
   const rows: any[] = data?.rows || []
@@ -128,6 +204,14 @@ export default function PeerComparisonPage() {
   }, [parts, activeMetric])
 
   const marketOpts: string[] = data?.markets || []
+  // The cascade roster, as the server composed it — one entry per in-scope store WITH its market, so
+  // picking a market narrows the store dropdown to that market's stores. The page builds no roster of
+  // its own: what you can pick is what you were served.
+  const storeRoster: StoreOpt[] = useMemo(
+    () => (data?.store_options || []).map((o: { store: string; market?: string }) =>
+      ({ id: o.store, label: o.store, market: o.market || '' })),
+    [data?.store_options])
+  const focus: FocusPayload | null = data?.focus || null
 
   // The server's fold, printed as served. The shared offer gate carries NO extra condition here:
   // the figure and its panel came out of the same fold over the same rows, so a link appears for
@@ -170,24 +254,41 @@ export default function PeerComparisonPage() {
         </p>
       </div>
 
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
-        <label style={{ fontSize: 12, color: 'var(--text2)' }}>Month{' '}
-          <input type="month" style={sel} value={period.length === 7 ? period : thisMonth()} onChange={e => setPeriod(e.target.value)} />
-        </label>
-        <label style={{ fontSize: 12, color: 'var(--text2)' }} title="Which measure the lagging list and the gap columns rank on.">
-          Compare on{' '}
-          <select style={sel} value={activeMetric} onChange={e => setMetric(e.target.value)}>
-            {gapMetrics.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
-          </select>
-        </label>
-        <label style={{ fontSize: 12, color: 'var(--text2)' }} title="Bill-payment cut-offs that define the bands — the lower bound of each band, comma separated. Blank uses this tenant's configured bands.">
-          Band cut-offs{' '}
-          <input style={{ ...sel, width: 130 }} placeholder={(data?.band_cuts || []).join(', ') || 'default'}
-                 value={bands} onChange={e => setBands(e.target.value)} />
-        </label>
-        {marketOpts.length > 0 && <MultiSelect allLabel="All markets" width={150} value={selMarkets} options={marketOpts} onChange={setSelMarkets} />}
-        {(selMarkets.length > 0 || bands.trim() !== '') &&
-          <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => { setSelMarkets([]); setBands('') }}>Clear</button>}
+      {/* THE SHARED FILTER BAR (§3d, §CORE-27): the month and the market / store cascade, over the
+          org-scoped roster the server composed. The two controls that belong to THIS report only —
+          which measure to rank on, and the band cut-offs — ride in `right`, which extends the core
+          set rather than replacing it. */}
+      <StandardFilterBar
+        value={filt} onChange={setFilt}
+        periodMode="month"
+        show={{ period: true, stores: true, markets: true, reps: false }}
+        cascadeStores={storeRoster}
+        marketOptions={marketOpts}
+        storeLabel="Compare a store…"
+        marketLabel="Compare a market…"
+        right={
+          <>
+            <label style={{ fontSize: 12, color: 'var(--text2)' }} title="Which measure the comparison tiles, the lagging list and the gap columns rank on.">
+              Compare on{' '}
+              <select style={sel} value={activeMetric} onChange={e => setMetric(e.target.value)}>
+                {gapMetrics.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
+              </select>
+            </label>
+            <label style={{ fontSize: 12, color: 'var(--text2)' }} title="Bill-payment cut-offs that define the bands — the lower bound of each band, comma separated. Blank uses this tenant's configured bands.">
+              Band cut-offs{' '}
+              <input style={{ ...sel, width: 130 }} placeholder={(data?.band_cuts || []).join(', ') || 'default'}
+                     value={bands} onChange={e => setBands(e.target.value)} />
+            </label>
+            {bands.trim() !== '' &&
+              <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setBands('')}>Clear bands</button>}
+          </>
+        }
+      />
+      <div style={{ fontSize: 11, color: 'var(--text3)', margin: '6px 0 12px' }}>
+        Picking a market or a store does <b>not</b> hide the rest of the estate — it makes that the
+        <b> subject</b> of the tiles below and holds it against the other stores in its own traffic
+        band. Narrowing the table would make the selection its own band median, which is the one
+        comparison this report must never show.
       </div>
 
       {data?.error &&
@@ -215,6 +316,110 @@ export default function PeerComparisonPage() {
           <b>How stores are banded:</b> {data.band_basis}
           {data.kpi_feed && <> · {data.kpi_feed}</>}
         </div>}
+
+      {/* ════ THE SUBJECT — the selected market or store against the stores it competes with ════
+          Owner ask 2026-11-12 (index §59.10). Every figure here is the server's; this page prints it.
+          The two COUNTS open to their store rows (§CORE-17.3u); the peer median, the peer best and
+          the gaps do not, and the panel declaration states the ruling that refuses each. */}
+      {!loading && !data?.error && focus && focus.subject?.kind !== 'estate' && <>
+        <div className="stat-grid" style={{ marginBottom: 10 }}>
+          <StatTile hero
+            label={`${focus.subject?.label || 'Selection'} vs its traffic-band peers`}
+            value={focus.gap_median === null || focus.gap_median === undefined
+              ? '—'
+              : `${focus.gap_median > 0 ? '−' : focus.gap_median < 0 ? '+' : ''}${Math.abs(focus.gap_median).toFixed(2)}`}
+            sub={focus.sentence || focus.reason || ''}
+            icon={focus.verdict === 'behind' ? '🎯' : focus.verdict === 'ahead' ? '🏆' : '⚖︎'}
+            accent={focus.verdict === 'behind' ? 'var(--red)'
+              : focus.verdict === 'ahead' ? 'var(--green)' : undefined}
+            delta={focus.measurable
+              ? { value: `${focus.metric_label} vs peer median`, dir: focus.verdict === 'behind' ? 'down' : focus.verdict === 'ahead' ? 'up' : 'flat' }
+              : undefined} />
+          <StatTile label="Stores in the comparison" value={num(focus.stores_in_view)}
+            icon="🏬"
+            sub={<>
+              {focus.peer_stores} peer store{focus.peer_stores === 1 ? '' : 's'} in the same band
+              {focus.not_banded?.length > 0 &&
+                <> · <span title={focus.not_banded_reason || ''}>{focus.not_banded.length} with no traffic to band by</span></>}
+              <DrillTileLinks drills={peerDrill.dl('focus.stores', 'which stores')}
+                              open={peerDrill.open} onToggle={peerDrill.toggle} />
+            </>} />
+          <StatTile label="Behind their own band" value={num(focus.behind_count)}
+            icon="⚠︎"
+            accent={focus.behind_count > 0 ? 'var(--red)' : undefined}
+            sub={<>
+              of {focus.stores_in_view} compared, on {String(focus.metric_label || '').toLowerCase()}
+              <DrillTileLinks drills={peerDrill.dl('focus.behind', 'which stores')}
+                              open={peerDrill.open} onToggle={peerDrill.toggle} />
+            </>} />
+          {/* WHO ANSWERS FOR IT — the org tree's own answer. A manager it cannot name is said out
+              loud rather than left blank: a blank reads as a market nobody has to answer for. */}
+          <StatTile label="Accountable"
+            value={focus.accountable?.dms?.length
+              ? focus.accountable.dms.map(d => d.name).join(', ')
+              : '—'}
+            icon="👤"
+            sub={focus.accountable?.note || (focus.accountable?.dms?.length
+              ? `district manager${focus.accountable.dms.length === 1 ? '' : 's'} for the selected stores`
+              : 'the org tree names nobody for this selection')} />
+        </div>
+
+        {/* THE COMPARISON, BAND BY BAND. Figures from different bands are never averaged together —
+            different bands saw different numbers of people — so the table is per band and the
+            headline above is a median of the gaps, not of the levels. */}
+        {focus.bands?.length > 0 &&
+          <div className="card" style={{ padding: '12px 16px', marginBottom: 18, overflowX: 'auto' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
+              {focus.subject?.label} inside each of its traffic bands
+            </div>
+            <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ textAlign: 'left', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>
+                  <th style={{ padding: '4px 8px' }}>Traffic band</th>
+                  <th style={{ padding: '4px 8px', textAlign: 'right' }}>Its stores</th>
+                  <th style={{ padding: '4px 8px', textAlign: 'right' }}>Competing stores</th>
+                  <th style={{ padding: '4px 8px', textAlign: 'right' }}>{focus.metric_label} — it</th>
+                  <th style={{ padding: '4px 8px', textAlign: 'right' }}>peers</th>
+                  <th style={{ padding: '4px 8px', textAlign: 'right' }}>gap</th>
+                  <th style={{ padding: '4px 8px' }}>Best peer</th>
+                </tr>
+              </thead>
+              <tbody>
+                {focus.bands.map((b: FocusBand) => (
+                  <tr key={b.band} style={{ borderTop: '1px solid var(--border)' }}>
+                    <td style={{ padding: '6px 8px' }}>{b.label}</td>
+                    <td style={{ padding: '6px 8px', textAlign: 'right' }}>{b.subject_stores}</td>
+                    <td style={{ padding: '6px 8px', textAlign: 'right' }}>{b.peer_stores}</td>
+                    <td style={{ padding: '6px 8px', textAlign: 'right' }}>{num(b.subject_median, 2)}</td>
+                    <td style={{ padding: '6px 8px', textAlign: 'right' }}>{num(b.peer_median, 2)}</td>
+                    <td style={{ padding: '6px 8px', textAlign: 'right', color: gapColor(b.verdict === 'behind'), fontWeight: 600 }}>
+                      {num(b.gap_to_peer_median, 2)}
+                    </td>
+                    <td style={{ padding: '6px 8px', color: 'var(--text2)' }}>
+                      {b.comparable
+                        ? <>{b.peer_leader || '—'}{b.peer_best !== null && b.peer_best !== undefined ? ` at ${b.peer_best.toFixed(2)}` : ''}</>
+                        : <span style={{ color: 'var(--c-fg-92400e)' }}>{b.note}</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
+              ℹ︎ {focus.peer_basis} {focus.composite_basis}
+            </div>
+          </div>}
+
+        {!focus.measurable && focus.reason &&
+          <div className="card" style={{ padding: '10px 14px', marginBottom: 18, background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-92400e)', fontSize: 13 }}>
+            <b>⚠︎ This selection cannot be compared.</b> {focus.reason}
+          </div>}
+
+        {focus.subject?.unknown?.length > 0 &&
+          <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 14 }}>
+            Not found in this month’s data for your scope, so not part of the comparison:{' '}
+            <b>{focus.subject.unknown.join(', ')}</b>.
+          </div>}
+      </>}
 
       {/* the bands themselves */}
       {!loading && !data?.error && (data?.bands || []).length > 0 &&
@@ -260,7 +465,7 @@ export default function PeerComparisonPage() {
       ) : !data?.error ? (
         <ReportShell
           title={`Peer Sales Comparison — ${data?.period || period}`}
-          subtitle={`Stores grouped by bill-payment volume${selMarkets.length ? ' · filtered' : ''} · ${rows.length} stores in ${(data?.bands || []).length} traffic bands`}
+          subtitle={`Stores grouped by bill-payment volume · ${rows.length} stores in ${(data?.bands || []).length} traffic bands${focus?.subject?.label ? ` · comparing ${focus.subject.label} against its band peers (the table is not narrowed)` : ''}`}
           filename={`peer-comparison-${data?.period || period}`}
           columns={cols}
           rows={rows}

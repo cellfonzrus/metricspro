@@ -498,9 +498,12 @@ def cat_block(row, cat):
         return dict(cats.get(cat) or {})
     for m in (row.get("metrics") or ()):
         if (m or {}).get("cat") == cat:
-            # The action plan's own field names for the same three figures.
+            # The action plan's own field names for the same three figures — plus the served
+            # trend (§COMMCALC-72), which the team fold needs: the team's projection is the SUM of
+            # the stores' own projections, so dropping it here would have made the team total
+            # silently un-trendable while every store row carried one.
             return {"monthly": m.get("target"), "achieved_mtd": m.get("achieved"),
-                    "need": m.get("need"), "unit": m.get("unit")}
+                    "need": m.get("need"), "unit": m.get("unit"), "trend": m.get("trend")}
     return {}
 
 

@@ -265,3 +265,126 @@ def test_the_sibling_endpoint_survives_an_empty_catalog_too(wired, api_client, o
     literal, so the Daily Targets page 500'd for the same tenants for the same reason."""
     r = api_client.get(SUMMARY.format(period=PERIOD), params={"org_id": org, "today": AS_OF})
     assert r.status_code == 200, r.text
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# THE TREND, SERVED PER TENANT AGAINST THAT TENANT'S OWN TARGET (owner ask 2026-11-12, §COMMCALC-72)
+#
+# THE WINDOW IS RELATIVE TO THE PLAN'S OWN "AS OF" DAY, not to the wall clock. `AS_OF` is 20 October
+# inside `PERIOD` = October 2026, so from this plan's point of view October is the month in progress
+# and 19 days of it have completed — which is the right model for a screen whose whole premise is
+# "where do we stand as of this day". Pinning it here is the point: a reader who assumed the real
+# calendar decided the divisor would have had the trend jump the moment the month turned.
+#
+# The rest of the arithmetic (the first-of-month refusal, the finished-month factor of 1.0, the
+# future-month refusal, every month spelling) is proved exhaustively in
+# `tests/unit/test_month_trend.py` where `today` moves freely. What cannot be proved there is that
+# THIS endpoint reaches it for every tenant, against that tenant's own declared categories and its
+# own target figures.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+TREND_FIELDS = ("projected", "kind", "gap", "elapsed", "days_in_month", "basis")
+TEAM_TREND_FIELDS = ("projected", "kind", "gap", "stores_measured", "stores_not_trending",
+                     "stores_not_measured", "partial")
+OUTLIER_FIELDS = ("measure", "median", "spread", "basis", "counted", "high", "low")
+
+
+@pytest.mark.parametrize("org", TENANTS)
+def test_every_declared_metric_carries_a_trend_with_every_field_the_screen_reads(wired, api_client, org):
+    data = _get(api_client, org)
+    seen = 0
+    for s in data["stores"]:
+        for m in s["metrics"]:
+            t = m.get("trend")
+            assert t is not None, f"{org} {m['cat']} served no trend at all"
+            for f in TREND_FIELDS:
+                assert f in t, f"{org} {m['cat']} trend is missing {f}"
+            seen += 1
+    assert seen > 0, f"{org} declared no category to trend"
+
+
+@pytest.mark.parametrize("org", TENANTS)
+def test_the_divisor_is_the_days_completed_as_of_the_plan_s_OWN_day(wired, api_client, org):
+    # 20 October as of: the 1st-19th are complete, the 20th is in progress. The projection carries
+    # the month-to-date across all 31 days at that rate, and nothing here consults the wall clock.
+    for s in _get(api_client, org)["stores"]:
+        for m in s["metrics"]:
+            t = m["trend"]
+            assert t["basis"] == "mtd", f"{org} {m['cat']} read the as-of month as {t['basis']}"
+            assert (t["elapsed"], t["days_in_month"]) == (19, 31)
+            assert t["projected"] == pytest.approx(m["achieved"] * 31 / 19, abs=0.51), m["cat"]
+
+
+@pytest.mark.parametrize("org", TENANTS)
+def test_the_trend_is_judged_against_THIS_tenant_s_own_target(wired, api_client, org):
+    # The declared target figures differ per tenant (OWN_TARGETS), so a verdict reached against
+    # another tenant's number would show up here as the wrong kind.
+    for s in _get(api_client, org)["stores"]:
+        for m in s["metrics"]:
+            t = m["trend"]
+            assert t["target"] == pytest.approx(m["target"]), m["cat"]
+            expected = "on_track" if m["achieved"] >= m["target"] else "short"
+            assert t["kind"] == expected, f"{org} {m['cat']}: {t['kind']} against {m['target']}"
+
+
+@pytest.mark.parametrize("org", TENANTS)
+def test_a_metric_behind_its_target_names_the_gap_and_never_a_negative_one(wired, api_client, org):
+    for s in _get(api_client, org)["stores"]:
+        for m in s["metrics"]:
+            t = m["trend"]
+            if t["kind"] == "short":
+                assert t["gap"] > 0, m["cat"]
+                assert t["gap"] == pytest.approx(m["target"] - t["projected"]), m["cat"]
+            else:
+                assert t["gap"] in (0, None), m["cat"]
+
+
+@pytest.mark.parametrize("org", TENANTS)
+def test_the_team_total_carries_the_trend_and_names_who_is_not_trending(wired, api_client, org):
+    cats = (_get(api_client, org)["team_total"] or {}).get("categories") or {}
+    assert cats, f"{org} served no team total to trend"
+    for cat, block in cats.items():
+        t = block.get("trend")
+        assert t is not None, f"{org} {cat} team block served no trend"
+        for f in TEAM_TREND_FIELDS:
+            assert f in t, f"{org} {cat} team trend is missing {f}"
+        # Only THIS tenant's own store may be named — the leak this suite exists to catch.
+        for code in (t["stores_not_trending"] + t["stores_not_measured"]):
+            assert code == OWN_STORE[org], f"{org} team trend named {code}"
+
+
+@pytest.mark.parametrize("org", TENANTS)
+def test_the_team_projection_is_the_sum_of_the_stores_own_projections(wired, api_client, org):
+    data = _get(api_client, org)
+    cats = (data["team_total"] or {}).get("categories") or {}
+    for cat, block in cats.items():
+        own = [m["trend"]["projected"] for s in data["stores"] for m in s["metrics"]
+               if m["cat"] == cat and m["trend"]["projected"] is not None]
+        if not own:
+            continue
+        assert block["trend"]["projected"] == pytest.approx(sum(own), abs=0.02), cat
+        assert block["trend"]["stores_measured"] == len(own), cat
+        assert block["trend"]["partial"] is False, cat
+
+
+@pytest.mark.parametrize("org", TENANTS)
+def test_one_store_is_never_called_an_outlier(wired, api_client, org):
+    # Each tenant here has ONE store. A rule that named it would be calling the only measurement in
+    # the distribution an exception to itself.
+    cats = (_get(api_client, org)["team_total"] or {}).get("categories") or {}
+    for cat, block in cats.items():
+        o = block.get("outliers")
+        assert o is not None, f"{org} {cat} served no outlier block"
+        for f in OUTLIER_FIELDS:
+            assert f in o, f"{org} {cat} outliers missing {f}"
+        assert o["basis"] == "too_few", f"{org} {cat} judged {o['counted']} store(s) a pack"
+        assert o["high"] == [] and o["low"] == []
+
+
+def test_no_tenant_s_trend_or_outlier_block_names_another_tenant_s_store(wired, api_client):
+    # The directive's negative half, asserted across the whole payload rather than per field.
+    foreign = {o: [OWN_STORE[x] for x in TENANTS if x != o] for o in TENANTS}
+    for org in TENANTS:
+        blob = str(_get(api_client, org)["team_total"])
+        for code in foreign[org]:
+            assert code not in blob, f"{org}'s team total mentions {code}"

@@ -300,6 +300,19 @@ _PEER_BAND_NOTE = _PEER_ROW_NOTE + (
     "makes the comparison readable. A band is traffic measured in distinct bill-payment "
     "transactions, which is the report's stand-in for people through the door.")
 
+_PEER_FOCUS_NOTE = _PEER_ROW_NOTE + (
+    " Counted here are the stores of the SELECTED market or store that the comparison could band; "
+    "every other store in view is shown beside them and deliberately not counted, because the "
+    "selection is the subject and the rest of the estate is what it is being measured against. A "
+    "selected store with no bill-payment traffic is not in this count and is named apart on the "
+    "screen, never folded in as a zero.")
+
+_PEER_FOCUS_BEHIND_NOTE = _PEER_ROW_NOTE + (
+    " Counted here are the SELECTED stores that are behind their own traffic band's median — the "
+    "same verdict, from the same call, as the coaching list below the tiles. A selected store alone "
+    "in its band carries no figure at all rather than a measured zero: being alone in a band is not "
+    "keeping up (§CORE-17.3i).")
+
 _PEER_BEHIND_NOTE = _PEER_ROW_NOTE + (
     " Counted here is every store BEHIND the median of its own traffic band on the measure this "
     "page is ranked by. A store that is at or above its band's median is shown with a measured zero "
@@ -487,6 +500,30 @@ def _in_band(band):
     return _read
 
 
+# ── §59.10 THE SUBJECT'S OWN TWO COUNTS ───────────────────────────────────────────────────────────
+# The market/store tiles print two COUNTS — how many of the selection's stores are in the comparison,
+# and how many of them are behind their own band — and a count on this family opens (§CORE-17.3u).
+# Every other figure on those tiles is refused for a reason the header already states: the peer
+# median and the peer best are ORDER STATISTICS over the band, the gaps are subtractions composed at
+# the TOTAL (§CORE-17.3k), and both are measured over the stores the selection EXCLUDES, so no row
+# list of the selection's own stores adds up to them.
+PEER_FOCUS_PREFIX = "focus"
+PEER_FOCUS_STORES = PEER_KEY_SEP.join((PEER_FOCUS_PREFIX, "stores"))
+PEER_FOCUS_BEHIND = PEER_KEY_SEP.join((PEER_FOCUS_PREFIX, "behind"))
+
+
+def _store_set(names):
+    return {str(n or "").strip().upper() for n in (names or ()) if str(n or "").strip()}
+
+
+def _in_store_set(names):
+    want = _store_set(names)
+
+    def _read(r):
+        return str((r or {}).get("store") or "").strip().upper() in want
+    return _read
+
+
 def _peer_has_peers(r):
     """PURE: does this store have anybody in its band to be compared with? The producer's own peer
     count, read rather than re-derived from the band's membership."""
@@ -533,7 +570,8 @@ def _peer_behind_reason(metric):
     return _read
 
 
-def peer_catalogue(sales_tables, bands=(), metric=DEFAULT_GAP_METRIC, metric_label=None):
+def peer_catalogue(sales_tables, bands=(), metric=DEFAULT_GAP_METRIC, metric_label=None,
+                   focus_stores=(), focus_behind=(), focus_label=None):
     """PURE: the peer panels — ONE store row, counted per traffic band and once for "behind its own
     band".
 
@@ -558,6 +596,20 @@ def peer_catalogue(sales_tables, bands=(), metric=DEFAULT_GAP_METRIC, metric_lab
             label="%s — stores in this traffic band" % (label or band_key(band)),
             value=_zero_or_one(_in_band(band), lambda _r: True),
             in_figure=_in_band(band), note=_PEER_BAND_NOTE))
+    if focus_stores:
+        cat.append(dict(
+            common, key=PEER_FOCUS_STORES, total=PEER_FOCUS_STORES,
+            label="%s — stores in the comparison" % (focus_label or "The selection"),
+            value=_zero_or_one(_in_store_set(focus_stores), lambda _r: True),
+            in_figure=_in_store_set(focus_stores), note=_PEER_FOCUS_NOTE))
+        cat.append(dict(
+            common, key=PEER_FOCUS_BEHIND, total=PEER_FOCUS_BEHIND,
+            label="%s — its stores behind their own traffic band on %s"
+                  % (focus_label or "The selection", str(metric_label or metric).lower()),
+            value=_zero_or_one(_in_store_set(focus_behind),
+                               _peer_behind_measurable(metric)),
+            in_figure=_in_store_set(focus_behind),
+            reason=_peer_behind_reason(metric), note=_PEER_FOCUS_BEHIND_NOTE))
     return tuple(cat)
 
 
@@ -587,8 +639,21 @@ def peer_drilldowns(payload, *, cap=None):
     for b in payload.get("bands") or ():
         if b and b.get("stores") is not None:
             totals[band_key(b.get("band"))] = b.get("stores")
+    # THE SUBJECT'S COUNTS, from the producer's own figures — never re-folded here. `stores_in_view`
+    # is what `focus` counted as banded and in the selection, and `behind` is the list `lagging()`
+    # named; a second tally would be a second answer to a question already answered.
+    foc = payload.get("focus") or {}
+    fstores = [r.get("store") for r in rows
+               if str(r.get("store") or "").strip().upper()
+               in {str(s or "").strip().upper() for s in ((foc.get("subject") or {}).get("stores") or ())}]
+    fbehind = [x.get("store") for x in (foc.get("behind") or ()) if x]
+    if fstores:
+        totals[PEER_FOCUS_STORES] = foc.get("stores_in_view")
+        totals[PEER_FOCUS_BEHIND] = foc.get("behind_count")
     tables = sales_union_tables((payload.get("source_meta") or {}).get("sales"))
-    return _served(peer_catalogue(tables, bands=bands, metric=metric, metric_label=label),
+    return _served(peer_catalogue(tables, bands=bands, metric=metric, metric_label=label,
+                                  focus_stores=fstores, focus_behind=fbehind,
+                                  focus_label=((foc.get("subject") or {}).get("label") or None)),
                    rows, totals, cap)
 
 

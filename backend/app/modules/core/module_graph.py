@@ -1215,10 +1215,11 @@ FACTS: dict[str, dict] = {
         },
     },
     'peer_traffic_band': {
-        "question": 'Which stores see comparable FOOT TRAFFIC (bill-payment visits), and how far is '
-                    'each one behind the best and the median of its own band?',
+        "question": 'Which stores see comparable FOOT TRAFFIC (bill-payment visits), how far is '
+                    'each one behind the best and the median of its own band, and how does a chosen '
+                    'MARKET or STORE compare with the other stores in its band?',
         "homes": ('app/modules/commcalc/peer_comparison.py',),
-        "index": ('59',),
+        "index": ('59', '59.10'),
         "locks": ('harness_peer_comparison.py',),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
         # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
@@ -1237,6 +1238,27 @@ FACTS: dict[str, dict] = {
             # against either and re-bands nothing; `harness_batch21_drilldown.py` §A7 fails the
             # build if it stops dereferencing them.
             'app/modules/commcalc/sales_outcome_drilldown.py': ('_peer',),
+        },
+    },
+    'store_org_chain': {
+        "question": 'Who owns this store in the org tree — which district, which district manager, '
+                    'who is above them — and how is "the tree names nobody" said?',
+        "homes": ('app/modules/storeops/org_chain.py',),
+        "index": ('47.17', '59.10'),
+        "locks": ('harness_manager_report_card.py', 'harness_peer_comparison.py'),
+        # SNAPSHOT — by hand, never blessed (§50). Registered 2026-11-12 when the peer comparison's
+        # accountability tile became the second surface to say "the org tree names no district
+        # manager for these stores": that sentence now has ONE home here (`dm_gap_sentence`), and the
+        # cards' own copy was deleted in the same PR. `commcalc/manager_report_card` consumes it with
+        # NO import edge BY DESIGN — that module imports nothing (its §D1 rule), so the sentence is
+        # HANDED IN by whoever renders a card, and `harness_manager_report_card.py` §B17 is what
+        # holds it to the injection.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_oc_sentence', '_org_chain'),
+            'app/modules/storeops/router.py': ('org_chain',),
+            'app/modules/storeops/clock_variance_api.py': ('_org_chain',),
+            'app/modules/closing/router.py': ('org_chain',),
+            'app/modules/storevisit/visit_plan_router.py': ('org_chain',),
         },
     },
     'device_price_band': {
@@ -1571,6 +1593,12 @@ FACTS: dict[str, dict] = {
             # The report's endpoint reads the device-line test directly, so the look-back counts the
             # same lines the two ordering screens do.
             'app/modules/commcalc/router.py': ('_devvocab', '_dp'),
+            # The month-end trend home (§COMMCALC-72, 2026-11-12). `dim / elapsed` IS "how many per
+            # window-unit", so it asks here rather than dividing again — which is what leaves ONE
+            # division behind every projected figure in the tree. Its own window is in DAYS, the
+            # unit rule above allowing it beside the two callers that count days and the one that
+            # counts months.
+            'app/modules/commcalc/month_trend.py': ('_dp',),
         },
     },
     'device_model_family': {
@@ -2200,7 +2228,45 @@ FACTS: dict[str, dict] = {
             # closed" and `month_days` for the calendar it is judged against; it owns neither.
             'app/modules/commcalc/pay_data_quality.py': ('_fp',),
             'app/modules/commcalc/router.py': ('_feed_period', 'sales_recon'),
+            # §COMMCALC-72 — the month-end trend home reads `period_month_year` for either spelling,
+            # `month_days` for the month's length and `month_state` for "is this month still in
+            # progress". Its first draft re-derived all three, and `router._is_open_month`'s own copy
+            # of the third is why July once read as a closed month: this is the fact the whole
+            # factoring turns on, so the trend home dereferences it and owns none of it.
+            'app/modules/commcalc/month_trend.py': ('_fp',),
             'app/modules/notify/report_registry.py': ('SR',),
+        },
+    },
+    'month_trend': {
+        "question": ("WHAT IS THIS MONTH-TO-DATE FIGURE TRENDING TO, and may it be trended at all? "
+                     "The arithmetic was inline TWICE in the Executive MTD report "
+                     "(`trend_factor = dim / elapsed`, once for the month and once for a date range "
+                     "inside it) and its answer was already on two screens as \"Trending Acc. $\" "
+                     "and \"Trending Acc. Sales\", so the action plan's need for it in 2026-11 "
+                     "would have been the THIRD copy. The rule it keeps unchanged: the month-to-date "
+                     "divided by the days COMPLETED — strictly before the caller's own as-of day, "
+                     "because today is in progress — times the days the month holds. A finished "
+                     "month has nothing to project (factor 1.0) and a FUTURE one is refused outright, "
+                     "since `feed_period` rightly calls it open and that is exactly why there is no "
+                     "run rate to carry across it. The states are the point: nothing projectable is "
+                     "`not_measured` and NEVER `short` (a shortfall nobody measured is not a "
+                     "shortfall), and no target is `no_target` and never `on_track` — the 2026-09-10 "
+                     "\"0 achieved with on target\" defect, which a trend could have reintroduced. "
+                     "The same home owns WHO IS AN OUTLIER, median-based on projected attainment, "
+                     "naming nobody below four measured figures, because \"highlight the outliers in "
+                     "a different colour\" has to mean one rule rather than one per screen."),
+        "homes": ('app/modules/commcalc/month_trend.py',),
+        "index": ('COMMCALC-72',),
+        "locks": ('harness_month_trend_one_home.py',),
+        # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
+        "callers": {
+            # The two sites that HELD the inline copies: the Executive MTD report's whole-month
+            # factor and its date-range factor. Both now ask for a window and a factor.
+            'app/modules/commcalc/router.py': ('_month_trend',),
+            # The per-category trend the Daily Targets screen, the action plan and every report card
+            # read, plus the team roll-up's verdict — `aggregate_stores` sums the stores' OWN
+            # projections rather than re-dividing the team's achieved, and asks here for the verdict.
+            'app/modules/commcalc/targets_engine.py': ('_month_trend',),
         },
     },
     'sweep_due': {
