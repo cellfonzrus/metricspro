@@ -223,7 +223,11 @@ READERS = (
     (WHATIF, "_ledger_income_rows", ("_ct.present_columns(", "_ct.select_list(")),
     (EXPENSES, "effective_expense_rows", ("_ct.present_columns(",)),
     (TENANT, "_fetch_memberships", ('select("*")',)),
-    (COA, "wages_by_store", ('select("*")',)),
+    # `wages_by_store` became a 1-line wrapper on 2026-11-12 (§ACCOUNT-02: the same measurement is
+    # also needed keyed by store CODE, so `wages_by_code` is its sibling). The READER — the roster
+    # select this rule is about — moved WHOLE into their shared I/O core, which is what must stay
+    # pinned here: pinning the wrapper would pass while the core grew a column ladder.
+    (COA, "_wage_measurement", ('select("*")',)),
     (ROUTER, "_accessory_config_uncached", ("_ct.read_row(",)),
     (ROUTER, "_billpay_tender_tokens", ("_ct.read_row(",)),
     (ROUTER, "_activation_details_rules", ("_accessory_config(client, org_id)",)),
