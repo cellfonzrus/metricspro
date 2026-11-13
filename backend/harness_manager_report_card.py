@@ -18,6 +18,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.modules.commcalc import manager_report_card as M  # noqa: E402
+from app.modules.storeops import org_chain as _ORG_CHAIN  # noqa: E402  the one home for the DM-gap sentence
 
 _pass = _fail = 0
 _failed = []
@@ -225,8 +226,17 @@ ck("B16 coverage states the shortfall in numbers a person can act on",
    and OUT["coverage"]["stores_without_a_dm"] == 1 and OUT["coverage"]["dms"] == 2
    and OUT["coverage"]["managers_above"] == 1, OUT["coverage"])
 ck("B17 the note names the FIX (the org chart), and stays silent when coverage is complete",
-   "org chart" in (M.coverage_note(OUT["coverage"]) or "")
-   and M.coverage_note({"stores": 3, "stores_without_a_dm": 0}) is None)
+   "org chart" in (M.coverage_note(OUT["coverage"], _ORG_CHAIN.dm_gap_sentence) or "")
+   and M.coverage_note({"stores": 3, "stores_without_a_dm": 0},
+                       _ORG_CHAIN.dm_gap_sentence) is None
+   # THE MEASUREMENT ITSELF IS NOT WORDED HERE (2026-11-12): the sentence is handed in from
+   # `org_chain.dm_gap_sentence`, the one home two surfaces now read, and this module adds only the
+   # clause that is true of a CARD. A copy of the count's wording in this file would be the drift
+   # the §D1 "imports nothing" rule exists to make visible.
+   and "no district manager" in (M.coverage_note(OUT["coverage"], _ORG_CHAIN.dm_gap_sentence) or "")
+   # … and the COUNT is not worded in this module at all: the "n of m" clause comes from the
+   # injected home, so a copy of it here would show up as this substring and redden the check.
+   and "of {total} store" not in open(M.__file__).read())
 ck("B18 a store under TWO DMs is on both cards and the placement count says so, so the cards still add up",
    M.build([ROWS[0]], {"B-1": {"district": {"id": "u1", "name": "D1"},
                                "dm": [DM_A, DM_B], "above": [MM]}},

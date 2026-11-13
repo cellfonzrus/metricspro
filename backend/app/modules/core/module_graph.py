@@ -1215,10 +1215,11 @@ FACTS: dict[str, dict] = {
         },
     },
     'peer_traffic_band': {
-        "question": 'Which stores see comparable FOOT TRAFFIC (bill-payment visits), and how far is '
-                    'each one behind the best and the median of its own band?',
+        "question": 'Which stores see comparable FOOT TRAFFIC (bill-payment visits), how far is '
+                    'each one behind the best and the median of its own band, and how does a chosen '
+                    'MARKET or STORE compare with the other stores in its band?',
         "homes": ('app/modules/commcalc/peer_comparison.py',),
-        "index": ('59',),
+        "index": ('59', '59.10'),
         "locks": ('harness_peer_comparison.py',),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
         # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
@@ -1237,6 +1238,27 @@ FACTS: dict[str, dict] = {
             # against either and re-bands nothing; `harness_batch21_drilldown.py` §A7 fails the
             # build if it stops dereferencing them.
             'app/modules/commcalc/sales_outcome_drilldown.py': ('_peer',),
+        },
+    },
+    'store_org_chain': {
+        "question": 'Who owns this store in the org tree — which district, which district manager, '
+                    'who is above them — and how is "the tree names nobody" said?',
+        "homes": ('app/modules/storeops/org_chain.py',),
+        "index": ('47.17', '59.10'),
+        "locks": ('harness_manager_report_card.py', 'harness_peer_comparison.py'),
+        # SNAPSHOT — by hand, never blessed (§50). Registered 2026-11-12 when the peer comparison's
+        # accountability tile became the second surface to say "the org tree names no district
+        # manager for these stores": that sentence now has ONE home here (`dm_gap_sentence`), and the
+        # cards' own copy was deleted in the same PR. `commcalc/manager_report_card` consumes it with
+        # NO import edge BY DESIGN — that module imports nothing (its §D1 rule), so the sentence is
+        # HANDED IN by whoever renders a card, and `harness_manager_report_card.py` §B17 is what
+        # holds it to the injection.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_oc_sentence', '_org_chain'),
+            'app/modules/storeops/router.py': ('org_chain',),
+            'app/modules/storeops/clock_variance_api.py': ('_org_chain',),
+            'app/modules/closing/router.py': ('org_chain',),
+            'app/modules/storevisit/visit_plan_router.py': ('org_chain',),
         },
     },
     'device_price_band': {

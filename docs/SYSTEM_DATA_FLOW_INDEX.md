@@ -7506,7 +7506,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 
 - `GET /commcalc/expenses/apply-config` — additionally serves `labour_rows` (the resolved per-org labour vocabulary from its one home, with `payroll_source` / `commission_source` / `mode` / `grain`), so the Expenses sheet DEREFERENCES which of its rows the platform auto-fills instead of keeping a copy; its `default_tokens` are now DERIVED from that same vocabulary rather than a literal list (§4e).
 - `GET /account/pl/{period}?scope=&stores=&markets=` — unchanged, and now ALSO the drill path of the Account hub: company → market → store is this one read with one more thing in the filter, spelled by the one frontend helper `plStatement.plQuery`. Its per-scope snapshots now carry real per-line drill `detail` (§4e).
-- `GET /commcalc/peer-comparison?period=&metric=&bands=` — stores grouped into BILL-PAYMENT traffic bands, then ranked inside their band on boxes / AAL / family plan % / accessories per box, with the band median, the band best and the gap to each; and `GET /commcalc/targets/{period}/action-plan`, which now carries the SAME verdict per store as a `peer_gap` item (`peer_meta` reports a comparison that could not run, and the lagging stores it could not carry). Both callers read ONE assembly, `router._peer_comparison_payload`, so the screen and the plan cannot coach different stores (§59, §59.7).
+- `GET /commcalc/peer-comparison?period=&metric=&bands=&focus_markets=&focus_stores=` — stores grouped into BILL-PAYMENT traffic bands, then ranked inside their band on boxes / AAL / family plan % / accessories per box, with the band median, the band best and the gap to each; and `GET /commcalc/targets/{period}/action-plan`, which now carries the SAME verdict per store as a `peer_gap` item (`peer_meta` reports a comparison that could not run, and the lagging stores it could not carry). Both callers read ONE assembly, `router._peer_comparison_payload`, so the screen and the plan cannot coach different stores (§59, §59.7). `focus_markets` / `focus_stores` make ONE market or store the SUBJECT of a tile strip that holds it against the OTHER stores in its own band(s) — a spotlight, never a narrowing, because narrowing would make the selection its own band median and tell its DM he is average (§59.10).
 - `GET /commcalc/spiff-impact?period=&spiff=&bands=&markets=` — ONE carrier pay type per store: its dollars and paid units, its share of the P&L line those dollars ACTUALLY book to (§58’s classification, so the figures tie to the P&L’s carrier lines by construction), the store’s net profit WITH it against WITHOUT it from the stored per-store snapshot (§4’s `analysis.pl_totals` via `statement_filter.store_snapshots`), and the paid units per 100 boxes ranked inside the store’s own §59 traffic band through `peer_comparison.with_extra_metric` — so “behind” keeps ONE definition. The pay-type dropdown is derived from the month’s own statement, never a list in code, and a report that chose its own subject SAYS so (`selection_basis`). READ-ONLY (§60).
 - `GET /commcalc/accessory-target-plan/{period}?mode=&value=&basis=&stores=&markets=` — ONE company accessory goal, split per store on that store's own accessories-per-box over the last two months against the boxes it is projected to sell: the two history months in their own columns, MTD, the projected month-end (§5's `_targets_trending_by_code`), the target in force (mig `006`), the proportionate target and the extension it represents. READ-ONLY. `POST /commcalc/accessory-target-plan/{period}/assign` writes `accessories_monthly` on the selected stores through `_require_target_edit` — the same permission + store-span gate as `PUT /targets/{period}` — recomputing the plan server-side and moving no other column (§61).
 - `GET /commcalc/product-mix?period=&markets=&bands=` — per STORE and per REP: boxes, accessory $ per box, port-ins per box, and the device mix banded by what the CUSTOMER paid (free / budget / mid / premium, money cuts stated on every payload and overridable per call), plus the most-sold models with their average customer price and how many went out free. A rep is flagged only when BOTH signals are below the median of the reps in view, and the measured Pearson correlation between the mix and each outcome ships with the payload so the owner's claim can be falsified rather than assumed. The lagging-store ACTION PLAN is §59's own band, median, gap, verdict and sentence through `_peer_comparison_payload` + `with_extra_metric` on the SAME rows (no second feed read, no second definition of behind), with this report's flagged reps attached to each store item. The carrier's own port-in rate per store rides BESIDE ours through `kpi_failing.port_in_rate` — the column migration 002 has carried since 2026 and nothing ever displayed. READ-ONLY (§62).
@@ -7884,7 +7884,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
-| **Is this store selling less than stores that see the same number of people — and who proved it could be done?** Bill payments measure footfall (nobody is persuaded to walk in and pay a bill), so stores are banded on bill-payment VISITS and compared only inside their band. `lagging()` is the one definition of behind; `peer_action_item` turns one lagging row into the Daily Action Plan's own item, `critical` only when the shortfall exceeds 25% of the band median AND a real leader beat that median | `commcalc.daily_sales_feed` ∪ `commcalc.raw_sales` rolled up by `router._sales_cell_agg` (`_billpay_exec`, `box_count`, `_aal`, `accessory_rev`) × `commcalc.raw_dlar_store` (`family_plan_pct`, `aal_conversion`) | ONE home `commcalc/peer_comparison.py` (`resolve_bands` / `band_of` / `build` / `lagging` / `prompt_sentence` / `peer_action_item` / `peer_items_by_store`), assembled once by `router._peer_comparison_payload` for both the screen and the plan; reads NO raw sale line (AST-locked); module-graph fact `peer_traffic_band`; lock `harness_peer_comparison.py` — §59, §59.7. Live September 2026 (Cellfonz R Us): 28 stores → 4 bands spanning 83–616 visits, **12 behind their own band median** by 5.3%–42.1%, prompting 5 critical and 7 warning items |
+| **Is this store selling less than stores that see the same number of people — and who proved it could be done?** Bill payments measure footfall (nobody is persuaded to walk in and pay a bill), so stores are banded on bill-payment VISITS and compared only inside their band. `lagging()` is the one definition of behind; `peer_action_item` turns one lagging row into the Daily Action Plan's own item, `critical` only when the shortfall exceeds 25% of the band median AND a real leader beat that median | `commcalc.daily_sales_feed` ∪ `commcalc.raw_sales` rolled up by `router._sales_cell_agg` (`_billpay_exec`, `box_count`, `_aal`, `accessory_rev`) × `commcalc.raw_dlar_store` (`family_plan_pct`, `aal_conversion`) | ONE home `commcalc/peer_comparison.py` (`resolve_bands` / `band_of` / `build` / `lagging` / `prompt_sentence` / `peer_action_item` / `peer_items_by_store` / `subject_of` / `focus` / `focus_sentence_of`), assembled once by `router._peer_comparison_payload` for both the screen and the plan; reads NO raw sale line (AST-locked); module-graph fact `peer_traffic_band`; lock `harness_peer_comparison.py` — §59, §59.7. Live September 2026 (Cellfonz R Us): 28 stores → 4 bands spanning 83–616 visits, **12 behind their own band median** by 5.3%–42.1%, prompting 5 critical and 7 warning items |
 | **What is ONE carrier pay type worth to a store — to its commission payout revenue and to its net profit — and which stores are not earning it on the sales they make?** The share is of the P&L line the dollars actually book to (a “spiff” the org declares a reimbursement is NOT commission revenue, and the report says so); the lift is `spiff ÷ (net_income − spiff)` and is withheld with its reason when no positive base survives; the rate is paid units per 100 boxes, flagged as a different cohort when the pay type names a month rung | `commcalc.raw_comp_report` (`compensation_type`, `payment_amount`, `quantity`) classified through `commcalc/carrier_dollar_class` × the stored `commcalc.account_statements` per-store P&L × `router._sales_cell_agg`’s `box_count` / `_billpay_exec` | ONE home `commcalc/spiff_impact.py` (`pay_type_options` / `default_selection` / `store_money` / `profit_effect` / `units_per_100_boxes` / `caveats` / `build`) → `GET /commcalc/spiff-impact`; reads NO sale line and classifies NO dollar itself (both AST-locked); module-graph fact `spiff_store_impact`; lock `harness_spiff_impact.py` — §60. Live September 2026 (house org): $110,780.14 to `carrier_comm` and $373,211.61 to `vip_reimb`, both tying to the cent to the 31 stored per-store snapshots; **77% of the statement is not commission**, only 3 of 49 pay types carry the SPIFF component, and 13 of 28 stores have no positive profit base for a lift |
 | **Given ONE company accessory sales goal, what target should each store carry?** Weighted by the store's own accessories-per-box over the last two months x the boxes it is projected to sell; a store that sold boxes and attached nothing is weighted at the COMPANY rate and flagged, never given a $0 target; an unselected store's target is RESERVED out of the goal rather than assumed away; the assignments foot to the goal by largest remainder | `commcalc.daily_sales_feed`/`raw_sales` via `router._fetch_actuals` (`acc_gp` = accessory revenue + device set-up fee; `box_count`) x `router._targets_trending_by_code` (the projection) x `commcalc.targets.accessories_monthly` (mig `006`, the target in force — read AND written) | ONE home `commcalc/accessory_target_plan.py` (`company_goal` / `basis_amounts` / `company_rate` / `capacity_row` / `allocate` / `plan` / `assignment_payload`) → `GET /commcalc/accessory-target-plan/{period}` + its gated `/assign`; reads NO sale line and derives NO projection of its own (both AST-locked); module-graph fact `accessory_target_allocation`; lock `harness_accessory_target_plan.py` — §61. No new table: the suggestion is written into mig `006`'s own column, the row §5's Accessory Sales Targets tracker reads  **DRILL-DOWN §CORE-17.3o:** the seven money totals open to the store rows, the month figures dereferencing `data_lineage_registry.SALES_DISPLAY_SOURCES` through `targets_drilldown` and the target figure `targets_drilldown.TARGETS`; a store with no target row is shown WITHOUT a figure rather than as a target of zero, and the suggestion names no table at all. Declaration `commcalc/accessory_money_drilldown.py`, proof `harness_batch15_drilldown.py` |
 | **Is this rep selling, or just handing out the cheap phone — and does it cost us the accessory sale?** Two signals, never blended: accessory $ per box and port-ins per box, each against the median of the reps in view, with `both` the only flagged verdict. The device mix is banded on what the CUSTOMER paid, over the SAME lines the box count is tallied from, and a box-department line the activation predicate classifies as nothing is counted and reported rather than banded as a cheap phone. Two independent floors (10 boxes to rank, 10 classified device lines to make a mix claim) and the relationship is MEASURED every run | `commcalc.daily_sales_feed` ∪ `commcalc.raw_sales` rolled up by `router._sales_cell_agg` (`box_count`, `accessory_rev`, `_port`, and the new `price_cfg` extension's `_dev_bands` / `_dev_models` / `_dev_lines`) × `commcalc.raw_dlar_store.port_pct` through `kpi_failing.port_in_rate` | ONE home `commcalc/product_mix.py` (`resolve_price_cuts` / `band_of_price` / `band_labels` / `model_of` / `cell_price_cfg` / `rep_rows` / `rank` / `rep_prompt` / `correlations` / `store_rollup` / `model_rollup` / `build`), wired by `router._product_mix_payload` → `GET /commcalc/product-mix`; defines no ratio, median or severity cut of its own (all §59's, AST-locked) and imports no router or database; module-graph facts `device_price_band` + `kpi_column_meaning`; lock `harness_product_mix.py` (104 checks) — §62. Live September 2026, re-measured 2026-10-09 on the corrected box basis (house org, 29 reps clearing both floors): cheap-device share vs accessory $ per box **r = −0.18**, free share **r = −0.10**, port share vs accessory $ per box **r = +0.12** — the two signals are INDEPENDENT, which is why the verdict needs both and never blends them — while the two lagging behaviours travel together at **r = +0.50** |
@@ -22826,7 +22826,9 @@ people walked in, so a gap in boxes sold is a gap in SELLING, not in footfall.
 
 **Shipped in stages, as stated to the owner.** §59.1–59.6 (the comparison screen, and the two facts it
 needed in the one home) shipped first. §59.7 — the action-plan prompt for rep / manager / DM / market
-manager — is the second stage, and §59.9 — the DM and market-manager report cards — is the third.
+manager — is the second stage, §59.9 — the DM and market-manager report cards — is the third, and
+§59.10 — holding ONE market or store against the stores in its own band, so a DM can be held to it —
+is the fourth.
 Every stage reads §59.4's `lagging()` rather than re-deciding who is behind.
 
 ### 59.1 THE DUPLICATE CHECK (build gate) — and what it CHANGED about the build
@@ -23226,6 +23228,98 @@ here: the first draft read `conversion.store` off the summary row. The live row 
 fixture had been written from the same assumption. Caught by running the real endpoint against
 production, not by reading the code. §A14–A16 now pin the flat shape, prove the state dereferences
 `meets_target`, and prove the nested shape is not quietly accepted.
+
+### 59.10 THE SUBJECT — one market or store, held against the stores it competes with (stage 4)
+
+Owner, 2026-11-12, verbatim: *"under peer sales, add another filter of market and store along with
+other tiles on top to compare that selected market or store to their compettive stores . the isdea is
+to copare a nj market with all other store in thier band with other stores so the dm can be held
+respsonbile"*.
+
+**THE TRAP, NAMED ONCE SO NOBODY RE-DERIVES IT — a filter here would have destroyed the comparison.**
+This report's whole value is that a store is measured against the stores that see the same footfall.
+Narrow the rows to one market and every band then holds that market's stores ONLY, so the band median
+becomes its own median: the screen would report each market as roughly average and the laggards would
+vanish. Measured on live October 2026 (Cellfonz R Us, 28 stores, 4 markets) the difference is not
+theoretical — narrowing hides real laggards, because a market compared with itself sets its own bar:
+
+| market | narrowed to itself (what a plain filter reports) | against its band peers (§59.10) |
+|---|---|---|
+| NYC | 6 stores, **2 behind** its own median | 6 stores vs **22 peers**, 0.04 behind, **4 behind** |
+| LI | 7 stores, **3 behind** its own median | 7 stores vs **11 peers**, 0.02 behind, **4 behind** |
+| NJ | 6 stores, 2 behind its own median | 6 stores vs 12 peers, **0.01 AHEAD**, 2 behind |
+| PA | 9 stores, 4 behind its own median | 9 stores vs 13 peers, **0.08 AHEAD**, 2 behind |
+
+So the pick is a **SPOTLIGHT**: `focus_markets` / `focus_stores` choose the SUBJECT, the comparison set
+stays the whole in-scope estate, and the table below the tiles is not narrowed (the screen says so in
+one line, because a tile strip above an unnarrowed table otherwise reads as a filtered one). The
+pre-existing `markets=` narrowing parameter is untouched and separate; the page no longer sends it.
+
+**AND THE PEER MEDIAN EXCLUDES THE SUBJECT.** It is the one median on this report that is not the
+per-store band median, and it has to be: a market measured against a median its own stores are inside
+is partly measured against itself, and the weaker it is the more it drags down the bar it is judged by.
+The per-store band median in the table still INCLUDES the store (a band of two has no median
+otherwise), the two carry different names (`gaps[*].band_median` vs `bands[*].peer_median`), and
+`harness_peer_comparison.py` §L2/§L3 hold both — a planted "include the subject" reddens L2 at 0.25
+against the 0.35 that is right.
+
+**NOTHING ELSE IS NEW.** The band is `band_of`, the median is `_median`, the ranked metrics are
+`GAP_METRICS`, who is behind is `lagging()` and the coaching sentence is `prompt_sentence()` — all
+dereferenced by `focus`, none copied. The only genuinely new figures are the peer-excluding median, the
+peer best/leader outside the subject, and the composite: **the median of the subject's own per-band
+gaps**, which is legitimate across bands precisely because each term is already band-relative.
+Levels from different bands are never averaged, and the payload says so (`composite_basis`).
+
+**WHO ANSWERS FOR IT** — the owner's "so the dm can be held responsible". The endpoint reads the org
+tree through THE walk (`storeops/org_chain.dm_by_store`) and only when something is focused, so an
+unfocused load pays nothing for it. A tree that could not be READ and a tree that names NOBODY stay
+different facts on the payload (`accountable.error` vs `accountable.note`), because only the second is
+fixed in the org chart — and the sentence for the second now has ONE home,
+`org_chain.dm_gap_sentence`, which the manager report cards (§47.17) also dereference instead of
+carrying the copy they used to. The cards' own clause is HANDED IN, because that module imports
+nothing. **Coverage is the limiting factor and is the owner's to fix, not a bug here:** the tree
+resolves a DM for 6 of 29 Cellfonz stores and 0 of 20 Luxelink stores, so most selections will show
+the note rather than a name.
+
+**§59.10 honesty rules — every one of these would otherwise render as a plausible number**
+- **Nothing picked** is not the estate compared with itself: `measurable: false` with the reason, and
+  no tiles. A gap of zero for everybody is the most believable wrong answer available here.
+- **A subject that fills its band** has no competing store, so it carries NO figure — the same ruling
+  §59 already applies to a band of one. Live case: Luxelink's Chicago market IS both of its top two
+  bands, and those two rows say so instead of scoring 0.
+- **A selected store with no bill-payment traffic** is named apart and is not in `stores_in_view`.
+- **A measure the carrier did not report** (family plan %) is `not_measured`, never a 0% gap.
+- **A pick that reached no row** — out of this user's RBAC scope, or not trading this month — is
+  reported under `subject.unknown`, never silently dropped: a blank tile reads as a market with
+  nothing to answer for.
+
+**§59.10 surfaces, scope and the lock**
+- **Endpoint** `GET /commcalc/peer-comparison?…&focus_markets=&focus_stores=`. The subject is applied
+  **AFTER** the RBAC keyset, over the payload the request is already serving, so a store outside the
+  caller's scope is not in the rows and cannot be focused — the cross-tenant case is proved by
+  `tests/integration/test_peer_comparison_focus_endpoint.py` (another tenant's store code and another
+  tenant's market name both reach nothing, for all three fixture orgs).
+- **Drill-down (§CORE-17.3u)** the two COUNTS the tiles print — the selection's stores, and how many of
+  them are behind their own band — open to their store rows as `focus.stores` / `focus.behind`,
+  declared in `commcalc/sales_outcome_drilldown.py` and folded over the SAME rows the table prints.
+  The peer median, the peer best and the gaps get no panel: order statistics over the stores the
+  selection EXCLUDES, and a subtraction composed at the total (§CORE-17.3h, §CORE-17.3k).
+- **Page** the market/store pair is now the shared `<StandardFilterBar>` cascade over a `store_options`
+  roster the server composes WITH each store's market (§3d, §CORE-27) — the report's own two controls
+  (ranked metric, band cut-offs) ride in its `right` slot, and `<ReportShell>` still carries the Send
+  bar. Pinned by `src/app/(platform)/commcalc/peer-comparison/__tests__/peer-comparison.page.test.tsx`,
+  whose first test is the single-word regression: the pick must leave as `focus_*` and never as
+  `markets`.
+- **Proof / lock** `harness_peer_comparison.py` §L (28 checks: the peer-excluding median, the
+  un-narrowed set, the borrowed verdict, the five honesty rules, RULE TWO — no market name, store code
+  or band cut in the module — and the endpoint un-wire lock), plus `tests/unit/test_peer_focus.py` (16)
+  and `tests/integration/test_peer_comparison_focus_endpoint.py` (33, three tenants each declaring
+  their own box departments and their own market names). L2 and L24 were ARMED with planted defects
+  (include the subject in the peer median; make the subject narrow the rows) and both reddened.
+- Module-graph fact `peer_traffic_band` gains index `59.10`; the new fact `store_org_chain` registers
+  `storeops/org_chain.py` as the one home for "who owns this store in the org tree, and how is *the
+  tree names nobody* said".
+
 ## 60. SPIFF IMPACT — what ONE pay type is worth to a store's commission revenue and its profit, and who is not earning it (owner ask 2026-10-08)
 
 Owner, verbatim: *"create a report for management review to assess the affect of a certain spiff on the

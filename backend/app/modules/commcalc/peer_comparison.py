@@ -593,3 +593,245 @@ def peer_items_by_store(payload, metric=DEFAULT_GAP_METRIC, min_gap=0.0):
         if key:
             out[key] = it
     return out
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# §59.10  THE SUBJECT — one market or one store, held against the stores it actually competes with
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# OWNER ASK 2026-11-12, verbatim: *"under peer sales, add another filter of market and store along
+# with other tiles on top to compare that selected market or store to their compettive stores . the
+# isdea is to copare a nj market with all other store in thier band with other stores so the dm can
+# be held respsonbile"*.
+#
+# THE TRAP, NAMED ONCE SO NOBODY RE-DERIVES IT. A market "filter" that NARROWS the rows destroys the
+# comparison it is asked for: narrow the report to one market and every band then holds that market's
+# stores only, so the band median becomes its OWN median and the screen tells the manager he is
+# average. The peer set must stay the whole in-scope estate while the SUBJECT narrows. So the picked
+# market / store is a SPOTLIGHT, not a filter: `focus` reads the payload the report already built
+# and never shrinks it (the existing `markets=` narrowing parameter is untouched and separate).
+#
+# AND THE PEER MEDIAN HERE EXCLUDES THE SUBJECT, which is the one figure on this report that is not
+# the per-store band median. It has to: a market compared with a median its own stores are inside is
+# partly compared with itself, and the weaker it is the more it drags the bar it is being measured
+# against. The per-store band median (`rows[*].gaps`, which DOES include the store — a band of two
+# has no median otherwise) is unchanged, and the two carry different names for that reason.
+#
+# NOT A SECOND DEFINITION OF ANYTHING ELSE. The band is `band_of`, the median is `_median`, the
+# metrics are `GAP_METRICS`, who is behind is `lagging()` and the coaching sentence is
+# `prompt_sentence()` — all dereferenced here, none copied. PURE: it is handed a payload.
+
+FOCUS_NO_SUBJECT = (
+    "Pick a market or a store to compare. With nothing picked there is no subject, and comparing the "
+    "whole estate with itself would report a gap of zero for everybody.")
+FOCUS_NO_PEER = (
+    "Every store in this traffic band belongs to the selection, so there is no competing store left "
+    "to measure it against. Widen the selection, or compare on a band the selection does not fill.")
+FOCUS_METRIC_BLANK = (
+    "This measure is not reported for the selected stores in this window, so there is nothing to "
+    "compare. Blank means not reported, never zero.")
+#: How many names the subject label spells out before it counts them instead.
+FOCUS_LABEL_MAX = 3
+
+
+def _metric_decl(metric):
+    """PURE: (key, label, higher_is_better) for a ranked metric, from the DECLARATION — an unknown
+    key falls back to the report's own default rather than ranking on a column nobody declared."""
+    want = str(metric or "").strip() or DEFAULT_GAP_METRIC
+    for key, label, higher in GAP_METRICS:
+        if key == want:
+            return key, label, bool(higher)
+    for key, label, higher in GAP_METRICS:
+        if key == DEFAULT_GAP_METRIC:
+            return key, label, bool(higher)
+    return DEFAULT_GAP_METRIC, DEFAULT_GAP_METRIC, True
+
+
+def _focus_label(names):
+    n = len(names)
+    if not n:
+        return ""
+    if n <= FOCUS_LABEL_MAX:
+        return " + ".join(names)
+    return f"{n} selected"
+
+
+def subject_of(payload, *, stores=(), markets=()):
+    """PURE: which stores the picked market(s) / store(s) actually name, out of the rows IN VIEW.
+
+    "In view" is the point of reading the payload rather than a roster: the payload was already
+    RBAC-scoped by the endpoint, so a store this user may not see is not in it and cannot be focused.
+    A name that reaches no row comes back under `unknown` — out of scope, or not trading this window —
+    because a silently dropped pick renders as a store with nothing to answer for.
+
+    A store pick WINS over a market pick: the cascade picker emits both (pick the market, then one of
+    its stores) and the narrower pick is the thing the person is looking at.
+    """
+    payload = payload or {}
+    in_view, market_of = [], {}
+    for r in list(payload.get("rows") or ()) + list(payload.get("unbanded") or ()):
+        st = str((r or {}).get("store") or "").strip()
+        if st and st not in market_of:
+            in_view.append(st)
+            market_of[st] = str((r or {}).get("market") or "").strip()
+    asked_stores = [str(s or "").strip() for s in (stores or ()) if str(s or "").strip()]
+    asked_markets = [str(m or "").strip() for m in (markets or ()) if str(m or "").strip()]
+
+    if asked_stores:
+        want = {s.upper() for s in asked_stores}
+        picked = [s for s in in_view if s.upper() in want]
+        unknown = sorted({s for s in asked_stores if s.upper() not in {p.upper() for p in picked}})
+        kind = "store"
+        label = _focus_label(sorted(picked)) or _focus_label(sorted(asked_stores))
+    elif asked_markets:
+        want = {m.casefold() for m in asked_markets}
+        picked = [s for s in in_view if (market_of.get(s) or "").casefold() in want]
+        reached = {(market_of.get(s) or "").casefold() for s in picked}
+        unknown = sorted({m for m in asked_markets if m.casefold() not in reached})
+        kind = "market"
+        label = _focus_label(sorted(asked_markets))
+    else:
+        picked, unknown, kind, label = [], [], "estate", ""
+    return {"kind": kind, "label": label, "stores": sorted(picked),
+            "markets": sorted(asked_markets), "unknown": unknown}
+
+
+def _verdict(gap):
+    if gap is None:
+        return "not_measured"
+    if gap > 0:
+        return "behind"
+    if gap < 0:
+        return "ahead"
+    return "level"
+
+
+def _gap_toward_behind(mine, theirs, higher_is_better):
+    """PURE: their figure minus mine, SIGNED so that positive always means behind — whichever
+    direction the metric runs. Stated rather than assumed, the same way `GAP_METRICS` states it."""
+    if mine is None or theirs is None:
+        return None
+    return round((theirs - mine) if higher_is_better else (mine - theirs), 2)
+
+
+def focus(payload, *, stores=(), markets=(), metric=DEFAULT_GAP_METRIC):
+    """THE SUBJECT-vs-PEERS payload: the picked market or store against the OTHER stores in its own
+    traffic band(s). PURE — every input is the report's own payload (index §59.10).
+
+    Returns the subject, the per-band comparison, the composite gap, and which of the subject's own
+    stores `lagging()` named. A comparison that cannot run carries `measurable: False` and the reason
+    said out loud; no figure here is ever a zero standing in for "cannot say".
+    """
+    payload = payload or {}
+    key, label, higher = _metric_decl(metric)
+    subject = subject_of(payload, stores=stores, markets=markets)
+    subj = {s.upper() for s in subject["stores"]}
+
+    rows = [r for r in (payload.get("rows") or ()) if r]
+    unbanded = [str((r or {}).get("store") or "").strip() for r in (payload.get("unbanded") or ())
+                if str((r or {}).get("store") or "").strip().upper() in subj]
+    band_label = {}
+    by_band = {}
+    for r in rows:
+        by_band.setdefault(r.get("band"), []).append(r)
+        band_label[r.get("band")] = r.get("band_label")
+
+    def _is_subject(row):
+        return str(row.get("store") or "").strip().upper() in subj
+
+    bands_out, store_gaps, peer_total, subject_banded = [], [], 0, 0
+    for idx in sorted(b for b in by_band if by_band[b]):
+        members = by_band[idx]
+        mine_rows = [r for r in members if _is_subject(r)]
+        if not mine_rows:
+            continue
+        peer_rows = [r for r in members if not _is_subject(r)]
+        subject_banded += len(mine_rows)
+        peer_total += len(peer_rows)
+        mine_vals = [r.get(key) for r in mine_rows if r.get(key) is not None]
+        peer_vals = [r.get(key) for r in peer_rows if r.get(key) is not None]
+        subject_median = _median(mine_vals)
+        peer_median = _median(peer_vals) if peer_vals else None
+        peer_best = (max(peer_vals) if higher else min(peer_vals)) if peer_vals else None
+        peer_leader = None
+        for r in peer_rows:
+            if peer_best is not None and r.get(key) == peer_best:
+                peer_leader = r.get("store")
+                break
+        gap = _gap_toward_behind(subject_median, peer_median, higher)
+        if peer_median is not None:
+            for r in mine_rows:
+                g = _gap_toward_behind(r.get(key), peer_median, higher)
+                if g is not None:
+                    store_gaps.append(g)
+        comparable = bool(peer_rows) and gap is not None
+        bands_out.append({
+            "band": idx, "label": band_label.get(idx),
+            "subject_stores": len(mine_rows), "peer_stores": len(peer_rows),
+            "subject_median": subject_median, "peer_median": peer_median,
+            "peer_best": peer_best, "peer_leader": peer_leader,
+            "gap_to_peer_median": gap, "gap_to_peer_best": _gap_toward_behind(
+                subject_median, peer_best, higher),
+            "comparable": comparable, "verdict": _verdict(gap) if comparable else "not_measured",
+            "note": (None if comparable else
+                     (FOCUS_NO_PEER if not peer_rows else FOCUS_METRIC_BLANK)),
+        })
+
+    gap_median = _median(store_gaps) if store_gaps else None
+    measurable = bool(subj) and any(b["comparable"] for b in bands_out)
+    reason = None
+    if not subj:
+        reason = FOCUS_NO_SUBJECT
+    elif not bands_out:
+        reason = (UNBANDED_REASON if unbanded else
+                  "No store in the selection has a traffic measurement in this window, so there is "
+                  "nothing to band it by.")
+    elif not measurable:
+        reason = next((b["note"] for b in bands_out if b["note"]), FOCUS_NO_PEER)
+
+    behind = [item for item in lagging(payload, metric=key)
+              if str(item.get("store") or "").strip().upper() in subj]
+    for item in behind:
+        item["prompt"] = prompt_sentence(item)
+
+    return {
+        "subject": subject,
+        "metric": key, "metric_label": label, "higher_is_better": higher,
+        "measurable": measurable, "reason": reason,
+        "stores_in_view": subject_banded,
+        "peer_stores": peer_total,
+        "not_banded": sorted(unbanded),
+        "not_banded_reason": (UNBANDED_REASON if unbanded else None),
+        "gap_median": gap_median,
+        "verdict": _verdict(gap_median) if measurable else "not_measured",
+        "behind": behind, "behind_count": len(behind),
+        "bands": bands_out,
+        "peer_basis": (
+            "Each selected store is measured against the OTHER stores in its own traffic band — the "
+            "selection's own stores are excluded from that median, so a selection is never partly "
+            "compared with itself."),
+        "composite_basis": (
+            "The headline gap is the median of the selected stores' own gaps, each measured inside "
+            "its own band. Figures from different bands are never averaged together: different bands "
+            "saw different numbers of people."),
+        "sentence": focus_sentence_of(subject, label, gap_median, subject_banded, len(behind),
+                                      measurable),
+    }
+
+
+def focus_sentence_of(subject, metric_label, gap_median, stores_in_view, behind_count, measurable):
+    """PURE: the one sentence the subject tile reads, in the owner's own terms — what the selection
+    is behind by, on the same traffic, and how many of its stores carry it. ONE wording, so the tile
+    and anything that mails it cannot say different things."""
+    name = (subject or {}).get("label") or "The selection"
+    if not measurable or gap_median is None:
+        return ""
+    where = f"{behind_count} of {stores_in_view} store{'' if stores_in_view == 1 else 's'}"
+    if gap_median > 0:
+        return (f"{name} is {gap_median:,.2f} {str(metric_label or '').lower()} behind the stores it "
+                f"shares a traffic band with ({where} behind their own band median). The same number "
+                f"of people walked in, so this gap is sell-through, not footfall.")
+    if gap_median < 0:
+        return (f"{name} is {abs(gap_median):,.2f} {str(metric_label or '').lower()} AHEAD of the "
+                f"stores it shares a traffic band with ({where} still behind their own band median).")
+    return (f"{name} is level with the stores it shares a traffic band with on "
+            f"{str(metric_label or '').lower()} ({where} behind their own band median).")

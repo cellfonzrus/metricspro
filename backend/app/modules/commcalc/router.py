@@ -35,7 +35,7 @@ from app.modules.commcalc import daily_incentive as _daily_incentive   # 2026-10
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
 from app.modules.commcalc import peer_comparison as _peercmp   # 2026-10-08 — THE peer traffic-band comparison (index §59)
 from app.modules.commcalc import product_mix as _pmix       # 2026-10-09 — THE device price mix / port discipline (index §62)
-from app.modules.commcalc import manager_report_card as _mrcard   # 2026-10-08 — THE DM / market-manager report card (index §59.9; pure)
+from app.modules.commcalc import manager_report_card as _mrcard   # 2026-10-08 — THE DM / market-manager report card (index §59.10; pure)
 from app.modules.commcalc import accessory_target_plan as _accplan   # 2026-10-09 — THE accessory company-goal allocation (index §61; pure)
 from app.modules.commcalc import accessory_order_catalog as _aocat  # 2026-10-30 — THE accessory ORDERING vocabulary (index §COMMCALC-49.12; pure)
 from app.modules.commcalc import accessory_order_plan as _aop          # 2026-10-29 — THE accessory ORDER plan (index §COMMCALC-49; pure)
@@ -27582,6 +27582,7 @@ def _peer_comparison_payload(client, org_id, period, rows, *, resolve_market=Non
 
 @router.get("/peer-comparison")
 def peer_comparison(period: str = "", bands: str = "", markets: str = "", metric: str = "",
+                    focus_markets: str = "", focus_stores: str = "",
                     authorization: str = Header(default=""), org_id: str = ORG_ID):
     """PEER SALES COMPARISON — stores of comparable foot traffic, ranked on what they do with it.
 
@@ -27603,6 +27604,14 @@ def peer_comparison(period: str = "", bands: str = "", markets: str = "", metric
     `bands` = comma-separated bill-payment cut-offs (the lower bound of each band) overriding the house
     cuts for this call; `markets` filters; `metric` picks which gap the "lagging" list ranks on. The read
     is RBAC store-scoped exactly like every other sales report.
+
+    `focus_markets` / `focus_stores` (owner ask 2026-11-12, index §59.10) are the SUBJECT, not a filter.
+    They name the market or store the tiles hold up against the OTHER stores in its own traffic
+    band(s); the comparison set is NOT narrowed by them, because narrowing it is precisely what would
+    destroy the comparison — filter the report to one market and that market becomes its own band
+    median, which tells its manager he is average. They are applied AFTER the RBAC keyset, over the
+    payload this request is already serving, so a store outside this user's scope is not in the rows
+    and cannot be focused; a name that reaches no row comes back under `focus.subject.unknown`.
     """
     require_org(org_id)
     client = sb()
@@ -27656,7 +27665,55 @@ def peer_comparison(period: str = "", bands: str = "", markets: str = "", metric
 
     out["stores"] = opt_stores
     out["markets"] = opt_markets
+    # THE CASCADE ROSTER for the shared market/store picker (§3d): every in-scope store WITH its
+    # market, so picking a market narrows the store list to that market's stores. One list, derived
+    # from the same scoped rows the options above are — never a second roster read.
+    out["store_options"] = [{"store": s, "market": (resolve_market(s) or "")} for s in opt_stores]
     out["source_meta"] = {"sales": meta, "rows": len(rows), "cells": len(cells)}
+
+    # ── THE SUBJECT (index §59.10) ────────────────────────────────────────────────────────────────
+    # Computed over the payload AS SERVED — after the keyset and the market narrowing above — so the
+    # tiles can only ever compare stores this caller was already allowed to read. The band, the
+    # median, the verdict and the sentence are all `peer_comparison`'s own; nothing is re-derived.
+    out["focus"] = _peercmp.focus(
+        out,
+        stores=[s.strip() for s in (focus_stores or "").split(",") if s.strip()],
+        markets=[m.strip() for m in (focus_markets or "").split(",") if m.strip()],
+        metric=metric)
+    out["params"] = dict(out.get("params") or {},
+                         focus_stores=out["focus"]["subject"]["stores"],
+                         focus_markets=out["focus"]["subject"]["markets"])
+
+    # WHO IS ACCOUNTABLE for the subject — the org tree's own answer, read in bulk through THE walk
+    # (`storeops/org_chain.dm_by_store`). Only read when something is actually focused, so an
+    # unfocused load pays nothing for it. A tree that cannot be read, and a store the tree names no
+    # manager for, are DIFFERENT facts and are reported as such: a blank manager and "there is no
+    # manager" look identical on a tile and only one of them is the owner's to fix.
+    if out["focus"]["subject"]["stores"]:
+        from app.modules.storeops import org_chain as _org_chain
+        dms, no_dm, tree_error = {}, [], None
+        try:
+            from app.modules.storeops.router import org_chain_inputs
+            chain = _org_chain.dm_by_store(**org_chain_inputs(org_id))
+            upper = {str(k or "").strip().upper(): v for k, v in (chain or {}).items()}
+            for st in out["focus"]["subject"]["stores"]:
+                names = _org_chain.dm_names(upper.get(str(st).strip().upper()) or {})
+                if names:
+                    for n in names:
+                        dms.setdefault(n, []).append(st)
+                else:
+                    no_dm.append(st)
+        except Exception as e:
+            dms, no_dm = {}, []
+            tree_error = f"the org tree could not be read ({type(e).__name__}: {e})"
+        total = len(out["focus"]["subject"]["stores"])
+        out["focus"]["accountable"] = {
+            "dms": [{"name": n, "stores": sorted(v)} for n, v in sorted(dms.items())],
+            "no_dm": sorted(no_dm), "stores": total, "error": tree_error,
+            # The two facts stay apart: a tree that could not be READ is not a tree that names
+            # nobody, and only the second one is fixed in the org chart.
+            "note": (tree_error or _org_chain.dm_gap_sentence(len(no_dm), total)),
+        }
     # WHERE EVERY FIGURE ON THIS SCREEN CAME FROM (§CORE-17.3u). Attached LAST, over the payload this
     # request is actually serving — after the RBAC keyset and the market filter above — so a panel can
     # only ever fold rows the caller was already served. The declaration is pure and takes nothing but
@@ -33876,7 +33933,7 @@ async def get_manager_report_cards(period: str, today: str = "",
                                    stores: Optional[List[str]] = Query(default=None),
                                    markets: Optional[List[str]] = Query(default=None),
                                    authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """MANAGER REPORT CARDS (owner 2026-10-08, index §59.9) — what was assigned to each district
+    """MANAGER REPORT CARDS (owner 2026-10-08, index §59.10) — what was assigned to each district
     manager, store by store, with the system's own check-off of whether it was met; and the same card
     one level up, where the rows are the DMs beneath that manager so they are accountable too.
 
@@ -33934,7 +33991,8 @@ async def get_manager_report_cards(period: str, today: str = "",
                           # the card module imports nothing, so the axis is read here, from its one
                           # home, and handed in.
                           axis=targets_engine.target_axis(_target_catalog(sb(), org_id)))
-    note = _mrcard.coverage_note(cards.get('coverage'))
+    from app.modules.storeops import org_chain as _oc_sentence
+    note = _mrcard.coverage_note(cards.get('coverage'), _oc_sentence.dm_gap_sentence)
     # WHAT WAS ASSIGNED, AND WHERE EACH NUMBER CAME FROM (§CORE-17.3m). Each card's own roll-up
     # opens to the stores ON that card; a market manager's opens to the DMs beneath them, with the
     # stores the org tree places under none of them listed WITHOUT a figure (unattributable is not
