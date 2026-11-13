@@ -158,3 +158,20 @@ def dm_names(chain):
     guessed is worse than one that prints nothing (the house's absence-is-never-zero doctrine).
     """
     return [n for n in ((m.get("name") or m.get("employee_id")) for m in (chain or {}).get("dm") or []) if n]
+
+
+def dm_gap_sentence(missing, total, tail=None):
+    """PURE: ONE wording for "the org tree names no district manager for these stores", for every
+    surface that has to say it. None when the tree answers for every store.
+
+    THE FACT HAS ONE HOME (owner directive 2026-09-20). It was said twice on this platform — the
+    manager report cards and, from 2026-11-12, the peer comparison's accountability tile — and two
+    wordings of one measurement drift the first time the fix moves. Each surface adds its own clause
+    through `tail`; the fact and the remedy are stated here.
+    """
+    missing, total = int(missing or 0), int(total or 0)
+    if not missing or not total:
+        return None
+    head = (f"{missing} of {total} store{'' if total == 1 else 's'} have no district manager in the "
+            f"org tree")
+    return f"{head}, so {tail}" if tail else f"{head}. Assigning them in the org chart is what fixes it."

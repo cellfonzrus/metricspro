@@ -348,18 +348,23 @@ def build(summary_rows, chain_by_store, peer_items=None, aggregate=None, peer_co
             "unassigned": unassigned, "coverage": coverage, "items": items_for(axis)}
 
 
-def coverage_note(coverage):
+def coverage_note(coverage, sentence_of):
     """ONE sentence for a surface to print above the cards when the org tree cannot answer. PURE.
+
+    `sentence_of` is `storeops/org_chain.dm_gap_sentence` — the one home for the measurement itself,
+    injected (this module imports nothing). This function adds only the clause that is TRUE OF A
+    CARD: what an unassigned store costs here.
 
     None when every store has a DM — a note that fires unconditionally is noise, and a card that
     stays silent while most of the org is unassigned is worse. The note names the fix (the org tree),
     never the symptom.
     """
     c = coverage or {}
-    missing = int(c.get("stores_without_a_dm") or 0)
-    total = int(c.get("stores") or 0)
-    if not missing or not total:
-        return None
-    return (f"{missing} of {total} stores have no district manager in the org tree, so their items "
-            f"are listed below but appear on nobody's card. Assigning them in the org chart is what "
-            f"puts them on one.")
+    # THE FACT IS DEREFERENCED, never re-worded. `org_chain.dm_gap_sentence` is the ONE home for
+    # "the org tree names no district manager for these stores" — two surfaces say it since
+    # 2026-11-12 (these cards and the peer comparison's accountability tile), and two wordings of one
+    # measurement drift the first time the remedy moves. It is HANDED IN rather than imported,
+    # because this module imports nothing (§D1): every fact on a card arrives the same way.
+    return sentence_of(c.get("stores_without_a_dm"), c.get("stores"),
+                       tail=("their items are listed below but appear on nobody's card. "
+                             "Assigning them in the org chart is what puts them on one."))
