@@ -83,6 +83,42 @@ def ancestors_of(unit, unit_by_id):
     return out
 
 
+def children_index(unit_by_id):
+    """PURE: {parent_id: [child_id, …]} — built ONCE from the same `unit_by_id` the upward walk uses,
+    so the two directions read one tree and cannot disagree about its shape."""
+    out = {}
+    for uid, u in (unit_by_id or {}).items():
+        out.setdefault(_s((u or {}).get("parent_id")), []).append(_s(uid))
+    return out
+
+
+def subtree_ids(unit_id, unit_by_id, children=None):
+    """PURE: `unit_id` and EVERY unit beneath it, as a set of ids. {} / empty when the unit is unknown.
+
+    THE DOWNWARD WALK, and the only one. `ancestors_of` climbs; this descends. It exists because the
+    UNION RULE — owner 2026-11-13, *"if we add another level the expense report should automatically
+    add they level and then divide the salary based on the people who report to them"* — is exactly
+    this set: a regional manager's store coverage is the union of his district managers' coverage,
+    which is the union of their units' stores, which is the subtree. Writing that union a second
+    time (per level, per caller, in SQL) is the duplicate defect the index rules forbid, so every
+    caller that needs "everything beneath this node" dereferences THIS function.
+
+    Same 20-hop posture as the climb, expressed as a visited set: a cycle introduced by a bad
+    `parent_id` terminates instead of looping forever."""
+    start = _s(unit_id)
+    if not start or start not in {_s(k) for k in (unit_by_id or {})}:
+        return set()
+    kids = children if children is not None else children_index(unit_by_id)
+    seen, stack = set(), [start]
+    while stack:
+        u = stack.pop()
+        if not u or u in seen:
+            continue
+        seen.add(u)
+        stack.extend(kids.get(u, []))
+    return seen
+
+
 def managers_at(unit, mgr_eids_by_unit, emp_by_eid, level_names):
     """PURE: [{employee_id, name, email, phone, unit, level}] for one unit — a node may have several.
 

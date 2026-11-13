@@ -630,7 +630,9 @@ def _assemble_scope(client, org_id, period, inputs, journal, matcher,
     # twice. One grain in use ⇒ byte-identical to the plain routing.
     jscope, jmeta = balance_sheet.journal_grain_entries(
         journal, scope_key, stores_in_scope, matcher, company_of)
-    pl = engine._assemble(inputs, jscope, coa.PL_SPEC, coa.PL_LABEL, PL_SECTIONS,
+    # ONE home for the chart (§STOREOPS-09): `coa.pl_spec_for` adds the lines THIS org declared —
+    # a wages line per org level — on top of the shared `PL_SPEC`. Never `coa.PL_SPEC` directly.
+    pl = engine._assemble(inputs, jscope, coa.pl_spec_for(inputs), coa.pl_label_for(inputs), PL_SECTIONS,
                           scope_key, stores_in_scope, include_cw)
     prior_ni = engine._prior_accum_ni(client, org_id, scope_key, period)
     bs = engine._assemble(inputs, jscope, bs_spec(), bs_label(), BS_SECTIONS,

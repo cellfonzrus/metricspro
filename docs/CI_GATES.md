@@ -33,7 +33,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 623 gates
+## Gated — 624 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -409,6 +409,7 @@ the Runs on column is how you can tell.
 | `harness_org_scope_guard.py` | `org-scope-guard.yml` | Sensitive queries are org-scoped (`org-scope-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_ota_config_parity.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_overhead_allocation.py` | `tests.yml` | Proof harnesses, group 2 of 4 (`harness-suite-2`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_overhead_level_lines.py` | `tests.yml` | Proof harnesses, group 2 of 4 (`harness-suite-2`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_pa_roster_names.py` | `tests.yml` | Proof harnesses, group 2 of 4 (`harness-suite-2`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_paramount_kpi_lock.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_path_redact.py` | `tests.yml` | Proof harnesses, group 4 of 4 (`harness-suite-4`) | `pull_request`, `push`, `workflow_dispatch` |

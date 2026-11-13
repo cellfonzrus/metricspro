@@ -90,8 +90,32 @@ BASES = (BASIS_EQUAL_STORES, BASIS_MARKET_THEN_STORE, BASIS_WEIGHTED)
 # ── how an overhead person's covered store set was resolved (most authoritative first) ───────────
 COVER_ORG_SPAN = "org_span"      # storeops.org_span_for_manager — the canonical manager->stores RPC
 COVER_ORG_UNIT = "org_unit"      # the subtree of the unit the employee is PLACED in
+COVER_MARKET = "market"          # a unit in that subtree IS a market: core.scope's store->market answer
+COVER_ORG_UNIT_MARKET = "org_unit_market"   # both rungs contributed (the union, named honestly)
 COVER_ORG_WIDE = "org_wide"      # no unit at all: every active store in the org
 COVER_NONE = "none"              # nothing resolved — REPORTED, never guessed
+COVERS = (COVER_ORG_SPAN, COVER_ORG_UNIT, COVER_MARKET, COVER_ORG_UNIT_MARKET,
+          COVER_ORG_WIDE, COVER_NONE)
+
+# ── which DECLARED org level a person sits at (owner ask 2026-11-13) ─────────────────────────────
+LEVEL_UNIT = "unit_level"        # the level of the unit in employees.org_unit_id
+LEVEL_MANAGED = "managed_level"  # the highest level among the units they MANAGE (org_managers)
+LEVEL_NONE = "none"              # the org declared no level that fits — SAID, never guessed
+
+# The P&L line key family for the per-level lines. The key is derived from the level's RANK, which
+# `storeops.org_levels` makes unique per org — deliberately NOT from the level's NAME, because a
+# tenant's own words must never become a stored line key that another tenant's statement is read
+# against. The tenant's words appear in the LABEL only. §STOREOPS-09.
+LEVEL_LINE_PREFIX = "overhead_wages_l"
+# The anchor the per-level lines are inserted AFTER in the chart, so the wages box reads as one box,
+# and the chart attributes they inherit from it: operating expense, materialise only when they carry
+# value, STORE grain (the 2026-09-09 directive forbids a company-wide overhead bucket). They are
+# named here, outside the functions that build a line, so those functions hold no vocabulary literal
+# at all — the lock in harness_overhead_level_lines.py §6(a) asserts exactly that.
+LEVEL_LINE_AFTER = "overhead_wages"
+LEVEL_LINE_SECTION = "opex"
+LEVEL_LINE_KIND = "auto_opt"
+LEVEL_LINE_GRAIN = "store"
 
 # ── why an employee is (or is not) overhead ──────────────────────────────────────────────────────
 WHY_UNATTACHED = "salaried_unattached"   # structural: salaried, active, no home store
@@ -117,6 +141,23 @@ DEFAULT_CONFIG = {
     "include_inactive_stores": False,
     "wages_label": "Overhead salaries (allocated to stores)",
     "commission_label": "Overhead commission (allocated to stores)",
+    # ── ONE LINE PER ORG LEVEL (owner ask 2026-11-13) ───────────────────────────────────────────
+    # "add a line in the expenses with the name dm salary and rm salary or mm salary , if we add
+    # another level the expense report should automatically add they level"
+    #
+    # 'on' (default) = one wages line per level the tenant DECLARES in storeops.org_levels, named
+    # from that tenant's own level name. Adding a level makes its line appear with no deploy and no
+    # config edit — that is the ask. 'off' = the single combined `wages_label` line only.
+    #
+    # Defaulting this ON moves nothing: the module's own `mode` default is 'off', so no org derives
+    # anything at all until its owner opts in, and byte-identity rests there, not here.
+    "level_lines": "on",
+    # The POLICY template the tenant's own level NAME is rendered into. A format string is a house
+    # policy and is allowed a default; the level NAME is tenant vocabulary and is NOT — it is a
+    # required argument with no house words behind it (owner directive 2026-10-30). `{level}` is
+    # substituted literally; a template missing it is refused back to this default rather than
+    # producing an unnamed line.
+    "level_label_template": "{level} salaries (allocated to stores)",
     # 'off' = HOUSE DEFAULT: no commission line is derived. 'management_incentive' = read the
     # ALREADY-COMPUTED payout from commcalc.management_incentive_payout. This module never computes
     # a commission amount; it only places one that another engine already decided.
@@ -168,6 +209,10 @@ def resolve_config(org_row: Optional[dict] = None) -> dict:
     eff["include_inactive_stores"] = bool(eff["include_inactive_stores"])
     eff["wages_label"] = _s(eff["wages_label"]) or DEFAULT_CONFIG["wages_label"]
     eff["commission_label"] = _s(eff["commission_label"]) or DEFAULT_CONFIG["commission_label"]
+    ll = _s(eff["level_lines"]).lower()
+    eff["level_lines"] = ll if ll in ("on", "off") else "on"
+    tpl = _s(eff["level_label_template"])
+    eff["level_label_template"] = tpl if "{level}" in tpl else DEFAULT_CONFIG["level_label_template"]
     return eff
 
 
@@ -208,10 +253,48 @@ def classify_employee(emp: dict, cfg: dict, monthly_equivalent: Callable[[object
 
 
 # ── 2. which stores they cover ───────────────────────────────────────────────────────────────────
+def market_unit_stores(unit_ids: Optional[Iterable[str]],
+                       unit_by_id: Optional[Dict[str, dict]],
+                       codes_by_market: Optional[Dict[str, Iterable[str]]]) -> List[str]:
+    """PURE: the store codes of every MARKET that a unit in `unit_ids` corresponds to.
+
+    RUNG 2b OF THE SAME LADDER, dereferencing the platform's ONE store→market answer rather than
+    adding a second resolver. `codes_by_market` is built by the caller from
+    `core.scope.market_by_code` (§13a, the canonical union index) — this function never reads a
+    table and never decides what a market is.
+
+    A unit CORRESPONDS to a market when, case-insensitively, its NAME equals a declared market, or
+    its CODE's tail after the last ':' does (`mkt:chicago`, the shape mig 050's seeder writes).
+    That is a DATA-to-DATA match between two things the TENANT declared: no market name, level name
+    or tenant word appears in this file.
+
+    WHY THIS RUNG EXISTS, measured 2026-11-13. A market node can hold its stores through
+    `stores.org_unit_id` OR through `stores.market` alone, and live orgs do both at once: in one
+    measured tenant a market node has SIX active stores placed under it and FOUR more that carry
+    that market and no unit at all. The placement walk can only see the six, so without this rung
+    the manager's salary divides by six and four stores they actually cover carry none of it — a
+    wrong figure that looks right. Requiring every store to be hand-placed to fix that is a wiring
+    demand, not a design. The tenant and its words stay in the index and the harness, not here."""
+    by_market = {_s(k).lower(): [_s(c) for c in (v or []) if _s(c)]
+                 for k, v in (codes_by_market or {}).items() if _s(k)}
+    if not by_market:
+        return []
+    out = set()
+    for uid in (unit_ids or []):
+        u = (unit_by_id or {}).get(uid) or (unit_by_id or {}).get(_s(uid)) or {}
+        name = _s(u.get("name")).lower()
+        tail = _s(u.get("code")).lower().rsplit(":", 1)[-1]
+        for cand in (name, tail):
+            if cand and cand in by_market:
+                out.update(by_market[cand])
+    return sorted(out)
+
+
 def covered_stores(span_codes: Optional[Iterable[str]],
                    unit_codes: Optional[Iterable[str]],
                    org_codes: Optional[Iterable[str]],
-                   cfg: dict) -> Tuple[List[str], str]:
+                   cfg: dict,
+                   market_codes: Optional[Iterable[str]] = None) -> Tuple[List[str], str]:
     """(sorted covered store codes, how) for ONE overhead person.
 
     A LADDER, most authoritative first, and it stops at the first rung that answers:
@@ -223,6 +306,14 @@ def covered_stores(span_codes: Optional[Iterable[str]],
          `storeops.org_managers`, and an org that has placed its people in the tree but never
          written a manager row gets an EMPTY span from rung 1 — which is a wiring gap, not a person
          who covers nothing. Gated by `span_fallback`.
+      2b. `market_codes` — the stores of any MARKET that a unit in that same subtree IS
+         (`market_unit_stores`, dereferencing `core.scope.market_by_code`). UNIONED with rung 2
+         rather than tried after it, because a market node holds its stores through
+         `stores.org_unit_id` and through `stores.market` AT ONCE in live data, and taking only the
+         placed half divides a salary by the wrong store count. Gated by the same
+         `span_fallback`: it is the SAME unit answered through the canonical market vocabulary, so
+         it is exactly as strong a claim as rung 2 and no stronger. `span_fallback='org_span'`
+         still refuses both.
       3. `org_codes`   — every (active) store, for a person sitting at no unit at all. Gated by
          `span_fallback='org_wide'` ONLY, because "covers everything" is a strong claim to make on
          a person's behalf.
@@ -235,14 +326,116 @@ def covered_stores(span_codes: Optional[Iterable[str]],
     if span:
         return span, COVER_ORG_SPAN
     if fb in (COVER_ORG_UNIT, COVER_ORG_WIDE):
-        unit = sorted({_s(c) for c in (unit_codes or []) if _s(c)})
-        if unit:
-            return unit, COVER_ORG_UNIT
+        unit = {_s(c) for c in (unit_codes or []) if _s(c)}
+        mkt = {_s(c) for c in (market_codes or []) if _s(c)}
+        both = unit | mkt
+        if both:
+            # The reason code NAMES which rung(s) answered, so every cell still says how it was
+            # resolved. `org_unit_market` is not a fourth mechanism — it is the UNION of 2a and 2b
+            # over the SAME subtree, reported as the union it is rather than as either half.
+            how = (COVER_ORG_UNIT if not mkt else
+                   COVER_MARKET if not unit else COVER_ORG_UNIT_MARKET)
+            return sorted(both), how
     if fb == COVER_ORG_WIDE:
         every = sorted({_s(c) for c in (org_codes or []) if _s(c)})
         if every:
             return every, COVER_ORG_WIDE
     return [], COVER_NONE
+
+
+# ── 2c. the org's DECLARED level vocabulary — a required argument, never a default ──────────────
+# OWNER ASK 2026-11-13 (verbatim): "Anybody who is a dm their salary is divided among the stores they
+# are responsible for , similarly for the regional manager or market manager whatever stores they
+# cover their salary is divided amount their stores , add a line in the expenses with the name dm
+# salary and rm salary or mm salary , if we add another level the expense report should automatically
+# add they level and then divide the salary based on the people who report to them"
+#
+# THE TRAP THIS AVOIDS (§COMMCALC-49.10, owner directive 2026-10-30). The level names are the
+# TENANT'S OWN WORDS and they differ in every tenant: measured 2026-11-13 the four live orgs declare
+# FOUR DIFFERENT vocabularies, of six, two, three and six levels, agreeing on not one rung — the
+# names themselves are deliberately not written here, and the cross-tenant harness reads them from
+# each org's own rows. A house default behind this vocabulary would label one tenant's line with
+# another tenant's word and look entirely plausible doing it. So the rows are a REQUIRED argument:
+# nothing declared means nothing identified, the people fall to the combined line, and the surface
+# SAYS SO.
+def level_vocabulary(level_rows: Optional[Iterable[dict]]) -> List[dict]:
+    """THE org's levels: [{level_id, name, rank, key}] in rank order. [] in ⇒ [] out, always.
+
+    `level_rows` are `storeops.org_levels` rows for ONE org (`id`/`level_id`, `name`, `rank`). There
+    is no fallback list: this function cannot answer for an org that has declared nothing, which is
+    the whole point — a caller that has not asked the org must not be able to produce a line.
+
+    `key` is `overhead_wages_l<rank>`: `org_levels` is UNIQUE (org_id, rank), so rank is the stable
+    per-org handle, and it carries none of the tenant's vocabulary into a stored line key."""
+    out: List[dict] = []
+    seen = set()
+    for r in (level_rows or []):
+        if not isinstance(r, dict):
+            continue
+        name = _s(r.get("name"))
+        lid = _s(r.get("id") if r.get("id") is not None else r.get("level_id"))
+        try:
+            rank = int(r.get("rank"))
+        except (TypeError, ValueError):
+            continue
+        if not name or not lid or lid in seen or rank < 0:
+            continue
+        seen.add(lid)
+        out.append({"level_id": lid, "name": name, "rank": rank,
+                    "key": "%s%d" % (LEVEL_LINE_PREFIX, rank)})
+    out.sort(key=lambda d: (d["rank"], d["name"]))
+    return out
+
+
+def level_label(level_name: str, cfg: dict) -> str:
+    """The P&L label for one level's line: the TENANT'S OWN level name rendered into the house
+    POLICY template (`level_label_template`) — "<the org's own level name> salaries (allocated to
+    stores)" with the house template, and whatever the org configured otherwise.
+
+    RAISES on a blank name instead of substituting anything. That refusal IS the lock the 2026-10-30
+    directive asks for, expressed at runtime: there is no word this function could put in a tenant's
+    label that the tenant did not declare, so a caller that has not asked the org gets an error
+    rather than a plausible-looking line."""
+    name = _s(level_name)
+    if not name:
+        raise ValueError(
+            "level_label requires the org's OWN declared level name (storeops.org_levels.name); "
+            "there is no house default for a tenant's vocabulary")
+    cfg = resolve_config(cfg if isinstance(cfg, dict) else None)
+    return cfg["level_label_template"].replace("{level}", name)
+
+
+def level_of_person(unit_id: Optional[str],
+                    managed_unit_ids: Optional[Iterable[str]],
+                    unit_by_id: Optional[Dict[str, dict]],
+                    levels: Optional[Iterable[dict]]) -> Tuple[Optional[dict], str]:
+    """(the level dict from `levels`, how) for ONE overhead person — or (None, LEVEL_NONE).
+
+    A LADDER mirroring the coverage ladder's own order of authority:
+      1. the level of the unit the person is PLACED in (`employees.org_unit_id`);
+      2. failing that, the HIGHEST level (lowest rank) among the units they MANAGE
+         (`storeops.org_managers`) — a person who manages three districts is a district-level cost
+         wherever they personally sit.
+
+    Nothing resolves ⇒ (None, LEVEL_NONE). That person keeps the combined overhead line and the
+    note says their level is unknown. Guessing a level would put real salary on a line the tenant
+    reads as a different job."""
+    by_id = {_s(l.get("level_id")): l for l in (levels or []) if _s((l or {}).get("level_id"))}
+    if not by_id:
+        return None, LEVEL_NONE
+    units = unit_by_id or {}
+
+    def _lvl(uid):
+        u = units.get(uid) or units.get(_s(uid)) or {}
+        return by_id.get(_s(u.get("level_id")))
+
+    own = _lvl(_s(unit_id)) if _s(unit_id) else None
+    if own:
+        return own, LEVEL_UNIT
+    managed = [l for l in (_lvl(_s(u)) for u in (managed_unit_ids or [])) if l]
+    if managed:
+        return sorted(managed, key=lambda l: (l["rank"], l["name"]))[0], LEVEL_MANAGED
+    return None, LEVEL_NONE
 
 
 # ── 3. the allocation itself ─────────────────────────────────────────────────────────────────────
@@ -344,6 +537,10 @@ def build_overhead(people: Iterable[dict], cfg: dict,
     comm: Dict[str, float] = {}
     rows: List[dict] = []
     unallocated: List[dict] = []
+    # Per-level accumulation rides ALONGSIDE `wages_by_store`, keyed by the level_id the caller
+    # resolved with `level_of_person`. It is the SAME cells, grouped — never a second allocation —
+    # so `sum(by_level) == wages_by_store` holds cell for cell and is asserted in the harness.
+    by_level: Dict[str, Dict[str, float]] = {}
     for p in (people or []):
         codes = [c for c in (p.get("covered") or []) if _s(c)]
         sal = round(_f(p.get("salary_month")), 2)
@@ -364,9 +561,15 @@ def build_overhead(people: Iterable[dict], cfg: dict,
             wages[k] = round(wages.get(k, 0.0) + v, 2)
         for k, v in c_cells.items():
             comm[k] = round(comm.get(k, 0.0) + v, 2)
+        lvl_id = _s(p.get("level_id"))
+        bucket = by_level.setdefault(lvl_id, {})
+        for k, v in w_cells.items():
+            bucket[k] = round(bucket.get(k, 0.0) + v, 2)
         rows.append({
             "employee_id": p.get("employee_id"), "label": p.get("label"), "role": p.get("role"),
             "why": p.get("why"), "coverage": p.get("coverage") or COVER_NONE,
+            "level_id": lvl_id, "level_name": _s(p.get("level_name")),
+            "level_rank": p.get("level_rank"), "level_how": _s(p.get("level_how")) or LEVEL_NONE,
             "store_count": len(codes), "covered": sorted(codes),
             "salary_month": sal, "commission": cm,
             "basis_used": basis_used if sal else c_basis, "basis_note": note,
@@ -379,6 +582,7 @@ def build_overhead(people: Iterable[dict], cfg: dict,
     return {
         "wages_by_store": wages,
         "commission_by_store": comm,
+        "wages_by_level": by_level,
         "people": rows,
         "unallocated": unallocated,
         "config": cfg,
@@ -392,6 +596,99 @@ def build_overhead(people: Iterable[dict], cfg: dict,
             "stores_touched": len(set(wages) | set(comm)),
         },
     }
+
+
+# ── 4b. ONE LINE PER DECLARED LEVEL (owner ask 2026-11-13) ──────────────────────────────────────
+def level_lines(result: dict, cfg: dict, levels: Optional[Iterable[dict]]) -> dict:
+    """The per-LEVEL wage lines for one period:
+
+        {"lines": [{key, label, level_id, level_name, rank, by_store, total}, …]   # rank order
+         "combined_by_store": {store: amount},        # people whose level did not resolve
+         "combined_total": float,
+         "levels_declared": int,
+         "note": str}                                  # "" when there is nothing to explain
+
+    `levels` is `level_vocabulary`'s output and is REQUIRED. [] ⇒ no per-level line exists, EVERY
+    dollar stays on the combined line, and `note` says the org has declared no levels. That is the
+    "nothing declared means nothing identified, and the surface says so" posture: there is no list
+    of level names in this file to fall back to.
+
+    `level_lines='off'` returns the same shape with no lines and everything combined, so a tenant
+    can go back to the single line by changing a config row.
+
+    THE SUM IS PRESERVED EXACTLY. Every cell here comes from `build_overhead`'s already-allocated
+    `wages_by_level`; nothing is re-divided, so
+        Σ lines + combined == result['wages_by_store']
+    cell for cell, and the per-level view can never disagree with the total the statement shows.
+    Asserted in harness_overhead_level_lines.py §4.
+
+    THE OWNER'S "automatically add the level" IS THIS: the lines come from whatever
+    `storeops.org_levels` holds at read time. A tenant that adds a level and places (or assigns) a
+    person at it gets that line on the next read — no deploy, no config edit, no code change."""
+    cfg = resolve_config(cfg if isinstance(cfg, dict) else None)
+    by_level = dict((result or {}).get("wages_by_level") or {})
+    declared = [l for l in (levels or []) if isinstance(l, dict)]
+    combined: Dict[str, float] = {}
+
+    def _fold(dst: Dict[str, float], src: Dict[str, float]) -> None:
+        for k, v in (src or {}).items():
+            dst[k] = round(dst.get(k, 0.0) + _f(v), 2)
+
+    if cfg["level_lines"] != "on" or not declared:
+        for cells in by_level.values():
+            _fold(combined, cells)
+        total = round(sum(combined.values()), 2)
+        if cfg["level_lines"] != "on":
+            note = ("overhead salary is booked on ONE combined line because `level_lines` is off "
+                    "for this org; switch it on to get a line per declared org level.")
+        elif total:
+            note = ("$%s of overhead salary could not be split per org level because this org has "
+                    "declared NO levels in its org chart — it is booked on the single combined "
+                    "line. Declaring the levels (Settings → Org Chart) is what names the lines; "
+                    "no level names are assumed on an org's behalf." % f"{total:,.2f}")
+        else:
+            note = ""
+        return {"lines": [], "combined_by_store": combined, "combined_total": total,
+                "levels_declared": len(declared), "note": note}
+
+    lines: List[dict] = []
+    for lvl in sorted(declared, key=lambda l: (l.get("rank", 0), _s(l.get("name")))):
+        cells = by_level.get(_s(lvl.get("level_id")))
+        if not cells:
+            continue            # a declared level nobody is paid at books nothing — no empty line
+        lines.append({"key": _s(lvl.get("key")) or "%s%s" % (LEVEL_LINE_PREFIX, lvl.get("rank")),
+                      "label": level_label(lvl.get("name"), cfg),
+                      "level_id": _s(lvl.get("level_id")), "level_name": _s(lvl.get("name")),
+                      "rank": lvl.get("rank"),
+                      "by_store": {k: round(_f(v), 2) for k, v in cells.items()},
+                      "total": round(sum(_f(v) for v in cells.values()), 2)})
+    known = {_s(l.get("level_id")) for l in declared}
+    for lid, cells in by_level.items():
+        if _s(lid) not in known:
+            _fold(combined, cells)
+    ctotal = round(sum(combined.values()), 2)
+    bits: List[str] = []
+    if lines:
+        bits.append("Overhead salary is split into %d line(s), one per org level the org chart "
+                    "declares: %s." % (len(lines), ", ".join(l["level_name"] for l in lines)))
+    if ctotal:
+        bits.append("$%s belongs to %s whose org level could not be identified — they sit at no org "
+                    "unit and manage none, so they stay on the combined line rather than being "
+                    "assigned to a level they may not hold." % (f"{ctotal:,.2f}", "people"))
+    return {"lines": lines, "combined_by_store": combined, "combined_total": ctotal,
+            "levels_declared": len(declared), "note": " ".join(bits)}
+
+
+def level_spec_rows(lines: Optional[Iterable[dict]]) -> List[tuple]:
+    """The P&L chart rows for the per-level lines, in the 6-tuple shape `coa.pl_spec_for` inserts:
+    (key, label, section, kind, grain, after).
+
+    `opex` / `auto_opt` / `store` grain and anchored after `overhead_wages`, matching the two lines
+    the wages box already carries — `auto_opt` so a level that books nothing renders no line, and
+    `store` grain because the directive forbids a company-wide overhead bucket."""
+    return [(_s(l.get("key")), _s(l.get("label")), LEVEL_LINE_SECTION, LEVEL_LINE_KIND,
+             LEVEL_LINE_GRAIN, LEVEL_LINE_AFTER)
+            for l in (lines or []) if _s(l.get("key")) and _s(l.get("label"))]
 
 
 # ── 5. company == sum of stores (the owner's second sentence, as an assertion) ────────────────────
@@ -485,6 +782,9 @@ def line_note(result: dict, recon: Optional[dict] = None) -> str:
                     "NOT booked — no org-tree coverage and no home store. Place them in the org tree "
                     "to book it." % (f"{_f(t.get('salary_unallocated')) + _f(t.get('commission_unallocated')):,.2f}",
                                      t["people_unallocated"]))
+    lv = (result or {}).get("levels") or {}
+    if lv.get("note"):
+        bits.append(lv["note"])
     if recon and recon.get("note"):
         bits.append(recon["note"])
     return " ".join(bits)
@@ -537,24 +837,47 @@ def gather(client, org_id: str, period: str, cfg: dict, code_to_key=None) -> dic
     except Exception:
         _mkt = {}
     market_by_code = {c: _mkt.get(c.upper(), "") for c in org_codes}
-    # unit -> its own stores; the subtree is walked below so a market unit covers its stores.
+    # The INVERSE index, for the market rung of the coverage ladder: {market: [store_code, …]}. It is
+    # the same canonical answer read the other way round, not a second resolution.
+    codes_by_market: Dict[str, List[str]] = {}
+    for _c, _m in market_by_code.items():
+        if _s(_m):
+            codes_by_market.setdefault(_s(_m), []).append(_c)
+    # THE ORG TREE. `name` and `code` are read because the market rung matches a unit against the
+    # org's own market vocabulary; `level_id` because the per-level lines are named from the level
+    # the person sits at. The DOWNWARD walk itself is `org_chain.subtree_ids` — the platform's one
+    # home for "everything beneath this node", which is precisely the union rule the owner's
+    # 2026-11-13 ask rests on. A local re-walk here would be the second traversal the index forbids.
     try:
-        units = (so.table("org_units").select("id,parent_id").eq("org_id", org_id)
-                 .limit(50000).execute().data) or []
+        units = (so.table("org_units").select("id,parent_id,level_id,name,code")
+                 .eq("org_id", org_id).limit(50000).execute().data) or []
     except Exception:
         units = []
-    children: Dict[str, List[str]] = {}
-    for u in units:
-        children.setdefault(_s(u.get("parent_id")), []).append(_s(u.get("id")))
+    try:
+        levels = (so.table("org_levels").select("id,name,rank").eq("org_id", org_id)
+                  .limit(50000).execute().data) or []
+    except Exception:
+        levels = []
+    try:
+        from app.modules.storeops import org_chain as _oc
+        _lvl_names, unit_by_id = _oc.index_tree(levels, units)
+        _children = _oc.children_index(unit_by_id)
+        _subtree = lambda uid: _oc.subtree_ids(uid, unit_by_id, _children)   # noqa: E731
+    except Exception:
+        unit_by_id, _children = {}, {}
+        _subtree = lambda uid: set()                                         # noqa: E731
+    # Which units each person MANAGES — the second rung of `level_of_person`. Org-scoped by hand.
+    managed_by_emp: Dict[str, List[str]] = {}
+    try:
+        for m in ((so.table("org_managers").select("unit_id,employee_id").eq("org_id", org_id)
+                   .limit(50000).execute().data) or []):
+            managed_by_emp.setdefault(_s(m.get("employee_id")), []).append(_s(m.get("unit_id")))
+    except Exception:
+        managed_by_emp = {}
+    vocab = level_vocabulary(levels)
 
     def subtree_codes(unit_id: str) -> List[str]:
-        seen, stack = set(), [_s(unit_id)]
-        while stack:
-            u = stack.pop()
-            if not u or u in seen:
-                continue
-            seen.add(u)
-            stack.extend(children.get(u, []))
+        seen = _subtree(unit_id)
         return [_s(s.get("store_code")) for s in stores
                 if _s(s.get("org_unit_id")) in seen and _s(s.get("store_code"))]
 
@@ -595,22 +918,50 @@ def gather(client, org_id: str, period: str, cfg: dict, code_to_key=None) -> dic
         except Exception:
             span = []
         span = [c for c in span if c in set(org_codes)]
-        unit = subtree_codes(_s(e.get("org_unit_id"))) if _s(e.get("org_unit_id")) else []
-        codes, how = covered_stores(span, unit, org_codes, cfg)
+        _uid = _s(e.get("org_unit_id"))
+        _managed = managed_by_emp.get(eid) or []
+        # THE UNION RULE, owner 2026-11-13: a higher level covers the union of everything beneath it.
+        # `_subtree` IS that union — the one downward walk — so a regional unit's set already
+        # contains every district unit's set beneath it with no per-level arithmetic of its own.
+        _sub = set(_subtree(_uid)) if _uid else set()
+        for _mu in _managed:
+            _sub |= set(_subtree(_mu))
+        unit = [_s(s.get("store_code")) for s in stores
+                if _s(s.get("org_unit_id")) in _sub and _s(s.get("store_code"))]
+        mkt_codes = [c for c in market_unit_stores(_sub, unit_by_id, codes_by_market)
+                     if c in set(org_codes)]
+        codes, how = covered_stores(span, unit, org_codes, cfg, market_codes=mkt_codes)
+        lvl, lvl_how = level_of_person(_uid, _managed, unit_by_id, vocab)
         people.append({"employee_id": eid, "label": _s(e.get("name")) or eid,
                        "role": _s(e.get("role")), "why": why, "salary_month": sal,
                        "commission": comm_by_emp.get(eid, 0.0),
-                       "covered": codes, "coverage": how})
+                       "covered": codes, "coverage": how,
+                       "level_id": (lvl or {}).get("level_id", ""),
+                       "level_name": (lvl or {}).get("name", ""),
+                       "level_rank": (lvl or {}).get("rank"), "level_how": lvl_how})
 
     res = build_overhead(people, cfg, market_of=lambda c: market_by_code.get(c, ""))
+    # The per-LEVEL lines, named from THIS org's own `org_levels` rows and from nothing else.
+    res["levels"] = level_lines(res, cfg, vocab)
+    res["level_vocabulary"] = vocab
     # Market subtotals are taken in STORE-CODE space, before any re-keying, because that is the only
     # space the market vocabulary is keyed in. They are a pure sum of stores either way.
     res["market_rollup"] = rollup_by_market(res["wages_by_store"], lambda c: market_by_code.get(c, ""))
     if code_to_key is not None:
-        for key in ("wages_by_store", "commission_by_store"):
+        def _refold(cells):
             folded: Dict[str, float] = {}
-            for c, v in (res.get(key) or {}).items():
+            for c, v in (cells or {}).items():
                 k = code_to_key(c) or c
                 folded[k] = round(folded.get(k, 0.0) + _f(v), 2)
-            res[key] = folded
+            return folded
+
+        for key in ("wages_by_store", "commission_by_store"):
+            res[key] = _refold(res.get(key))
+        # The per-level cells are re-keyed by the SAME function, in the same pass, so the identity
+        # Σ lines + combined == wages_by_store survives the fold even when two codes share an
+        # address (the collision the fold exists for).
+        for ln in ((res.get("levels") or {}).get("lines") or []):
+            ln["by_store"] = _refold(ln.get("by_store"))
+        if res.get("levels"):
+            res["levels"]["combined_by_store"] = _refold(res["levels"].get("combined_by_store"))
     return res

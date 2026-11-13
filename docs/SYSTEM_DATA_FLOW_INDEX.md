@@ -219,6 +219,7 @@ Primary code homes:
 | STOREOPS-04 | **A punch says where it was made, and an off-site one reaches the board management already reads** | "the sales reps when they log in should capture the gos location so they are not clocking out at their homes and the geolocation when they clock out from somewhere else than their usual location which should match the store address should be reported as flag to the management" — the clock-IN had captured a fix since mig 045 and the clock-OUT captured nothing at all, the platform's one geofence decision had never judged a punch, and no store had coordinates to judge one against. Who owns "was this person at the store this record is for", for the clock-in, the clock-out and the DM store visit alike — and what stops "we could not tell" from being read as "they were not there"?
 | STOREOPS-05 | **The phone shows the week the TENANT declared, and whose shifts it shows is the server's answer** | "Make scheduling and hr with store vista and closing live in the app also" — the rota, time off and cover requests existed only on the web, and the phone had no schedule at all. The gates were already right (`gate_person_rows`, §14w) and the week start was already declared per tenant; what was missing was a surface. Who decides which seven days a week IS on a phone, and what stops a client-side filter from being mistaken for a permission? |
 | STOREOPS-07 | **A correction a human types reaches the figure, or nothing does** | "i just fixed the hours in ny logistics , went in to check it still shows the old hours , check and fix for good platform wide" — and nothing he could have typed could have moved those figures. **616 hand-typed corrections** sat in `storeops.manual_hours` (51 house, 565 LuxeLink; ±4,441h gross), eight of them filed in the ten days before the report, and no pay or hours path read that table at all. All four tenants had declared `count_manual_hours = true` and `resolve_config` forced it FALSE for the three on `schedule_fallback`. The one correction the figure DID honour, `shifts.actual_hours`, is written by nothing in the product — the frontend displays it in seven places and writes it in none. And the mig-914 RPC decided `correction > punch > schedule` in SQL, where it could read neither the corrections nor the declaration. Who owns "what are this person's paid hours that day", what does a correction MEAN when 2,249 of its hours are negative, and what stops a closed month restating the moment the fold is switched on? |
+| STOREOPS-09 | **An expense line per org level, named in the tenant's own words** | "Anybody who is a dm their salary is divided among the stores they are responsible for , similarly for the regional manager or market manager whatever stores they cover their salary is divided amount their stores , add a line in the expenses with the name dm salary and rm salary or mm salary , if we add another level the expense report should automatically add they level and then divide the salary based on the people who report to them" — the mechanism existed (§14t) and booked ONE combined line. Four live tenants declare four different level vocabularies agreeing on not one rung, so whose word names the line, what stops a house default from labelling one tenant's expenses in another's language, and what makes a level added tomorrow appear with no deploy? |
 | CORE-33 | **What an employee may reach is one declaration, and the API is what enforces it** | "on ny logistics Manan was able to go past [the clock-in screen] and also see the adjustment hours, this should not be allowed for any sales reps — this is universal across the board". The browser was the only gate: a menu row the viewer could see opened its whole subtree by URL, and the payroll writes behind those pages asked for no authority at all. Who decides what a surface's audience is, and what makes the API refuse a caller the menu would not offer it to? |
 | CORE-42 | **A gate proved in-process is a claim, not a measurement** | "create a testng agent who deciatedly is checking the data leakage, unwanted access to modules even if theya re gated like the case of manan and we discovered by accident, c annot have an accident of this sort, put it on schdule and one module at a time from the front end as though somebnbody was trying to hack in to the system". Every access control here is proved by a harness that imports the handler — which catches a wrong rule and not a right rule that was never reached. Who asks the DEPLOYED platform what it actually answers an unprivileged outsider, one module at a time, and what stops that probe from writing to production or from reporting a pass on a question it never asked? |
 | CORE-32 | **A guard that reads source code must be told f-strings exist** | Found by running the suite on a newer interpreter than CI's: the guard that stops our own setup internals reaching a customer was RED on Python 3.13 and GREEN on 3.11. PEP 701 stopped making an f-string one string token, so it had stopped seeing f-strings — and the same file held a SECOND reader of the same fact that had been taught the new shape. What proves a capability that depends on the interpreter, when CI pins one? |
@@ -5646,6 +5647,13 @@ be a seaprate box in the p&l under wages"
   for 2 rows risks over-matching `3352 26th` onto `3735 26th` — one digit apart, four live raw
   spellings — which silently moves one store's payroll onto another. That over-match guard is
   pinned in `harness_overhead_allocation.py` §6.
+- **SUPERSEDED IN PART by §STOREOPS-09 (owner ask 2026-11-13).** The single combined
+  `overhead_wages` line became ONE LINE PER ORG LEVEL, named from the tenant's own
+  `storeops.org_levels`, and the coverage ladder grew a MARKET rung dereferencing §13a.
+  Everything above still holds — nothing here was forked — but read §STOREOPS-09 for the lines
+  the P&L actually renders, for the `level_lines` / `level_label_template` config keys, and for
+  the measured before/after of the market rung (a market node holding 6 placed stores and 10
+  real ones).
 
 - **Dashboard-builder Phase D1 — user-designed TILE LAYOUTS, backend (owner spec 2026-09-01):**
   every module's tiled dashboard layout becomes per-org CONFIG (RULE TWO), not code. SUPER ADMIN
@@ -7430,8 +7438,8 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `storeops.org_units/levels/managers` | org-hierarchy UI (storeops) | `org_span_for_manager` RPC → RBAC span, MI store set |
 | `storeops.org_units` / `org_levels` / `org_managers` / `employees` / `stores` (read together by `storeops.router.org_chain_inputs`) | org-hierarchy UI (storeops) | **THE ORG-TREE WALK, one home** — pure `storeops/org_chain.py` (`index_tree` → `district_for` → `managers_at` → `chain_for` → `dm_by_store`/`dm_names`): which district and DM own a store, answered in BULK. Callers: `storeops._dm_for_store` (notify routing), `storeops._managers_above_dm` (escalation), `GET /closing/accountability-chain`'s `dm` cell (§48.7). Lock `harness_org_chain.py` |
 | `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3); **P&L wages estimate** `coa.wages_by_store`→`derive_wage_cells` (actual_hours else scheduled_hours — the owner's 2026-09-08 rule, already implemented); **salary coverage basis** `labour_coverage.load_shift_hours`→`hours_basis_by_code` (hours only, never dollars — §4) |
-| `storeops.employees` / `stores` / `org_units` (+ RPC `org_span_for_manager`) | storeops roster + org tree | **OVERHEAD ALLOCATION** `storeops/overhead_allocation.gather` → `classify_employee` (structural: active + salaried + blank `home_store`) / `covered_stores` (span RPC → org-unit subtree → org-wide) / `build_overhead` → the P&L `overhead_wages` + `overhead_comm` lines (§14t, mig `997`, house default OFF). Reads the roster only; derives NO pay — the conversion is `coa.monthly_salary_equivalent`, the commission is `management_incentive_payout` (§9) |
-| `commcalc.account_config.overhead_config` (JSONB, mig `997`) | Settings / owner SQL | §14t — `mode` / `basis` (`equal_stores` \| `equal_market_then_store` \| `weighted`) / `span_fallback` / `roles[]` / labels / `commission_source` / `manual_expense_names[]`. Read ONLY via `coa._account_config` → `overhead_allocation.resolve_config`. NULL = house default = nothing booked |
+| `storeops.employees` / `stores` / `org_units` (+ RPC `org_span_for_manager`) | storeops roster + org tree | **OVERHEAD ALLOCATION** `storeops/overhead_allocation.gather` → `classify_employee` (structural: active + salaried + blank `home_store`) / `covered_stores` (span RPC → org-unit subtree ∪ the MARKET rung → org-wide; §STOREOPS-09) / `level_of_person` + `level_lines` (the per-LEVEL expense lines, named from `storeops.org_levels`, §STOREOPS-09) / `build_overhead` → the P&L `overhead_wages` + `overhead_comm` + one `overhead_wages_l<rank>` line per declared level (§14t, §STOREOPS-09, mig `997`, house default OFF). Reads the roster only; derives NO pay — the conversion is `coa.monthly_salary_equivalent`, the commission is `management_incentive_payout` (§9) |
+| `commcalc.account_config.overhead_config` (JSONB, mig `997`) | Settings / owner SQL | §14t — `mode` / `basis` (`equal_stores` \| `equal_market_then_store` \| `weighted`) / `span_fallback` / `roles[]` / labels / `commission_source` / `manual_expense_names[]` / **`level_lines` (`on` default) + `level_label_template` (`"{level} salaries (allocated to stores)"`) — §STOREOPS-09, no migration: both live inside the SAME JSONB**. Read ONLY via `coa._account_config` → `overhead_allocation.resolve_config`. NULL = house default = nothing booked |
 | `storeops.employees.epay_salesperson` / `epay_login` (the POS/b2b IDENTITY columns — the reason `commcalc.name_map` is not needed) | Employee Setup / HR editors (`POST`/`PATCH /storeops/employees`, `EMP_FIELDS`); **mig `1001`** seeds them VERBATIM from the b2b feed for the PA-market roster (§14u — owner-run, not applied) | `commission_engine` seller match (`epay_salesperson || name`, `:554,613,1141`) and its remediation text (`:1195`); `GET /commcalc/rep-employee-map` aliases; `GET /commcalc/commission-plans/roster` assignment VALUE; `hr/router` + `hr/letters` chargeback/commission keying. Setting them to the feed's exact bytes is what makes a `name_map` row unnecessary (§14u) |
 | `storeops.employees.pay_rate` / `pay_amount` (the per-employee PAY columns) | Employee Setup / HR "Employees & Pay" / Roles & Access grid (`PATCH /storeops/employees/{id}`, pay-write gated by `gate_pay_write` like every other pay writer — §19.44; every edit logged to `storeops.payroll_change_log`; the HR + Roles browser writes are built ONLY in `frontend/src/lib/employeeRowSlices.ts` and planned per row by `lib/rowSave.ts::planRowSave` — §19.35; a save counts only what the reply shows stored, `rowSave.notPersisted` reading the PATCH echo + `pay_fields_ignored` — §19.37) | **EVERY read path that emits them is gated by `storeops/pay_visibility.can_see_pay` + `strip_pay`** — the six original money surfaces + `/storeops/payroll-raw` (fail-closed 403), and since 2026-09-10 the DM sweep: `/storeops/employees`, `/storeops/payroll-change-log` (the logged VALUES), the `PATCH` echo, `/storeops/pto-accrual/{period}`, `/storeops/salary-advance/additional-payroll/{period}` + `/history`, `/core/employees` (+ `/hr/employees`), `/core/employee-dashboard` (others' bundles), `/marketing/event-sales/roi`, `POST /hr/employees`. Store-level aggregates derived from these columns (`coa.derive_wage_cells`, `overhead_allocation`, `labour_coverage`, per-store payroll expenses) are deliberately NOT gated — §14 DM sweep |
 | `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)** |
@@ -8116,6 +8124,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | Withholding estimate (gross/FICA/federal/state/net) | `storeops.timelog`+`manual_hours` hours × `employees.pay_rate` × `payroll_settings` W-4 | browser: `frontend/src/lib/payroll-tax.ts computePay`; server twin: `storeops/payroll_tax_estimate.compute_pay` (§14 W3 — keep in lockstep) |
 | Which route books rep commission, and what happens to the other one (`replaced` / `no_replacement` / `not_applicable`) | `commcalc.rep_commissions` is AUTHORITATIVE (owner 2026-09-08 "Rep commision should go in p&l") — the `rep_comm` P&L line / GP `−Rep Pay`. A `store_expenses` row named in `account_config.labour_commission_expense_names` (mig `994`, house default `'{}'`) is the duplicate and stops booking, per store-month, ONLY where rep commission exists to replace it | `commcalc/labour_coverage.suppression_plan` → `account/coa.build_inputs` (skips the row; `rep_comm` line `note`) **and** `commcalc/gp_report.calc_gp_report` (`commission_suppression_names` → `exp_total`; payload `labour_commission_suppressed`). ONE decision, two readers — they can never suppress differently. Proof `harness_labour_coverage.py` §H (§4) |
 | Overhead salary / commission of staff attached to NO store (DM, market manager) — per store, and who got paid how much | `storeops.employees` (salaried + active + blank `home_store`) × the covered store set (`org_span_for_manager` → `employees.org_unit_id` subtree → org-wide) ÷ the configured `basis`. Commission = `commcalc.management_incentive_payout` (§9), **never recomputed**. Company = the SUM of the store cells and nothing else | `storeops/overhead_allocation.py` (`classify_employee` / `covered_stores` / `allocate` / `build_overhead` / `company_total` / `reconcile_manual`) → `account/coa.build_inputs` → P&L lines **`overhead_wages`** + **`overhead_comm`**, `auto_opt`, store grain, sited under `wages`. Config `account_config.overhead_config` (mig `997`, house default `mode='off'` ⇒ books nothing). Proof `harness_overhead_allocation.py` (52 checks) (§14t) |
+| The SAME overhead salary split ONE LINE PER ORG LEVEL, each named in the tenant's own word ("District Manager salaries…", "Market salaries…") — and a level added tomorrow appearing with no deploy | `storeops.org_levels(name, rank)` (the tenant's DECLARED vocabulary, a REQUIRED argument — nothing declared ⇒ nothing identified and the line says so) × the level each overhead person sits at (`employees.org_unit_id`'s level, else the highest level among the units they MANAGE) × the SAME per-store cells, grouped — Σ(level lines) + combined == `wages_by_store` cell for cell | `storeops/overhead_allocation.py` (`level_vocabulary` / `level_label` / `level_of_person` / `level_lines` / `level_spec_rows` / `market_unit_stores`) + `storeops/org_chain.subtree_ids` (THE union rule) → `account/coa.build_inputs` declares them on `coa.DYNAMIC_PL_SPEC` → `coa.pl_spec_for(inputs)`, which BOTH assemblers dereference → P&L lines **`overhead_wages_l<rank>`**, `opex` / `auto_opt` / store grain, spliced after `overhead_wages`. Proof `harness_overhead_level_lines.py` (65 checks, incl. the cross-tenant and no-leak locks) (§STOREOPS-09) |
 | Store salary coverage state for a month (`entered` / `derived_actual` / `derived_scheduled` / `carried` / `not_measured` / `no_staff`) | `commcalc.store_expenses` authoritative payroll rows (ruling-K2 predicate, minus flat allocations) + `storeops.shifts` hours (actual else scheduled) + `expenses_effective` carry answer | `commcalc/labour_coverage.labour_coverage` → `GET /gp/{period}` key `labour_coverage` and the P&L `wages` line `note` (§4, mig `992`). Computes NO dollars — the amounts stay with `coa.derive_wage_cells` |
 | Scheduled hours per rep per month (and the hourly rate it implies against an entered monthly salary) | `storeops.shift_templates` × the calendar; evidence from `commcalc.raw_sales` first/last `trans_ts` per store·rep·day | `storeops/schedule_from_history.py` `weekly_template` / `monthly_hours` / `rate_check` — the ONE derivation (§14v); proof `harness_schedule_from_history.py` |
 | Rent due this month / current-month rent (per store) | `storeops.store_lease.rent_schedule`→`current_rent`×`escalation_pct` (schedule wins); due window from `rent_due` → `tenants.rent_due_default` → house first-week (mig `946`) | `store_lease.rent_for_month` + `resolve_rent_due`/`rent_due_window` (the §14 read contract for the finance rents-due/recurring-expenses build); surfaced on `GET /storeops/store-lease` |
@@ -26513,6 +26522,7 @@ status word rather than a blank that reads as nil.
 | CORE-37 | core |
 | CORE-43 | core |
 | STOREOPS-08 | storeops |
+| STOREOPS-09 | storeops, account |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -45134,6 +45144,192 @@ the burden is display-only. No migration.
 See also §14y (the hours basis one home) · §CORE-17.3x (the payroll drill-down family) ·
 §CORE-17.3i (absence is never zero) · §19.44 / mig 434 (pay visibility) · §19.18 (one fact, one home,
 dereferenced) · §CORE-43 (the market attribution fix shipped alongside).
+
+## §STOREOPS-09. AN EXPENSE LINE PER ORG LEVEL, NAMED IN THE TENANT'S OWN WORDS (owner ask 2026-11-13)
+
+Owner, 2026-11-13, verbatim: *"Anybody who is a dm their salary is divided among the stores they are
+responsible for , similarly for the regional manager or market manager whatever stores they cover
+their salary is divided amount their stores , add a line in the expenses with the name dm salary and
+rm salary or mm salary , if we add another level the expense report should automatically add they
+level and then divide the salary based on the people who report to them"*
+
+### STOREOPS-09.1 Duplicate check (the build gate)
+
+| Question asked of the index | Answer | What was done |
+| --- | --- | --- |
+| Is there already a mechanism that divides an unattached manager's salary across the stores they cover? | **YES** — §14t, `storeops/overhead_allocation.py` (mig `997`, proof `harness_overhead_allocation.py`), written from the owner's OWN 2026-09-09 directive including his "$78,000 market manager / divided among the stores in each market" example. `classify_employee` (structural: active + salaried + no `home_store`), `covered_stores` (the ladder), `allocate` (three config bases, cents-exact), `build_overhead`, `company_total`, `reconcile_manual` | **EXTENDED, not forked.** Every function above is untouched in behaviour; the three things the new ask adds are added INSIDE it |
+| Is there already an org-tree walk? | **YES** — `storeops/org_chain.py` (§47.17/§59.10), the one home, read in bulk via `storeops.router.org_chain_inputs`. It climbed (`ancestors_of`) and had no descent | The DOWNWARD walk was added there as `subtree_ids` / `children_index` — and `overhead_allocation.gather`'s own local stack-and-children walk was **deleted** and now dereferences it. The union rule IS that walk |
+| Is there already a canonical store→market answer? | **YES** — `core/scope.market_by_code` / `store_market_resolver` (§13a), guarded by `harness_market_resolution_guard.py` | The new market rung READS it (inverted once into `{market: [codes]}` by the caller). No second resolver, no read of `stores.market` on its own |
+| Is there already a per-org label override channel for a P&L line? | **YES** — `L[key]['label']`, which `wages` and both §14t overhead lines already use | The per-level labels ride the SAME channel |
+| Is there already a place a per-ORG P&L line can exist? | **NO** — `coa.PL_SPEC` is a module-level list and `engine._assemble` took it as an argument from two call sites | ONE home created: `coa.pl_spec_for(inputs)` / `pl_label_for(inputs)`, and **both** assemblers now dereference it. A line the TENANT declared cannot otherwise exist, which is the whole ask |
+| Is there already a payroll-row → P&L-line router? | **YES** — `commcalc/labour_vocabulary.resolve` (§ACCOUNT-01) | **Not touched and not needed**: these lines are DERIVED from the roster, not routed from a payroll row. Stated here so the next reader does not add a second map |
+
+### STOREOPS-09.2 The three things the ask adds
+
+1. **A line per org LEVEL, named from the tenant's own `storeops.org_levels(name, rank)`** instead of
+   one combined line. `level_vocabulary(rows)` → `[{level_id, name, rank, key}]`; `level_of_person`
+   resolves which level someone sits at (the level of their `employees.org_unit_id`, else the
+   HIGHEST level among the units they MANAGE); `level_lines(result, cfg, levels)` groups the cells;
+   `level_spec_rows` emits the chart rows. The line KEY is `overhead_wages_l<rank>` — `org_levels` is
+   `UNIQUE (org_id, rank)`, so rank is the stable per-org handle and **none of the tenant's
+   vocabulary reaches a stored line key**. The tenant's words appear in the LABEL only, rendered
+   into the house POLICY template `level_label_template` (default `"{level} salaries (allocated to
+   stores)"`, per-org config).
+2. **A higher level covers the union of everything beneath it** — a regional manager's store set is
+   the union of his district managers' store sets. That union is `org_chain.subtree_ids`, the one
+   downward walk, and nothing per-level computes it: splice a new rung into the tree and every
+   ancestor's set contains it on the next read.
+3. **Market-level coverage dereferences the existing store→market answer.** A unit CORRESPONDS to a
+   market when, case-insensitively, its `name` — or its `code`'s tail after the last `:`
+   (`mkt:chicago`, mig 050's own seed shape) — equals a market in `core.scope.market_by_code`. A
+   DATA-to-DATA match between two things the TENANT declared; no market name or level name is a
+   literal in code.
+
+**ADDING A LEVEL NEEDS NO DEPLOY AND NO CONFIG EDIT.** The lines come from whatever `org_levels`
+holds at read time. That is the owner's sentence, met literally.
+
+### STOREOPS-09.3 THE §COMMCALC-49.10 TRAP, and why the level name is a REQUIRED argument
+
+Measured 2026-11-13, the four live orgs declare **four different level vocabularies** — of six, two,
+three and six rungs — agreeing on **not one rung**. A house default behind that vocabulary would
+label one tenant's expense line with another tenant's word and look entirely plausible doing it:
+exactly the device-line failure of §COMMCALC-49.10, where a declaration was right and only the code
+had its own copy.
+
+So the rows are a **required argument with no house words behind them**:
+
+- `level_vocabulary(None)` / `([])` / `("x")` / malformed rows ⇒ **`[]`**, always. There is no list of
+  level names in the module to fall back to.
+- `level_label("")` / `(None)` **RAISES**. A caller that has not asked the org *cannot answer*. That
+  refusal is the lock expressed at runtime.
+- **Nothing declared means nothing identified, and the surface says so**: the people stay on the one
+  combined line and the note reads *"could not be split per org level because this org has declared
+  NO levels in its org chart … Declaring the levels (Settings → Org Chart) is what names the lines;
+  no level names are assumed on an org's behalf."* Likewise a person whose own level cannot be
+  identified keeps the combined line and the note names them rather than assigning a level they may
+  not hold.
+
+### STOREOPS-09.4 The coverage ladder — one ladder, one more rung, every cell still says how
+
+| rung | reason code | source |
+| --- | --- | --- |
+| 1 | `org_span` | `storeops.org_span_for_manager` (mig 050) — used AS-IS, still wins outright |
+| 2a | `org_unit` | stores placed under the subtree of the unit they sit in / manage (`org_chain.subtree_ids`) |
+| 2b | `market` | the stores of any MARKET a unit in that same subtree IS (`market_unit_stores` → `core.scope.market_by_code`) |
+| 2a+2b | `org_unit_market` | **the union**, named honestly as the union it is |
+| 3 | `org_wide` | every active store — only under `span_fallback='org_wide'` |
+| — | `none` | **REPORTED in `unallocated`, never spread** (unchanged posture) |
+
+2b is **unioned with** 2a rather than tried after it, and is gated by the same `span_fallback`: it is
+the SAME unit answered through the canonical market vocabulary, so it is exactly as strong a claim as
+2a and no stronger. `span_fallback='org_span'` still refuses both.
+
+**WHY 2b EXISTS, measured 2026-11-13 on the reporting tenant.** A market node holds its stores
+through `stores.org_unit_id` AND through `stores.market` alone, at once:
+
+| unit | stores PLACED under it | the market rung | before | after |
+| --- | --- | --- | --- | --- |
+| `Company` (root) | 19 | 23 | 19 / `org_unit` | **23** / `org_unit_market` |
+| `Chicago` | 13 | 13 | 13 / `org_unit` | 13 / `org_unit_market` |
+| `NY` | 6 | 10 | **6** / `org_unit` | **10** / `org_unit_market` |
+
+A manager at that `NY` node had his salary divided by **six** while covering **ten** stores — a wrong
+figure that looks entirely right. Requiring every store to be hand-placed to fix it is a wiring
+demand, not a design.
+
+### STOREOPS-09.5 The P&L contract — a per-ORG line, in one home, dereferenced
+
+`coa.PL_SPEC` is the chart every tenant shares; a line a tenant INVENTS after the deploy cannot live
+in it. So `build_inputs` DECLARES those rows on the inputs dict under `coa.DYNAMIC_PL_SPEC`, as
+6-tuples `(key, label, section, kind, grain, after)`, and **every** assembler builds its P&L from
+`coa.pl_spec_for(inputs)` / `pl_label_for(inputs)`:
+
+- `account/engine.py::compute` (the persisted snapshots)
+- `account/statement_engine.py::_assemble_scope` (the on-demand service, the API, the notify reports)
+
+The rows are `opex` / **`auto_opt`** / **`store` grain**, spliced immediately after `overhead_wages`
+so the wages box reads as one box, in rank order. `inputs` already carries non-cell side entries
+(`_unbooked_sales`, `_royalty_coverage`) and every reader guards with `isinstance(ln, dict)`, so a
+LIST side entry is the established shape. **No declarations ⇒ `pl_spec_for` returns the shared
+`PL_SPEC` object ITSELF**, so every statement is byte-identical, line for line.
+
+**THE SAME CELLS, GROUPED — not a second allocation.** Each dollar MOVES off the combined
+`overhead_wages` line onto its level's line; `build_overhead`'s `wages_by_level` is the already-
+allocated cells keyed by level. The identity
+
+    Σ(per-level lines) + combined == wages_by_store
+
+holds cell for cell, through the store-code → address fold as well, so the opex subtotal and net
+income do not move by one cent.
+
+### STOREOPS-09.6 LIVE, October 2026, all four tenants (read-only simulation of `mode='derive'`)
+
+`overhead_config` is **NULL on all three rows that exist** and NY LOGISTICS has no row at all ⇒
+`mode='off'` everywhere ⇒ **this books nothing today for anybody**. The figures below are what each
+owner would see the moment he switched it on, measured through the real module against production:
+
+| tenant | declared levels | the person | level resolved | coverage | line | October figure |
+| --- | --- | --- | --- | --- | --- | --- |
+| LuxeLink | `Company`(0) · `Market`(1) | `E223`, role Manager, annual $78,000 → **$6,500.00/mo** | `Market` (rank 1, from his org unit) | `org_unit_market`, **13 stores** | `overhead_wages_l1` **"Market salaries (allocated to stores)"** | **$6,500.00** = $500.00 × 13 |
+| NY LOGISTICS | `Management`(0) · `Market`(1) · `Store`(2) | `E270`, weekly $2,000 → **$8,666.67/mo** | `Management` (rank 0, its root) | `org_unit_market`, **1 store** | `overhead_wages_l0` **"Management salaries (allocated to stores)"** | **$8,666.67** |
+| house org | `Executive`(0) … `Sales Consultant`(5) | `E127`, `E130`, both Admin, **annual 1.0** (a $1/yr placeholder) → $0.08/mo each | **none** — no org unit, no managed unit | `none` | — | **$0.00 booked**; **$0.16 REPORTED in `unallocated`** |
+| Vzone | `Executive`(0) … `Sales Consultant`(5) | nobody salaried and store-unattached | — | — | — | **$0.00**, no line |
+
+Four vocabularies, four different answers, one code path, and `overhead_wages_l0` on one tenant is
+`Management` while on another it would be `Executive` — which is why the key carries the rank and the
+label carries the word.
+
+### STOREOPS-09.7 The locks (they fail the BUILD, not the review)
+
+`backend/harness_overhead_level_lines.py` — **65 checks**, DB-free, in `tests.yml`:
+
+| § | what it holds |
+| --- | --- |
+| 6(a) | **No declared level NAME is a string literal** in `overhead_allocation.py`, `org_chain.py` or `coa.py`, checked against all four live vocabularies (`company` / `store` / `market` excluded by name — they are the statement's own grain and scope words, a year older than `org_levels`). An **AST** pass then proves the five functions that NAME a line hold **no** level-word literal at all, those three included |
+| 6(b) | `level_label`'s **refusal** is asserted in the source, so it cannot be softened back to a default |
+| 6(c) | **No P&L assembly passes `coa.PL_SPEC` to `engine._assemble`** any more — both dereference `coa.pl_spec_for(inputs)`, so a tenant-declared line cannot be dropped by a caller that forgot it exists. `pl_spec_for` is defined exactly once |
+| 6(d) | **ONE coverage ladder**: a `covered_stores` definition and the `COVER_*` reason vocabulary each exist in exactly one backend module |
+| 6(e) | **ONE downward org-tree walk**: no second stack-and-children subtree traversal anywhere in `storeops`, and the allocation module is proved to USE the one home |
+| 7 | **Money does not move**: house default still `mode='off'`, no declarations ⇒ the shared chart object itself, `PL_SPEC` never mutated by a per-org read |
+| R5 | **The note rides a line that renders.** Found replaying this end to end against production: `overhead_wages` is `auto_opt`, so once the per-level lines carry every dollar the combined line is DROPPED — and the honesty note went with it, taking the hand-entered-overhead gap report and the unallocated-pay report along, exactly when they are hardest to notice missing. `build_inputs` now attaches the note to the FIRST per-level line when the combined line books nothing |
+| 5 | **Cross-tenant** (owner 2026-10-30): the four live vocabularies each produce THEIR OWN lines from THEIR OWN rows; the word a label names is declared by that tenant; and reading one tenant's result with ANOTHER tenant's vocabulary identifies **nothing** and books the combined line — it never relabels with the foreign word |
+
+`harness_overhead_allocation.py` (52) and `harness_org_chain.py` still pass unchanged — the
+pre-existing RULE TWO text check in the former is what caught the first draft of this work writing a
+level name into a comment, and it stays.
+
+### STOREOPS-09.8 DATA, reported and NOT coded around
+
+- **The hand-typed `DM Salaries` row exceeds the roster.** The reporting tenant types `DM Salaries`
+  by hand into `commcalc.store_expenses`: **October 2026 = $20,400.01** across 16 stores (July and
+  August 2026 = $25,500.01 across 20), while the roster explains **$6,500.00** — an October gap of
+  **$13,900.01**. `reconcile_manual` REPORTS it on the line and **suppresses nothing and deletes
+  nothing**: the hand-entered rows are the larger and more complete figure, so switching them off on
+  the strength of a smaller derived number would delete real cost and book nothing back. The fix is
+  roster data — who those DMs are and what they are paid — and the owner has been asked.
+- **`storeops.org_managers` is EMPTY for two of the four tenants** (22 rows: 17 house, 5 Vzone; zero
+  for the reporting tenant and NY LOGISTICS), so rung 1 answers for nobody there and rung 2 is what
+  resolves coverage. A wiring gap, not a person who covers nothing.
+- **Nine house-org stores carry market `PA` and no org unit, and one carries no market at all.** The
+  market rung cannot help the first nine because no unit is named for that market, and the tenth is
+  invisible to both rungs. Reported; no code invents a placement.
+- **Two house-org employees are salaried at `annual = 1.0`** — a $1/yr placeholder, $0.08/month.
+  They are correctly classified as overhead and correctly land in `unallocated` (no unit, no managed
+  unit). The figure is a data-entry artefact, not a rule to code around.
+- **No tenant has switched this on.** Doing so MOVES MONEY onto every store's P&L and is the owner's
+  call. No config row was written and none is proposed in a migration: the keys `level_lines` and
+  `level_label_template` live inside the existing `overhead_config` JSONB (mig `997`), so **no
+  migration is needed for this work at all.**
+
+💰 **Books nothing, writes nothing, moves no money.** `mode='off'` is still the house default, no org
+has a config row, `pl_spec_for` hands every org the shared chart object itself, and every statement
+is byte-identical, line for line.
+
+See also §14t (the mechanism this extends, and mig `997`) · §47.17 / §59.10 (the org-tree walk) ·
+§13a (the canonical store→market answer) · §CORE-43 (its browser twin) · §ACCOUNT-01 (the payroll-row
+→ P&L-line router, deliberately untouched) · §COMMCALC-49.10 (a tenant's vocabulary is never a
+default) · §19.18 (one fact, one home, dereferenced).
+
 
 ## §COMMCALC-55. A SUCCESSFUL LOGIN IS RECOGNISED BY EVIDENCE, NEVER BY A GUESSED VOCABULARY (owner report 2026-11-05)
 

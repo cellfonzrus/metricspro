@@ -577,6 +577,10 @@ jobs:
         working-directory: backend
         if: always()   # a red harness must not hide the 60 after it
         run: python3 harness_overhead_allocation.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_overhead_level_lines
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_overhead_level_lines.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: harness_pa_roster_names
         working-directory: backend
         if: always()   # a red harness must not hide the 60 after it

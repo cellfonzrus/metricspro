@@ -274,7 +274,9 @@ def compute_and_store(client, org_id, period):
     for scope_key, scope_label, stores_in_scope, include_cw in scopes:
         jscope = _journal_for_scope(journal, scope_key, stores_in_scope)
         # P&L first (net income feeds retained earnings on the BS)
-        pl = _assemble(inputs, jscope, coa.PL_SPEC, coa.PL_LABEL,
+        # The chart comes from `coa.pl_spec_for(inputs)`, never from `coa.PL_SPEC` directly: lines a
+        # TENANT declared (one per org level, §STOREOPS-09) exist only on the inputs this org built.
+        pl = _assemble(inputs, jscope, coa.pl_spec_for(inputs), coa.pl_label_for(inputs),
                        [("Revenue", "revenue"), ("Cost of Goods Sold", "cogs"),
                         ("Operating Expenses", "opex"), ("Other", "other")],
                        scope_key, stores_in_scope, include_cw)
