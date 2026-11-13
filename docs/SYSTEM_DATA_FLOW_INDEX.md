@@ -26403,6 +26403,7 @@ status word rather than a blank that reads as nil.
 | CORE-41 | core |
 | CORE-42 | core |
 | ACCOUNT-01 | account, commcalc, closing |
+| ACCOUNT-02 | account, commcalc |
 | CORE-32 | core |
 | CORE-33 | core |
 | CORE-34 | core |
@@ -47777,3 +47778,132 @@ Cross-references: §CORE-33 (the declaration this measures from outside, and the
 route it reached — the allowlist this dereferences) · §CORE-19.6 (the anon Data API grants, the same
 question asked of the database) · §19.18 (one fact, one home, dereferenced) · §22 (★ NO LOCKOUT ★) ·
 §CORE-34/35 (the gate index listing these jobs) · §19.25 (a failing harness fails CI).
+
+
+## §ACCOUNT-02. A FROZEN COPY OF A MEASUREMENT MUST NOT OUTRANK IT IN SILENCE (reported 2026-11-12)
+
+Owner, verbatim, after pressing **⚙️ Compute statements** on `/accounts`: *"in the accoutn module i
+diod the compute but the expenses are not  showing correctly , they shoudl include the salaries"*.
+
+### §ACCOUNT-02.1 What was on screen, measured live before a line was changed
+
+The salaries WERE on the salary line (§ACCOUNT-01.3 put them there). The line was simply a frozen
+copy, taken from the payroll report at some earlier moment and never refreshed.
+
+| fact (LuxeLink, October 2026) | figure |
+| --- | --- |
+| salary the `wages` line booked | **$54,044.69** |
+| salary `coa.wages_by_store` measures from the SAME month's hours + punches | **$105,109.69** |
+| absent from October's operating expenses | **$51,065.00** |
+| of which: the gap at the 12 stores whose entered figure is below their own measurement | $60,860.68 |
+
+The two gap figures differ because a flat `DM Salaries` allocation ($25,500.01, one identical amount
+at every store) books on top and is not a measurement of any store's staff — `allocated_names` has
+ruled on that since §4e and this check reuses that ruling rather than making a second one.
+
+Per store, the copy had drifted by any amount at all (production, 2026-11-12):
+
+| store | entered (booked) | measured |
+| --- | --- | --- |
+| `Belmont` | $166.50 | $7,339.70 |
+| `Utica` | $90.00 | $3,699.24 |
+| `3735 26th` | $85.25 | $6,138.41 |
+| `Diversey` | $6,033.26 | $11,856.90 |
+| `957` | $4,523.53 | $4,523.53 — agrees to the cent |
+
+All 31 payroll rows carried `created_at` **2026-11-12T21:41:26**, because `PUT /commcalc/expenses/
+{period}` is a whole-month delete-then-insert: saving the sheet restamps every row without
+re-reading payroll, so the row's own timestamp says nothing about when its figure was measured.
+
+### §ACCOUNT-02.2 THE CLASS — a fact with two homes, where the copy wins
+
+`/commcalc/expenses`'s **fill salaries** button COPIES `GET /storeops/payroll-by-store` into an
+`Employee Salaries` row per store. Membership in `account_config.payroll_expense_names` CONFERS
+payroll authority (§4, mig `621`), and authority SUPPRESSES the hours estimate — so the copy
+outranks the fact it was copied from, for as long as it exists. That is §19.18's rule broken in the
+one direction nobody checks: not a second derivation, but a second STORE of one derivation's answer,
+with the live reader switched off by its mere presence. Both figures are plausible, neither is
+labelled, and the P&L renders the staler one.
+
+**WHICH ROUTE SHOULD BOOK IS NOT DECIDED HERE.** It moves money (LuxeLink October labour +$51,065.00
+at minimum), and money-touching changes are surfaced for the owner's word (CLAUDE.md). The owner card
+was posted 2026-11-12. What ships here is the REPORT, which needed no ruling and should never have
+been absent: a figure that reads like a measurement and is not one is §4e's silent-$0.00 defect one
+step along.
+
+### §ACCOUNT-02.3 The one home, and the two readers that dereference it
+
+- **`app/modules/commcalc/labour_coverage.py` `payroll_expense_by_key`** — THE accumulator for "how much salary did
+  this store ENTER", in the CALLER's key space (`key_of`). `entered_amounts` now dereferences it
+  instead of carrying a second copy of the same predicate.
+- **`app/modules/commcalc/labour_coverage.py` `entered_vs_measured`** — THE comparison. Pure, nets nothing, moves no
+  dollar. Deliberately the same shape and the same reason as `commission_collisions` beside it
+  (report the divergence, let the owner rule), so there is one pattern for "two routes answer one
+  question", not two.
+- **`app/modules/account/coa.py` `_wage_measurement` / `wages_by_store` / `wages_by_code`** — ONE derivation, two key
+  spaces. The GP report books by store CODE and the P&L by canonical ADDRESS; inverting
+  address→code is many-to-one after §ACCOUNT-01's fold, so it would pay one measurement to two
+  codes. `derive_wage_cells` already takes the code→address map as an ARGUMENT, so the code-keyed
+  reading is the same function with an empty map — not a second read and not a second derivation.
+- **Both readers wired in the SAME change** (the sibling rule): `coa.build_inputs` hands over the
+  cells it already holds, folded with the very `key_of` it books with, and the finding lands in the
+  `wages` line's existing `note` channel; `commcalc/router._compute_gp` hands over
+  `coa.wages_by_code` and carries it on the existing `labour_coverage` payload key. The GP report has
+  no wage estimate of its own, so its `−Expenses` column IS the entered figure — a stale copy there
+  moves gross profit, which is why excusing it was not an option.
+
+### §ACCOUNT-02.4 THREE ABSENCES, each with its own reason, none of them a $0.00
+
+The tri-state discipline of §19.50 / §CORE-17, because every one of these would otherwise read as
+"we checked and it agrees":
+
+| when | what the comparison says |
+| --- | --- |
+| no measurement handed over, or `payroll_evidence` REFUSED this period's clock evidence (§14y) | `verdict = not_measured_comparison`, both totals **None**, and a note that says NOT CHECKED |
+| the month is CARRIED (`carried_from`) | the same refusal — `coverage_note` already says those dollars belong to another month in full, and calling each carried row "stale" would send the owner to re-enter a figure the carry rule replaces anyway (§COMMCALC-23) |
+| a store has an entered figure and no measurable hours | listed in `unmeasured_keys`, never compared against an implied zero: reporting its whole salary as OVERSTATED sends an owner hunting a code defect when the fault is missing clock data |
+
+### §ACCOUNT-02.5 What the other three tenants showed, and what was DATA
+
+Measured live 2026-11-12 over all four tenants, Sep/Oct/Nov 2026. Nothing here was repaired in code:
+
+- **House org (Cellfonz R Us):** October and November salary $0.00, and correctly so — only 62.94%
+  of October's 510 scheduled employee-days (46.75% of November's 246) carry a punch or a correction,
+  under the 85.00% the org requires, so `payroll_evidence` REFUSES rather than paying unclocked days
+  nothing. Missing clock data, reported in the line's own note (§14y).
+- **Vzone:** October's stored statement booked $0.00 of salary because it was computed on **1
+  October 2026** by the scheduled sweep and never recomputed; the live read gives $20,010.00 and
+  November already shows it. `POST /account/run-due` only fires on periods it finds STALE, so a
+  month computed on its first day can sit there all month. Reported.
+- **NY LOGISTICS:** no October or November statement exists at all, though $18,328.79 of October
+  labour is measurable.
+
+### §ACCOUNT-02.6 Duplicate check (build gate) — what was checked, what was reused
+
+Searched this index for an existing mechanism answering "was this store's salary measured for this
+month" and "do two routes carry the same labour dollars": §4e / §19.50 own both, in
+`labour_coverage.py`. **Reused**, not duplicated: `allocated_names` (what counts as a measurement of
+a store's own staff), `authoritative_codes`' predicate (now behind the one accumulator), the
+`commission_collisions` report shape and its tri-state verdict, the `note` passthrough both surfaces
+already read, and `coa.derive_wage_cells` for every dollar. No new report, endpoint, table, migration
+or feed — which is why nothing registers in §16–18, the reports category or the lineage registry.
+
+### §ACCOUNT-02.7 What the lock holds
+
+`harness_labour_coverage.py` **§J** (195 checks, up from 171): the live October regression to the
+cent and in worst-first order, the two stores that still agree excluded, all three absences, the
+materiality floor in both directions, `entered_amounts` proven to DEREFERENCE the one accumulator,
+one tenant's vocabulary proven unable to answer for another, and §G's total-preserving claim
+re-proven with the comparison wired in. `harness_any_columns_lock.py`'s roster-read pin follows the
+read into `_wage_measurement` (pinning the wrapper would pass while the core grew a column ladder);
+`harness_finance_sync_in_async.py` carries the attribution sanction and the live both-sides
+measurement. Tests: `backend/tests/unit/test_entered_salary_vs_measured.py` (19) ·
+`backend/tests/integration/test_pl_salary_entered_vs_measured.py` (6, two tenants with different
+payroll vocabularies over the real `build_inputs` and the house database double).
+
+**Cross-references:** §ACCOUNT-01 (the store-code fold and the salary line this builds on) · §4e
+(the labour vocabulary and the coverage states) · §19.50 (a gated detector's tri-state verdict) ·
+§19.18 (one fact, one home, dereferenced — never copied) · §14y (paid hours, the evidence and the
+interlock that refuses) · §COMMCALC-23 (a carried month never inherits labour) ·
+§COMMCALC-49.10 (a feature is not finished until it works for every tenant) · §64 / §COMMCALC-70
+(the store identity the key spaces fold through) · §CORE-34/35 (the gate index listing the proof).

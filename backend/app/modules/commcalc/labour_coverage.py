@@ -174,9 +174,19 @@ def allocated_names(exp_rows, payroll_names, min_stores=3, dominance=0.8):
     return out
 
 
-def entered_amounts(exp_rows, payroll_names):
-    """PURE: {store_code: Σ authoritative payroll dollars entered for this period}. Reporting only —
-    the P&L books these rows itself through its own routing table."""
+def payroll_expense_by_key(exp_rows, payroll_names, key_of=None):
+    """PURE: {key: Σ authoritative payroll dollars entered for this period}. THE one accumulator
+    for "how much salary did this store ENTER", read by `entered_amounts` (store-code space) and by
+    `entered_vs_measured`'s caller (whatever space that reader books in) — the same shape, and the
+    same reason, as `commission_expense_by_key` below. Reporting only: the P&L books these rows
+    itself through its own routing table.
+
+    `key_of` maps a row's raw `store_code` into the CALLER's key space and defaults to the code
+    itself. The P&L keys its store lines by canonical store ADDRESS, so it passes its own
+    `code -> resolve_store(code2addr[code])`; the comparison is then made in the very key space that
+    reader books in, and this module stays DB-free and key-agnostic. Rows with no store key are
+    skipped — an unattributable payroll row pairs with nothing.
+    """
     want = _names(payroll_names)
     out = {}
     for r in (exp_rows or []):
@@ -185,9 +195,19 @@ def entered_amounts(exp_rows, payroll_names):
             continue
         sk = str(r.get("source_key") or "").strip()
         name = str(r.get("expense_name") or "").strip().lower()
-        if sk in AUTHORITATIVE_SOURCE_KEYS or (want and not sk and name in want):
-            out[code] = round(out.get(code, 0.0) + _f(r.get("amount")), 2)
+        if not (sk in AUTHORITATIVE_SOURCE_KEYS or (want and not sk and name in want)):
+            continue
+        key = _norm(key_of(code)) if key_of else code
+        if not key:
+            continue
+        out[key] = round(out.get(key, 0.0) + _f(r.get("amount")), 2)
     return out
+
+
+def entered_amounts(exp_rows, payroll_names):
+    """PURE: {store_code: Σ authoritative payroll dollars entered for this period}. The store-code
+    reading of `payroll_expense_by_key` — DEREFERENCED, never a second copy of the predicate."""
+    return payroll_expense_by_key(exp_rows, payroll_names)
 
 
 def hours_basis_by_code(shifts, hours_basis_cfg=None, emp_by_id=None, evidence=None):
@@ -294,7 +314,8 @@ def store_state(code, auth, hours, carried_from, is_active=True):
 
 def labour_coverage(store_codes, exp_rows, shifts, payroll_names, period,
                     carried_from=None, active_codes=None, hours_basis_cfg=None,
-                    evidence=None, hours_interlock=None):
+                    evidence=None, hours_interlock=None, measured_by_code=None,
+                    measured_key_of=None):
     """PURE: the whole report. DISPLAY-ONLY — moves no figure.
 
     Returns {'period', 'carried_from', 'scanned', 'states': {code: state},
@@ -346,13 +367,27 @@ def labour_coverage(store_codes, exp_rows, shifts, payroll_names, period,
     # this report MOVES NO FIGURE and must not start suppressing one.
     _lock = hours_interlock if isinstance(hours_interlock, dict) else {}
     _note = coverage_note(len(codes), counts, carried_from, period, sorted(allocated))
+    # ENTERED vs MEASURED (owner report 2026-11-12, §ACCOUNT-02). The ENTERED side is the same
+    # narrowed vocabulary this report already decided on (`measuring` — a flat allocation is not a
+    # measurement of a store's own staff, `allocated_names`), so the comparison cannot disagree with
+    # the states above about what counts as an entered figure. The MEASURED side is handed over by
+    # the I/O caller from `coa.derive_wage_cells` — this module derives no dollar of its own.
+    # `measured_key_of` is for a reader that does NOT book in store-code space: the P&L keys its
+    # store lines by canonical store ADDRESS, so it hands over address-keyed measurements and the
+    # SAME `code -> resolve_store(code2addr[code])` it books with. Both sides then land in one key
+    # space, chosen by the caller — the `commission_expense_by_key` pattern, not a second one.
+    _evm = entered_vs_measured(payroll_expense_by_key(exp_rows, measuring, key_of=measured_key_of),
+                               measured_by_code, allocated_excluded=sorted(allocated),
+                               carried_from=carried_from)
+    if _evm.get("note") and _evm["verdict"] == VERDICT_MEASURED:
+        _note = " ".join(x for x in (_note, _evm["note"]) if x)
     if _lock.get("refused") and _lock.get("reason"):
         _note = " ".join(x for x in (_note, "PAID HOURS ARE NOT SAFE TO COMPUTE FOR THIS PERIOD: "
                                             + str(_lock["reason"])) if x)
     return {"period": period, "carried_from": carried_from or None,
             "scanned": len(codes), "states": states, "detail": detail,
             "counts": counts, "gaps": gaps, "allocated_names": sorted(allocated),
-            "hours_interlock": _lock or None, "note": _note}
+            "hours_interlock": _lock or None, "entered_vs_measured": _evm, "note": _note}
 
 
 def coverage_note(scanned, counts, carried_from, period, allocated=()):
@@ -413,6 +448,97 @@ def commission_expense_by_key(exp_rows, commission_names, key_of=None):
 # RESULT. These two strings are the ONE vocabulary for that verdict.
 VERDICT_MEASURED = "measured"
 VERDICT_NOT_CONFIGURED = "not_configured"
+#: The comparison below could not be run at all — no measurement was handed over, or the month is
+#: carried and none of its figures belong to it. NOT the same fact as "measured, and it agrees".
+VERDICT_NOT_MEASURED = "not_measured_comparison"
+
+# ── ENTERED vs MEASURED: which direction a stale copy leans ──────────────────────────────────────
+UNDERSTATED = "understated"   # the platform measures MORE labour than the entered figure carries
+OVERSTATED = "overstated"     # the entered figure carries more than the platform can measure
+
+#: House POLICY defaults for "material" (a rate and a floor — never a tenant's vocabulary, so a
+#: default is right here). A cent of rounding residue between two derivations is not a finding, and
+#: neither is a few percent of drift on a month still being clocked.
+MATERIAL_TOLERANCE_PCT = 0.05
+MATERIAL_MIN_GAP = 1.0
+
+
+def entered_vs_measured(entered_by_key, measured_by_key,
+                        tolerance_pct=MATERIAL_TOLERANCE_PCT, min_gap=MATERIAL_MIN_GAP,
+                        allocated_excluded=(), carried_from=None):
+    """PURE: an ENTERED salary figure against the salary the platform MEASURES for the same month.
+    DISPLAY-ONLY — moves no figure and nets nothing.
+
+    WHY (owner report 2026-11-12, index §ACCOUNT-02): LuxeLink's October P&L booked $54,044.69 of
+    salary against $105,109.69 measurable from the same month's hours and punches. Nothing was
+    miscomputed. The Expenses sheet's "fill salaries" button had COPIED a payroll figure into an
+    `Employee Salaries` row per store, and a payroll row CONFERS authority, which SUPPRESSES the
+    live measurement — so the copy froze and outranked the fact it was copied from: `Belmont`
+    $166.50 against $7,339.70, `Utica` $90.00 against $3,699.24, while three stores still agreed to
+    the cent. A fact with two homes diverges, and until this nothing on any surface said so.
+
+    WHICH ROUTE SHOULD BOOK IS THE OWNER'S CALL and it moves money, so it is NOT decided here. This
+    reports the divergence, in the same shape and for the same reason as `commission_collisions`.
+
+    Returns {'verdict', 'stores': [{'store_key','entered','measured','gap','direction'}…],
+             'total_understated': float|None, 'total_overstated': float|None,
+             'unmeasured_keys': [key…], 'allocated_excluded': [name…], 'note': str|None}
+
+    THREE ABSENCES, each with its own reason, none of them a $0.00 (§19.50 / §CORE-17):
+      • `measured_by_key` is None — nothing was handed over, so nothing was compared. The totals are
+        **None**, so an absence can never be summed, charted or believed as agreement.
+      • `carried_from` — this month shows another month's rows, which `coverage_note` already says in
+        full. Calling each carried row "stale" is a second sentence about one fact, and it would
+        send an owner to re-enter a figure the carry rule replaces anyway (§COMMCALC-23).
+      • a key with an entered figure and NO measurement is listed in `unmeasured_keys`, never
+        compared against an implied zero: reporting its whole salary as OVERSTATED would send an
+        owner hunting a code defect when the fault is missing clock data.
+    """
+    if measured_by_key is None or carried_from:
+        _why = ("this month has no expense rows of its own, so its figures are "
+                f"{carried_from}'s carried forward and none of them was entered for this month"
+                if carried_from else
+                "no salary measurement was handed over for this period")
+        return {"verdict": VERDICT_NOT_MEASURED, "stores": [],
+                "total_understated": None, "total_overstated": None,
+                "unmeasured_keys": [], "allocated_excluded": sorted(allocated_excluded or ()),
+                "note": ("Entered salary was NOT CHECKED against the platform's own measurement: "
+                         + _why + ". This is not a finding of agreement.")}
+    stores, unmeasured = [], []
+    under = over = 0.0
+    for key in sorted(entered_by_key or {}):
+        entered = round(_f((entered_by_key or {}).get(key)), 2)
+        if key not in (measured_by_key or {}):
+            unmeasured.append(key)
+            continue
+        measured = round(_f((measured_by_key or {}).get(key)), 2)
+        gap = round(measured - entered, 2)
+        if abs(gap) < min_gap or abs(gap) <= abs(measured) * _f(tolerance_pct):
+            continue
+        direction = UNDERSTATED if gap > 0 else OVERSTATED
+        if gap > 0:
+            under = round(under + gap, 2)
+        else:
+            over = round(over - gap, 2)
+        stores.append({"store_key": key, "entered": entered, "measured": measured,
+                       "gap": abs(gap), "direction": direction})
+    # Worst first: the biggest gap misleads a reader most, and an owner reads the top of a list.
+    stores.sort(key=lambda s: (-s["gap"], s["store_key"]))
+    note = None
+    if stores:
+        bits = []
+        if under:
+            bits.append(f"${under:,.2f} LESS than the hours and punches measure")
+        if over:
+            bits.append(f"${over:,.2f} MORE than the hours and punches measure")
+        note = (f"The entered salary at {len(stores)} store(s) carries " + " and ".join(bits)
+                + ". An entered payroll figure outranks the platform's own measurement, so the "
+                  "figure on screen is whatever was last saved to the Expenses sheet — re-fill the "
+                  "salaries for this month, or the labour cost here is not this month's.")
+    return {"verdict": VERDICT_MEASURED, "stores": stores,
+            "total_understated": under, "total_overstated": over,
+            "unmeasured_keys": sorted(unmeasured),
+            "allocated_excluded": sorted(allocated_excluded or ()), "note": note}
 
 
 def commission_collisions(exp_rows, rep_pay_by_code, commission_names, tolerance=0.005):

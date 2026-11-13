@@ -370,12 +370,21 @@ MONEY_MODULE_DELTA = {
     #   Nov 24->20); the house org, Vzone and NY LOGISTICS unchanged key for key and cent for cent.
     #   Locked by harness_store_identity_lock.py §F; proven by harness_store_code_case.py. The same
     #   sanction, with the same measurement, is `harnesslib.COA_STORE_CODE_INDEX_SANCTION`.
+    #   SANCTIONED 2026-11-12 (index §ACCOUNT-02, owner report "the expenses ... shoudl include the
+    #   salaries"): `wages_by_store`'s I/O body moved WHOLE into `_wage_measurement`, and
+    #   `wages_by_code` is the SAME measurement keyed by the shift's own store_code — for the GP
+    #   report, which books in code space and would otherwise need the address->code inversion that
+    #   §ACCOUNT-01's fold makes many-to-one. ONE derivation, two key spaces, no second read.
+    #   MEASURED live against production both sides, all four tenants x Sep/Oct/Nov 2026: every total
+    #   identical to the cent and `by_code` equal to `by_store` in every month (LuxeLink October
+    #   $105,109.69 both ways, the house org's Oct/Nov a refusal on both paths).
     f"{MOD}/account/coa.py": ({"_account_config", "build_inputs", "wages_by_store",
                                "derive_wage_cells", "derive_wage_cells_with_basis",
                                "store_resolver", "store_code_to_address",
                                "_squash_key", "_lead_num_key"},
                               {"_lcov_mod", "build_inputs.add_comm",
-                               "is_side_entry", "statement_lines"}),
+                               "is_side_entry", "statement_lines",
+                               "_wage_measurement", "wages_by_code"}),
     f"{MOD}/account/autocompute.py": (set(), set()),
     f"{MOD}/account/statement_filter.py": (set(), {"unbound_spellings"}),
 }
