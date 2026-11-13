@@ -26413,6 +26413,8 @@ status word rather than a blank that reads as nil.
 | CORE-35 | core |
 | CORE-36 | core |
 | CORE-37 | core |
+| CORE-43 | core |
+| STOREOPS-08 | storeops |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -48150,7 +48152,7 @@ splits into:
 
 | Question asked of the index | Answer | What was done |
 | --- | --- | --- |
-| Is there a canonical store→market resolution to extend? | **YES — §13a**, `core.scope.store_market_resolver` / `market_by_code` over the union index, case-, punctuation- and address-tolerant, fail-closed on ambiguity, CI-guarded by `harness_market_resolution_guard.py` | **Reused as the rule.** Nothing new was derived: the browser module below is its dereference, pinned to it by an equivalence test against LIVE production answers |
+| Is there a canonical store→market resolution to extend? | **YES — §13a**, `backend/app/core/scope.py` (`store_market_resolver` / `market_by_code`) over the union index, case-, punctuation- and address-tolerant, fail-closed on ambiguity, CI-guarded by `harness_market_resolution_guard.py` | **Reused as the rule.** Nothing new was derived: the browser module below is its dereference, pinned to it by an equivalence test against LIVE production answers |
 | Then why a frontend module at all? | §13a's guard only ever scanned the **backend**. The pages hold a **span-scoped** roster (`GET /storeops/stores`) and must not fetch the whole org to answer a filter, so the fold has to happen where the rows are | A deliberate second implementation, kept honest by `store-market.equivalence.test.ts` rather than by argument |
 | Is there a shared browser helper already? | **PARTLY** — `lib/market-store-cascade.ts` narrows a store OPTION list to the picked markets. It never answered "which market is this row's store in" | Extended by composition, not forked: the cascade still owns the narrowing, this owns the resolution |
 | How many private copies existed? | **24**, in 24 screens | All 24 rewired; the lock below fails the build on a 25th |

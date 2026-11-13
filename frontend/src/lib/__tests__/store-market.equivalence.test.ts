@@ -31,7 +31,7 @@ import live from './store-market.live.json'
 /** spelling -> why the browser lookup is allowed to differ from the canonical resolver. */
 const ALLOWED_DIVERGENCE: Record<string, Record<string, string>> = {
   house: {
-    'CELLULAR SERVICES': 'a company, not a store; its market lives only in commcalc.store_mapping',
+    'CELLULAR SERVICES': 'a company, not a store; its market lives only in the store mapping',
   },
 }
 
