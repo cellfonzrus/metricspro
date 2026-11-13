@@ -398,9 +398,12 @@ def level_label(level_name: str, cfg: dict) -> str:
     rather than a plausible-looking line."""
     name = _s(level_name)
     if not name:
+        # Business words only: this sentence can reach a tenant, and the infra-names lock (§19.39)
+        # rightly refuses a message that names a schema or a table. WHERE the levels are stored is
+        # documented in this module's header and in index §STOREOPS-09, not in an error a user sees.
         raise ValueError(
-            "level_label requires the org's OWN declared level name (storeops.org_levels.name); "
-            "there is no house default for a tenant's vocabulary")
+            "this organisation's own org-chart level name is required to name an overhead expense "
+            "line; there is no house default for a tenant's vocabulary")
     cfg = resolve_config(cfg if isinstance(cfg, dict) else None)
     return cfg["level_label_template"].replace("{level}", name)
 

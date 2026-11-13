@@ -465,7 +465,10 @@ check("R5 REGRESSION: the note RIDES A LINE THAT RENDERS. `overhead_wages` is au
       and 'L["overhead_wages"]["note"] = _n' not in COA_SRC)
 check("§6(b) LOCK: level_label's refusal is in the SOURCE, so it cannot be softened to a default "
       "without this check moving too",
-      "raise ValueError" in OA and "there is no house default for a tenant's vocabulary" in OA)
+      "raise ValueError" in OA and "there is no house default for a tenant's vocabulary" in OA
+      # …and the refusal is worded in BUSINESS words: the infra-names lock (§19.39) refuses a
+      # user-reachable message that names a schema or a table, and this one can reach a tenant.
+      and "storeops.org_levels" not in OA.split("def level_label")[1].split("def level_of_person")[0])
 
 # §6(c) — every P&L assembly dereferences the one home.
 ASSEMBLERS = ("app/modules/account/engine.py", "app/modules/account/statement_engine.py")
