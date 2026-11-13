@@ -2344,6 +2344,11 @@ FACTS: dict[str, dict] = {
             # allowlist and the measured set) to answer which relation a person's hours came out of,
             # and keys its basis→relation map on those constants rather than on words of its own.
             'app/modules/storeops/payroll_hours_drilldown.py': ('_hb',),
+            # §STOREOPS-08 — the employer burden must be put on exactly the rows the report PAID, so
+            # it binds the row-level `row_is_paid` rather than folding the paying allowlist itself.
+            # That fold lived in the drill-down above until 2026-11-12; it moved into this home when
+            # a second caller needed the same answer, and both dereference it (§19.18).
+            'app/modules/storeops/payroll_employer_cost.py': ('_hb',),
             'app/modules/storeops/pto_accrual.py': ('_hours_basis',),
             'app/modules/storeops/router.py': ('_hours_basis',),
             'app/modules/storeops/salary_expense.py': ('_hb',),

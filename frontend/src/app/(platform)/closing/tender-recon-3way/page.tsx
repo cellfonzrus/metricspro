@@ -9,6 +9,7 @@ import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterVa
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillPanel, type DrillRow } from '@/components/DrillDownPanel'
 import { narrowPanels, screenKey } from '@/lib/drill-narrow'
+import { buildStoreMarket } from '@/lib/store-market'
 
 // 3-Way Tender Recon — the SAME tenders captured three independent ways, per store, per day, per tender:
 //  (1) Daily Closing (what the rep entered), (2) POS X-report, (3) Sales Transactions (raw_sales/feed).
@@ -91,24 +92,16 @@ export default function TenderRecon3WayPage() {
   const tenders: { key: string; label: string }[] = data?.tenders || []
   const days: any[] = data?.days || []
 
-  // Market per store: prefer closing/stores by code, else asset market by address / leading street-number
-  // (unchanged join logic, just no longer feeding a bespoke MultiSelect).
+  // Market per store, through the ONE browser home (§CORE-43). This page used to carry its OWN
+  // code → address → leading-street-number ladder — a fourth copy of the fold, lower-cased instead of
+  // squashed, so `104-08 Lefferts Blvd` and `10408 Lefferts Blvd` were different stores to it. The two
+  // rosters it already reads are passed in together; the lookup fails closed when they disagree.
   const marketOf = useMemo(() => {
-    const mktByCode: Record<string, string> = {}
-    storeMeta.forEach(s => { if (s.store_code && s.market) mktByCode[s.store_code] = s.market })
-    const mktByAddr: Record<string, string> = {}, mktByNum: Record<string, string> = {}
-    const leadNum = (a: string) => (a.match(/^\s*([0-9][0-9-]*)/)?.[1] || '').replace(/\D/g, '')
-    assetStores.forEach(s => {
-      const a = (s.store || '').trim().toLowerCase(); if (!a || !s.market) return
-      mktByAddr[a] = s.market
-      const nk = leadNum(a); if (nk && !mktByNum[nk]) mktByNum[nk] = s.market
-    })
-    return (code: string, address: string): string => {
-      if (mktByCode[code]) return mktByCode[code]
-      const a = (address || '').trim().toLowerCase()
-      if (mktByAddr[a]) return mktByAddr[a]
-      const nk = leadNum(a); return (nk && mktByNum[nk]) || ''
-    }
+    const lk = buildStoreMarket([
+      ...storeMeta.map(s => ({ store_code: s.store_code, address: s.store_address, market: s.market })),
+      ...assetStores.map(s => ({ address: s.store, market: s.market })),
+    ])
+    return (code: string, address: string): string => lk.marketOf(code) || lk.marketOf(address)
   }, [storeMeta, assetStores])
 
   // Flatten every day's stores into one row-per-store-per-day list — the shared filter framework's unit.

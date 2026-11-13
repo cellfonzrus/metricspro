@@ -975,6 +975,10 @@ jobs:
         working-directory: backend
         if: always()   # a red harness must not hide the 60 after it
         run: python3 harness_payroll_data_flow.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_payroll_employer_cost
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_payroll_employer_cost.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: harness_payroll_expenses
         working-directory: backend
         if: always()   # a red harness must not hide the 60 after it

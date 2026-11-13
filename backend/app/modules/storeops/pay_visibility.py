@@ -59,6 +59,11 @@ PAY_FIELDS = (
     "pay_rate", "pay_effective", "scheduled_pay", "actual_pay", "net_pay", "payable_pay",
     "wages", "salary_period_pay", "salary_derived_pay", "pay_amount", "gross_pay",
     "pay_per_hour", "base_salary", "total_comp", "annualized",
+    # THE EMPLOYER BURDEN (2026-11-12, §STOREOPS-08) — the employer-side tax on a person's pay and
+    # the total that pay costs the company. Derived FROM the figures above, so withholding those and
+    # serving these would hand a gated caller the salary back by subtraction.
+    "employer_tax", "employer_cost", "employer_tax_scheduled", "employer_cost_scheduled",
+    "tax_fica_ss", "tax_medicare", "tax_futa", "tax_suta",
 )
 PAY_TOTALS_FIELDS = (
     "pay", "payable_pay", "scheduled_pay", "actual_pay", "wages", "gross_pay",

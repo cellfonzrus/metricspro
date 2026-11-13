@@ -6,6 +6,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import { SetupNotice } from '@/lib/setupNotice'
+import { buildStoreMarket } from '@/lib/store-market'
 
 // Accountability lens: per-employee attendance patterns, flagged against policy, with POSITIVE coaching
 // recommendations + the DATES/TIMES of each late (or left-early) incident so a manager can coach on the
@@ -51,11 +52,7 @@ export default function AccountabilityPage() {
       .finally(() => setLoading(false))
   }, [filt.period, filt.periodTo])
 
-  const mktOf = useMemo(() => {
-    const m: Record<string, string> = {}
-    for (const s of stores) if (s.store_code) m[s.store_code] = (s.market && String(s.market).trim()) ? s.market : NO_MARKET
-    return m
-  }, [stores])
+  const mktOf = useMemo(() => buildStoreMarket(stores), [stores])
   const storeOptions = useMemo(() => stores.filter(s => s.store_code)
     .map(s => ({ id: s.store_code, label: s.store_code, sublabel: s.address || s.market || undefined }))
     .sort((a, b) => a.label.localeCompare(b.label)), [stores])
@@ -74,7 +71,7 @@ export default function AccountabilityPage() {
       if (selStores.size || selMarkets.size) {
         const incStores = (e.incidents || []).map((i: any) => i.store_code).filter(Boolean)
         if (selStores.size && !incStores.some((s: string) => selStores.has(foldKey(s)))) return false
-        if (selMarkets.size && !incStores.some((s: string) => selMarkets.has(foldKey(mktOf[s] || NO_MARKET)))) return false
+        if (selMarkets.size && !incStores.some((s: string) => selMarkets.has(foldKey(mktOf.marketOf(s) || NO_MARKET)))) return false
       }
       return true
     })

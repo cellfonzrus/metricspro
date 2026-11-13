@@ -6,6 +6,7 @@ import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { buildScheduleExport } from '../lib/scheduleExport'
 import { currentPeriodFromSettingsResponse } from '@/lib/pay-period'
+import { buildStoreMarket, marketsFromRoster } from '@/lib/store-market'
 
 interface Shift {
   id: number
@@ -198,12 +199,8 @@ export default function SchedulePage() {
   }, [weekEnd, wwDow, filterMarkets, filterStore])
 
   // market lookup by store_code (employees only carry home_store)
-  const mktOf = useMemo(() => {
-    const m: Record<string, string> = {}
-    stores.forEach(s => { if (s.store_code) m[s.store_code] = s.market || '' })
-    return m
-  }, [stores])
-  const markets = useMemo(() => Array.from(new Set(stores.map(s => s.market).filter(Boolean))).sort(), [stores])
+  const mktOf = useMemo(() => buildStoreMarket(stores), [stores])
+  const markets = useMemo(() => marketsFromRoster(stores), [stores])
 
   // Approved time-off → {employee_name: Set(dates off this week)} for the grid (employee view).
   const empById = useMemo(() => Object.fromEntries(employees.map(e => [String(e.id), e.name])), [employees])
@@ -232,7 +229,7 @@ export default function SchedulePage() {
     (selMkt.size === 0 || selMkt.has(s.market)) &&
     (!filterStore || s.store_code === filterStore))
   const filteredEmps = employees.filter(e =>
-    (selMkt.size === 0 || selMkt.has(mktOf[e.home_store])) &&
+    (selMkt.size === 0 || selMkt.has(mktOf.marketOf(e.home_store))) &&
     (!filterStore || e.home_store === filterStore))
 
   const shiftsOf = (pred: (s: Shift) => boolean) => shifts.filter(pred)

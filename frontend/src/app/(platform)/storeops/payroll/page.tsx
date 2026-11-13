@@ -15,11 +15,18 @@ import { narrowPanel, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { currentPeriodFromSettingsResponse, isFullCalendarMonth, monthRange, rangeLabel, stepPeriod, type PayPeriodSettings } from '../lib/pay-period'
 import { PAY_BASIS_LABEL, type PayBasis } from '../lib/pay-basis'
+import { employerTotals } from '../lib/payroll-cost-tiles'
+import { buildStoreMarket, marketsFromRoster } from '@/lib/store-market'
 
 interface PayrollRow {
   employee_id: string; name: string; store: string; pay_rate: number
   scheduled_hours: number; actual_hours: number; shifts: number
   scheduled_pay: number; actual_pay: number
+  // WHAT THE PERIOD COSTS THE COMPANY (owner 2026-11-12, §STOREOPS-08). Stamped by the route from
+  // the HR Payroll Expenses page's own tax rule; ABSENT on a row the report did not pay, on a
+  // pay-gated caller's rows, and on a backend older than this feature — never zero in those cases.
+  employer_tax?: number; employer_cost?: number
+  employer_tax_scheduled?: number; employer_cost_scheduled?: number
   // Salary pay-basis (owner directive 2026-07-27, migrations 416/417) — present only for a salaried
   // employee (pay_basis != 'hourly'); absent/undefined for every hourly row, pre-migration tenant, etc.
   pay_basis?: PayBasis; pay_amount?: number; salary_period_pay?: number; salary_prorated?: boolean
@@ -152,17 +159,13 @@ export default function PayrollPage() {
     }).catch(() => {})
   }, [])
 
-  const storeMarket = useMemo(() => {
-    const m: Record<string, string> = {}
-    for (const s of stores) if (s.store_code) m[s.store_code] = s.market || ''
-    return m
-  }, [stores])
+  const storeMarket = useMemo(() => buildStoreMarket(stores), [stores])
   const storeOptions = useMemo(() => stores
     .filter(s => s.store_code)
     .map(s => ({ id: s.store_code, label: s.store_code + (s.is_active === false ? ' (inactive)' : ''), sublabel: s.address || s.market || undefined }))
     .sort((a, b) => a.label.localeCompare(b.label)), [stores])
   const marketOptions = useMemo(() =>
-    Array.from(new Set(stores.map(s => s.market).filter(Boolean) as string[])).sort(), [stores])
+    marketsFromRoster(stores), [stores])
   const repOptions = useMemo(() => optionsFromRows(rows, {
     rep: r => r.name, repEmail: r => empEmail[r.employee_id],
   }).reps, [rows, empEmail])
@@ -172,7 +175,7 @@ export default function PayrollPage() {
   // from this FILTERED set, never the full load ("what you see is what exports"). With no filter active,
   // filterRows returns every row unchanged → totals stay byte-identical to before this change.
   const visibleRows = useMemo(() => filterRows(rows, filt, {
-    store: r => r.store, market: r => storeMarket[r.store] || '', rep: r => r.name,
+    store: r => r.store, market: r => storeMarket.marketOf(r.store), rep: r => r.name,
   }), [rows, filt, storeMarket])
 
   // Pay-visibility (mig 434 / PR #162): GET /storeops/payroll is a bare array, and a gated caller's
@@ -187,6 +190,12 @@ export default function PayrollPage() {
   const totalActual    = visibleRows.reduce((s, r) => s + r.actual_hours, 0)
   const totalPayScheduled = visibleRows.reduce((s, r) => s + (r.scheduled_pay || 0), 0)
   const totalPayActual    = visibleRows.reduce((s, r) => s + (r.actual_pay || 0), 0)
+  // THE EMPLOYER BURDEN, over the rows ON SCREEN (§STOREOPS-08) — summed by the shared fold, which
+  // applies no rate of its own: the per-row figures are the server's, from the same tax rule the HR
+  // Payroll Expenses page books from. `available` is false for a pay-gated caller (money keys
+  // deleted server-side) and on a backend older than the feature, and the tiles then do not render
+  // rather than reading $0.00.
+  const burden = useMemo(() => employerTotals(visibleRows), [visibleRows])
 
   // ── §CORE-17.3d/§CORE-17.3x — THE TILES AND THEIR EVIDENCE ARE ONE FOLD ───────────────────────
   // This page filters its rows in the BROWSER (store / market / employee) and then reduces over what
@@ -209,6 +218,7 @@ export default function PayrollPage() {
   const folded: Record<string, number> = {
     scheduled_hours: totalScheduled, actual_hours: totalActual,
     scheduled_pay: totalPayScheduled, actual_pay: totalPayActual,
+    employer_tax: burden.tax, employer_cost: burden.cost,
   }
   const tileValue = (k: string): number => {
     const n = folded[k] || 0
@@ -293,6 +303,10 @@ export default function PayrollPage() {
     ...(canSeePay ? [
       { header: 'Scheduled Pay', field: 'scheduled_pay', money: true, get: (r: PayrollRow) => r.scheduled_pay },
       { header: 'Actual Pay', field: 'actual_pay', money: true, get: (r: PayrollRow) => r.actual_pay },
+      // RULE FOUR (§3c): what you see is what exports — the two burden figures travel with the rows
+      // they are on. Blank, never 0.00, on a row the report did not pay.
+      { header: 'Payroll Tax (employer)', field: 'employer_tax', money: true, get: (r: PayrollRow) => r.employer_tax },
+      { header: 'Cost of Payroll', field: 'employer_cost', money: true, get: (r: PayrollRow) => r.employer_cost },
       // Additive-only (2026-07-22): a POSTED payroll chargeback shown as a visible deduction + the
       // resulting net — pending/waived chargebacks never deduct, so this is $0 for the common case
       // (no chargebacks this period) and byte-identical to Actual Pay when nothing's posted.
@@ -357,8 +371,10 @@ export default function PayrollPage() {
         }
       />
 
-      {/* Summary — pay tiles are DROPPED (not zeroed) for a pay-gated caller. */}
-      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${canSeePay ? 4 : 2}, 1fr)`, gap: 12, marginBottom: 20 }}>
+      {/* Summary — pay tiles are DROPPED (not zeroed) for a pay-gated caller. The grid wraps rather
+          than being pinned to a column count, so the two burden tiles (§STOREOPS-08) do not squeeze
+          six figures into four columns on a laptop or off the side of a phone. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 20 }}>
         {[
           { key: 'scheduled_hours', label: 'Scheduled Hours', val: tileValue('scheduled_hours').toFixed(1), unit: 'hrs', icon: '📅', drill: 'the shifts behind these hours' },
           { key: 'actual_hours', label: 'Actual Hours', val: tileValue('actual_hours').toFixed(1), unit: 'hrs', icon: '⏱️', drill: 'the people behind these hours, and what measured them' },
@@ -366,13 +382,25 @@ export default function PayrollPage() {
             { key: 'scheduled_pay', label: 'Scheduled Pay', val: fmt(tileValue('scheduled_pay')), icon: '💵', drill: 'the people behind this pay' },
             { key: 'actual_pay', label: 'Actual Pay', val: fmt(tileValue('actual_pay')), icon: '💰', drill: 'the people behind this pay' },
           ] : []),
-        ].map(({ key, label, val, unit, icon, drill: drillLabel }: any) => (
+          // THE OWNER'S TWO TILES (2026-11-12). Rendered only where the server actually served the
+          // figures — a pay-gated caller and an older backend get no tile rather than a $0.00 that
+          // would read as "payroll cost this company nothing".
+          ...(canSeePay && burden.available ? [
+            { key: 'employer_tax', label: 'Payroll Tax (employer)', val: fmt(tileValue('employer_tax')), icon: '🏛️',
+              sub: 'on actual pay · your own rates', drill: 'the people behind this tax, and the settings it was read with' },
+            { key: 'employer_cost', label: 'Cost of Payroll', val: fmt(tileValue('employer_cost')), icon: '🧾',
+              sub: 'actual pay + employer tax', drill: 'the people behind this cost' },
+          ] : []),
+        ].map(({ key, label, val, unit, icon, sub, drill: drillLabel }: any) => (
           <div key={label} className="card">
             <div style={{ fontSize: 20 }}>{icon}</div>
             <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--accent)', marginTop: 8 }}>
               {val}{unit && <span style={{ fontSize: 13, color: 'var(--text3)', marginLeft: 4 }}>{unit}</span>}
             </div>
             <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{label}</div>
+            {/* WHICH FIGURE THIS IS, said on the tile rather than left to the drill-down: a burden
+                is only readable beside the pay it was computed on. */}
+            {sub && <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
             {/* The rows this figure was folded from, and which relation each one came out of. */}
             <DrillTileLinks drills={payrollDrill.dl(key, drillLabel)}
               open={payrollDrill.open} onToggle={payrollDrill.toggle} />

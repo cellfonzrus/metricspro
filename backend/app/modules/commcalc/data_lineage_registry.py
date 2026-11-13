@@ -283,6 +283,17 @@ EMPLOYEE_ROSTER = "employees"
 #: did not happen would be worse than the gap. The gap is written down in
 #: `storeops/payroll_hours_drilldown.py` and in §CORE-17.3x instead.
 MANUAL_HOURS = "manual_hours"
+#: THE EMPLOYER PAYROLL-TAX RATES AND WAGE BASES (`storeops.payroll_tax_config`, mig 404). The org's
+#: own declaration of FICA SS / Medicare / FUTA / SUTA rates and their annual wage bases, and
+#: therefore the provenance of every employer-burden figure: the tax is not readable from a wage
+#: alone. Named here from 2026-11-12, when the payroll report grew its payroll-tax and
+#: cost-of-payroll tiles (§STOREOPS-08) and had to say where the rate came from.
+PAYROLL_TAX_CONFIG = "payroll_tax_config"
+#: WHAT A PAYROLL RUN ALREADY BOOKED TOWARD EACH ANNUAL WAGE BASE (`storeops.payroll_tax_ledger`,
+#: mig 404) — one row per (org, period, employee). It is the provenance of a tax figure's CAPS: a
+#: period's FUTA depends on what earlier periods consumed, and an org that has never pressed a
+#: payroll run has consumed nothing, which the surface says rather than implies.
+PAYROLL_TAX_LEDGER = "payroll_tax_ledger"
 
 
 # ── WHICH TABLE A BILL-PAYMENT PROCESSOR'S FEED LANDS IN ───────────────────────────────────────

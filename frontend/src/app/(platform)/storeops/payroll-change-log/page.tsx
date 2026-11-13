@@ -16,6 +16,7 @@ import ReportShell from '@/components/ReportShell'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { currentPeriodFromSettingsResponse, monthRange, rangeLabel, type PayPeriodSettings } from '../lib/pay-period'
+import { buildStoreMarket, marketsFromRoster } from '@/lib/store-market'
 
 const ENTRY_POINT_LABEL: Record<string, string> = {
   shift_edit: 'Shift edit (Schedule)',
@@ -108,23 +109,19 @@ export default function PayrollChangeLogPage() {
       .finally(() => setLoading(false))
   }, [rangeReady, filt.period, filt.periodTo])
 
-  const storeMarket = useMemo(() => {
-    const m: Record<string, string> = {}
-    for (const s of stores) if (s.store_code) m[s.store_code] = s.market || ''
-    return m
-  }, [stores])
+  const storeMarket = useMemo(() => buildStoreMarket(stores), [stores])
   const storeOptions = useMemo(() => stores
     .filter(s => s.store_code)
     .map(s => ({ id: s.store_code, label: s.store_code + (s.is_active === false ? ' (inactive)' : ''), sublabel: s.address || s.market || undefined }))
     .sort((a, b) => a.label.localeCompare(b.label)), [stores])
   const marketOptions = useMemo(() =>
-    Array.from(new Set(stores.map(s => s.market).filter(Boolean) as string[])).sort(), [stores])
+    marketsFromRoster(stores), [stores])
   const repOptions = useMemo(() => optionsFromRows(items, {
     rep: r => r.employee_name || r.employee_id, repEmail: r => empEmail[r.employee_id],
   }).reps, [items, empEmail])
 
   const standardFiltered = useMemo(() => filterRows(items, filt, {
-    store: r => r.store_code, market: r => storeMarket[r.store_code] || '',
+    store: r => r.store_code, market: r => storeMarket.marketOf(r.store_code),
     rep: r => r.employee_name || r.employee_id, date: r => r.work_date,
   }), [items, filt, storeMarket])
   const visibleItems = useMemo(() => deepLinkEmployeeId

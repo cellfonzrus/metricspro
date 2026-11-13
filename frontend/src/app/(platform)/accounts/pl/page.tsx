@@ -17,6 +17,7 @@ import PLRangeExport from '../_components/PLRangeExport'
 import PLPerStorePrint from '../_components/PLPerStorePrint'
 import { PL_COLUMNS, PL_SECTION_TITLE as SECTION_TITLE, plQuery, plStatementRows } from '../_components/plStatement'
 import { scopeDisplay, statementScopeDisplay } from '../_components/scopeFinancials'
+import { buildStoreMarket } from '@/lib/store-market'
 
 function PLInner() {
   const { period, periods } = usePeriod()
@@ -55,14 +56,14 @@ function PLInner() {
   // Store options = the period's per-store scopes (guaranteed selectable, canonical addresses that
   // exactly match the backend store: scope keys); market sublabel + market options from the org
   // filter roster. Both org-scoped, pick-don't-type (§3b).
-  const storeMarket = useMemo(() => {
-    const m: Record<string, string> = {}
-    ;(fopts.stores || []).forEach((s: any) => { if (s.store && s.market) m[s.store] = s.market })
-    return m
-  }, [fopts])
+  // §CORE-43: a P&L scope key is a store ADDRESS as the ledger spelled it, so the lookup folds case
+  // and punctuation rather than comparing it letter-for-letter to the filter option's own spelling.
+  const storeMarket = useMemo(
+    () => buildStoreMarket((fopts.stores || []).map((s: any) => ({ address: s.store, market: s.market }))),
+    [fopts])
   const storeOpts: EntityOption[] = useMemo(() =>
     scopes.filter((s: any) => String(s.scope_key || '').startsWith('store:'))
-      .map((s: any) => { const a = String(s.scope_key).slice('store:'.length); return { id: a, label: a, sublabel: storeMarket[a] || undefined } }),
+      .map((s: any) => { const a = String(s.scope_key).slice('store:'.length); return { id: a, label: a, sublabel: storeMarket.marketOf(a) || undefined } }),
     [scopes, storeMarket])
   const marketOpts: string[] = useMemo(() => fopts.markets || [], [fopts])
 

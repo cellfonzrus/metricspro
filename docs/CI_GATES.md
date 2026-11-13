@@ -33,7 +33,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 622 gates
+## Gated — 623 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -432,6 +432,7 @@ the Runs on column is how you can tell.
 | `harness_payout_structure.py` | `carrier-vocab-guard.yml` | Boost payout terms — one home for the rates, and the employee PDF prints them (DB-free) (`boost-payout-terms`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_payroll_approval_save.py` | `carrier-vocab-guard.yml` | Closing filter contract (imports the closing router) (`closing-filter-contract-proof`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_payroll_data_flow.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_payroll_employer_cost.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_payroll_expenses.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_payroll_expenses_router_integration.py` | `tests.yml` | Proof harnesses, group 2 of 4 (`harness-suite-2`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_payroll_hours_basis.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |

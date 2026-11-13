@@ -21,6 +21,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { currentPeriodFromSettingsResponse, monthRange, rangeLabel, type PayPeriodSettings } from '../lib/pay-period'
 import { SetupNotice, setupFailed } from '@/lib/setupNotice'
+import { buildStoreMarket, marketsFromRoster } from '@/lib/store-market'
 
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '8px', borderTop: '1px solid var(--border)', fontSize: 13, whiteSpace: 'nowrap' }
@@ -123,17 +124,13 @@ export default function SalaryAdvancesPage() {
   }, [addlPeriod])
   useEffect(() => { loadAddl() }, [loadAddl])
 
-  const storeMarket = useMemo(() => {
-    const m: Record<string, string> = {}
-    for (const s of stores) if (s.store_code) m[s.store_code] = s.market || ''
-    return m
-  }, [stores])
+  const storeMarket = useMemo(() => buildStoreMarket(stores), [stores])
   const storeOptions = useMemo(() => stores
     .filter(s => s.store_code)
     .map(s => ({ id: s.store_code, label: s.store_code + (s.is_active === false ? ' (inactive)' : ''), sublabel: s.address || s.market || undefined }))
     .sort((a, b) => a.label.localeCompare(b.label)), [stores])
   const marketOptions = useMemo(() =>
-    Array.from(new Set(stores.map(s => s.market).filter(Boolean) as string[])).sort(), [stores])
+    marketsFromRoster(stores), [stores])
   const employeeOptions = useMemo(() => employees
     .filter((e: any) => e.employee_id)
     .map((e: any) => ({ id: e.employee_id, label: e.name || e.employee_id, sublabel: e.email || undefined }))
@@ -148,11 +145,11 @@ export default function SalaryAdvancesPage() {
   }).reps, [owed, empEmail])
 
   const visibleOwed = useMemo(() => filterRows(owed, filt, {
-    store: r => r.store, market: r => storeMarket[r.store] || '', rep: r => r.name,
+    store: r => r.store, market: r => storeMarket.marketOf(r.store), rep: r => r.name,
   }), [owed, filt, storeMarket])
 
   const visibleHistory = useMemo(() => filterRows(history, filt, {
-    store: r => r.store_code, market: r => storeMarket[r.store_code] || '', rep: r => r.employee_name || r.employee_id,
+    store: r => r.store_code, market: r => storeMarket.marketOf(r.store_code), rep: r => r.employee_name || r.employee_id,
     date: r => r.paid_date,
   }), [history, filt, storeMarket])
 

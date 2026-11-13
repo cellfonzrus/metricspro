@@ -1,0 +1,514 @@
+{
+"house": {
+"expected": {
+"1 S 60th St, Philadelphia": "PA",
+"1115 Liberty Ave": "LI",
+"B-103": "LI",
+"B-1115": "LI",
+"B-11634": "LI",
+"B-117": "NYC",
+"B-151": "NYC",
+"B-1710": "PA",
+"B-1750": "LI",
+"B-1800": "LI",
+"B-196": "NJ",
+"B-2509": "NJ",
+"B-2612": "LI",
+"B-2701": "PA",
+"B-2778": "PA",
+"B-3565": "NYC",
+"B-3605": "PA",
+"B-3PL": "NYC",
+"B-418": "LI",
+"B-4712": "NYC",
+"B-509": "NYC",
+"B-5135": "NJ",
+"B-559": "NJ",
+"B-5619": "PA",
+"B-6011": "NJ",
+"B-60TH": "PA",
+"B-6149": "PA",
+"B-6507": "PA",
+"B-652": "NJ",
+"B-723": "PA",
+"CELLULAR SERVICES": "NYC",
+"Cellular Services": "NYC",
+"b-103": "LI",
+"b-1115": "LI",
+"b-11634": "LI",
+"b-117": "NYC",
+"b-151": "NYC",
+"b-1710": "PA",
+"b-1750": "LI",
+"b-1800": "LI",
+"b-196": "NJ",
+"b-2509": "NJ",
+"b-2612": "LI",
+"b-2701": "PA",
+"b-2778": "PA",
+"b-3565": "NYC",
+"b-3605": "PA",
+"b-3pl": "NYC",
+"b-418": "LI",
+"b-4712": "NYC",
+"b-509": "NYC",
+"b-5135": "NJ",
+"b-559": "NJ",
+"b-5619": "PA",
+"b-6011": "NJ",
+"b-60th": "PA",
+"b-6149": "PA",
+"b-6507": "PA",
+"b-652": "NJ",
+"b-723": "PA",
+"cellular services": "NYC"
+},
+"roster": [
+{
+"address": "",
+"is_active": true,
+"market": "",
+"store_code": "Cellular Services"
+},
+{
+"address": null,
+"is_active": true,
+"market": "LI",
+"store_code": "B-1750"
+},
+{
+"address": null,
+"is_active": true,
+"market": "LI",
+"store_code": "B-103"
+},
+{
+"address": null,
+"is_active": true,
+"market": "LI",
+"store_code": "B-11634"
+},
+{
+"address": null,
+"is_active": true,
+"market": "LI",
+"store_code": "B-2612"
+},
+{
+"address": null,
+"is_active": true,
+"market": "PA",
+"store_code": "B-6507"
+},
+{
+"address": null,
+"is_active": true,
+"market": "PA",
+"store_code": "B-3605"
+},
+{
+"address": null,
+"is_active": true,
+"market": "PA",
+"store_code": "B-2778"
+},
+{
+"address": null,
+"is_active": true,
+"market": "PA",
+"store_code": "B-5619"
+},
+{
+"address": null,
+"is_active": true,
+"market": "PA",
+"store_code": "B-723"
+},
+{
+"address": null,
+"is_active": true,
+"market": "PA",
+"store_code": "B-6149"
+},
+{
+"address": null,
+"is_active": true,
+"market": "LI",
+"store_code": "B-418"
+},
+{
+"address": "1115 Liberty Ave",
+"is_active": true,
+"market": "LI",
+"store_code": "B-1115"
+},
+{
+"address": null,
+"is_active": true,
+"market": "LI",
+"store_code": "B-1800"
+},
+{
+"address": null,
+"is_active": true,
+"market": "NJ",
+"store_code": "B-196"
+},
+{
+"address": null,
+"is_active": true,
+"market": "NJ",
+"store_code": "B-2509"
+},
+{
+"address": null,
+"is_active": true,
+"market": "NJ",
+"store_code": "B-5135"
+},
+{
+"address": null,
+"is_active": true,
+"market": "NJ",
+"store_code": "B-559"
+},
+{
+"address": null,
+"is_active": true,
+"market": "NJ",
+"store_code": "B-6011"
+},
+{
+"address": null,
+"is_active": true,
+"market": "NJ",
+"store_code": "B-652"
+},
+{
+"address": null,
+"is_active": true,
+"market": "NYC",
+"store_code": "B-509"
+},
+{
+"address": null,
+"is_active": true,
+"market": "NYC",
+"store_code": "B-117"
+},
+{
+"address": null,
+"is_active": true,
+"market": "NYC",
+"store_code": "B-151"
+},
+{
+"address": null,
+"is_active": true,
+"market": "NYC",
+"store_code": "B-3565"
+},
+{
+"address": null,
+"is_active": true,
+"market": "NYC",
+"store_code": "B-3PL"
+},
+{
+"address": null,
+"is_active": true,
+"market": "NYC",
+"store_code": "B-4712"
+},
+{
+"address": "1 S 60th St, Philadelphia",
+"is_active": true,
+"market": "PA",
+"store_code": "B-60TH"
+},
+{
+"address": null,
+"is_active": true,
+"market": "PA",
+"store_code": "B-1710"
+},
+{
+"address": null,
+"is_active": true,
+"market": "PA",
+"store_code": "B-2701"
+}
+]
+},
+"luxelink": {
+"expected": {
+"104-08": "NY",
+"104-08 Lefferts Blvd": "NY",
+"18226 Kedzie Hazel Crest": "Chicago",
+"21880 Hempstead Ave": "NY",
+"2317 Cicero Cicero": "Chicago",
+"2414 Cermak Chicago": "Chicago",
+"2640 Narragansett Chicago": "Chicago",
+"274 Wyckoff Ave": "NY",
+"3248 LAWARANCE": "Chicago",
+"3248 Lawrence Chicago": "Chicago",
+"3352 26TH": "Chicago",
+"3352 26th": "Chicago",
+"3352 26th Chicago": "Chicago",
+"3560": "NY",
+"3560 Nostrand Ave": "NY",
+"3706 Third Ave": "NY",
+"3735 26TH": "Chicago",
+"3735 26th": "Chicago",
+"3735 26th Chicago": "Chicago",
+"3738 26TH STREET": "",
+"3966 Grand Chicago": "Chicago",
+"4640 Diversey Chicago": "Chicago",
+"4801 Armitage Chicago": "Chicago",
+"516 8th Ave , New York": "NY",
+"531 Utica Ave": "NY",
+"5601 Belmont Chicago": "Chicago",
+"639 Lincoln Chicago Heights": "Chicago",
+"64 Graham Ave Brooklyn": "NY",
+"6500 Irving Park Chicago": "Chicago",
+"7812": "NY",
+"7812 Bergenline": "NY",
+"902 Ave U": "NY",
+"957": "NY",
+"957 Pennsylvania Ave": "NY",
+"ARMITAGE": "Chicago",
+"AVE U": "NY",
+"Armitage": "Chicago",
+"Ave U": "NY",
+"BELMONT": "Chicago",
+"Belmont": "Chicago",
+"CERMARK": "Chicago",
+"CHICAGO HEIGHTS": "Chicago",
+"CICERO": "Chicago",
+"Cermark": "Chicago",
+"Chicago heights": "Chicago",
+"Cicero": "Chicago",
+"DIVERSEY": "Chicago",
+"Diversey": "Chicago",
+"EIGHT AVE": "NY",
+"Eight Ave": "NY",
+"GRAHAM": "NY",
+"GRAND": "Chicago",
+"Graham": "NY",
+"Grand": "Chicago",
+"IRVING PARK": "Chicago",
+"Irving Park": "Chicago",
+"KEDZIE": "Chicago",
+"LAWRENCE": "Chicago",
+"LEFFERTS": "NY",
+"Lefferts": "NY",
+"NARRAGANSETT": "Chicago",
+"NOSTRAND": "NY",
+"Narragansett": "Chicago",
+"Nostrand": "NY",
+"QV": "NY",
+"THIRD AVE": "NY",
+"Third Ave": "NY",
+"UTICA": "NY",
+"Utica": "NY",
+"WYCKOFF": "NY",
+"Wyckoff": "NY",
+"armitage": "Chicago",
+"ave u": "NY",
+"belmont": "Chicago",
+"cermark": "Chicago",
+"chicago heights": "Chicago",
+"cicero": "Chicago",
+"diversey": "Chicago",
+"eight ave": "NY",
+"graham": "NY",
+"grand": "Chicago",
+"irving park": "Chicago",
+"kedzie": "Chicago",
+"lawrence": "Chicago",
+"lefferts": "NY",
+"narragansett": "Chicago",
+"nostrand": "NY",
+"qv": "NY",
+"third ave": "NY",
+"utica": "NY",
+"wyckoff": "NY"
+},
+"roster": [
+{
+"address": "2317 Cicero Cicero",
+"is_active": true,
+"market": "Chicago",
+"store_code": "Cicero"
+},
+{
+"address": "2414 Cermak Chicago",
+"is_active": true,
+"market": "Chicago",
+"store_code": "Cermark"
+},
+{
+"address": "2640 Narragansett Chicago",
+"is_active": true,
+"market": "Chicago",
+"store_code": "Narragansett"
+},
+{
+"address": "3248 Lawrence Chicago",
+"is_active": true,
+"market": "Chicago",
+"store_code": "lawrence"
+},
+{
+"address": "3352 26th Chicago",
+"is_active": true,
+"market": "Chicago",
+"store_code": "3352 26th"
+},
+{
+"address": "3735 26th Chicago",
+"is_active": true,
+"market": "Chicago",
+"store_code": "3735 26th"
+},
+{
+"address": "3966 Grand Chicago",
+"is_active": true,
+"market": "Chicago",
+"store_code": "Grand"
+},
+{
+"address": "4640 Diversey Chicago",
+"is_active": true,
+"market": "Chicago",
+"store_code": "Diversey"
+},
+{
+"address": "4801 Armitage Chicago",
+"is_active": true,
+"market": "Chicago",
+"store_code": "Armitage"
+},
+{
+"address": "5601 Belmont Chicago",
+"is_active": true,
+"market": "Chicago",
+"store_code": "Belmont"
+},
+{
+"address": "639 Lincoln Chicago Heights",
+"is_active": true,
+"market": "Chicago",
+"store_code": "Chicago heights"
+},
+{
+"address": "6500 Irving Park Chicago",
+"is_active": true,
+"market": "Chicago",
+"store_code": "Irving Park"
+},
+{
+"address": "21880 Hempstead Ave",
+"is_active": true,
+"market": "NY",
+"store_code": "QV"
+},
+{
+"address": "3560 Nostrand Ave",
+"is_active": true,
+"market": "NY",
+"store_code": "Nostrand"
+},
+{
+"address": "7812 Bergenline",
+"is_active": true,
+"market": "NY",
+"store_code": "7812"
+},
+{
+"address": "957 Pennsylvania Ave",
+"is_active": true,
+"market": "NY",
+"store_code": "957"
+},
+{
+"address": "902 Ave U",
+"is_active": false,
+"market": "NY",
+"store_code": "Ave U"
+},
+{
+"address": "531 Utica Ave",
+"is_active": true,
+"market": "NY",
+"store_code": "Utica"
+},
+{
+"address": "18226 Kedzie Hazel Crest",
+"is_active": true,
+"market": "Chicago",
+"store_code": "kedzie"
+},
+{
+"address": "104-08 Lefferts Blvd",
+"is_active": true,
+"market": "NY",
+"store_code": "Lefferts"
+},
+{
+"address": "64 Graham Ave Brooklyn",
+"is_active": true,
+"market": "NY",
+"store_code": "Graham"
+},
+{
+"address": "274 Wyckoff Ave",
+"is_active": true,
+"market": "NY",
+"store_code": "Wyckoff"
+},
+{
+"address": "3706 Third Ave",
+"is_active": true,
+"market": "NY",
+"store_code": "Third Ave"
+},
+{
+"address": "516 8th Ave , New York",
+"is_active": true,
+"market": "NY",
+"store_code": "Eight Ave"
+}
+]
+},
+"nylogistics": {
+"expected": {
+"2224 Avenue U, Brooklyn": "New York",
+"7710": "New York"
+},
+"roster": [
+{
+"address": "2224 Avenue U, Brooklyn ",
+"is_active": true,
+"market": "New York",
+"store_code": "7710"
+}
+]
+},
+"vzone": {
+"expected": {
+"2723 Ave U Brooklyn": "NY",
+"AVE U": "NY",
+"Ave U": "NY",
+"ave u": "NY"
+},
+"roster": [
+{
+"address": "2723 Ave U Brooklyn",
+"is_active": true,
+"market": "NY",
+"store_code": "Ave U"
+}
+]
+}
+}

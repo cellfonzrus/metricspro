@@ -8,6 +8,7 @@ import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib
 import DrillDownPanel, {
   DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel,
 } from '@/components/DrillDownPanel'
+import { buildStoreMarket } from '@/lib/store-market'
 
 // WHAT A READER NEEDS BESIDE EACH SHIFT IN A PANEL (§CORE-17.3x) — off the row's own `fields`, which
 // the server composed. "Hours from" is the read's own answer to which column held the figure: a shift
@@ -51,11 +52,7 @@ export default function HoursBudgetPage() {
   }, [week])
   useEffect(() => { load() }, [load])
 
-  const storeMarket = useMemo(() => {
-    const m: Record<string, string> = {}
-    for (const r of rows) if (r.store_code) m[r.store_code] = r.market || ''
-    return m
-  }, [rows])
+  const storeMarket = useMemo(() => buildStoreMarket(rows), [rows])
   const storeOptions = useMemo(() => rows
     .filter(r => r.store_code)
     .map(r => ({ id: r.store_code, label: r.store_code, sublabel: r.address || r.market || undefined }))
@@ -69,7 +66,7 @@ export default function HoursBudgetPage() {
     store: r => r.store_code, market: r => r.market || '',
   }), [rows, filt])
   const visibleOvs = useMemo(() => filterRows(ovs, filt, {
-    store: r => r.store_code, market: r => storeMarket[r.store_code] || '',
+    store: r => r.store_code, market: r => storeMarket.marketOf(r.store_code),
   }), [ovs, filt, storeMarket])
 
   async function saveBudget(store: string) {

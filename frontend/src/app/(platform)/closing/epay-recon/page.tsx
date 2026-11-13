@@ -7,6 +7,7 @@ import { ExportButtons, ExportPayload } from '@/lib/export'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 import DrillDownPanel, { useDrillTile, type DrillPanel } from '@/components/DrillDownPanel'
 import { DrillStat, STORE_DRILL_COLUMNS } from '../_lib/DrillStat'
+import { buildStoreMarket } from '@/lib/store-market'
 
 // ePay bill-payment recon: DECLARED ePay (closing) vs SALES bill-payments (by tender) vs BANK deposited.
 export default function EpayReconPage() {
@@ -75,11 +76,7 @@ export default function EpayReconPage() {
   // form's picker), same pattern as accessory-recon's sibling addition.
   const [fMarkets, setFMarkets] = useState<string[]>([])
   const [fStores, setFStores] = useState<string[]>([])
-  const marketByCode = useMemo(() => {
-    const m: Record<string, string> = {}
-    for (const s of stores) if (s.store_code && s.market) m[s.store_code] = s.market
-    return m
-  }, [stores])
+  const marketByCode = useMemo(() => buildStoreMarket(stores), [stores])
   const storesForCascade: StoreOpt[] = useMemo(
     () => stores.filter((s: any) => s.store_code).map((s: any) => ({ id: s.store_code, label: s.store_address || s.store_code, market: s.market || null })),
     [stores])
@@ -88,7 +85,7 @@ export default function EpayReconPage() {
   const rows = allRows.filter(r =>
     (!flaggedOnly || r.flag) &&
     (!fStores.length || fStores.includes(r.store_code)) &&
-    (!fMarketsFold.size || fMarketsFold.has((marketByCode[r.store_code] || '').trim().toLowerCase())))
+    (!fMarketsFold.size || fMarketsFold.has(marketByCode.marketOf(r.store_code).trim().toLowerCase())))
   const t = data?.totals || {}
   // THE SERVED PANELS (§CORE-17). The tiles show the DAY's figure for every store, which is what the
   // server folded them from — the market/store/flagged pickers below narrow only the table, so a
@@ -102,7 +99,7 @@ export default function EpayReconPage() {
       title: 'ePay Bank-Deposit Recon', subtitle: date, filename: `epay-recon_${date}`,
       sheets: [{ name: 'By store', rows, columns: [
         { header: 'Store', get: (r: any) => r.store_address },
-        { header: 'Market', get: (r: any) => marketByCode[r.store_code] || '' },
+        { header: 'Market', get: (r: any) => marketByCode.marketOf(r.store_code) },
         { header: 'Declared ePay cash', get: (r: any) => r.declared.cash, money: true },
         { header: 'Sales bill-pay cash', get: (r: any) => r.sales.cash, money: true },
         { header: 'Bank deposited', get: (r: any) => r.bank_deposited, money: true },

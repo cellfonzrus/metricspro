@@ -26511,6 +26511,8 @@ status word rather than a blank that reads as nil.
 | CORE-35 | core |
 | CORE-36 | core |
 | CORE-37 | core |
+| CORE-43 | core |
+| STOREOPS-08 | storeops |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -45043,6 +45045,96 @@ mistake a narrowed read for an authorisation it has not made.
 - **§E4** the delta rule has not left the one home.
 
 
+
+---
+
+## §STOREOPS-08. WHAT A PAY PERIOD COSTS THE COMPANY, BESIDE WHAT IT PAYS (owner ask 2026-11-12)
+
+Owner, 2026-11-12: *"in the payroll report add anopthe rtil for the payroll tax paid for that period
+and a another tile shows the total of payroll and payroll tax as a cost of payroll to teh company"*.
+
+### STOREOPS-08.1 Duplicate check (the build gate)
+
+| Question asked of the index | Answer | What was done |
+| --- | --- | --- |
+| Is there already an employer payroll-tax rule? | **YES** — `storeops/payroll_expenses.compute_payroll_tax` (mig 404): FICA SS + Medicare + FUTA + SUTA at the org's declared rates, with PER-EMPLOYEE CUMULATIVE CALENDAR-YEAR wage-base caps and a per-store split by wage share. The HR Payroll Expenses page books from it; the P&L carries what it books | **Reused as THE rule.** No second formula: the tiles resolve through it |
+| Could the payroll report call it as it stood? | **NO** — its only door took `hours × rate`, and `GET /storeops/payroll` serves a SALARIED person a 0-hour row carrying their period pay (`payroll_salary.py`). Measured live: three LuxeLink employees, **$16,607.15** in October 2026, would have been taxed on $0.00 | The one home grew `compute_payroll_tax_from_wages`; the hours door converts and DELEGATES, so the cap ladder and the per-store split stayed in exactly one place |
+| Is there already a place these figures should appear? | **YES** — the payroll report's tile strip and its drill-down catalogue (§CORE-17.3x), one person-and-pay-period row | Two panels ADDED to that catalogue rather than a second one built: same grain, same keys, same fold (§CORE-17.3l) |
+| Is there already a "did the report pay this row" predicate? | **PARTLY** — `payroll_hours_drilldown._pays` folded the paying allowlist itself | Moved into the one home as `payroll_hours_basis.row_is_paid`; the drill-down and the new producer both dereference it (§19.18) |
+| Should the payroll-expense ITEMS (workers comp, UI) be added too? | **NO, deliberately** — they have their own page and their own additive P&L line, and folding them in here would double-count them. The panel note says so | Nothing added |
+
+### STOREOPS-08.2 What it is
+
+`storeops/payroll_employer_cost.py` (PURE) carries the one home's tax answer onto the rows
+`GET /storeops/payroll` already serves, adding per row: `employer_tax` (with the four legs
+`tax_fica_ss` / `tax_medicare` / `tax_futa` / `tax_suta`), `employer_cost` = pay + tax, and the same
+pair on the SCHEDULED basis (`employer_tax_scheduled` / `employer_cost_scheduled`) — because the
+report prints scheduled pay beside actual and the owner's own figure that day was the scheduled one.
+It spells no rate, no wage base and no dollar. The route reads the config and the year-to-date caps
+through `_employer_tax_inputs`, which reads the SAME table and uses the SAME year rule as
+`_payex_gather`, so the report and the HR page cannot disagree about a cap.
+
+**LIVE, October 2026, every tenant** (actual-pay basis; each panel ties to the cent):
+
+| tenant | actual pay | employer tax | cost of payroll |
+| --- | --- | --- | --- |
+| LuxeLink | $108,204.53 | $11,841.36 | $120,045.89 |
+| Cellfonz R Us | $72,905.30 | $7,983.05 | $80,888.35 |
+| NY LOGISTICS | $20,160.28 | $2,196.41 | $22,356.69 |
+| Vzone | $20,449.79 | $1,849.74 | $22,299.53 |
+
+### STOREOPS-08.3 Absence is never zero, and the gate withholds the burden too
+
+A row the report did not pay carries NO cost key — `payroll_employer_cost.carries_pay` is the
+predicate, bound by identity by the drill-down, and it is **not** the hours question: a salaried row
+has no hours basis at all, while a `$0.00` with nothing measured behind it is the §CORE-17.3i row and
+is not counted. A **pay-gated** caller (mig 434) has the money keys deleted BEFORE the burden is
+computed, so no burden key is produced, the two tiles do not render and neither panel is served —
+never a $0.00. The four burden keys are in `pay_visibility.PAY_FIELDS` as well, so any other surface
+stripping these rows strips them. `payroll_tax_config.enabled = false` answers empty from the one
+home, and the response says so (`X-Payroll-Tax-Enabled`) rather than printing a free payroll.
+
+### STOREOPS-08.4 The honest limit, stated on the panel
+
+The annual wage bases are consumed by payroll runs that have been BOOKED (`storeops.payroll_tax_ledger`).
+**No tenant has ever booked one** (0 rows, measured 2026-11-12), so every period starts with the caps
+untouched and FUTA / state unemployment here are an **upper bound rather than a settlement**. That is
+the HR page's own behaviour on a first run, inherited from the same home rather than re-decided, and
+every burden panel's note says it in words. The two relations are named on every burden row —
+`payroll_tax_config` ("your payroll tax settings") and `payroll_tax_ledger` ("payroll runs already
+booked this year"), registered in the lineage registry and in `frontend/src/lib/sourceLabels.ts`.
+
+### STOREOPS-08.5 A pre-existing defect this exposed, and FIXED rather than excused
+
+`payroll_hours_drilldown._actual_pay` asked the HOURS question of a MONEY figure, so it blanked a
+salaried person's pay — the panel's evidence was SHORT of its own figure by **$16,607.15** on
+LuxeLink and **$3,860.68** on the house org for October 2026, and the tie-out correctly reported the
+disagreement on both tenants. The report's totals were never wrong; its evidence was. Fixed in the
+same PR, for the same reason the new panels are: the money question is `carries_pay`. All four
+tenants' pay panels now tie.
+
+### STOREOPS-08.6 Where it shows, and the tests
+
+Both screens of the family get the tiles (§CORE-17.3l — a tile on one of two screens reading one
+endpoint is the next divergence): the **Payroll Report** strip (`storeops/payroll/page.tsx`, grid now
+wrapping rather than pinned to four columns) and the **StoreOps Reports → Hours & Payroll** strip.
+Both fold through `storeops/lib/payroll-cost-tiles.employerTotals` over the rows ON SCREEN, so the
+store / market / employee filters narrow the figures, and both export the two columns (RULE FOUR).
+
+Proofs: `backend/harness_payroll_employer_cost.py` (22 checks — the two tax doors' equivalence, the
+cap ladder, the salaried row, absence-is-not-zero, the gated row, purity, no rate of its own);
+`harness_batch24_drilldown.py` extended to **114 checks** (the two panels, the provenance, the gate,
+the grain census) and its `STRIPPED` fixture now dereferences `pay_visibility` instead of naming the
+money keys itself — a second copy of the strip rule which had already gone stale;
+`frontend/src/app/(platform)/storeops/lib/__tests__/payroll-cost-tiles.test.ts` (8).
+
+💰 Books nothing, writes nothing, moves no money: every hours and pay figure is byte-identical and
+the burden is display-only. No migration.
+
+See also §14y (the hours basis one home) · §CORE-17.3x (the payroll drill-down family) ·
+§CORE-17.3i (absence is never zero) · §19.44 / mig 434 (pay visibility) · §19.18 (one fact, one home,
+dereferenced) · §CORE-43 (the market attribution fix shipped alongside).
+
 ## §COMMCALC-55. A SUCCESSFUL LOGIN IS RECOGNISED BY EVIDENCE, NEVER BY A GUESSED VOCABULARY (owner report 2026-11-05)
 
 The owner signed in to the carrier owners portal by hand, from his phone, and sent the screenshot.
@@ -48419,3 +48511,123 @@ store), `frontend/src/lib/__tests__/trend-state.test.ts` (7) and the `focusPlan`
 Related: §COMMCALC-57 (the tiles this extends) · §COMMCALC-49.2 (the velocity home it dereferences)
 · §19.18 (one fact, one home, dereferenced — never copied) · §23e (the silent-zero rule) ·
 §CORE-17.3m (the team fold) · §CORE-34/35 (the gate index listing this job).
+
+
+---
+
+## §CORE-43. THE BROWSER ANSWERS "WHICH MARKET IS THIS STORE IN?" IN ONE PLACE (reported 2026-11-12)
+
+Owner, 2026-11-12: *"payroll for luxlink shows 110571.59 for october but when you do per market it
+does not total up chicago is 41207 and Ny is 24966, where is the rest and which reps are not assigned
+a market"*.
+
+**MEASURED, by running the real producer against production.** `GET /storeops/payroll?month=2026-10`
+for LuxeLink: 35 rows, **scheduled pay $110,571.59** — his figure to the cent. The per-market view
+credited **Chicago $41,201.67**, **NY $24,966.83** and left **$44,403.09 under no market**, which
+splits into:
+
+| | amount | what it was |
+| --- | --- | --- |
+| 13 reps, 9 store spellings | **$37,760.23** | the roster's own codes IN CAPITALS — the time clock and schedule had written `CICERO` `LAWRENCE` `ARMITAGE` `NOSTRAND` `CHICAGO HEIGHTS` `BELMONT` `3352 26TH` `3735 26TH` `CERMARK` against `storeops.stores` declaring `Cicero` `lawrence` `Armitage` `Nostrand` `Chicago heights` `Belmont` `3352 26th` `3735 26th` `Cermark` |
+| 1 salaried manager | **$6,642.86** | `store = 'Unassigned'` — a Manager on $78,000 with `home_store` NULL, the explicit bucket `storeops/payroll_salary.py` creates by design. **A real data gap for the owner, not a code defect** |
+
+### CORE-43.1 Duplicate check (the build gate)
+
+| Question asked of the index | Answer | What was done |
+| --- | --- | --- |
+| Is there a canonical store→market resolution to extend? | **YES — §13a**, `backend/app/core/scope.py` (`store_market_resolver` / `market_by_code`) over the union index, case-, punctuation- and address-tolerant, fail-closed on ambiguity, CI-guarded by `harness_market_resolution_guard.py` | **Reused as the rule.** Nothing new was derived: the browser module below is its dereference, pinned to it by an equivalence test against LIVE production answers |
+| Then why a frontend module at all? | §13a's guard only ever scanned the **backend**. The pages hold a **span-scoped** roster (`GET /storeops/stores`) and must not fetch the whole org to answer a filter, so the fold has to happen where the rows are | A deliberate second implementation, kept honest by `store-market.equivalence.test.ts` rather than by argument |
+| Is there a shared browser helper already? | **PARTLY** — `lib/market-store-cascade.ts` narrows a store OPTION list to the picked markets. It never answered "which market is this row's store in" | Extended by composition, not forked: the cascade still owns the narrowing, this owns the resolution |
+| How many private copies existed? | **24**, in 24 screens | All 24 rewired; the lock below fails the build on a 25th |
+
+### CORE-43.2 The class, not the instance
+
+The instance is "LuxeLink's October payroll lost $44k of market attribution". The class is **a free-text
+store string compared LETTER FOR LETTER to a roster code**:
+
+```ts
+const m: Record<string, string> = {}
+for (const s of stores) if (s.store_code) m[s.store_code] = s.market || ''
+... filterRows(rows, filt, { market: r => m[r.store] || '' })
+```
+
+A row's `store` is whatever a feed, a time clock or a human put there — §13e makes two spellings of
+one store the NORMAL case, and `GET /storeops/payroll` stamps the store from `shifts.store_code` /
+`timelog.store_code` verbatim. So the row stays in every TOTAL and vanishes from every per-market
+view, and the filter shows a smaller, entirely plausible number. **Zero is a plausible-looking
+answer, which is why this class hides** (same lesson as §COMMCALC-49.10). It is the browser twin of
+the 2026-09-03 `1115 Liberty Ave` defect §13a was written for, and of the `b-1115` phantom store
+(§ACCOUNT-01) — a fold that does not fold.
+
+`closing/tender-recon-3way/page.tsx` had grown a FOURTH copy of the fold itself — its own
+code → address → leading-street-number ladder, lower-cased instead of squashed, so `104-08 Lefferts
+Blvd` and `10408 Lefferts Blvd` were different stores to it.
+
+### CORE-43.3 The one home, dereferenced
+
+**`frontend/src/lib/store-market.ts`** — pure, no React, no fetch:
+
+- `squashStore(v)` — the comparison form, mirroring `core.scope._squash`: accent-folded (the one
+  accent fold's rule, §ACCOUNT-01), upper-cased, every non-alphanumeric dropped.
+- `buildStoreMarket(roster)` → `{ marketOf(store), markets }`. Learns a market for each store CODE
+  and each ADDRESS spelling (`address` and `store_address` both), plus an unambiguous leading street
+  number as a last resort. **First market wins; a second, different market makes that key answer ''
+  for ever** — never an arbitrary winner. A key learned with no market stays known-and-marketless, so
+  it cannot borrow a neighbour's market through the number rule.
+- `marketsFromRoster(roster)` — the market OPTION list off the same roster the lookup binds, folded
+  so one market spelled two ways is one option (§13c's rule, in the browser).
+- **The roster is a REQUIRED argument. An empty roster identifies NOTHING** and the surface says so,
+  rather than falling back to another tenant's words (owner directive 2026-10-30). It folds; it never
+  guesses: `3738 26th Street` resolves to nothing, not to `3735 26th`.
+
+**The 24 screens now reading it** (each previously carried its own map): storeops `payroll`,
+`payroll-tax`, `payroll-change-log`, `salary-advances`, `employees`, `schedule`, `timeoff`,
+`shift-extensions`, `hours-budget`, `reports`, `attendance`, `timeclock`, `accountability`; `hr/employee-database`;
+closing `accessory-recon`, `bank-deposit`, `deposit-recon`, `epay-recon`, `expenses-report`,
+`tender-recon-3way`; accounts `pl`, `journal`, `balance-sheet`, `_components/PLPerStorePrint`.
+
+### CORE-43.4 The lock
+
+`frontend/src/lib/__tests__/store-market-one-home.test.ts`, a step of the `frontend-tests` job
+(§CORE-34/35), **fails the build** when: a source file assigns a market into a map keyed on
+`.store_code` / `.store` / `.home_store`; any file grows its own street-number market ladder; or one
+of the 24 named screens stops importing `buildStoreMarket`. It carries **negative controls** proving
+each rule can go red, and the red was demonstrated by re-introducing the old map in
+`storeops/payroll/page.tsx` before the PR.
+
+### CORE-43.5 Tests, and every tenant
+
+- `store-market.test.ts` — 32 cases: every capitalised October spelling, exact codes unchanged,
+  addresses with case/punctuation drift, the street-number rule and its ambiguity, accents, empty
+  roster, and **cross-tenant isolation** (LuxeLink's lookup cannot answer `B-1115`; the house
+  lookup cannot answer `CICERO`).
+- `store-market.equivalence.test.ts` — the browser lookup vs **`core.scope.store_market_resolver`
+  run against production** for all four tenants, over every store spelling their shifts, clock and
+  roster carry since 2026-08-01 plus the UPPER/lower variant of every code (fixture
+  `store-market.live.json`, GENERATED not typed). **One excused divergence, named**: `Cellular
+  Services`, a house-org roster row with a blank market which is a company and not a store (owner
+  2026-10-02) — the canonical union answers `NYC` for it only because `commcalc.store_mapping`
+  carries a market there, and no shift, punch or payroll row in production names it.
+- `payroll-market-regression.test.ts` — the reported defect itself, from the 35 rows the API served
+  (store + scheduled pay only, no employee name or rate): reproduces Chicago $41,201.67 / NY
+  $24,966.83 / $44,403.09 unattributed, then asserts $75,289.90 / $28,638.83 and that the only thing
+  left unattributed is the `Unassigned` salary row.
+
+### CORE-43.6 Not money, and what the owner still has to do
+
+No migration, no money moved: every figure and every total is byte-identical, only market
+ATTRIBUTION changes. The capitalised spellings were separately normalised in production the same
+evening by the time clock's write-side fix (§ACCOUNT-01 sibling), which repaired the instance; this
+section is the mechanism, so the next feed that spells a store its own way costs nothing.
+
+**Open for the owner:** give Jose Utrera (Manager, `E223`, $78,000) a `home_store`, or rule that a
+salaried manager rolls up to a market directly — $6,642.86 of October sits in the `Unassigned`
+bucket until then. **Deliberately NOT converged here:** the market OPTION lists on pages this PR did
+not otherwise touch still build their own `new Set(stores.map(s => s.market))` (commcalc/expenses,
+storeops/visits, accounts/companies, closing/_lib/ClosingPickupStatus) — resolution is fixed
+everywhere, enumeration on those four is follow-up.
+
+See also §13a (the canonical resolution this dereferences) · §13c (market enumeration) · §13e (two
+spellings of one store is the normal case) · §ACCOUNT-01 (the same fold defect on the backend's
+payroll authority) · §19.18 (one fact, one home, dereferenced) · §COMMCALC-49.10 (a default that is
+really one tenant's vocabulary).

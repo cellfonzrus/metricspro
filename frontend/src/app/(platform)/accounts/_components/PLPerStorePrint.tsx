@@ -13,6 +13,7 @@ import { useMemo, useState } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import ReportExportBar from '@/components/ReportExportBar'
 import { perStorePayload, plQuery, type StoreResult } from './plStatement'
+import { type StoreMarketLookup } from '@/lib/store-market'
 
 const PARALLEL = 4            // a few reads at a time — polite to the API, quick for a 30-store company
 
@@ -23,7 +24,7 @@ export default function PLPerStorePrint({ period, scope, companyLabel, stores, m
   stores: string[]                      // the Store filter (empty = no store picked)
   markets: string[]                     // the Market filter
   allStores: string[]                   // every store with a P&L this period (the Store filter's options)
-  storeMarket: Record<string, string>   // store → market, for the page header
+  storeMarket: StoreMarketLookup        // store → market (§CORE-43), for the page header
 }) {
   const [open, setOpen] = useState(false)
   const key = `${period}|${scope}|${stores.join('|')}|${markets.join('|')}`
@@ -48,7 +49,7 @@ export default function PLPerStorePrint({ period, scope, companyLabel, stores, m
       const list: string[] = scopeRead.filtered_stores || []
       if (list.length === 0) { setErr('None of the selected stores is in this company for this period.'); return }
       // 2. each store alone, a few at a time, kept in the list's order
-      const out: StoreResult[] = list.map(s => ({ store: s, market: storeMarket[s] }))
+      const out: StoreResult[] = list.map(s => ({ store: s, market: storeMarket.marketOf(s) }))
       let next = 0, done = 0
       setProgress(`0 / ${list.length}`)
       const worker = async () => {

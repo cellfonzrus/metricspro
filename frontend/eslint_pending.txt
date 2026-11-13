@@ -857,6 +857,5 @@
 5	react-hooks/static-components	src/app/(platform)/commcalc/spiff-impact/page.tsx
 17	react-hooks/static-components	src/app/(platform)/marketing/events/[id]/page.tsx
 10	react-hooks/static-components	src/app/(platform)/storeops/payroll-tax/page.tsx
-5	react-hooks/static-components	src/app/(platform)/storeops/reports/page.tsx
 2	react-hooks/static-components	src/app/(platform)/storeops/setup/stores/LeasePanel.tsx
 8	react-hooks/static-components	src/app/(platform)/storeops/visits/[id]/page.tsx

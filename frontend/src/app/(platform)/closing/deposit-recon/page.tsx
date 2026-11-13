@@ -8,6 +8,7 @@ import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 import { WorkflowNext } from '@/components/WorkflowNext'
+import { buildStoreMarket } from '@/lib/store-market'
 
 // Cash Deposit Reconciliation (OWNER DIRECTIVE 2026-08-05) — cross-checks cash COLLECTED (Daily
 // Closing + POS X-Report) against cash DEPOSITED (commcalc.bank_deposit), per tenant-defined category,
@@ -73,18 +74,14 @@ export default function DepositReconPage() {
   }, [dateFrom, dateTo, includeExpenses, includeBillPayments, includeOther, categoryId, fStores])
   useEffect(() => { load() }, [load])
 
-  const marketByCode = useMemo(() => {
-    const m: Record<string, string> = {}
-    for (const s of stores) if (s.store_code && s.market) m[s.store_code] = s.market
-    return m
-  }, [stores])
+  const marketByCode = useMemo(() => buildStoreMarket(stores), [stores])
   const fMarketsFold = useMemo(() => new Set(fMarkets.map(m => m.trim().toLowerCase())), [fMarkets])
 
   const days: any[] = data?.days || []
   const flatRows: DepRow[] = useMemo(() => {
     const out: DepRow[] = []
     for (const day of days) {
-      if (fMarketsFold.size && !fMarketsFold.has((marketByCode[day.store_code] || '').trim().toLowerCase())) continue
+      if (fMarketsFold.size && !fMarketsFold.has(marketByCode.marketOf(day.store_code).trim().toLowerCase())) continue
       for (const c of day.categories || []) {
         out.push({ store_code: day.store_code, store_address: day.store_address, close_date: day.close_date,
           closing_cash_total: day.closing_cash_total, xreport_cash: day.xreport_cash, xreport_available: day.xreport_available,
