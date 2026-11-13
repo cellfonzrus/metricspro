@@ -548,29 +548,35 @@ fake.store[("storeops", "timelog")] = [t for t in fake.store[("storeops", "timel
 
 # ── E4: force-clockout — manual "run now" (DM-triggered) vs the unattended cron sweep are
 # distinguishable entry_points, and BOTH log the auto-stamped clock-out. ═══════════════════════════
+# The overdue window is DERIVED from `now` and the sweep's OWN grace, never pinned to a wall-clock
+# constant. `_do_force_clockout` stamps the clock-out at scheduled_end + FORCE_CLOCKOUT_GRACE_MIN and
+# skips any punch not yet due, so a fixture hard-coding a 00:00-00:05 shift is deterministically red
+# every day between local midnight and 00:05 + grace (it was: 4 checks failed at 00:09 local, the
+# product being right and the fixture wrong). Deriving it means the harness is due at every hour.
 _biz_tz = R._biz_tz_for(ORG)
-work_today = datetime.now(timezone.utc).astimezone(_biz_tz).date().isoformat()
+_sched_end = (datetime.now(timezone.utc)
+              - timedelta(minutes=R.FORCE_CLOCKOUT_GRACE_MIN)   # the rule's own grace, dereferenced
+              - timedelta(minutes=30))                          # comfortably past due, not borderline
+_local_end = _sched_end.astimezone(_biz_tz)
+# Keep the whole 10-minute shift inside ONE local day: `_scheduled_end_for_punch` reads end <= start
+# as an OVERNIGHT shift and rolls the end forward 24h, which would make it not-yet-due again.
+if _local_end.hour == 0 and _local_end.minute < 20:
+    _sched_end -= timedelta(minutes=_local_end.minute + 40)     # back to ~23:20 the previous day
+    _local_end = _sched_end.astimezone(_biz_tz)
+_local_start = _local_end - timedelta(minutes=10)
+work_today = _local_end.date().isoformat()
 fake.store[("storeops", "shifts")] = fake.store[("storeops", "shifts")] + [
     {"id": 950, "org_id": ORG, "employee_id": "E46", "employee_name": "Solo Kiosk", "store_code": "S1",
      "shift_date": work_today, "scheduled_hours": 8.0, "actual_hours": 0.0,
-     "start_time": "00:00", "end_time": "00:05", "status": "scheduled", "is_deleted": False},
+     "start_time": _local_start.strftime("%H:%M"), "end_time": _local_end.strftime("%H:%M"),
+     "status": "scheduled", "is_deleted": False},
 ]
-# The punch must start BEFORE its own scheduled end (00:05). The old fixture clocked in at "now",
-# i.e. AFTER the scheduled end — which _do_force_clockout deliberately leaves open, because a punch
-# starting past its scheduled end is a SECOND session (a re-clock-in after an earlier auto-close) and
-# has no future end to close against. So the sweep correctly closed nothing and E4a/E4b failed while
-# the product was right; E5a/E5b then failed as knock-ons of the two missing log rows. Clock in at
-# 00:01 local so this is a genuine overdue FIRST session, which is what E4 means to test.
-def _local_iso(day, hhmm):
-    """`day` at `hhmm` in the business timezone, as a UTC ISO stamp (what the kiosk writes)."""
-    h, m = (int(x) for x in hhmm.split(":"))
-    return (datetime.fromisoformat(f"{day}T00:00:00").replace(tzinfo=_biz_tz, hour=h, minute=m)
-            .astimezone(timezone.utc).isoformat())
-
-
+# The punch must start BEFORE its own scheduled end: a punch starting at/after the scheduled end is a
+# SECOND session (a re-clock-in after an earlier auto-close) and `_do_force_clockout` deliberately
+# leaves those open, since there is no future end to close against. E4c below asserts that rule.
 fake.store[("storeops", "timelog")] = fake.store[("storeops", "timelog")] + [
     {"id": "openpunch1", "org_id": ORG, "employee_id": "E46", "employee_name": "Solo Kiosk",
-     "store_code": "S1", "clock_in": _local_iso(work_today, "00:01"), "clock_out": None,
+     "store_code": "S1", "clock_in": (_sched_end - timedelta(minutes=9)).isoformat(), "clock_out": None,
      "hours": None, "work_date": work_today},
 ]
 before_count = len(log_rows())
@@ -585,7 +591,7 @@ check("E4a manual 'run now' force-clockout closes the overdue punch and logs ent
 # a second overdue punch, closed via the unattended pg_cron sweep this time
 fake.store[("storeops", "timelog")] = fake.store[("storeops", "timelog")] + [
     {"id": "openpunch2", "org_id": ORG, "employee_id": "E46", "employee_name": "Solo Kiosk",
-     "store_code": "S1", "clock_in": _local_iso(work_today, "00:02"), "clock_out": None,
+     "store_code": "S1", "clock_in": (_sched_end - timedelta(minutes=8)).isoformat(), "clock_out": None,
      "hours": None, "work_date": work_today},
 ]
 before_count = len(log_rows())
@@ -605,7 +611,7 @@ check("E4b the unattended pg_cron sweep logs entry_point 'force_clockout_cron' w
 # must LEAVE IT OPEN rather than stamp a clock-out that precedes its own clock-in.
 fake.store[("storeops", "timelog")] = fake.store[("storeops", "timelog")] + [
     {"id": "secondsession1", "org_id": ORG, "employee_id": "E46", "employee_name": "Solo Kiosk",
-     "store_code": "S1", "clock_in": datetime.now(timezone.utc).isoformat(), "clock_out": None,
+     "store_code": "S1", "clock_in": _sched_end.isoformat(), "clock_out": None,
      "hours": None, "work_date": work_today},
 ]
 before_count = len(log_rows())
