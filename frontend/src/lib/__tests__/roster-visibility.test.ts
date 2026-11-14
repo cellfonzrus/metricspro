@@ -63,7 +63,11 @@ describe('visibleRoster', () => {
   })
 
   it('survives a null row list', () => {
-    expect(visibleRoster(null as any, false)).toEqual([])
+    // Typed as the signature really is (`T[] | null | undefined`) rather than cast through `any`:
+    // the point of the check is that a page whose rows have not loaded yet renders nothing instead
+    // of throwing, and a cast would also hide the signature no longer accepting null.
+    expect(visibleRoster<never>(null, false)).toEqual([])
+    expect(visibleRoster<never>(undefined, false)).toEqual([])
   })
 
   it('can say how many it hid, so hiding is never silent', () => {
