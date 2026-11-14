@@ -461,11 +461,23 @@ def measured_fill(entered_rows, measured_by_key, payroll_names,
     grain = str(grain or _lvoc.HOUSE_AUTHORITY_GRAIN).strip().lower() or _lvoc.HOUSE_AUTHORITY_GRAIN
     allocated = allocated_names(entered_rows, payroll_names)
     measuring = [n for n in _names(payroll_names) if n not in allocated]
-    auth = {k for k in (_norm(key_of(c)) if key_of else c
-                        for c in authoritative_codes(entered_rows, measuring)) if k}
+
+    def _fold(v):
+        """The caller's fold, applied ONCE per side. A fold that raises leaves the key as it was
+        rather than losing the store's money — the same contract `as_expense_rows`' relabel keeps.
+        The decision is then made in the raw spelling, which is what the fold exists to improve on,
+        never a dollar dropped on the floor."""
+        if not (key_of and v):
+            return _norm(v)
+        try:
+            return _norm(key_of(v)) or _norm(v)
+        except Exception:
+            return _norm(v)
+
+    auth = {k for k in (_fold(c) for c in authoritative_codes(entered_rows, measuring)) if k}
     if measured_by_key is None:
         return {"fill": {}, "fill_amount": None, "suppressed": [], "suppressed_by_key": {},
-                "suppressed_amount": None,
+                "unattributed": {}, "unattributed_amount": None, "suppressed_amount": None,
                 "grain": grain, "measured": False, "allocated_excluded": sorted(allocated),
                 "note": ("Labour could not be measured for this period, so no store's hours were "
                          "added. This is not a finding that they cost nothing.")}
@@ -475,11 +487,18 @@ def measured_fill(entered_rows, measured_by_key, payroll_names,
     #: caller's RAW map is what made this report read "$0.00 of measured payroll is NOT added" for
     #: twelve LuxeLink stores holding $19,653.18 — a key space mixed by a second lookup, which is the
     #: very mistake `key_of` exists to prevent.
-    fill, suppressed = {}, {}
+    fill, suppressed, unattributed = {}, {}, {}
     for raw, amt in (measured_by_key or {}).items():
-        key = _norm(key_of(raw)) if (key_of and raw) else _norm(raw)
+        key = _fold(raw)
         if not key:
-            continue                     # unattributable pay pairs with no store's approved figure
+            # PAY ATTRIBUTABLE TO NO STORE (a salaried manager with no home store). It pairs with no
+            # store's approved figure, so it is held OUT of the per-store decision — and reported
+            # here rather than dropped, because dropping it is a silent loss of real cost. Whether
+            # it may be BOOKED is the same question the company-wide cell has always answered: only
+            # where nothing was suppressed, i.e. no entered figure exists that it could already be
+            # inside. The caller reads `suppressed` to decide, so both readers decide alike.
+            unattributed[raw] = round(unattributed.get(raw, 0.0) + _f(amt), 2)
+            continue
         if org_wide_authority or key in auth:
             suppressed[key] = round(suppressed.get(key, 0.0) + _f(amt), 2)
             continue
@@ -492,6 +511,8 @@ def measured_fill(entered_rows, measured_by_key, payroll_names,
                 f"salary and books on its own row. Adding both would count the same labour twice.")
     return {"fill": fill, "fill_amount": round(sum(fill.values()), 2),
             "suppressed": sorted(suppressed), "suppressed_by_key": suppressed,
+            "unattributed": unattributed,
+            "unattributed_amount": round(sum(unattributed.values()), 2),
             "suppressed_amount": sup_amt,
             "grain": grain, "measured": True, "allocated_excluded": sorted(allocated),
             "note": note}

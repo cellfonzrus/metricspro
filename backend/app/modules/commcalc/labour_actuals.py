@@ -237,9 +237,16 @@ def as_expense_rows(actual, resolved, booked_rows, *, halves=None, store_col="st
     # cell into the sheet's code space exactly as it does for the commission half.
     _plan = salary_fill_plan(act, resolved, booked_rows, key_as=key_as, key_canon=key_canon,
                              grain=grain)
+    # Pay attributable to NO store is held out of the per-store decision by `measured_fill` and
+    # reported on the plan. It books here under exactly the rule the P&L's company-wide cell has
+    # always used — only where nothing was suppressed, so it cannot be a dollar already inside an
+    # entered figure. Dropping it instead would be a silent loss of real cost (§19.49).
+    _sal_cells = dict(_plan["fill"] or {})
+    if not _plan["suppressed"]:
+        _sal_cells.update(_plan["unattributed"] or {})
     out = []
     for h in use:
-        _cells = (_plan["fill"] if h == SALARY
+        _cells = (_sal_cells if h == SALARY
                   else ((act.get("by_half_store") or {}).get(h) or {}))
         for store, amt in sorted(_cells.items()):
             val = round(float(amt or 0.0), 2)

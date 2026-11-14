@@ -828,6 +828,28 @@ ok("K20 an unmeasurable period fills nothing and SAYS it could not measure",
 ok("K21 …and says so in words, so no screen can render it as $0.00 of labour",
    "not a finding that they cost nothing" in (k_none["note"] or ""), True)
 
+# PAY ATTRIBUTABLE TO NO STORE is held OUT of the per-store decision and REPORTED, never dropped —
+# a salaried manager with no home store is real cost (live: LuxeLink $6,500.00 of market salary,
+# §STOREOPS-09). The caller books it only where nothing was suppressed, which is the rule the P&L's
+# company-wide cell has always used, so both readers decide alike.
+K_CW = dict(K_MEASURED); K_CW[None] = 6500.00
+k_cw = lc.measured_fill(K_SHEET, K_CW, PAYROLL_NAMES, grain="store")
+ok("K22 unattributable pay is not a store's fill",
+   sorted(k_cw["fill"]), ["Irving Park", "Narragansett"])
+near("K23 …and it is reported with its dollars rather than dropped",
+     k_cw["unattributed_amount"], 6500.00)
+ok("K24 …and it is NOT counted as refused either (it pairs with no approved figure)",
+   k_cw["suppressed_amount"], k["suppressed_amount"])
+ok("K25 nothing measurable at all leaves it None, not 0.00",
+   lc.measured_fill(K_SHEET, None, PAYROLL_NAMES)["unattributed_amount"], None)
+
+# A FOLD THAT RAISES must not lose a store's money: the decision falls back to the raw spelling,
+# which is the same contract `labour_actuals.as_expense_rows`' relabel keeps (its §D16).
+ok("K26 a key_of that raises leaves the key as it was rather than dropping the dollars",
+   lc.measured_fill([], {"Irving Park": 1077.04}, PAYROLL_NAMES, grain="store",
+                    key_of=lambda _: (_ for _ in ()).throw(ValueError("boom")))["fill"],
+   {"Irving Park": 1077.04})
+
 # ── report ────────────────────────────────────────────────────────────────────────────────────
 print("=" * 78)
 print("harness_labour_coverage — salary READ path (GP + P&L coverage, month grain, double-book)")

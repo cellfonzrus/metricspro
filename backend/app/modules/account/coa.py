@@ -2351,7 +2351,7 @@ def build_inputs(client, org_id, period):
         # never holds it, and the rule it books under is unchanged: booked only where NO entered
         # payroll figure exists anywhere this period — otherwise it cannot be shown to be absent from
         # the entered store figures, and it is REPORTED on the note (`_est_skipped_cw`) instead.
-        _cw = round(sum(safe_float(a) for k, a in _wage_cells.items() if not _norm_store(k)), 2)
+        _cw = _fill_plan["unattributed_amount"]
         for st, amt in (_fill_plan["fill"] or {}).items():
             add("wages", st, amt)
             if has_payroll_gross:

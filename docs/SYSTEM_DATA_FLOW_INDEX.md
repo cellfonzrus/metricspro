@@ -48874,7 +48874,7 @@ codes in a third space, so six LuxeLink stores' approved figures suppressed noth
 `commcalc/labour_coverage.measured_fill(entered_rows, measured_by_key, payroll_names, grain,
 key_of)` — PURE, derives no dollar. Returns `fill` (the measurement that may be added), `suppressed`
 / `suppressed_by_key` / `suppressed_amount` (what it refuses to add twice, reported never hidden),
-`grain`, `measured`, `allocated_excluded` and a `note`.
+`unattributed` / `unattributed_amount`, `grain`, `measured`, `allocated_excluded` and a `note`.
 
 - **The ruling, applied**: the entered (DM-approved) figure wins where it exists; the measurement
   fills in only a store that has NO approved figure of its own.
@@ -48885,6 +48885,12 @@ key_of)` — PURE, derives no dollar. Returns `fill` (the measurement that may b
 - **`key_of` folds BOTH sides** into one space before the decision, and the refused dollars are
   accumulated in that same pass — looking them back up in the caller's raw map is what made the
   report say "$0.00 is NOT added" while holding back $19,653.18.
+- **Pay attributable to NO store** (a salaried manager with no home store — live, LuxeLink's
+  $6,500.00 of market salary, §STOREOPS-09) is held OUT of the per-store decision and REPORTED, then
+  booked only where nothing was suppressed: the rule the P&L's company-wide cell has always used, so
+  both readers decide alike. Dropping it would be a silent loss of real cost (§19.49).
+- **A `key_of` that raises** leaves the key as it was rather than losing the store's money — the
+  same contract `as_expense_rows`' relabel keeps.
 - **`measured_by_key=None` is not a fill of zero** (§19.50): `measured` False, both totals `None`.
 
 Readers: `account/coa.build_inputs` (the statement's `wages` line — its inline
@@ -48931,12 +48937,13 @@ new endpoint, no migration.
 
 ### §ACCOUNT-03.8 What the lock holds
 
-`harness_labour_coverage.py` **§K** (216 checks, up from 195): the live October regression to the
+`harness_labour_coverage.py` **§K** (221 checks, up from 195): the live October regression to the
 cent, the opposite failure (a store losing its labour entirely), the $0.00 placeholder, the producer
 row, both grains with the house grain dereferenced, the key-space fold AND the dollars counted in
 it, the mechanism pinned without the fold, one tenant's vocabulary proven unable to decide another's
-fill, the flat allocation, the plan proven identical to the statement's authority set, and the
-unmeasurable period as a tri-state. **`labour_actuals.as_expense_rows`' `booked_rows` is a REQUIRED
+fill, the flat allocation, the plan proven identical to the statement's authority set, unattributable
+pay reported rather than dropped, a raising fold, and the unmeasurable period as a tri-state.
+`harness_labour_actuals.py` §D/§E carry the same contract at the plumbing layer (90 checks). **`labour_actuals.as_expense_rows`' `booked_rows` is a REQUIRED
 POSITIONAL argument** — the structural lock: a future caller cannot materialise measured salary rows
 beside an expense sheet it never declared, which is exactly how the GP report came to double-book a
 month. Tests: `backend/tests/unit/test_one_labour_authority.py` (17) ·
