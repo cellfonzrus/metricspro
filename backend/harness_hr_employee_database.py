@@ -332,12 +332,25 @@ try:
     check("7 only requested keys (+employee_id) present", set(row.keys()) == {"employee_id", "name", "email"}, row.keys())
 
     # ── 8. Employee selection honored ───────────────────────────────────────────────────────────────
-    r_emp = call(hr_router.hr_employee_database, reveal=False, authorization="Bearer admin", employee_ids="E2")
+    # E2 is the INACTIVE fixture, so asking for it by id now needs the opt-in: the DEFAULT became
+    # active-only on 2026-11-14 (owner directive, index §CORE-44). The opt-in is passed here so the
+    # check still isolates what it is named for — that `employee_ids` narrows — rather than silently
+    # also depending on the default. The default itself is pinned at 8b below.
+    r_emp = call(hr_router.hr_employee_database, reveal=False, authorization="Bearer admin",
+                 employee_ids="E2", include_inactive=True)
     check("8 employee_ids narrows to exactly E2", [x["employee_id"] for x in r_emp["employees"]] == ["E2"], r_emp["employees"])
+    r_emp_default = call(hr_router.hr_employee_database, reveal=False, authorization="Bearer admin",
+                         employee_ids="E2")
+    check("8b asking for an INACTIVE employee by id returns nothing BY DEFAULT (§CORE-44) — the "
+          "report hides them until Show inactive is ticked, even when named",
+          r_emp_default["employees"] == [], r_emp_default["employees"])
 
     # ── 9. include_inactive + document status ───────────────────────────────────────────────────────
     r_active_only = call(hr_router.hr_employee_database, reveal=False, authorization="Bearer admin", include_inactive=False)
     check("9a include_inactive=False excludes E2", all(x["employee_id"] != "E2" for x in r_active_only["employees"]))
+    r_unasked = call(hr_router.hr_employee_database, reveal=False, authorization="Bearer admin")
+    check("9a2 and so does asking for NOTHING — active-only is the DEFAULT, which IS the directive",
+          all(x["employee_id"] != "E2" for x in r_unasked["employees"]))
     r_all = call(hr_router.hr_employee_database, reveal=False, authorization="Bearer admin", include_inactive=True)
     e1_doc = next(x for x in r_all["employees"] if x["employee_id"] == "E1")
     e2_doc = next(x for x in r_all["employees"] if x["employee_id"] == "E2")

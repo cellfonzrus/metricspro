@@ -7496,6 +7496,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 
 | endpoint | code | what it is the one home of |
 | --- | --- | --- |
+| `GET /core/filter-options` | the org-scoped option source behind the shared `StandardFilterBar` — stores (+markets) from `storeops.stores` ∪ `commcalc.store_mapping`, reps from `storeops.employees` ∪ `storeops.app_users`. **ACTIVE-ONLY since 2026-11-14** through `core/roster_visibility`, with `include_inactive=1` and an `inactive_hidden` count so hiding is never silent | `core/router.filter_options` → `StandardFilterBar` `optionsUrl` | §CORE-44 · §3d |
 | `POST /storeops/timeclock/clock-in` · `POST /storeops/timeclock/clock-out` | `storeops/router.py` (`_punch_geo_columns` → `core/store_geofence.evaluate_presence`) | WHERE a punch was made, judged against that punch's OWN store (never the rep's home store — a floater ends their shift where they worked it) and stored beside it. The clock-out carried NO location at all before 2026-11-01. **Never refuses a punch** on its location. Gated on `_punch_geo_present` so an un-migrated database behaves exactly as today (§STOREOPS-04) |
 | `GET /storeops/timeclock/geo-config` · `PUT …` | `storeops/router.py` → `core/store_geofence.resolve_config` | the tenant's punch-geofence policy, read and written through the SAME resolver the judging path uses, so a junk payload cannot write a fence the judging code would then obey. Manager/admin only (§STOREOPS-04) |
 | `GET /storeops/stores/geo-pins` · `PUT /storeops/stores/{store_code}/geo-pin` | `storeops/router.py` → `core/store_geofence.store_pin` | declaring where a store is, and which stores are NOT declared. Audited (`geo_pinned_by`/`geo_pinned_at`), org-scoped by construction (another tenant's store is a 404, never a pin), store code matched case-folded through `_norm_store` because `'b-1115'` once created a phantom store holding a day's money, and half a pin is a 400 rather than a store on the prime meridian (§STOREOPS-04) |
@@ -7871,6 +7872,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 
 | metric | basis | where it is decided |
 | --- | --- | --- |
+| **Is this store / this person still active?** | the roster row's own `is_active`, where **NULL means ACTIVE** (`BOOLEAN DEFAULT true`, nullable, mig `003`) and only an EXPLICIT false is inactive — the wire spellings `'false'` / `'f'` / `0` count as false, which a bare truthiness test gets backwards | `core/roster_visibility.is_active` / `.visible` / `.hidden_count` — THE one answer, with the browser twin `frontend/src/lib/roster-visibility.ts`. Active-only is the DEFAULT; `include_inactive` (one spelling) is the opt-in the `StandardFilterBar` "Show inactive" checkbox resolves to. `.eq("is_active", True)` is BANNED: it drops NULL, which deleted live employees from every roster. Lock: `harness_roster_visibility.py` (§CORE-44) |
 | **On what day will this earned money reach us?** | the carrier's DECLARED payout cycle — its own statement date, a declared weekday, declared days of the month, a declared day of the month, or a declared net-days lag | `payables/receipt_schedule.receipt_date` / `receipt_date_of_row` — THE one home, returning the date WITH the basis so no caller can show one without the other. **No house default**, unlike the outbound `billing_period`: inbound there is only an EARNING date, so a default would invent a payment date out of a sale date. Nothing declared → `cadence_undeclared`, no date, NOT measured. `is_measured` is an ALLOWLIST (§66). Lock: `harness_cash_calendar.py` (§PAYABLES-02) |
 | **What money is expected to come IN, and out of which feed?** | each tenant's OWN declared source (`commcalc.receipt_source_map`, mig `1115`), dated through the lineage registry's day column | `payables/expected_receipts.dated_receipts` — org-scoped on every read including the declaration itself, because two tenants' rows sit in the same physical tables. A declaration that cannot be READ is `declared: True` with the failure in words (§COMMCALC-29); a declaration TABLE that does not exist is `declared: False` with the migration named. An empty result is **never** \$0.00 (§PAYABLES-02) |
 | **What is left after offsetting — the net cash position, by day?** | this day's expected in minus this day's owed out, folded PER DAY and then added up (§CORE-17.3h), with the opening balance carried forward | `payables/cash_calendar.build` — pure, and it reads nothing: the OUT side is `owed_read.dated_owed`, the SAME read the Daily Owed surface and the weekly roll-up share (§COMMCALC-34), so the calendar cannot total what those screens disagree with. **An unmeasured side REFUSES to net**: `expected_in` / `net` / `running` go to None and the measured side is still shown in full (§PAYABLES-02) |
@@ -26523,6 +26525,7 @@ status word rather than a blank that reads as nil.
 | CORE-36 | core |
 | CORE-37 | core |
 | CORE-43 | core |
+| CORE-44 | core, storeops, hr, commcalc |
 | STOREOPS-08 | storeops |
 | STOREOPS-09 | storeops, account |
 <!-- SECTION-REGISTER:END -->
@@ -45334,6 +45337,141 @@ See also §14t (the mechanism this extends, and mig `997`) · §47.17 / §59.10 
 §13a (the canonical store→market answer) · §CORE-43 (its browser twin) · §ACCOUNT-01 (the payroll-row
 → P&L-line router, deliberately untouched) · §COMMCALC-49.10 (a tenant's vocabulary is never a
 default) · §19.18 (one fact, one home, dereferenced).
+
+
+## §CORE-44. AN INACTIVE STORE OR PERSON DOES NOT SHOW UNLESS "SHOW INACTIVE" IS TICKED (owner directive 2026-11-14)
+
+Owner: *"once the store or employee is made inactive their data should [not] be shwoing on any module
+unless the checkox is clicked for show inactive stores"*. Asked whether hiding should take their past
+money with it: *"yes the past earning will show in that months totals and the year to date also"* —
+so **hiding is a ROW rule, never a MONEY rule.**
+
+### CORE-44.1 Duplicate check (the build gate)
+
+Searched the index and the code for an existing mechanism before writing anything, and **reused all
+three that already existed** rather than building siblings:
+
+- **The opt-in already had a spelling.** Twelve endpoints took `include_inactive` (`GET
+  /storeops/employees`, `GET /storeops/stores`, `GET /hr/employee-database`, the commission-plan
+  roster, the CRM/HR config lists). Nothing new was invented — the one home simply STATES that
+  spelling (`INCLUDE_INACTIVE_PARAM`) so a thirteenth caller cannot coin `show_inactive`.
+- **The shared bar already existed** (§3d, §CORE-27, §CORE-28). The checkbox is a control ON it, next
+  to Sort by, reaching every adopting report at once — not a per-report toggle.
+- **Keeping a closed store's history already had a mechanism**: `commcalc/router._storeops_roster`'s
+  `keep_codes` ("this store has real data in the period I am rendering"). That is what satisfies the
+  owner's money ruling, and it was left exactly as it was.
+
+**AND THE SAME DEFECT WAS FIXED HALFWAY, ONCE BEFORE.** `backend/harness_inactive_store_filter.py`
+is the 2026-08-06 ancestor of this section, from the owner report *"t-902 / 531 etc all t-stores have
+been disabled but they still show in time clock, targets etc reports"*. It got the STORE side right
+and named this exact trap in its own docstring — *"a blanket `.eq("is_active", True)` would silently
+drop any store whose flag was never explicitly set — worse than the bug being fixed"* — citing the
+employee-side convention as the thing it was matching. **The employee side was never actually
+converted**: `GET /storeops/employees` still carried that very `.eq` fifteen months later, and
+`/core/filter-options` was never touched at all. That harness still passes, unchanged, because
+`_store_is_active` now dereferences the home rather than re-deriving it. A fix for the surface that
+reported the defect, and not for its siblings, is the patchwork the 2026-09-20 directive bans — this
+section is the same defect finished.
+
+New: the PREDICATE's home, and the lock. Nothing else.
+
+### CORE-44.2 The class, not the instance
+
+The general fact that was wrong is not "one report still lists a closed store". It is that **every
+caller decided for itself what the active flag means, and the copies disagreed with each other**:
+
+- `storeops/router._store_is_active` read a MISSING / NULL flag as **ACTIVE** — correct:
+  `storeops.stores.is_active` and `storeops.employees.is_active` are both `BOOLEAN DEFAULT true` and
+  NULLABLE (mig `003`), so a row written before the column existed carries NULL and is LIVE.
+- `GET /storeops/employees` narrowed with **`.eq("is_active", True)`**, which drops NULL server-side
+  — the OPPOSITE answer, to the same question, on the same shape of column, in the same module. An
+  employee whose flag was never set VANISHED from every roster, picker and schedule it feeds.
+  `GET /hr/employee-database` carried the identical drop, and its own `include_inactive` defaulted
+  **TRUE**, i.e. the directive backwards.
+- **`GET /core/filter-options` never filtered at all.** It SELECTED `is_active` for employees and
+  ignored it, and never read the flag for stores. Because it is the option source behind the shared
+  `StandardFilterBar`, that is the Stores / People dropdown on most reports: every adopting report
+  offered closed stores and terminated people as things to filter by.
+- In the browser the test was written out by hand in **71 places**, some of them as `is_active ===
+  true`, which hides every row whose flag was never set.
+
+Two traps are stated once in the home so nobody re-derives them: **NULL means ACTIVE**, and **the
+string `'false'` is TRUTHY** in both Python and JavaScript, so a flag that came back through
+PostgREST, a CSV import or a form post reads as active at exactly the one caller that got it off the
+wire.
+
+### CORE-44.3 The one home, dereferenced
+
+| the question | the one home |
+| --- | --- |
+| is this store / person active? | `backend/app/modules/core/roster_visibility.py` — `is_active` (NULL/missing → active; `False` / `0` / `'false'` / `'f'` / `'no'` / `'off'` → inactive), `visible(rows, include_inactive=False)` (**active-only is the default** — the default IS the directive), `hidden_count`, `split`, plus `INCLUDE_INACTIVE_PARAM` and `POSTGREST_ACTIVE_FILTER` (`("is_active", "not.is.false")`, the filter that does NOT drop NULL) |
+| …in the browser | `frontend/src/lib/roster-visibility.ts` — `rosterIsActive`, `visibleRoster`, `inactiveCount`, `splitRoster`, `INACTIVE_LABEL` (one wording of the checkbox), `withIncludeInactive` (one way to add the opt-in to a roster URL) |
+| the control | `StandardFilterValue.showInactive` + `FieldAccessors.active` (`lib/standard-filters`, which dereferences `rosterIsActive` rather than testing a flag itself) → the **Show inactive** checkbox on `components/StandardFilterBar.tsx`. `standardInactiveHidden(rows, value, acc)` is the count it states |
+
+**Wired in this change:** `core/router.filter_options` (active-only by default, `include_inactive=1`,
+and it returns `inactive_hidden`); `storeops/router._store_is_active` / `_active_stores_only` /
+`get_employees` (the NULL drop gone); `hr/router.hr_employee_database` (NULL drop gone, default
+flipped to False); `commcalc/router._store_active`; and in the browser `StandardFilterBar` (the
+options now follow the tick, so a user who ticks it can also NAME the closed store in the picker),
+`StoreMultiSelect` (the shared store-picker adapter), `storeops/employees`, `hr/people`,
+`storeops/schedule`, `hr/employee-database` (its box opened ON; it opens OFF now, and its store
+filter follows the same tick instead of always requesting the full set).
+
+**Deliberately excused, stated rather than hidden:** `GET /commcalc/commission-plans/roster` keeps
+`include_inactive=True`. A mid-month terminated rep still has period sale lines that pay under their
+plan and the engine matches them, so hiding them there would make them un-assignable — the same
+reasoning as `keep_codes`.
+
+### CORE-44.4 The lock
+
+`backend/harness_roster_visibility.py`, in `carrier-vocab-guard.yml`, DB-free:
+
+- **A** the home answers NULL / `'false'` / `0` the way it must, `visible` still hides by default,
+  the opt-in spelling and the PostgREST filter are unchanged.
+- **B** the shared surfaces still dereference it, `filter_options` still DEFAULTS to active-only, and
+  `_store_is_active`'s body is a dereference rather than a re-derivation. Every source it reads is
+  comment-stripped first — the 2026-10-30 lesson that a file can satisfy a check by TALKING about the
+  thing (§CORE-27).
+- **C / E** two debt ledgers, `backend/roster_visibility_pending.txt` (**67** hand-rolled tests
+  across 22 roster-reading modules) and `frontend/roster_visibility_pending.txt` (**64** across 47
+  files, down from 71). **They may only SHRINK**, and a path not in the ledger may not appear at all.
+  Only modules that actually read `stores` / `employees` / `app_users` are measured: the same words
+  over another registry's own flag are that registry's business.
+- **D** the frontend home still exports its five functions and the bar still renders a CHECKBOX whose
+  Clear resets it.
+- Four mutations confirmed RED: the home reading NULL as inactive, `filter_options` defaulting open
+  again, a screen hand-rolling the test again, and the checkbox becoming a text field.
+
+### CORE-44.5 Tests, and every tenant
+
+TDD, written red first: `backend/tests/unit/test_roster_visibility.py` (9),
+`backend/tests/integration/test_inactive_is_hidden_everywhere.py` (12 — the REAL routes over the
+in-memory double, **two tenants** with a live store, a closed store and a flag-never-set store each,
+asserting the positive, the opt-in, the honest count, and the NEGATIVE: neither tenant's roster
+reaches the other's answer), `frontend/src/lib/__tests__/roster-visibility.test.ts` (16),
+`frontend/src/lib/__tests__/standard-inactive.test.ts` (11),
+`frontend/src/components/__tests__/StandardFilterBar.inactive.test.tsx` (7).
+
+The inactive rule is a **POLICY**, not a tenant's vocabulary, so a house default is correct here —
+§COMMCALC-49.10's ban is on a default that is really one tenant's WORDS. What must never cross is the
+data, which is what the negative assertions pin.
+
+### CORE-44.6 Not money, and what hiding is allowed to do
+
+💰 **No migration, no money moved, no schema change.** Nothing in this work touches an amount: the
+only reads whose row set changed are an option list, two rosters and one roster report. Per the
+owner's ruling a closed store's past earnings stay in that month's totals and in year-to-date, which
+is why `keep_codes` was left alone and why **hiding is never silent** — the bar states "N inactive
+hidden" and `filter_options` returns `inactive_hidden`, so a list that is shorter than its own total
+says so.
+
+**Still owed (the ledgers ARE the plan):** 67 backend and 64 frontend hand-rolled tests, each one a
+line to delete as its caller is wired; and the 70 report routes that carry no standard filters at all
+(§CORE-27) cannot show the checkbox until they adopt the bar — the same wiring visit lowers both pins.
+
+See also §3d / §CORE-27 / §CORE-28 (the shared bar this is a control on) · §19.18 (one fact, one home,
+dereferenced) · §COMMCALC-49.10 (a tenant's vocabulary is never a default — and why a POLICY default
+is different) · §13e (two spellings of one store, which is why the option fold is filtered twice).
 
 
 ## §COMMCALC-55. A SUCCESSFUL LOGIN IS RECOGNISED BY EVIDENCE, NEVER BY A GUESSED VOCABULARY (owner report 2026-11-05)

@@ -285,7 +285,7 @@
 55	@typescript-eslint/no-explicit-any	src/app/(platform)/hr/onboarding/page.tsx
 38	@typescript-eslint/no-explicit-any	src/app/(platform)/hr/page.tsx
 17	@typescript-eslint/no-explicit-any	src/app/(platform)/hr/payroll-expenses/page.tsx
-20	@typescript-eslint/no-explicit-any	src/app/(platform)/hr/people/page.tsx
+19	@typescript-eslint/no-explicit-any	src/app/(platform)/hr/people/page.tsx
 1	@typescript-eslint/no-explicit-any	src/app/(platform)/layout.tsx
 22	@typescript-eslint/no-explicit-any	src/app/(platform)/marketing/events/[id]/page.tsx
 2	@typescript-eslint/no-explicit-any	src/app/(platform)/marketing/events/new/page.tsx

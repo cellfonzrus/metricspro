@@ -195,6 +195,7 @@ class FakeClient:
 FAKE_DEFAULT = FakeClient()
 
 import app.modules.storeops.pay_visibility as pv                     # noqa: E402
+import app.modules.core.roster_visibility as _roster_visibility      # noqa: E402
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("A. resolve_pay_access — full truth table (fails closed on unknowns)")
@@ -669,8 +670,14 @@ def _load(parts, name, ns):
 
 
 _HOLDER = [FAKE_DEFAULT]
+# `_rv` is the REAL `core.roster_visibility` module, not a stub: since 2026-11-14 (§CORE-44) the
+# shipped `get_employees` source hides inactive rows THROUGH it, and a stub here would let this
+# harness pass over a roster filter that no longer works. The fixtures below are all `is_active: True`,
+# so the active filter is a no-op for what this file measures (pay visibility) and the real module is
+# what proves it stays one.
 _BASE_NS = {"Header": _fastapi.Header, "HTTPException": _HTTPException, "ORG_ID": "ORG1",
-            "_payvis": pv, "sb": lambda: _HOLDER[0], "get_supabase": lambda: _HOLDER[0],
+            "_payvis": pv, "_rv": _roster_visibility,
+            "sb": lambda: _HOLDER[0], "get_supabase": lambda: _HOLDER[0],
             "scope_keyset": lambda *a, **k: None, "in_keyset": lambda ks, code: True}
 
 

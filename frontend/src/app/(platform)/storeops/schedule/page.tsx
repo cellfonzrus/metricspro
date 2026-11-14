@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useMemo, useRef, Fragment } from 'react'
+import { rosterIsActive } from '@/lib/roster-visibility'
 import { api, localToday, parseLocalDate, addDays, mondayOf } from '@/lib/client'
 import { apiCached, LOOKUP, CONFIG } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
@@ -139,7 +140,7 @@ export default function SchedulePage() {
       apiCached('/api/v1/storeops/employees', LOOKUP),
       // include_inactive=true: this page's OWN "view filter" dropdown deliberately still lists closed
       // stores (see the comment lower in this file) so historical schedule data stays viewable — the
-      // "add shift" picker already independently filters to is_active!==false client-side.
+      // "add shift" picker already independently filters through `rosterIsActive` client-side.
       apiCached('/api/v1/storeops/stores?include_inactive=true', LOOKUP),
       api('/api/v1/storeops/time-off').catch(() => []),
       apiCached('/api/v1/storeops/employees?all_company=true', LOOKUP).catch(() => []),
@@ -521,7 +522,7 @@ export default function SchedulePage() {
           </div>
           <select className="select" value={filterStore} onChange={e => setFilterStore(e.target.value)}>
             <option value="">All stores</option>
-            {stores.filter(s => s.store_code && (selMkt.size === 0 || selMkt.has(s.market))).map(s => <option key={s.store_code} value={s.store_code}>{s.store_code} — {s.address?.substring(0, 26)}{s.is_active === false ? ' (inactive)' : ''}</option>)}
+            {stores.filter(s => s.store_code && (selMkt.size === 0 || selMkt.has(s.market))).map(s => <option key={s.store_code} value={s.store_code}>{s.store_code} — {s.address?.substring(0, 26)}{rosterIsActive(s) ? '' : ' (inactive)'}</option>)}
           </select>
           <button className="btn btn-secondary" onClick={prevWeek}>← Prev</button>
           <button className="btn btn-secondary" onClick={() => setWeekStart(workWeekStartOf(wwDow))}>Today</button>
@@ -806,7 +807,7 @@ export default function SchedulePage() {
                       store (is_active=false) should stop generating new shifts/hours entirely. The
                       view-filter dropdown above intentionally still lists every store (incl. closed
                       ones), so historical schedule data stays viewable. */}
-                  {stores.filter(s => s.store_code && s.is_active !== false).map(s => <option key={s.store_code} value={s.store_code}>{s.store_code} — {s.address?.substring(0, 24)}</option>)}
+                  {stores.filter(s => s.store_code && rosterIsActive(s)).map(s => <option key={s.store_code} value={s.store_code}>{s.store_code} — {s.address?.substring(0, 24)}</option>)}
                 </select>
               )}
             </div>
