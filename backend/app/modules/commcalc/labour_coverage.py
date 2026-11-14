@@ -416,6 +416,87 @@ def coverage_note(scanned, counts, carried_from, period, allocated=()):
             f"cost.{tail}")
 
 
+def measured_fill(entered_rows, measured_by_key, payroll_names,
+                  grain=None, key_of=None):
+    """THE one decision: whose labour figure books this store-month — the ENTERED (approved) figure,
+    or the platform's own measurement. Returns the measurement that may be ADDED, and the dollars it
+    refuses to add a second time. PURE; derives no dollar of its own.
+
+    OWNER REPORT 2026-11-14 (index §ACCOUNT-03): *"check Gross profit report it shows different
+    numbers … if the source of data is the same why are th numbers different, this is conflicting and
+    must be fixed in teh code itself"*, and in the same hour the ruling that settles it: *"the
+    luxelink salary is updated everyweek by the Dms and that is the approved salary you should be
+    counting towards the expenses"*.
+
+    WHY IT EXISTS. This question had TWO answers in two files. `coa.build_inputs` held the rule
+    inline (`if st in payroll_auth_stores: continue`) and was right; the GP report summed the
+    Expenses sheet — which HOLDS the approved salary rows — and then added the measured payroll ON
+    TOP, for every store. Live LuxeLink October 2026: `Diversey` booked the approved $7,308.26 AND a
+    measured $12,555.70, so its expense column read $27,789.02 against the P&L's $15,403.41;
+    `Belmont` $1,441.50 + $7,097.48 = $14,213.98. **$86,369.22 of one month's labour booked twice**,
+    at 15 of 19 measured stores — which is why the owner has been told twice that the two reports
+    disagree. One question, one home, both readers dereferencing it.
+
+    `grain` is the org's `payroll_authority_grain` and defaults to the house grain
+    (`labour_vocabulary.HOUSE_AUTHORITY_GRAIN`, dereferenced — never respelled here). `'org'` means
+    one approved row ANYWHERE suppresses every store's measurement; `'store'` means a store's own
+    approved row suppresses only its own.
+
+    `key_of` folds BOTH sides into the caller's key space, and a caller that books in two code
+    vocabularies MUST pass it: live, the Expenses sheet spells a store `Utica` while
+    `store_mapping` spells it `LUX-NY-UTICA`, and deciding in two key spaces is how one store
+    answered twice. Same `key_of` contract as `payroll_expense_by_key` / `commission_expense_by_key`.
+
+    A FLAT ALLOCATION IS NOT AN APPROVED FIGURE (`allocated_names`, §4e): a store whose only payroll
+    row is an estate-wide $1,275.00 has no measurement of its OWN staff, so its hours still fill in.
+    That ruling is reused, not made again.
+
+    `measured_by_key=None` is NOT a fill of zero (§19.50): `measured` is False, both totals are
+    **None**, and the caller reports that it could not measure rather than booking $0.00 of labour.
+
+    Returns {'fill': {key: amount}, 'fill_amount', 'suppressed': [key…], 'suppressed_amount',
+             'grain', 'measured', 'allocated_excluded': [name…], 'note'}.
+    """
+    from app.modules.commcalc import labour_vocabulary as _lvoc
+    grain = str(grain or _lvoc.HOUSE_AUTHORITY_GRAIN).strip().lower() or _lvoc.HOUSE_AUTHORITY_GRAIN
+    allocated = allocated_names(entered_rows, payroll_names)
+    measuring = [n for n in _names(payroll_names) if n not in allocated]
+    auth = {k for k in (_norm(key_of(c)) if key_of else c
+                        for c in authoritative_codes(entered_rows, measuring)) if k}
+    if measured_by_key is None:
+        return {"fill": {}, "fill_amount": None, "suppressed": [], "suppressed_by_key": {},
+                "suppressed_amount": None,
+                "grain": grain, "measured": False, "allocated_excluded": sorted(allocated),
+                "note": ("Labour could not be measured for this period, so no store's hours were "
+                         "added. This is not a finding that they cost nothing.")}
+    org_wide_authority = (grain != "store") and bool(auth)
+    #: Both dicts are accumulated in the FOLDED key space, in the one pass, so the dollars reported
+    #: are the dollars decided on. Looking the suppressed amount back up by its folded key in the
+    #: caller's RAW map is what made this report read "$0.00 of measured payroll is NOT added" for
+    #: twelve LuxeLink stores holding $19,653.18 — a key space mixed by a second lookup, which is the
+    #: very mistake `key_of` exists to prevent.
+    fill, suppressed = {}, {}
+    for raw, amt in (measured_by_key or {}).items():
+        key = _norm(key_of(raw)) if (key_of and raw) else _norm(raw)
+        if not key:
+            continue                     # unattributable pay pairs with no store's approved figure
+        if org_wide_authority or key in auth:
+            suppressed[key] = round(suppressed.get(key, 0.0) + _f(amt), 2)
+            continue
+        fill[key] = round(fill.get(key, 0.0) + _f(amt), 2)
+    sup_amt = round(sum(suppressed.values()), 2)
+    note = None
+    if suppressed:
+        note = (f"${sup_amt:,.2f} of measured payroll at {len(suppressed)} store(s) is NOT added: "
+                f"those stores have an entered payroll figure of their own, which is the approved "
+                f"salary and books on its own row. Adding both would count the same labour twice.")
+    return {"fill": fill, "fill_amount": round(sum(fill.values()), 2),
+            "suppressed": sorted(suppressed), "suppressed_by_key": suppressed,
+            "suppressed_amount": sup_amt,
+            "grain": grain, "measured": True, "allocated_excluded": sorted(allocated),
+            "note": note}
+
+
 def commission_expense_by_key(exp_rows, commission_names, key_of=None):
     """PURE: {key: Σ commission-named expense dollars}. The ONE accumulator both the collision
     DETECTOR and the suppression PLAN read, so the dollars they talk about can never disagree.
