@@ -283,8 +283,9 @@ def writers(tree_src, watched):
     return out
 
 
-def calls_hook(fsrc):
-    """True when the function's CODE (not a comment or string) calls `auto_calc.landed(` / `_auto_calc.landed(`."""
+def _calls_hook_directly(fsrc):
+    """True when this function's own CODE (not a comment or string) calls `auto_calc.landed(` /
+    `_auto_calc.landed(`."""
     try:
         tree = ast.parse(_dedent(fsrc))
     except SyntaxError:
@@ -292,6 +293,41 @@ def calls_hook(fsrc):
     for n in ast.walk(tree):
         if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "landed"
                 and isinstance(n.func.value, ast.Name) and n.func.value.id in ("auto_calc", "_auto_calc")):
+            return True
+    return False
+
+
+def _bare_calls(fsrc):
+    """Every bare-name call in this function — the candidates for one level of indirection."""
+    try:
+        tree = ast.parse(_dedent(fsrc))
+    except SyntaxError:
+        return set()
+    return {n.func.id for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+
+
+def calls_hook(fsrc, src=None):
+    """True when the lander REACHES the hook: directly, or through ONE module-level helper in the same
+    file that calls it.
+
+    WHY THE INDIRECTION IS ALLOWED (index §COMMCALC-73, 2026-11-14). A module whose landers share one
+    landing call is wired, not silent — and in `epay_sweep` that sharing is the fix: three storage
+    paths each decided for itself whether to RECORD the landing as well as queue the calculation, and
+    two of them recorded nothing, so two Data Imports tiles showed a month-old manual upload over
+    current data. Recording and recalculating are now one call every path makes. Demanding the literal
+    `auto_calc.landed(` in each path would force that call to be copied three times, which is the
+    very shape this lock exists to prevent. `harness_upload_trace_coverage` (j/k) pins the other half:
+    the sweep may reach the hook from exactly ONE place, and that place records the landing.
+
+    One level only, and only within the same file, so "it is in there somewhere" can never pass.
+    """
+    if _calls_hook_directly(fsrc):
+        return True
+    if not src:
+        return False
+    for name in sorted(_bare_calls(fsrc)):
+        helper = fn_src(src, name)
+        if helper and _calls_hook_directly(helper):
             return True
     return False
 
@@ -319,7 +355,7 @@ def lander_failures(tree_src):
             continue
         if (path, name) not in found:
             bad.append(f"STALE LANDER {path}::{name} — it no longer writes a watched table")
-        if not calls_hook(f):
+        if not calls_hook(f, src):
             bad.append(f"LANDER DOES NOT CALL THE HOOK {path}::{name} — auto_calc.landed(...) is missing")
     for (path, name) in sorted(excused):
         src = tree_src.get(path)
@@ -601,6 +637,23 @@ def main():
     t10 = mutate(AUTO, "    return str(table or \"\").strip() in _lineage.COMMISSION_CALC_FEEDS",
                  "    return str(table or \"\").strip() in (\"raw_sales\", \"daily_sales_feed\")")
     check("N10 the hook carrying its own copy of the feed list → RED", bool(registry_failures(t10)))
+    # The one level of indirection must not become a hole: if the SHARED landing call stops calling the
+    # hook, every path that reaches the hook only through it is silent, and the lock must say so.
+    t12 = mutate("app/modules/commcalc/epay_sweep.py",
+                 "    return _auto_calc.landed(client, org_id, table=spec[\"table\"], periods=periods,",
+                 "    return {\"queued\": False}  # hook removed\n    return _auto_calc_off(")
+    _f12 = lander_failures(t12)[0]
+    check("N12 the sweep's shared landing call stops calling the hook → RED (indirection is not a hole)",
+          bool(_f12) and any("_store_rows_by_day" in m for m in _f12), str(_f12)[:300])
+    # And indirection is ONE level within ONE file: a helper in another module does not satisfy it.
+    t13 = dict(tree_src)
+    t13["app/modules/commcalc/new_sweep.py"] = (
+        "from app.modules.commcalc import epay_sweep as _es\n\n"
+        "def pull(client, org_id, rows):\n"
+        "    client.schema('commcalc').table('daily_sales_feed').insert(rows).execute()\n"
+        "    return _es.landed(client, org_id, {}, 'k', periods=[], rows=len(rows), mode='x')\n")
+    check("N13 a lander reaching the hook only through ANOTHER module is still unclassified → RED",
+          bool(lander_failures(t13)[0]))
     check("N11 the unmodified tree is GREEN (the controls are not vacuous)",
           not lander_failures(tree_src)[0] and not trigger_failures(tree_src) and not runner_failures(tree_src)
           and not config_failures(tree_src, fe) and not registry_failures(tree_src))
