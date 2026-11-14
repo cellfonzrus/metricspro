@@ -76,7 +76,7 @@ import { rowStripe } from '@/lib/surface'
 export default function DailyTargetsPage() {
   const { period } = usePeriod()
   // The tenant's own target axis — the four built-ins plus every category it declared.
-  const { cats: CATS } = useTargetAxis(period)
+  const { cats: CATS, failed: axisFailed } = useTargetAxis(period)
   const [summary, setSummary] = useState<any[]>([])
   const [loadingSum, setLoadingSum] = useState(true)
   const [storeCode, setStoreCode] = useState('')
@@ -228,6 +228,17 @@ export default function DailyTargetsPage() {
           pace spreads the remaining balance over the open days left.
         </p>
       </div>
+
+      {/* A FAILED READ IS NOT AN ANSWER (§CORE-44): the columns below are the four built-ins, not
+          this business's own list, and a screen that cannot say so looks complete while hiding
+          every declared category. */}
+      {axisFailed && (
+        <div className="card" style={{ padding: '10px 16px', marginBottom: 14, fontSize: 13 }}>
+          ⚠ <strong>Only the built-in categories are shown.</strong> The list of categories this
+          business counts could not be loaded, so any other category has no column below. Reload the
+          page; if it keeps saying this, the server could not be reached.
+        </div>
+      )}
 
       <FreshnessBanner daily={freshness?.daily} dlar={freshness?.dlar} period={period} />
 
