@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useMemo, Fragment } from 'react'
+import { rosterIsActive } from '@/lib/roster-visibility'
 import { api } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
@@ -117,7 +118,7 @@ export default function EmployeesPage() {
   const storeMarket = useMemo(() => buildStoreMarket(stores), [stores])
   const cascadeStores: StoreOpt[] = useMemo(() => stores
     .filter((s: any) => s.store_code)
-    .map((s: any) => ({ id: s.store_code, label: s.store_code + (s.is_active === false ? ' (inactive)' : ''), market: s.market || undefined }))
+    .map((s: any) => ({ id: s.store_code, label: s.store_code + (rosterIsActive(s) ? '' : ' (inactive)'), market: s.market || undefined }))
     .sort((a: StoreOpt, b: StoreOpt) => a.label.localeCompare(b.label)), [stores])
   const repOptions = useMemo(() => employees
     .map(e => ({ id: e.name, label: e.name })).filter(o => o.id)
@@ -126,7 +127,8 @@ export default function EmployeesPage() {
   const filtered = filterRows(employees, filt, {
     rep: e => e.name, store: e => e.home_store || '', market: e => storeMarket.marketOf(e.home_store || ''),
   }).filter(e => {
-    if (!showInactive && !e.is_active) return false
+    // `!e.is_active` read a NULL flag as INACTIVE, the opposite of the column's own default.
+    if (!showInactive && !rosterIsActive(e)) return false
     if (search && ![e.name, e.home_store, e.role, e.email, e.epay_salesperson]
       .some(v => (v || '').toLowerCase().includes(search.toLowerCase()))) return false
     return true

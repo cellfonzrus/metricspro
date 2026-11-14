@@ -43,6 +43,9 @@ describe('<StandardFilterBar> sort by', () => {
     expect(onChange.mock.calls[0][0]).toEqual({
       period: '2026-09', periodTo: '', stores: [], markets: [], reps: [],
       sort: { field: 'store', dir: 'desc' },
+      // `showInactive: false` is the owner's 2026-11-14 default travelling with every filter value
+      // (§CORE-44) — the sort control still changes nothing but the sort.
+      showInactive: false,
     })
   })
 

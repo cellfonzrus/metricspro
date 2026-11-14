@@ -1,7 +1,7 @@
 // Unit proof for `lib/target-axis` — the browser's dereference of the ONE home for "what can have a
 // target" (`targets_engine.target_axis`, index §COMMCALC-02).
 //
-// THE DEFECT THESE EXIST FOR (owner report 2026-11-14, index §CORE-44). The axis was asked for at
+// THE DEFECT THESE EXIST FOR (owner report 2026-11-14, index §CORE-45). The axis was asked for at
 // `/commcalc/targets/{period}/axis`, with no `/api/v1` prefix. `apiUrl()` prefixes NOTHING — in the
 // browser the site proxies the path as given — so the request reached the Next app, which has no
 // page of that name, and 404'd. The catch then answered with the four built-in categories. Every

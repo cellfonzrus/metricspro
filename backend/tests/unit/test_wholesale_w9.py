@@ -172,13 +172,31 @@ def test_the_exemption_and_the_tax_rate_are_one_answer():
 
 
 # ── the return link: a credential, and the words that carry it ──────────────────────────────────
+#: A value this short appearing inside a 32-character random token is COINCIDENCE, not derivation.
+#: The fixtures carry `"w9"` and `"c-3"`, and this test used to assert that no fixture value at all
+#: appeared in the token — which a random token cannot promise: over a 62-character alphabet a given
+#: two-letter sequence turns up in a 32-character string roughly once every few hundred tokens. It
+#: duly failed in CI on 2026-11-14 with `assert 'w9' not in 'bXkALW54M6G…I0R0Vd1E0CP0'`, on a change
+#: that touched neither W9 nor token generation. A check that fails at random enforces nothing, so
+#: the bar is now a length at which a coincidence is implausible, and the sample is many tokens
+#: rather than one — which makes the test STRONGER against the thing it is really guarding (a token
+#: derived from the customer), not weaker.
+TOKEN_COINCIDENCE_LEN = 6
+
+
 def test_a_return_token_is_not_derivable_from_the_customer():
     a, b = w9.new_token(), w9.new_token()
     assert a != b
     assert len(a) >= 32
+    tokens = [w9.new_token() for _ in range(50)]
+    assert len(set(tokens)) == len(tokens), "tokens repeat — they are not random"
     for row in (WHOLESALE, doc()):
         for value in row.values():
-            assert str(value) not in a
+            text = str(value)
+            if len(text) < TOKEN_COINCIDENCE_LEN:
+                continue
+            for token in tokens:
+                assert text not in token
 
 
 def test_a_link_with_no_token_is_dead_and_so_is_an_expired_one():
