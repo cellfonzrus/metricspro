@@ -214,6 +214,7 @@ Primary code homes:
 | COMMCALC-72 | **A month-to-date figure is trended in ONE place, and an outlier is not a verdict** | "it shoudl also show trending and which stores are not trending towards the accessories goals … the outloers shoudl be highlighted in a different color". The projection was ALREADY HERE, inline TWICE in the Executive MTD report and already on two screens as "Trending Acc. $", so the third copy the action plan wanted was factored instead — and the draft of that home re-derived three more facts (`feed_period`'s month parsing, month length and open/closed) and the division itself (`demand_projection.velocity`) before the duplicate check caught them. What may a trend say when no day of the month has completed, what may it say when there is no target, and who may be called an outlier when four stores are the whole distribution? |
 | COMMCALC-73 | **A pull nobody recorded is a report that looks a month stale** | The owner pasted the Data Imports page: two of three tiles read *"Last upload: Oct 8, 2026 … via manual upload"* while the ePay owners-portal sweep had been landing their rows every night since 12 Nov (§COMMCALC-69), `raw_comp_report` 78,053 → 89,556. The rows arrived; the RECORD of their arrival did not. The sweep has THREE storage paths — the month replace, the per-day replace and the Daily-Transaction ingest hook — and each decided for itself whether to write a landing record. Exactly one did, which is why MI/ATU's tile was right and the other two were a month stale over current data. The two journals every "last upload" surface reads now have ONE writer, which `router`'s trace helper dereferences too (it could not before: the home lived in `router`, which imports the sweep), and the record plus the §6l post-landing hook are ONE call every storage path makes, locked by `harness_upload_trace_coverage` (f/j/k) so a new path cannot land silently. The third tile, the monthly sales archive, is NOT this defect: its promotion is switched off in its own registry row — reported, not patched. |
 | COMMCALC-74 | **A refusal names which refusal it is** | One operator sentence covered two states with opposite remedies, and the same source row produced both inside 25 minutes: first a saved address pointing INSIDE the portal (the sentence was right), then the FRONT DOOR being refused by a security appliance, where the address was already correct and "Check the address saved on this source" sent the owner to look at something that was fine. The page is what tells them apart — an appliance says so in the words a person reads and hands over a support id, which is the only reference the portal's own security team can look the refusal up by. So the refusal SENTENCE is now derived from the page rather than from the kind alone: the edge state never asks for the address and quotes the id, the inside-the-portal state is unchanged, and a caller with no page in hand still gets the actionable one rather than a guess. No new kind and no migration — the kind column's CHECK constraint allows three, and the markers stay per-org config. The login verdict's own second copy of the refusal sentence is gone: it reports the one that came with the evidence. |
+| COMMCALC-75 | **A feed lands the same however its file arrives** | The processor back office is fronted by a security appliance that refuses automated clients at every address tried, and the owner confirmed it offers no scheduled email of its own — so the per-store pull cannot fetch this report and no amount of code will make it. Everything downstream of the fetch was already built and was never at fault: the parse, the terminal-to-store resolution, the idempotent upsert and the bill-payment and fee reconciliations that read the rows. ONLY THE TRANSPORT was broken, so the file gets a door instead of the firewall getting a workaround: one arrival function lands a DELIVERED file — forwarded to the mailbox the email sweep already watches, picked off the Upload page, or sent by the processor if they agree to it — through the SAME ingest the pull uses, with the same dedup and the same store resolution, so a delivered file and a pulled one are indistinguishable downstream. A file that is not this report lands nothing and names the columns it looked for; an empty one is never a green tick. The registry row that lets the route be PICKED is a seeded declaration, not code. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -26485,6 +26486,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-72 | commcalc |
 | COMMCALC-73 | commcalc |
 | COMMCALC-74 | commcalc |
+| COMMCALC-75 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -49254,3 +49256,78 @@ Cross-references: §40 (the one home for the backend's location, and the rewrite
 address) · §40.13 (unreadable is not off — the same rule on the sign-in gate) · §CORE-40 (a word is
 not a zero) · §COMMCALC-02 (the target axis and `target_line`) · §COMMCALC-49.10 (absent is not zero)
 · §19.18 (one fact, one home, dereferenced).
+
+## §COMMCALC-75. A FEED LANDS THE SAME HOWEVER ITS FILE ARRIVES (owner 2026-11-14)
+
+### COMMCALC-75.1 THE MEASUREMENT
+
+The owner, verbatim: *"dont break their firewall but find a way to get the report"*, after
+*"it does not have schduduled email or subscription"*.
+
+`commcalc.data_source` `31157161-2ac3-4a1e-8d32-b21c29de35d0` carried `auth_status = 'error'` with
+the frame it saved at 19:45:38 still on the row. Read out of `login_shot` and looked at, that frame
+is not the blank screen it appeared to be in the live view — it is a security appliance's page, four
+short lines at the top of a white page: *"The requested URL was rejected. Please consult with your
+administrator. Your support ID is: <13809694667338819615>."* It is served at the FRONT DOOR, to the
+server, to a test machine and to a store's computer alike. There is nothing for the pull to fix.
+
+### COMMCALC-75.2 THE CLASS
+
+**A feed's landing must not be a property of how its file arrived.** Before this, the processor
+transaction detail could be reached exactly one way — the browser pull — so the day that one way
+stopped, the feed stopped, although every part of the landing still worked perfectly:
+`epay_ingest.parse_records`, `resolve_stores` (the declared terminal registry, with the store's own
+login as the fallback, §COMMCALC-58), the upsert that dedups on the transaction's own id, and the
+bill-payment and fee reconciliations that read `commcalc.raw_epay_daily_tx`.
+
+A report that can arrive only one way is a report with a single point of failure that is not even
+ours. The fix is a TRANSPORT, never a second landing: adding a parser, a sibling table or a second
+recorder would be the duplicate defect the index rules forbid.
+
+### COMMCALC-75.3 WHAT CHANGED
+
+- **`commcalc/epay_ingest.from_upload(client, org_id, records, filename, store_code)`** — THE ONE
+  ARRIVAL DOOR for a delivered file of this feed. It calls the existing `ingest()`, so the parse, the
+  resolution and the dedup are unchanged and shared with the pull. It records the landing through
+  `ingest_record.write_log` (§COMMCALC-73's one journal writer — this module inserts into no journal
+  itself, pinned by its tests). HONEST ZERO: a file that is not this report saves nothing, returns
+  `success: False` with `skipped: 'epay_no_transactions'` and names the columns it looked for against
+  the columns the file has, and writes NO journal row.
+- **`POST /api/v1/commcalc/upload?file_type=epay_daily_tx`** — an early-return branch of
+  `_upload_file_impl`, beside `inventory_aging` and `x_report`, which returns before the
+  period/TABLE_MAP flow because this report is per settlement DAY. The email and FTP sweeps reach it
+  with no change of their own: they route a matching attachment to this endpoint exactly as they do
+  every other report.
+- **`store_code` query parameter on the upload endpoint** — the same declaration the per-store pull
+  reads off `data_source.store_code`, for a file whose terminal the declared registry cannot place.
+  Every other feed ignores it and is byte-identical.
+- **`ingest_record.TARGET_TABLE['epay_daily_tx'] = 'raw_epay_daily_tx'`** — so the trace row the
+  upload wrapper writes names the table the rows actually landed in.
+- **Migration 1121** seeds one `commcalc.report_kind` row, `processor_transaction_detail`, whose
+  `upload_types` names this route. Without it the route exists but cannot be PICKED, because the five
+  upload surfaces are driven by the registry (§16) rather than by lists of their own. Mirrored in
+  `report_kinds.HOUSE_KINDS` and appended to `SEED_MIGRATIONS`, byte-equal, as that harness requires.
+- **`uploadRoutes.ts`** carries the route's metadata and `PERIODLESS` membership — the tile renders
+  only when a visible registry row names it, which is the registry's decision, not the file's.
+
+### COMMCALC-75.4 WHAT THIS DELIBERATELY DOES NOT DO
+
+Nothing here attempts to get past the appliance: no new user agent, no proxy, no header, no retry
+shape, no fingerprint. That was asked for in as many words and declined in as many words. The
+remaining routes are all consented ones — the processor delivering the file, a person forwarding it
+to the mailbox the sweep already watches, or a person uploading it — and this change is what makes
+all three land identically.
+
+### COMMCALC-75.5 TESTS AND THE LOCK
+
+`backend/tests/unit/test_a_feed_lands_however_the_file_arrives.py` (8 units, DB-free on the one
+Supabase double): a delivered file lands where the pull lands with the same store resolution; the
+arrival is journalled; an undeclared terminal is NAMED rather than swallowed; a declared store is
+honoured; a file that is not this report is a skip that names the columns; an empty file is never a
+green tick; the journals are written through their one home; and the delivery and the pull share one
+ingest.
+
+Cross-references: §COMMCALC-58 (the per-store pull, whose transport this replaces rather than
+repairs) · §COMMCALC-74 (what the appliance's page says, and the support id it hands over) ·
+§COMMCALC-73 (one writer of the ingest journals) · §COMMCALC-07 (the pull transport) · §16 (the
+report-kind registry the upload surfaces read) · §19.18 (one fact, one home, dereferenced).

@@ -79,8 +79,11 @@ export const PERIOD_ROUTES: Record<string, PeriodRoute> = {
   ma_commission:  { id: 'ma_commission',  label: 'Marketplace commission details', icon: '🧾', required: false, mode: 'additive_daily', desc: 'Per-activation commission detail — spiffs M1–M6, rebates, MRC net discount' },
   ma_daily_tx:    { id: 'ma_daily_tx',    label: 'Marketplace daily transactions', icon: '📆', required: false, mode: 'additive_daily', desc: 'Daily airtime/top-up transactions — merchant discount = your margin' },
   ma_fulfillment: { id: 'ma_fulfillment', label: 'Marketplace handset fulfillment', icon: '🚚', required: false, mode: 'additive_daily', desc: 'Marketplace handset fulfillment orders' },
+  // Processor back-office transaction detail arriving as a FILE (§COMMCALC-75). Its rows dedup on the
+  // transaction's own id, so a re-upload of the same day adds nothing — 'additive_keyed'.
+  epay_daily_tx:  { id: 'epay_daily_tx',  label: 'Processor transaction detail', icon: '🏧', required: false, mode: 'additive_keyed', desc: 'The processor back office\u2019s per-transaction settlement detail — lands per store from the terminal on each row' },
 }
-export const PERIODLESS = new Set(['catalog', 'master_cats', 'inventory_aging', 'x_report', 'ma_commission', 'ma_daily_tx', 'ma_fulfillment'])
+export const PERIODLESS = new Set(['catalog', 'master_cats', 'inventory_aging', 'x_report', 'ma_commission', 'ma_daily_tx', 'ma_fulfillment', 'epay_daily_tx'])
 
 /** A file that loads into another module through its own endpoint (not the generic capture).
  *  `traceKeys` = the upload_type/file_type these endpoints record their ingest under (NOT always the

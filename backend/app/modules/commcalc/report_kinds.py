@@ -61,7 +61,8 @@ MIGRATION = "1010_report_kind_registry.sql"
 # every migration that seeds HOUSE rows of commcalc.report_kind, in order — HOUSE_KINDS is the byte-equal
 # mirror of their VALUES blocks concatenated (harness_report_kinds.py §A parses each back); a new house
 # kind is a NEW numbered migration (never an edit of an earlier seed) and a row appended here
-SEED_MIGRATIONS = (MIGRATION, "1012_sales_by_invoice.sql", "1022_franchise_royalty_cost_profit_centers.sql")
+SEED_MIGRATIONS = (MIGRATION, "1012_sales_by_invoice.sql", "1022_franchise_royalty_cost_profit_centers.sql",
+                   "1121_report_kind_processor_transaction_detail.sql")
 # THE VERTICAL AXIS (mig 1022, index §37.2): `applies_to_vertical` — the tenant verticals (core/verticals, mig 1020) a
 # kind applies to; '{}' = any, so every kind seeded before it is unchanged. It is NOT one of `_COLS` (the 1010-shaped
 # seed INSERTs carry 18 columns): a house kind's vertical scope is seeded by an UPDATE in the migration that adds the
@@ -255,6 +256,11 @@ HOUSE_KINDS = [
        recognisable_columns=["Products / Services", "Total Gross Sales", "Exclusions", "Commissions", "Total STR", "Total Due"],
        source_hint="from the franchisor's center-management portal (save the page as PDF or HTML, or paste it)",
        landing="module", applies_to_vertical=list(_HOUSE_MODULE_VERTICALS.get("royalty") or []), sort_order=400),
+    _k(key="processor_transaction_detail", label="Transaction detail from the payment processor back office",
+       what_in_it="Every transaction the processor settled for a store — one row per line, with the terminal, the product, the retail amount and the fee lines — the feed the bill-payment and fee reconciliations read.",
+       recognisable_columns=["TransactionID", "TerminalID", "SettlementDate", "ProductTitle", "Retail", "Commission"],
+       source_hint="from the processor back office", landing="bill_payments", layout="epay_daily_tx",
+       requires_columns=["TerminalID"], upload_types=["epay_daily_tx"], sort_order=85),
 ]
 HOUSE_KEYS = [r["key"] for r in HOUSE_KINDS]
 

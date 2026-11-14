@@ -1208,8 +1208,14 @@ async def upload_file(
     close_date: str = "",
     org_id: str = "00000000-0000-0000-0000-000000000001",
     trace_source: str = "manual",
+    store_code: str = "",
 ):
     """Upload a data file (sales, payment_detail, mi, dlar_rep, dlar_store, catalog).
+
+    `store_code` DECLARES the store a per-store file belongs to, for a feed whose rows carry a
+    terminal the declared registry cannot place (§COMMCALC-75). It is the same declaration the
+    per-store pull reads off `data_source.store_code`, so a delivered file and a pulled one answer
+    "whose store is this" the one way. Ignored by every feed that resolves its own stores.
 
     THIN TRACED WRAPPER (mig 202): the real work is in `_upload_file_impl`; this records exactly ONE
     `upload_trace` row per call — for the manual route AND for the email/FTP sweeps that call this
@@ -1245,7 +1251,8 @@ async def upload_file(
             _res = _import_batches.duplicate_response(file_type, _batch)
             return _res
 
-        _res = await _upload_file_impl(file_type, file, period, force, close_date, org_id, trace_source)
+        _res = await _upload_file_impl(file_type, file, period, force, close_date, org_id,
+                                       trace_source, store_code)
         # Return a clean copy WITHOUT the internal `_trace` payload; `_write_upload_trace` (finally) still
         # sees the rich `_trace` because it reads `_res`, not the returned copy.
         return {k: v for k, v in _res.items() if k != "_trace"} if isinstance(_res, dict) else _res
@@ -1299,6 +1306,7 @@ async def _upload_file_impl(
     close_date: str = "",
     org_id: str = "00000000-0000-0000-0000-000000000001",
     trace_source: str = "manual",
+    store_code: str = "",
 ):
     """Upload a data file (sales, payment_detail, mi, dlar_rep, dlar_store, catalog).
 
@@ -1499,6 +1507,19 @@ async def _upload_file_impl(
         return {'success': True, 'file_type': 'inventory_aging', 'stores': saved, 'saved': saved,
                 'devices': devices_saved, 'as_of': as_of, 'rows_read': len(rows),
                 'recon_counts': recon_counts}
+
+    # Processor TRANSACTION DETAIL arriving as a FILE (§COMMCALC-75, owner 2026-11-14 "dont break their
+    # firewall but find a way to get the report"). The per-store back office is fronted by a security
+    # appliance that refuses automated clients, so this feed's browser PULL cannot fetch the file. The
+    # landing was never the problem, so the file gets a door instead: the mailbox sweep routes a matching
+    # attachment here exactly as it does every other report, a person can pick it on the Upload page, and
+    # it lands through the SAME epay_ingest the pull uses — one ingest, two transports. Periodless (the
+    # report is per settlement DAY), so it returns before the period/TABLE_MAP flow.
+    if file_type == 'epay_daily_tx':
+        from app.modules.commcalc import epay_ingest as _epay_ingest
+        return _epay_ingest.from_upload(client, org_id, rows,
+                                        filename=getattr(file, 'filename', None),
+                                        store_code=(store_code or '').strip() or None)
 
     # POS "X report": daily takings BY TENDER TYPE per store → commcalc.pos_tender_summary, for the tender
     # reconciliation against the daily closing sheet. Flexible column detection (any POS). Periodless.

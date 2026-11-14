@@ -33,6 +33,7 @@ TARGET_TABLE = {
     "ma_commission": "raw_ma_commission", "ma_daily_tx": "raw_ma_daily_tx",
     "ma_fulfillment": "raw_ma_fulfillment", "x_report": "pos_tender_summary",
     "inventory_aging": "inventory_aging", "ma_overview": "ma_overview_upload",
+    "epay_daily_tx": "raw_epay_daily_tx",
 }
 
 

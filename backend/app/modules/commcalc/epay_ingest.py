@@ -19,6 +19,10 @@ from app.core.database import get_supabase
 
 PROCESSOR = "epay"
 
+# What this feed is called on an arrival route — the `file_type` the Upload page and the mailbox
+# sweep name it by, and the `report_definitions` / journal key every surface already reads.
+UPLOAD_TYPE = "epay_daily_tx"
+
 # The report's column headers (see the sample). Kept as a constant so the parser and any header-check
 # stay in one place.
 COLUMNS = ("TransactionID", "TransactionSourceID", "InvoiceID", "SettlementDate", "SettlementDay",
@@ -187,6 +191,48 @@ def ingest(org_id, records, source_batch=None, client=None, store_code=None):
                                 "suggested_store": suggest_store_from_username(row.get("user_name"))}
     return {"saved": saved, "rows": len(rows),
             "unresolved_terminals": sorted(by_terminal.values(), key=lambda x: x["terminal_id"])}
+
+
+def from_upload(client, org_id, records, filename=None, store_code=None):
+    """THE ONE ARRIVAL DOOR for a DELIVERED file of this feed — emailed by the processor, forwarded by
+    a person, or picked off the Upload page — landing through the SAME `ingest` the browser pull uses.
+
+    WHY IT EXISTS (owner 2026-11-14, "dont break their firewall but find a way to get the report").
+    The per-store back office (§COMMCALC-58) is fronted by a security appliance that refuses automated
+    clients outright, so the FETCH will not work and no amount of code will make it. Everything after
+    the fetch — the parse, the terminal → store resolution, the idempotent upsert, the bill-pay and fee
+    recons — was already built and was never the problem.
+
+    THE CLASS: a feed's landing must not be a property of how its file ARRIVED. A report that can be
+    reached one way only is a report that stops the day that one way stops. This adds a transport, not
+    a second landing: the rows, the resolution and the dedup are `ingest`'s, unchanged, so a delivered
+    file and a pulled one are indistinguishable downstream.
+
+    `store_code` is the same declaration `ingest` takes — the store whose own login (or mailbox) the
+    file came through, used only for a terminal the declared registry cannot place.
+
+    HONEST ZERO, like every other arrival route here: a file that is not this report lands nothing,
+    returns success=False with the columns it looked for against the ones the file has, and writes NO
+    journal row — a green tick on a file that ingested nothing is the defect that hid a month of
+    stale tiles (§COMMCALC-73)."""
+    from app.modules.commcalc import ingest_record as _ingest_record
+    rows = list(records or [])
+    out = ingest(org_id, rows, source_batch=filename, client=client,
+                 store_code=store_code) if rows else {"saved": 0, "rows": 0,
+                                                      "unresolved_terminals": []}
+    if not out.get("saved"):
+        found = ", ".join(str(c) for c in (list(rows[0].keys())[:25] if rows else [])) \
+            or "(no columns — empty or unreadable file)"
+        return {"success": False, "file_type": UPLOAD_TYPE, "saved": 0,
+                "rows_read": len(rows), "skipped": "epay_no_transactions",
+                "unresolved_terminals": out.get("unresolved_terminals") or [],
+                "note": (f"parsed 0 transactions from {len(rows)} row(s) — this report is recognised "
+                         f"by its own columns ({', '.join(COLUMNS[:6])} …). Found columns: {found}.")}
+    _ingest_record.write_log(client, {"org_id": org_id, "file_type": UPLOAD_TYPE, "period": None,
+                                      "filename": filename, "rows_saved": int(out["saved"])})
+    return {"success": True, "file_type": UPLOAD_TYPE, "saved": int(out["saved"]),
+            "rows_read": len(rows), "store_code": store_code or None,
+            "unresolved_terminals": out.get("unresolved_terminals") or []}
 
 
 def per_store_day(client, org_id, date_from, date_to, store_codes=None):
