@@ -411,6 +411,24 @@ check("R10 the appliance markers are a SUBSET of the refusal vocabulary (one lis
 check("R11 no appliance marker is also a challenge marker (the kinds cannot merge)",
       not (set(pb.APPLIANCE_REFUSAL_MARKERS) & set(pb.DEFAULT_CHALLENGE_MARKERS)))
 
+# The page as that back office ACTUALLY prints it, read off the frame stored on the source row
+# (`data_source.login_shot`, 2026-11-14 19:45:38). It wraps its reference in ANGLE BRACKETS — a
+# separator the first cut of the reader stopped on, which silently dropped the one thing the
+# portal's security team can look the refusal up by.
+_MEASURED = ("The requested URL was rejected. Please consult with your administrator.  "
+             "Your support ID is: <13809694667338819615>  [Go Back]")
+check("R12 the MEASURED page hands over its support id, brackets and all",
+      (pb.appliance_refusal(_MEASURED) or {}).get("support_id") == "13809694667338819615"
+      and "13809694667338819615" in pb.verdict_note(pb.REFUSAL_KIND, text=_MEASURED))
+check("R13 an id is read through whatever punctuation wraps it",
+      all((pb.appliance_refusal(f"request rejected. your support id is{sep}") or {}).get("support_id")
+          == "12345"
+          for sep in (": <12345>", " (12345)", ' "12345"', " #12345.", " [12345]", ":12345")))
+
+control("a LABEL followed by words is the appliance saying something else, never an id",
+        (pb.appliance_refusal("request rejected. your support id is not available") or {})
+        .get("support_id") is None)
+
 control("a rejection page with NO reference is still the edge state, with no invented id",
         (pb.appliance_refusal("request rejected") or {}).get("support_id") is None
         and "support id" not in pb.verdict_note(pb.REFUSAL_KIND, text="request rejected").lower())

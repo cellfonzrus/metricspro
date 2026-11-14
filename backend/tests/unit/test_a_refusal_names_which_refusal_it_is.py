@@ -117,3 +117,35 @@ def test_the_login_verdict_falls_back_to_its_own_sentence_with_no_evidence_in_ha
 
 def test_a_refusal_is_never_a_credential_problem():
     assert not lo.is_credential_problem(lo.REFUSED)
+
+
+# ── THE PAGE AS THAT BACK OFFICE ACTUALLY PRINTS IT (measured 2026-11-14 20:55) ─────────────────
+# Read off the frame stored on the source row itself (`login_shot`, 19:45:38). It differs from the
+# F5 page above in one way that matters: the appliance wraps its own reference in ANGLE BRACKETS.
+# The id is the whole point of the sentence, so a separator we did not anticipate silently costs
+# the operator the only thing the portal's security team can look the refusal up by.
+MEASURED_PAGE = ("The requested URL was rejected. Please consult with your administrator.  "
+                 "Your support ID is: <13809694667338819615>  [Go Back]")
+
+
+def test_the_measured_page_hands_over_its_support_id():
+    said = pb.appliance_refusal(MEASURED_PAGE)
+    assert said is not None
+    assert said["support_id"] == "13809694667338819615"
+    assert "13809694667338819615" in pb.verdict_note(pb.REFUSAL_KIND, text=MEASURED_PAGE)
+
+
+def test_an_id_is_read_through_whatever_punctuation_wraps_it():
+    for wrapped in ("Request Rejected. Your support ID is: (12345)",
+                    'Request Rejected. Your support ID is "12345"',
+                    "Request Rejected. Your support ID is #12345.",
+                    "Request Rejected. Reference ID: [12345]"):
+        assert pb.appliance_refusal(wrapped)["support_id"] == "12345", wrapped
+
+
+def test_a_label_followed_by_words_is_not_an_id():
+    # Punctuation is a wrapper; a WORD is the appliance saying something else, and inventing an id
+    # out of a sentence is worse than reporting none.
+    for no_id in ("Request Rejected. Your support ID is not available.",
+                  "Request Rejected. Your support ID is unavailable at this time."):
+        assert pb.appliance_refusal(no_id)["support_id"] is None, no_id

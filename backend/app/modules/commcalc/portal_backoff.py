@@ -181,7 +181,14 @@ def appliance_refusal(text):
 
 
 def _support_id(body):
-    """The digits an appliance labels as its support / reference id, or None. PURE."""
+    """The digits an appliance labels as its support / reference id, or None. PURE.
+
+    Whatever the appliance WRAPS the id in is a wrapper, not an answer: the back office measured on
+    2026-11-14 prints `Your support ID is: <13809694667338819615>`, and an unanticipated `<` once cost
+    the operator the only reference the portal's security team can look the refusal up by. So the
+    label may be followed by any run of punctuation or space. A LETTER is not a wrapper — it is the
+    appliance saying something else ("is not available"), and an id invented out of a sentence would
+    be worse than reporting none."""
     for label in _SUPPORT_ID_LABELS:
         at = body.find(label)
         if at < 0:
@@ -193,7 +200,7 @@ def _support_id(body):
                 digits += ch
             elif digits:
                 break
-            elif ch not in " \t:#":
+            elif ch.isalpha():
                 break
         if digits:
             return digits
