@@ -318,8 +318,17 @@ _paths = {name: _reaches_landed(fn) for name, fn in _sweep_fns.items()
           if _replaces_rows(fn) and name != "landed"}
 ok("(k1) every storage path in the sweep reaches the one landing call",
    _paths and all(_paths.values()), f"silent paths: {sorted(k for k, v in _paths.items() if not v)}")
-ok("(k2) and all three of them are seen (month replace, per-day replace, the DTD ingest)",
-   len(_paths) >= 3, f"found: {sorted(_paths)}")
+# DECLARED, not bounded by a count: a set a scan derived from the code must be compared to a set a
+# human wrote, or the scan going blind reads as a pass (harness_subject_set_lock). A NEW storage path
+# turns this red and NAMES itself, which is the point — it then has to be wired through `landed`.
+SWEEP_STORAGE_PATHS = {
+    "_process_report",     # the month replace (raw_mi)
+    "_store_rows_by_day",  # the per-day replace (raw_comp_report, raw_payment_detail)
+    "ingest_daily_tx",     # the DTD ingest hook (raw_epay_daily_tx)
+}
+ok("(k2) the storage paths are exactly the declared set (month, per-day, the DTD ingest)",
+   set(_paths) == SWEEP_STORAGE_PATHS,
+   f"derived: {sorted(_paths)} vs declared: {sorted(SWEEP_STORAGE_PATHS)}")
 
 # (g) a read-only upload endpoint is not asked to trace
 ok("(g1) read-only upload endpoints exist and are exempt", len(READONLY) > 0,

@@ -47863,8 +47863,13 @@ dereference it and grew a half-record instead. A one home that half the callers 
 - **(j)** the post-landing hook is reached from exactly ONE place in the sweep, and that place
   records the landing in the same call.
 - **(k)** every function in the sweep that replaces or upserts rows reaches that call — DERIVED from
-  the call graph with one level of indirection, never a name list, so a fourth storage path is red
-  by default.
+  the call graph with one level of indirection, never a name list — and the derived set is compared
+  to a DECLARED one rather than to a count (§CORE's subject-set lock: a scan that goes blind must not
+  read as a pass), so a fourth storage path goes red and names itself.
+- `harness_auto_calc_lock`'s check B now resolves ONE level of indirection within one file, so a
+  lander that reaches §6l through its module's single landing call is wired rather than silent;
+  N12/N13 keep that from becoming a hole (the shared call losing the hook → red, and indirection
+  through another module → still red).
 - **NEG6/NEG7** prove (j)/(k) can go red: a synthetic storage path that skips the call reads as
   silent, and a synthetic second hook site is seen.
 
