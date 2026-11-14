@@ -140,9 +140,69 @@ DEFAULT_CHALLENGE_MARKERS = (
     "captcha",
 )
 
-# What to TELL the operator for each kind. One home, because the three need genuinely different
-# actions and the wrong one wastes their afternoon: a refusal is usually a wrong address or a
-# permission, a challenge wants a proxy or a human, a throttle wants time.
+# A SECURITY APPLIANCE'S OWN REJECTION PAGE names itself, and that is how the two refusals are told
+# apart (index §COMMCALC-74). Policy, not a tenant's words: an F5/ASM, and every edge of that family,
+# answers a client it will not serve with its own page carrying these words plus a support id. Kept
+# NARROW on purpose — each of these must be a phrase a portal APPLICATION would not use about a page
+# of its own, because a false positive here tells an operator their correct address is fine when it
+# is not. Both spellings of the F5 page, since the title and the sentence differ in word order.
+APPLIANCE_REFUSAL_MARKERS = (
+    "request rejected",
+    "requested url was rejected",
+    "request is blocked",
+    "request unsuccessful",
+)
+
+#: How an appliance labels the reference its own support team can look up. Matched case-insensitively
+#: and followed by the digits. Two spellings because the appliances differ.
+_SUPPORT_ID_LABELS = ("your support id is", "support id is", "support id:", "reference id:")
+
+
+def appliance_refusal(text):
+    """Is this page a SECURITY APPLIANCE refusing the client, rather than the portal refusing the
+    request? PURE. Returns {"marker", "support_id"} or None.
+
+    WHY IT MATTERS, measured 2026-11-14 (§COMMCALC-74). One refusal sentence covered two states with
+    opposite remedies — "the address you saved points inside the portal, fix it" and "the edge will
+    not serve this client at all, the address is already right". Both reached one source row inside
+    25 minutes, and the second sent the owner to check an address that was correct. The page is what
+    tells them apart: an appliance says so in the words a person reads, and hands over a support id
+    that is the ONLY thing the portal's own security team can act on.
+
+    `support_id` is None when the page carries no reference — the state is unchanged, only the
+    evidence is thinner, and a fabricated id would be worse than none."""
+    body = str(text or "").lower()
+    if not body:
+        return None
+    hit = next((m for m in APPLIANCE_REFUSAL_MARKERS if m in body), None)
+    if not hit:
+        return None
+    return {"marker": hit, "support_id": _support_id(body)}
+
+
+def _support_id(body):
+    """The digits an appliance labels as its support / reference id, or None. PURE."""
+    for label in _SUPPORT_ID_LABELS:
+        at = body.find(label)
+        if at < 0:
+            continue
+        tail = body[at + len(label):]
+        digits = ""
+        for ch in tail:
+            if ch.isdigit():
+                digits += ch
+            elif digits:
+                break
+            elif ch not in " \t:#":
+                break
+        if digits:
+            return digits
+    return None
+
+
+# What to TELL the operator for each kind. One home, because the kinds need genuinely different
+# actions and the wrong one wastes their afternoon: a refusal is a wrong address, a permission, or an
+# edge that will not serve us at all; a challenge wants a proxy or a human; a throttle wants time.
 _VERDICT_NOTE = {
     REFUSAL_KIND: ("The portal REFUSED the request — this is not a sign-in page. Check the address "
                    "saved on this source: asking for a page inside the portal without a session is "
@@ -154,9 +214,33 @@ _VERDICT_NOTE = {
 }
 
 
-def verdict_note(kind):
-    """The one operator sentence for a verdict kind. PURE. Never raises, never returns None."""
-    return _VERDICT_NOTE.get(str(kind or "").strip().lower(), "")
+#: The REFUSAL sentence for the other state — the edge, not the portal. It must never mention the
+#: address, because in this state the address is already correct and checking it is the round trip
+#: that wasted the owner's afternoon on 2026-11-14.
+_EDGE_REFUSAL_NOTE = ("The portal's edge REFUSED this client before any sign-in page — it is not the "
+                      "saved address and not the password. A security appliance in front of the "
+                      "portal will not serve an automated client here; the way through is for the "
+                      "portal's own team to allow this source, or for the report to be delivered to "
+                      "us instead of pulled.")
+
+
+def verdict_note(kind, text=None):
+    """The one operator sentence for a verdict kind. PURE. Never raises, never returns None.
+
+    `text` is the page's VISIBLE words when the caller holds them. A refusal is two states with
+    opposite remedies (§COMMCALC-74) and only the page can say which: when it is an appliance
+    rejection the sentence does not mention the address at all and quotes the support id. Without
+    `text` the still-actionable state is reported, never a guess."""
+    kind = str(kind or "").strip().lower()
+    if kind == REFUSAL_KIND:
+        said = appliance_refusal(text)
+        if said:
+            note = _EDGE_REFUSAL_NOTE
+            if said.get("support_id"):
+                note += (f" Quote support ID {said['support_id']} to them — it is the reference "
+                         f"their security team can look this refusal up by.")
+            return note
+    return _VERDICT_NOTE.get(kind, "")
 
 
 def page_verdict(text, refusal=None, challenge=None, form_present=False):
@@ -194,7 +278,12 @@ def page_verdict(text, refusal=None, challenge=None, form_present=False):
         for m in (given if given is not None else seeds):
             m = str(m or "").strip().lower()
             if m and m in body:
-                return {"kind": kind, "marker": m, "note": verdict_note(kind)}
+                # The NOTE is derived from the page, not from the kind alone — a refusal page that
+                # is an appliance rejection earns a different remedy and carries its support id
+                # (§COMMCALC-74).
+                said = appliance_refusal(body) if kind == REFUSAL_KIND else None
+                return {"kind": kind, "marker": m, "note": verdict_note(kind, text=body),
+                         "support_id": (said or {}).get("support_id")}
     return None
 
 

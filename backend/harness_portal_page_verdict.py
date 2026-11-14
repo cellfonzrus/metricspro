@@ -18,11 +18,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.modules.commcalc import portal_backoff as pb       # noqa: E402
+from app.modules.commcalc import login_outcome as lo        # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SWEEP = open(os.path.join(HERE, "app/modules/commcalc/vidapay_sweep.py")).read()
 LIVE = open(os.path.join(HERE, "app/modules/commcalc/live_login.py")).read()
 BACKOFF = open(os.path.join(HERE, "app/modules/commcalc/portal_backoff.py")).read()
+LOGIN_OUTCOME = open(os.path.join(HERE, "app/modules/commcalc/login_outcome.py")).read()
 MIG = os.path.join(os.path.dirname(HERE), "database/migrations/1105_portal_block_marker_kind.sql")
 
 _passed = _failed = 0
@@ -370,6 +372,62 @@ control("…and the refusal detector still refuses a throttle page",
 control("matching is case-insensitive on BOTH sides",
         (pb.page_verdict("ACTION THAT IS NOT ALLOWED", refusal=["Action That Is Not Allowed"])
          or {}).get("kind") == pb.REFUSAL_KIND)
+
+
+# ── §COMMCALC-74. ONE REFUSAL KIND, TWO STATES, AND THE PAGE SAYS WHICH ──────────────────────────
+# The live defect: `data_source` 31157161… carried "Check the address saved on this source" twice in
+# 25 minutes — once truthfully (the saved url pointed inside the portal) and once while the FRONT
+# DOOR was being refused by an F5/ASM, where the address was already correct. One sentence, two
+# remedies, and the second sent the owner to check something that was right.
+print("\n── §COMMCALC-74 a refusal names which refusal it is ──")
+_EDGE = ("Request Rejected  The requested URL was rejected. Please consult with your administrator. "
+         "Your support ID is: 7814562390118473055")
+_INSIDE = "Access to this page has been denied. Please sign in to continue."
+
+check("R1 an appliance rejection is recognised and carries its support id",
+      (pb.appliance_refusal(_EDGE) or {}).get("support_id") == "7814562390118473055")
+check("R2 the portal's OWN denial is not an appliance rejection (the address is still the remedy)",
+      pb.appliance_refusal(_INSIDE) is None)
+check("R3 the two states get DIFFERENT sentences",
+      pb.verdict_note(pb.REFUSAL_KIND, text=_EDGE)
+      != pb.verdict_note(pb.REFUSAL_KIND, text=_INSIDE))
+check("R4 the edge sentence never asks for the address to be checked",
+      "check the address" not in pb.verdict_note(pb.REFUSAL_KIND, text=_EDGE).lower())
+check("R5 …and it quotes the support id, the only reference their team can act on",
+      "7814562390118473055" in pb.verdict_note(pb.REFUSAL_KIND, text=_EDGE))
+check("R6 the inside-the-portal sentence is unchanged",
+      "check the address" in pb.verdict_note(pb.REFUSAL_KIND, text=_INSIDE).lower()
+      and pb.verdict_note(pb.REFUSAL_KIND) == pb.verdict_note(pb.REFUSAL_KIND, text=_INSIDE))
+check("R7 the verdict carries the sentence its own page earned, and the support id",
+      (pb.page_verdict(_EDGE) or {}).get("support_id") == "7814562390118473055"
+      and "support id" in (pb.page_verdict(_EDGE) or {}).get("note", "").lower())
+check("R8 ONE operator sentence: login_outcome reports the verdict's, not a second copy",
+      LOGIN_OUTCOME.count("note(REFUSED)") == 1 and 'page_verdict or {}).get("note")' in LOGIN_OUTCOME)
+_lo_edge = lo.verdict(visible_text=_EDGE, form_present=False, page_verdict=pb.page_verdict(_EDGE))
+check("R9 …measured through the real login verdict, not read off the source",
+      _lo_edge["outcome"] == lo.REFUSED and "support id" in _lo_edge["note"].lower())
+check("R10 the appliance markers are a SUBSET of the refusal vocabulary (one list, not a second)",
+      set(pb.APPLIANCE_REFUSAL_MARKERS) <= set(pb.DEFAULT_REFUSAL_MARKERS))
+check("R11 no appliance marker is also a challenge marker (the kinds cannot merge)",
+      not (set(pb.APPLIANCE_REFUSAL_MARKERS) & set(pb.DEFAULT_CHALLENGE_MARKERS)))
+
+control("a rejection page with NO reference is still the edge state, with no invented id",
+        (pb.appliance_refusal("request rejected") or {}).get("support_id") is None
+        and "support id" not in pb.verdict_note(pb.REFUSAL_KIND, text="request rejected").lower())
+control("a refusal with no page in hand keeps the still-actionable sentence",
+        "check the address" in pb.verdict_note(pb.REFUSAL_KIND).lower())
+control("the other kinds are not changed by the page",
+        pb.verdict_note(pb.CHALLENGE_KIND, text=_EDGE) == pb.verdict_note(pb.CHALLENGE_KIND)
+        and pb.verdict_note(pb.THROTTLE_KIND, text=_EDGE) == pb.verdict_note(pb.THROTTLE_KIND))
+control("a challenge still outranks a refusal when both match",
+        (pb.page_verdict("request rejected — verify you are human") or {}).get("kind")
+        == pb.CHALLENGE_KIND)
+control("ARMED: deriving the note from the KIND alone would collapse the two states",
+        pb._VERDICT_NOTE[pb.REFUSAL_KIND] == pb.verdict_note(pb.REFUSAL_KIND, text=_INSIDE)
+        and pb._VERDICT_NOTE[pb.REFUSAL_KIND] != pb.verdict_note(pb.REFUSAL_KIND, text=_EDGE))
+control("a login verdict whose evidence carries no sentence falls back, never to empty",
+        bool(lo.verdict(visible_text=_INSIDE, form_present=False,
+                        page_verdict={"kind": "refusal", "marker": "access denied"})["note"]))
 
 print("\n%d passed, %d failed\n" % (_passed, _failed))
 if _failed:

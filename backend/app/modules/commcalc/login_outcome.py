@@ -287,12 +287,20 @@ def verdict(*, form_present, visible_text, page_verdict=None, signed_in_user=Non
     if not form_present and kind:
         # `portal_backoff`'s own words for the two kinds. Compared as substrings so this stays
         # correct if that module's constants are renamed around the same two concepts.
+        # THE SENTENCE COMES WITH THE EVIDENCE when the evidence has one (§COMMCALC-74). A refusal
+        # is two states with opposite remedies — the saved address points inside the portal, or the
+        # edge will not serve this client at all — and only the page that was READ can say which.
+        # `portal_backoff.verdict_note` derives that from the page and carries it on the verdict, so
+        # reporting the constant below instead meant two copies of one operator sentence and the
+        # less specific of the two winning. The constant stays as the fallback for a caller whose
+        # verdict carries no sentence; it is never a second answer to a question the page answered.
+        _said = str((page_verdict or {}).get("note") or "").strip()
         if "challenge" in kind:
             return {"outcome": HUMAN_CHECK, "marker": (page_verdict or {}).get("marker"),
-                    "note": note(HUMAN_CHECK)}
+                    "note": _said or note(HUMAN_CHECK)}
         if "refus" in kind:
             return {"outcome": REFUSED, "marker": (page_verdict or {}).get("marker"),
-                    "note": note(REFUSED)}
+                    "note": _said or note(REFUSED)}
 
     # 3b. THE PAGE IS SHOWING US OUR OWN NAME, and nothing above has claimed the page. Ranked
     #     HERE, below both of them, and deliberately not beside the word list: a greeting is

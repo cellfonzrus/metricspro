@@ -213,6 +213,7 @@ Primary code homes:
 | COMMCALC-71 | **A renamed figure is one column with two spellings — and a total of named parts is all of them or none** | The owner answered the question §COMMCALC-60 left open: the portal's `activations_total` IS the measurement we call gross adds. So it becomes a SPELLING on the one column, never a second column beside it, and the old spelling stays declared so a month spelled the old way keeps landing. Folding it in uncovered a second defect in the same line: `total_acts` (gross adds + upgrades) was summed with `portal_cell.total`, which adds up only the parts that arrived — right for alternative spellings of one figure, wrong for two different figures being added, because the new spelling alone would have been reported as the TOTAL with upgrades silently excluded. `total_all` is the both-parts-or-neither sum, and which of the two a caller wants is now a declared choice rather than a default. |
 | COMMCALC-72 | **A month-to-date figure is trended in ONE place, and an outlier is not a verdict** | "it shoudl also show trending and which stores are not trending towards the accessories goals … the outloers shoudl be highlighted in a different color". The projection was ALREADY HERE, inline TWICE in the Executive MTD report and already on two screens as "Trending Acc. $", so the third copy the action plan wanted was factored instead — and the draft of that home re-derived three more facts (`feed_period`'s month parsing, month length and open/closed) and the division itself (`demand_projection.velocity`) before the duplicate check caught them. What may a trend say when no day of the month has completed, what may it say when there is no target, and who may be called an outlier when four stores are the whole distribution? |
 | COMMCALC-73 | **A pull nobody recorded is a report that looks a month stale** | The owner pasted the Data Imports page: two of three tiles read *"Last upload: Oct 8, 2026 … via manual upload"* while the ePay owners-portal sweep had been landing their rows every night since 12 Nov (§COMMCALC-69), `raw_comp_report` 78,053 → 89,556. The rows arrived; the RECORD of their arrival did not. The sweep has THREE storage paths — the month replace, the per-day replace and the Daily-Transaction ingest hook — and each decided for itself whether to write a landing record. Exactly one did, which is why MI/ATU's tile was right and the other two were a month stale over current data. The two journals every "last upload" surface reads now have ONE writer, which `router`'s trace helper dereferences too (it could not before: the home lived in `router`, which imports the sweep), and the record plus the §6l post-landing hook are ONE call every storage path makes, locked by `harness_upload_trace_coverage` (f/j/k) so a new path cannot land silently. The third tile, the monthly sales archive, is NOT this defect: its promotion is switched off in its own registry row — reported, not patched. |
+| COMMCALC-74 | **A refusal names which refusal it is** | One operator sentence covered two states with opposite remedies, and the same source row produced both inside 25 minutes: first a saved address pointing INSIDE the portal (the sentence was right), then the FRONT DOOR being refused by a security appliance, where the address was already correct and "Check the address saved on this source" sent the owner to look at something that was fine. The page is what tells them apart — an appliance says so in the words a person reads and hands over a support id, which is the only reference the portal's own security team can look the refusal up by. So the refusal SENTENCE is now derived from the page rather than from the kind alone: the edge state never asks for the address and quotes the id, the inside-the-portal state is unchanged, and a caller with no page in hand still gets the actionable one rather than a guess. No new kind and no migration — the kind column's CHECK constraint allows three, and the markers stay per-org config. The login verdict's own second copy of the refusal sentence is gone: it reports the one that came with the evidence. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -26480,6 +26481,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-71 | commcalc |
 | COMMCALC-72 | commcalc |
 | COMMCALC-73 | commcalc |
+| COMMCALC-74 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -47788,6 +47790,83 @@ Cross-references: §4b.1 (the one reading rule, and the lock this widens) · §C
 per-report verdict that made this readable at all) · §COMMCALC-67 / -66 / -64 (the controls this
 exonerates) · §19.41 (the empty-pull verdict that reported the 33 days honestly) · §19.18 (a
 registry written and its callers not reading it).
+
+## §COMMCALC-74. A REFUSAL NAMES WHICH REFUSAL IT IS (found 2026-11-14 by misleading the owner)
+
+### COMMCALC-74.1 THE MEASUREMENT
+
+`commcalc.data_source` `31157161-2ac3-4a1e-8d32-b21c29de35d0` ("epay back office") carried, live:
+
+> The portal REFUSED the request — this is not a sign-in page. Check the address saved on this
+> source: asking for a page inside the portal without a session is answered this way. The screenshot
+> shows exactly what it said.
+
+Two attempts reached that one row inside 25 minutes:
+
+| attempt | `portal_url` | what the page was | was the sentence right? |
+| --- | --- | --- | --- |
+| first | `…/reports` | the portal answering a request for a page inside it | YES — fix the address |
+| second | the FRONT DOOR | an F5/ASM "The requested URL was rejected" page, with a support ID | **no** — the address was already correct |
+
+The second time it sent the owner to check an address that was fine, and he went to another thread to
+learn it was the firewall. Surfaced here by the per-store ePay thread, which owns that pull.
+
+### COMMCALC-74.2 THE CLASS
+
+**One outcome over two states whose remedies are opposite** — the §COMMCALC-51 shape. Worse, the
+sentence had TWO homes: `portal_backoff._VERDICT_NOTE[REFUSAL_KIND]` (the one that reached the live
+row) and `login_outcome._NOTES[REFUSED]`, which also named the address in words of its own.
+
+### COMMCALC-74.3 THE RULE
+
+**The remedy is derived from what the page IS, never from the kind alone** — which is what this
+module already demands of every other decision it makes (§COMMCALC-50.8/.9: ask the page what it is
+doing). A security appliance NAMES ITSELF: "request rejected" / "the requested url was rejected",
+plus a support id. That is evidence read off the visible text, not a new vocabulary.
+
+### COMMCALC-74.4 WHAT CHANGED
+
+- `portal_backoff.appliance_refusal(text)` — PURE, returns `{"marker", "support_id"}` or None.
+  `APPLIANCE_REFUSAL_MARKERS` is a **subset** of the refusal vocabulary, never a second list, and
+  deliberately narrow: each phrase must be one a portal application would not use about a page of its
+  own, because a false positive here tells an operator their wrong address is fine.
+- `verdict_note(kind, text=None)` — the edge state gets a sentence that never asks for the address
+  and quotes the support id; the inside-the-portal state is unchanged; **no page in hand returns the
+  still-actionable sentence**, never a guess and never a fabricated id.
+- `page_verdict` carries the sentence its own page earned, plus `support_id`.
+- `login_outcome.verdict` reports the sentence that came WITH the evidence, keeping its constant only
+  as the fallback for a caller whose verdict has none. One sentence, one home, dereferenced.
+- **No new kind and no migration.** `portal_block_marker.kind`'s CHECK constraint allows exactly
+  ('throttle','refusal','challenge'); a fourth kind would be owner-applied SQL for a distinction the
+  page can already state. The markers stay per-org config rows (RULE TWO).
+
+### COMMCALC-74.5 TESTS AND THE LOCK
+
+`tests/unit/test_a_refusal_names_which_refusal_it_is.py` (12 units) and
+`harness_portal_page_verdict.py`, 70 → 112 checks: R1–R11 plus six controls, including an ARMED one
+that fails if the note is ever derived from the kind alone again, and R8/R9 which prove the single
+sentence BOTH by source (one `note(REFUSED)` left, as the fallback) and by running the real login
+verdict over the measured page.
+
+**The regression uses the FRONT DOOR deliberately** — a test assuming "rejected at a sub-path, fine
+at the root" would pass while the real case failed.
+
+### COMMCALC-74.6 WHAT THIS DOES NOT FIX
+
+It does not get us in. That back office refuses non-browser clients from every address tried,
+production included, so the edge state is its permanent condition and the per-store pull is moving to
+delivery. This change makes the platform say so truthfully in one sentence instead of sending an
+operator round the houses.
+
+Deliberately NOT built, and retracted by the thread that proposed it: validating at save time that
+`portal_url` does not point inside the portal. `/login`, `/signin` and `/portal/login` are all
+legitimate front doors and some portals have no usable root, so it would be a false positive on good
+configuration. Whether an address is a sign-in page is a fact only the portal can state — which is
+why it belongs in the verdict and not in a validator.
+
+Cross-references: §COMMCALC-50 / -50.8 / -50.9 (the one vocabulary, and deciding from what the page
+is doing) · §COMMCALC-55 (a kind that is not a verdict) · §COMMCALC-51 (one sentence over states an
+operator needs told apart) · §COMMCALC-57 (that back office refuses automated clients by policy).
 
 ## §COMMCALC-73. A PULL NOBODY RECORDED IS A REPORT THAT LOOKS A MONTH STALE (owner report 2026-11-14)
 
