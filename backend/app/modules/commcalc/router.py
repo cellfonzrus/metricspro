@@ -168,16 +168,14 @@ def require_org(org_id: str):
 
 
 # ── UNIVERSAL UPLOAD TRACE (mig 202) ─────────────────────────────────────────────────────────────
-# Which table each upload_type lands in — so a trace record can name the target table without threading
-# the local TABLE_MAP through every caller. Kept in sync with upload_file's TABLE_MAP.
-_TRACE_TARGET_TABLE = {
-    "sales": "raw_sales", "daily_sales": "daily_sales_feed", "payment_detail": "raw_payment_detail",
-    "mi_report": "raw_mi", "dlar_rep": "raw_dlar_rep", "dlar_store": "raw_dlar_store",
-    "catalog": "raw_catalog", "master_cats": "raw_categories", "comp_report": "raw_comp_report",
-    "ma_commission": "raw_ma_commission", "ma_daily_tx": "raw_ma_daily_tx",
-    "ma_fulfillment": "raw_ma_fulfillment", "x_report": "pos_tender_summary",
-    "inventory_aging": "inventory_aging", "ma_overview": "ma_overview_upload",
-}
+# Which table each upload_type lands in, and the INSERT itself, both live in `ingest_record` — the one
+# home for writing the ingest journals, DEREFERENCED here. They moved there 2026-11-14 because the ePay
+# portal sweep could not reach a home that lives in `router` (router imports the sweep) and so grew its
+# own half-record: two Data Imports tiles showed a month-old manual upload while the sweep landed their
+# rows nightly (index §COMMCALC-73).
+from app.modules.commcalc import ingest_record as _ingest_record
+
+_TRACE_TARGET_TABLE = _ingest_record.TARGET_TABLE
 
 
 def _write_upload_trace(org_id, *, source="manual", filename=None, upload_type=None, period="",
@@ -234,9 +232,9 @@ def _write_upload_trace(org_id, *, source="manual", filename=None, upload_type=N
             "note": (str(res.get("note"))[:500] if res.get("note") else None),
             "error": (str(error)[:800] if error else None),
         }
-        sb().schema("commcalc").table("upload_trace").insert(row).execute()
+        _ingest_record.write_trace(sb(), row)
     except Exception as e:
-        print(f"WARN upload_trace insert skipped (run mig 202?): {e}")
+        print(f"WARN upload_trace row not built: {e}")
 
 
 def _month_year(period: str):

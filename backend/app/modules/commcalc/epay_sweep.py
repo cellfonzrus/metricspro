@@ -405,7 +405,44 @@ def ingest_daily_tx(client, org_id, xlsx_path, source_batch=None, ledger=None, t
            "rows": res.get("saved", 0), "parsed": res.get("rows", 0), "mode": "upsert",
            "unresolved_terminals": res.get("unresolved_terminals", []),
            "source_batch": source_batch}
+    # DATA LANDED (index §6l + §COMMCALC-73) — the same ONE call the map/REPLACE paths make. This hook
+    # stored rows and recorded nothing, so the one report landing every half hour could not say when it
+    # last received data. `raw_epay_daily_tx` is not a calculation input, which `auto_calc` answers
+    # honestly (not_a_calc_input) — the RECORD is the part that was missing.
+    out["auto_calc"] = landed(client, org_id, REPORTS["epay_daily_tx"], "epay_daily_tx",
+                              periods=[], rows=out["rows"], mode="upsert",
+                              period_label=((target or {}).get("period") if isinstance(target, dict) else None))
     return out
+
+
+def landed(client, org_id, spec, key, *, periods, rows, mode, period_label=None,
+           date_counts=None, period_counts=None):
+    """THE ONE HOME for "this leg landed rows" — the RECORD of the landing and the post-landing
+    recalculation hook, in one call, because they are two consequences of the same fact.
+
+    OWNER REPORT 2026-11-14 ("i need these uploads to work automatically"): comp and payment detail
+    had been pulled unattended every night since 12 Nov, and their Data Imports tiles both still read
+    "Last upload: Oct 8, 2026 … via manual upload". The sweep has THREE storage paths — the month
+    replace in `_process_report`, the per-day replace in `_store_rows_by_day`, and the DTD `ingest`
+    hook — and each decided for itself whether to write a landing record. Exactly one did, so MI/ATU's
+    tile was right and the other two were a month stale while the data behind them was current.
+
+    Two consequences, one call, so a path cannot have one without the other: the journals
+    (`ingest_record`, the one writer, which `router._write_upload_trace` dereferences too) and
+    `auto_calc.landed` (index §6l). `harness_upload_trace_coverage` (j/k) fails the build if
+    `auto_calc.landed` is reached from anywhere in this module but here.
+
+    `rows` is the count actually SAVED; a zero records no landing (see `ingest_record.sweep_landed`)
+    and no recalculation. Returns the auto_calc result, which every caller puts in its own result."""
+    from app.modules.commcalc import ingest_record as _ingest_record
+    _ingest_record.sweep_landed(
+        client, org_id, upload_type=spec.get("file_type") or key,
+        target_table=spec.get("table"), label=spec["label"], rows=rows, mode=mode,
+        periods=period_counts, date_counts=date_counts,
+        period_label=period_label or (periods[0] if periods else None))
+    from app.modules.commcalc import auto_calc as _auto_calc
+    return _auto_calc.landed(client, org_id, table=spec["table"], periods=periods,
+                             source="epay_sweep", filename=spec["label"], rows=rows)
 
 
 def _outcome_sentence(result, tgt=""):
@@ -1687,15 +1724,23 @@ def _store_rows_by_day(client, org_id, spec, key, rows, day_key):
     out = {"report": key, "label": spec["label"], "grain": "day",
            "period": ", ".join(_periods), "periods": _periods,
            "days": days, "rows": saved_total, "mode": "replace_by_day"}
-    # DATA LANDED (index §6l) — the ONE post-landing hook, for every month a written day belongs to. A table the
-    # calculation does not read answers not_a_calc_input; nothing is recalculated inline here.
-    from app.modules.commcalc import auto_calc as _auto_calc
+    # DATA LANDED (index §6l + §COMMCALC-73) — ONE call records the landing AND runs the post-landing
+    # hook, for every month a written day belongs to. A table the calculation does not read answers
+    # not_a_calc_input; nothing is recalculated inline here.
     _written = {d["day"] for d in days if d.get("rows")}
-    out["auto_calc"] = _auto_calc.landed(
-        client, org_id, table=spec["table"],
-        periods=sorted({r.get("period") for r in rows
-                        if str(r.get(day_key)) in _written and r.get("period")}),
-        source="epay_sweep", filename=spec["label"], rows=saved_total)
+    _per_period = {}
+    for r in rows:
+        if str(r.get(day_key)) in _written and r.get("period"):
+            _per_period[r["period"]] = _per_period.get(r["period"], 0) + 1
+    # The tile shows ONE period, so name the newest DAY's own month — never the alphabetically first
+    # ("November 2026" sorts before "October 2026", which would label a fresh pull with a stale month).
+    _newest = max(_written) if _written else None
+    _newest_period = next((r.get("period") for r in rows
+                           if str(r.get(day_key)) == _newest and r.get("period")), None)
+    out["auto_calc"] = landed(
+        client, org_id, spec, key, periods=sorted(_per_period), rows=saved_total, mode="replace_by_day",
+        period_label=_newest_period, period_counts=_per_period or None,
+        date_counts={d["day"]: d["rows"] for d in days if d.get("rows")} or None)
     if skipped:
         out["skipped_guard"] = skipped
     return out
@@ -1854,19 +1899,15 @@ def _process_report(client, org_id, page, key, xlsx_path, target=None, report_id
     if res.get("warning"):
         print(f"WARN epay sweep {key} {period}: {res['warning']}")
 
-    # best-effort: record it on the Upload page's history (never fail the sweep on this)
-    try:
-        client.schema("commcalc").table("upload_log").insert({
-            "org_id": org_id, "file_type": spec["file_type"], "period": period,
-            "filename": "epay auto-sweep", "rows_saved": saved}).execute()
-    except Exception:
-        pass
-    # DATA LANDED (index §6l) — the ONE post-landing hook: queues this period's Run Calculation per the org's config.
-    from app.modules.commcalc import auto_calc as _auto_calc
+    # DATA LANDED (index §6l + §COMMCALC-73) — ONE call records the landing in both ingest journals
+    # (where every "last upload" surface reads it) and queues this period's Run Calculation per the
+    # org's config. This path used to write its own upload_log row, which is why MI/ATU's tile was the
+    # only one of the three that told the truth.
     return {"report": key, "label": spec["label"], "period": period, "rows": saved,
             "mode": "replace",
-            "auto_calc": _auto_calc.landed(client, org_id, table=spec["table"], periods=[period],
-                                           source="epay_sweep", filename=spec["label"], rows=saved)}
+            "auto_calc": landed(client, org_id, spec, key, periods=[period], rows=saved,
+                                mode="replace", period_label=period,
+                                period_counts={period: saved} if saved else None)}
 
 
 def _recent_months(n):

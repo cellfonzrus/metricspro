@@ -56,27 +56,41 @@ export const BUILTIN_HINTS: Record<string, string> = {
 export const GRAINS = ['day', 'week', 'month'] as const
 export type Grain = typeof GRAINS[number]
 
+/** The axis, and whether asking for it FAILED. The two travel together on purpose: the fall back to
+ *  the built-ins is right — a blank target screen would be a regression — but a screen that cannot
+ *  tell the fall back from the tenant's real answer will show four categories and look correct.
+ *
+ *  That is exactly what happened (owner report 2026-11-14, index §CORE-44). The request was sent
+ *  without the `/api/v1` prefix, so it reached the Next app, 404'd, and this catch answered with the
+ *  built-ins for MONTHS. Every declared category was invisible on every target screen, no target for
+ *  one could be typed, and `commcalc.target_line` held zero rows in the entire database. One
+ *  character of address, and nothing anywhere said a word. A FAILED READ IS NOT AN ANSWER — the same
+ *  rule the sign-in Guard already follows for an unreadable enforcement flag. */
+export type TargetAxisResult = { cats: TargetCat[]; failed: boolean }
+
 // One in-flight request and one cached answer per period, so five components on one screen do not
 // make five identical calls. Keyed by period because a tenant can declare a category mid-month.
+// A FAILURE IS NEVER CACHED: a blip must not become a session of wrong answers, and the next screen
+// to mount asks again.
 const cache = new Map<string, TargetCat[]>()
-const inflight = new Map<string, Promise<TargetCat[]>>()
+const inflight = new Map<string, Promise<TargetAxisResult>>()
 
-export async function fetchTargetAxis(period: string): Promise<TargetCat[]> {
+export async function fetchTargetAxisResult(period: string): Promise<TargetAxisResult> {
   const key = period || ''
   const hit = cache.get(key)
-  if (hit) return hit
+  if (hit) return { cats: hit, failed: false }
   const live = inflight.get(key)
   if (live) return live
   const p = (async () => {
     try {
-      const r = await api(`/commcalc/targets/${encodeURIComponent(period)}/axis?org_id=${ORG_ID}`)
+      // `/api/v1` IS the address: apiUrl() prefixes nothing, so a path without it asks the Next app
+      // for a page of that name.
+      const r = await api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/axis?org_id=${ORG_ID}`)
       const axis: TargetCat[] = Array.isArray(r?.axis) && r.axis.length ? r.axis : [...BUILTIN_CATS]
       cache.set(key, axis)
-      return axis
+      return { cats: axis, failed: false }
     } catch {
-      // The axis route being unreachable must not blank a target screen: fall back to the built-ins,
-      // which is exactly what every screen showed before this module existed.
-      return [...BUILTIN_CATS]
+      return { cats: [...BUILTIN_CATS], failed: true }
     } finally {
       inflight.delete(key)
     }
@@ -85,17 +99,28 @@ export async function fetchTargetAxis(period: string): Promise<TargetCat[]> {
   return p
 }
 
+/** The categories alone, for a caller that has nowhere to say so. Prefer the hook. */
+export async function fetchTargetAxis(period: string): Promise<TargetCat[]> {
+  return (await fetchTargetAxisResult(period)).cats
+}
+
 /** THE hook every target surface uses. Returns the built-ins immediately, then the tenant's full
- *  axis once it arrives — so nothing ever renders an empty category list. */
-export function useTargetAxis(period: string): { cats: TargetCat[]; loaded: boolean } {
+ *  axis once it arrives — so nothing ever renders an empty category list. `failed` is true when the
+ *  categories on screen are that fall back rather than this tenant's own, so a screen whose JOB is
+ *  setting targets can say so instead of quietly offering four. */
+export function useTargetAxis(period: string): { cats: TargetCat[]; loaded: boolean; failed: boolean } {
   const [cats, setCats] = useState<TargetCat[]>(() => cache.get(period || '') || [...BUILTIN_CATS])
   const [loaded, setLoaded] = useState<boolean>(() => !!cache.get(period || ''))
+  const [failed, setFailed] = useState(false)
   useEffect(() => {
     let alive = true
-    fetchTargetAxis(period).then((a) => { if (alive) { setCats(a); setLoaded(true) } })
+    fetchTargetAxisResult(period).then((a) => {
+      if (!alive) return
+      setCats(a.cats); setFailed(a.failed); setLoaded(true)
+    })
     return () => { alive = false }
   }, [period])
-  return { cats, loaded }
+  return { cats, loaded, failed }
 }
 
 /** The categories whose target is saved as a `commcalc.target_line` row rather than a column — the

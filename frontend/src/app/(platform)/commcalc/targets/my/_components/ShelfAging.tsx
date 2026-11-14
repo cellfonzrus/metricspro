@@ -96,7 +96,7 @@ export default function ShelfAging() {
   // once, and `live` keeps a resolution that arrives after unmount from writing to a dead component.
   useEffect(() => {
     let live = true
-    api(`/commcalc/my-shelf?org_id=${ORG_ID}`)
+    api(`/api/v1/commcalc/my-shelf?org_id=${ORG_ID}`)
       .then((r: Shelf) => { if (live) { setData(r); setFailed(null) } })
       // A FAILED READ IS SAID, not swallowed into an empty shelf. "You have nothing aging" and "we
       // could not ask" are different sentences, and only one of them is reassuring.
