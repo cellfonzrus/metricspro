@@ -24806,12 +24806,28 @@ def _compute_gp(client, org_id, period, market=""):
     # through `store_identity_index`, the one home for canonical↔code (§64), never a second join.
     from app.modules.commcalc import labour_vocabulary as _lvoc
     from app.modules.commcalc import labour_actuals as _lact
-    _gp_vocab, _gp_lab, _gp_code = _labour_actuals_code_keyed(client, org_id, [period])
+    (_gp_vocab, _gp_lab, _gp_code, _gp_canon,
+     _gp_known) = _labour_actuals_code_keyed(client, org_id, [period])
     expenses, _exp_carried_from = _expfx.effective_expense_rows(
         client, org_id, period, pv, 'store_code,amount,expense_name',
         _lvoc.derived_row_names(_gp_vocab))
-    expenses = list(expenses) + _lact.as_expense_rows(
-        _gp_lab.get(period) or {}, _gp_vocab, halves=[_lact.SALARY], key_as=_gp_code)
+    # THE SHEET FIRST, then only the labour it does NOT already carry (owner report 2026-11-14,
+    # index §ACCOUNT-03). The sheet holds the tenant's APPROVED payroll rows for its own month, so
+    # adding the measured hours on top booked the same labour twice: live LuxeLink October,
+    # `Diversey` $7,308.26 approved + $12,555.70 measured = the $27,789.02 the owner reported,
+    # against the P&L's $15,403.41. `salary_fill_plan` is the one decision both reports now read.
+    _gp_sheet = list(expenses)
+    _gp_fill = _lact.salary_fill_plan(_gp_lab.get(period) or {}, _gp_vocab, _gp_sheet,
+                                      key_as=_gp_code, key_canon=_gp_canon)
+    # NOT A SILENT LOSS. A filled store the mapping carries no code for cannot be relabelled into
+    # this report's key space, so its dollars would simply vanish from the expense column. They are
+    # named here with their amount instead — the fix is a mapping row, never code (§ACCOUNT-03).
+    _gp_fill["unkeyed"] = {k: v for k, v in (_gp_fill.get("fill") or {}).items()
+                           if _gp_known and k not in _gp_known}
+    _gp_fill["unkeyed_amount"] = round(sum(_gp_fill["unkeyed"].values()), 2)
+    expenses = _gp_sheet + _lact.as_expense_rows(
+        _gp_lab.get(period) or {}, _gp_vocab, _gp_sheet,
+        halves=[_lact.SALARY], key_as=_gp_code, key_canon=_gp_canon)
     # Wide select so the cost map can key on the TOTAL variant's UPC/SKU/desc (migs 230/231); high limit so
     # a multi-thousand-row catalog isn't truncated at the PostgREST default. Falls back to the legacy
     # product_id,cost select when the TOTAL columns don't exist yet (pre-230) → house byte-identical.
@@ -24984,6 +25000,9 @@ def _compute_gp(client, org_id, period, market=""):
                             # P&L reads the same declaration whatever this report's mode is.
                             box_departments=_gp_box_depts)
     result['expenses_carried_from'] = _exp_carried_from
+    # WHOSE LABOUR FIGURE BOOKED, said out loud: the stores whose approved payroll row suppressed
+    # their measured hours, and the dollars that were therefore NOT added a second time.
+    result['labour_measured_fill'] = _gp_fill
     # WHERE THIS REPORT'S SALES CAME FROM — stated on the payload, never inferred from an empty column.
     # The failure this replaces was SILENT: five columns read $0.00 and nothing on screen said the
     # archive had not been promoted. A reader can now see which table led, how many rows each held, and
@@ -25240,7 +25259,7 @@ def expenses_trend(months: int = 6, org_id: str = ORG_ID):
     # relabelled through `store_identity_index` — the one home for canonical↔code (§64).
     from app.modules.commcalc import labour_vocabulary as _lvoc
     from app.modules.commcalc import labour_actuals as _lact
-    _tr_vocab, _tr_lab, _tr_code = _labour_actuals_code_keyed(_cl, org_id, kept)
+    _tr_vocab, _tr_lab, _tr_code, _tr_canon, _ = _labour_actuals_code_keyed(_cl, org_id, kept)
     eff = _expfx.effective_series(rows, kept, _lvoc.derived_row_names(_tr_vocab))
     _tr_unmeasured = {p: [h for h, ok in ((_tr_lab.get(p) or {}).get('measured') or {}).items()
                           if not ok] for p in kept}
@@ -25255,8 +25274,10 @@ def expenses_trend(months: int = 6, org_id: str = ORG_ID):
         # home the Sales Comparison's expense columns read, so the two can never fold a month's rows
         # into different stores. Keyed on the raw store CODE here, byte-identical to the loop it
         # replaced — this trend is already code-keyed and `_trend_market_by_code` expects codes.
-        _month_rows = list(cell['rows']) + _lact.as_expense_rows(
-            _tr_lab.get(p) or {}, _tr_vocab, period=p, key_as=_tr_code)
+        _tr_sheet = list(cell['rows'])
+        _month_rows = _tr_sheet + _lact.as_expense_rows(
+            _tr_lab.get(p) or {}, _tr_vocab, _tr_sheet, period=p, key_as=_tr_code,
+            key_canon=_tr_canon)
         for code, amt in _expfx.totals_by_store(_month_rows).items():
             by.setdefault(code, {}).setdefault(p, {'total': 0.0})
             by[code][p]['total'] += amt
@@ -27458,7 +27479,10 @@ def sales_comparison(period: str = "", mode: str = "mom", compare_period: str = 
         def _fold_period(label):
             cell = _eff.get(label) or {'rows': [], 'carried_from': None, 'carried_excluded': {}}
             rows = list(cell['rows'])
-            rows.extend(_lact.as_expense_rows(_lab.get(label) or {}, _vocab, period=label))
+            # The fill decision is made in the SAME canonical space this surface then folds both
+            # sides into (`exp_fold`), never in the sheet's typed-code space — §ACCOUNT-03.
+            rows.extend(_lact.as_expense_rows(_lab.get(label) or {}, _vocab, cell['rows'],
+                                               period=label, key_canon=exp_fold))
             keep = [r for r in rows if _keep_exp(r.get('store_code'))]
             return _expfx.totals_by_store(keep, exp_fold), cell.get('carried_from')
 
@@ -50424,7 +50448,18 @@ def _labour_actuals_code_keyed(client, org_id, periods):
     later be given a filter or a fallback the others never got. `labour_actuals` stays the one home
     for the DOLLARS; this is the one home for keying them the way `store_expenses` is keyed.
 
-    Returns `(vocab, {period: a `labour_actuals.by_store` result}, key_as)`.
+    Returns `(vocab, {period: a `labour_actuals.by_store` result}, key_as, key_canon, known)`,
+    where `known` is the set of canonical stores this org's `store_mapping` carries a code for. A
+    measured cell OUTSIDE it cannot be relabelled into the sheet's code space at all, so a reader
+    that books in codes would drop its dollars in silence — `known` is what lets the surface SAY so
+    (live: LuxeLink holds two mapping rows for one store, `LUX-NY-AVENUEU`/"902 Avenue U" active and
+    `Ave U`/"902 Ave U" inactive, and the shifts carry the inactive spelling).
+
+    `key_as` relabels a CANONICAL store as the tenant's own `store_code` (how a sheet is keyed).
+    `key_canon` folds EITHER spelling — a code the tenant typed or a canonical address — onto the one
+    store, and it is the space the "whose labour figure books this store-month" decision must be made
+    in (`labour_actuals.salary_fill_plan`, index §ACCOUNT-03). Deciding in `key_as`' space instead
+    left `Utica` and `531 Utica Ave` as two stores and booked one store's labour twice.
     """
     from app.modules.commcalc import labour_actuals as _lact
     from app.modules.account import coa as _coa_lk
@@ -50451,11 +50486,11 @@ def _labour_actuals_code_keyed(client, org_id, periods):
         _halves = _lact.wanted_halves(vocab)
         return vocab, {p: {'period': p, 'by_half_store': {}, 'by_half': {}, 'by_store': {},
                            'measured': {h: False for h in _halves}, 'halves': _halves}
-                       for p in (periods or [])}, (lambda k: k)
+                       for p in (periods or [])}, (lambda k: k), (lambda k: k), set()
     key_as = lambda k: (idx.get(k) or {}).get('store_code') or k                          # noqa: E731
-    lab = _lact.series(client, org_id, list(periods or []), vocab,
-                       lambda v: _store_identity.store_key(resolve, v))
-    return vocab, lab, key_as
+    key_canon = lambda v: _store_identity.store_key(resolve, v)                           # noqa: E731
+    lab = _lact.series(client, org_id, list(periods or []), vocab, key_canon)
+    return vocab, lab, key_as, key_canon, {k for k in idx if k}
 
 
 def _prospect_expense_window(client, org_id, cfg, period, today=None, expense_rows=None,
@@ -50508,13 +50543,15 @@ def _prospect_expense_window(client, org_id, cfg, period, today=None, expense_ro
         return {}, [], dict(win, error=win["basis"])
     from app.modules.commcalc import labour_vocabulary as _lvoc
     from app.modules.commcalc import labour_actuals as _lact
-    _vocab, _lab, _code_of = (labour_inputs if labour_inputs is not None
-                              else _labour_actuals_code_keyed(client, org_id, months))
+    _vocab, _lab, _code_of, _canon_of, _ = (labour_inputs if labour_inputs is not None
+                                            else _labour_actuals_code_keyed(client, org_id, months))
     series = effective_series(rows, months, _lvoc.derived_row_names(_vocab))
-    by_period = {p: (list((series.get(p) or {}).get("rows") or [])
-                     + _lact.as_expense_rows(_lab.get(p) or {}, _vocab, period=p,
-                                             key_as=_code_of))
-                 for p in months}
+    by_period = {}
+    for p in months:
+        _sheet = list((series.get(p) or {}).get("rows") or [])
+        by_period[p] = _sheet + _lact.as_expense_rows(_lab.get(p) or {}, _vocab, _sheet,
+                                                      period=p, key_as=_code_of,
+                                                      key_canon=_canon_of)
     carried = {p: (series.get(p) or {}).get("carried_from") for p in months
                if (series.get(p) or {}).get("carried_from")}
     matrix = _pev.average_expense_matrix(by_period, cfg["expense_average_basis"])

@@ -18,6 +18,9 @@ Every fixture below is the LIVE LuxeLink shape measured on 2026-09-08
       $7,626.14 double-book and its proof of removal, the byte-identity default, the
       nothing-to-replace-with case, and the P&L/GP one-derivation tie-out.
   §G  totals are preserved: this module never moves a dollar
+  §J  ENTERED vs MEASURED — a frozen copy must not outrank the measurement in silence
+  §K  ONE LABOUR AUTHORITY — the GP report and the P&L answer "whose figure books this
+      store-month?" with one function (REGRESSION: $86,369.22 of October booked twice)
 
 Run: python3 backend/harness_labour_coverage.py
 """
@@ -27,6 +30,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
 
 from app.modules.commcalc import labour_coverage as lc
+from app.modules.commcalc import labour_vocabulary as _lv  # noqa: E402
 from app.modules.storeops import payroll_hours_basis as _hb  # noqa: E402
 
 CHECKS = 0
@@ -708,6 +712,143 @@ ok("J22 …and the comparison itself books nothing: no key names a dollar it cou
     if k in ("booked_instead", "netted", "suppressed", "amount")], [])
 ok("J23 the report's note CARRIES the finding, so the banner cannot be silent about it",
    "LESS than the hours and punches measure" in (j_rep["note"] or ""), True)
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# §K  ONE LABOUR AUTHORITY — the Gross Profit report and the P&L must answer "whose labour figure
+#     books this store-month?" with ONE function, or they disagree on screen.
+#
+# OWNER REPORT 2026-11-14 (Sanjot): *"check Gross profit report it shows different numbers, we have
+# spoken about this a lot of times if the source of data is the same why are th numbers different ,
+# this is conflicting and must be fixed in teh code itself"* — and, the same hour, the ruling that
+# settles which figure is right: *"the luxelink salary is updated everyweek by the Dms and that is
+# the approved salary you should be counting towards the expenses"*.
+#
+# WHAT WAS ON SCREEN, measured on production 2026-11-14 before a line was changed. The GP report
+# summed the Expenses sheet — which HOLDS the DM-approved `Employee Salaries` rows — and then added
+# the payroll measured from hours ON TOP, for every store:
+#
+#   Diversey  approved $7,308.26 + measured $12,555.70 -> the $27,789.02 the owner reported
+#   Belmont   approved $1,441.50 + measured  $7,097.48 -> $14,213.98
+#   whole org  $86,369.22 of October labour added a second time, at 15 of 19 measured stores
+#
+# The P&L never had it: `coa.build_inputs` held the rule inline and was right. One question with two
+# answers in two files is the duplicate defect the house rules forbid. `measured_fill` is now the
+# one home and BOTH readers dereference it.
+#
+# The fixtures are the live October shape reduced to the four stores that make every case visible.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+K_SHEET = [expense("Diversey", "Employee Salaries", 6033.26),
+           expense("Diversey", "DM Salaries", 1275.00),
+           expense("Belmont", "Employee Salaries", 166.50),
+           expense("Belmont", "DM Salaries", 1275.00),
+           expense("Irving Park", "Rent / Lease", 3850.00),       # no salary row at all
+           expense("Narragansett", "Rent / Lease", 3840.00)]      # no salary row at all
+K_MEASURED = {"Diversey": 12555.70, "Belmont": 7097.48,
+              "Irving Park": 1077.04, "Narragansett": 1128.22}
+k = lc.measured_fill(K_SHEET, K_MEASURED, PAYROLL_NAMES, grain="store")
+ok("K1 THE REGRESSION — a store with an approved figure contributes NO measured hours",
+   sorted(k["suppressed"]), ["Belmont", "Diversey"])
+near("K2 …and the dollars refused are REPORTED, never quietly dropped",
+     k["suppressed_amount"], 19653.18)
+ok("K3 a store with NO approved figure keeps its labour cost (the opposite failure, §4e/§C)",
+   k["fill"], {"Irving Park": 1077.04, "Narragansett": 1128.22})
+near("K4 …and that is all that is added", k["fill_amount"], 2205.26)
+ok("K5 the note names the dollars it is holding back, in words",
+   "$19,653.18" in (k["note"] or ""), True)
+ok("K6 the plan books nothing of its own — no key on it could post a dollar",
+   [x for x in sorted(k.keys()) if x in ("booked", "netted", "amount", "total")], [])
+
+# A $0.00 PLACEHOLDER IS NOT AN APPROVED FIGURE. Without this a tenant that pre-creates its expense
+# rows at zero would suppress the hours too and book $0.00 of labour for a staffed store.
+ok("K7 a zero-amount payroll row is not an approved figure",
+   "Irving Park" in lc.measured_fill(
+       K_SHEET + [expense("Irving Park", "Employee Salaries", 0.0)],
+       K_MEASURED, PAYROLL_NAMES, grain="store")["fill"], True)
+ok("K8 a PRODUCER row is an approved figure with no vocabulary at all",
+   lc.measured_fill([expense("Irving Park", "x", 9000.0, source_key="payroll_gross")],
+                    K_MEASURED, [], grain="store")["fill"].get("Irving Park"), None)
+
+# GRAIN is the org's own `payroll_authority_grain`, and the HOUSE value is DEREFERENCED, never
+# respelled here — a second spelling of it is how an org-grain tenant silently went per-store.
+ok("K9 org grain: ONE approved row anywhere suppresses every store's measurement",
+   lc.measured_fill(K_SHEET, K_MEASURED, PAYROLL_NAMES, grain="org")["fill"], {})
+ok("K10 org grain with NO approved row anywhere fills every store",
+   lc.measured_fill([expense("Diversey", "Rent / Lease", 10.0)], K_MEASURED, PAYROLL_NAMES,
+                    grain="org")["fill"], K_MEASURED)
+ok("K11 the house grain is dereferenced from the vocabulary home",
+   lc.measured_fill(K_SHEET, K_MEASURED, PAYROLL_NAMES)["grain"], _lv.HOUSE_AUTHORITY_GRAIN)
+
+# THE KEY SPACE. Live, the sheet spells one store `Utica` and `store_mapping` spells it
+# `LUX-NY-UTICA`. Deciding in two key spaces is how one store answered twice.
+K_FOLD = {"Utica": "utica", "LUX-NY-UTICA": "utica"}.get
+k_fold = lc.measured_fill([expense("Utica", "Employee Salaries", 1365.00)],
+                          {"LUX-NY-UTICA": 3888.74}, PAYROLL_NAMES, grain="store", key_of=K_FOLD)
+ok("K12 both sides fold through the caller's key_of before the decision is made",
+   [k_fold["fill"], k_fold["suppressed"]], [{}, ["utica"]])
+near("K13 …and the refused dollars are counted in that same folded space, not looked back up",
+     k_fold["suppressed_amount"], 3888.74)
+ok("K14 WITHOUT the fold the same rows double-book — the mechanism itself is pinned",
+   lc.measured_fill([expense("Utica", "Employee Salaries", 1365.00)],
+                    {"LUX-NY-UTICA": 3888.74}, PAYROLL_NAMES, grain="store")["fill"],
+   {"LUX-NY-UTICA": 3888.74})
+
+# RULE TWO / §COMMCALC-49.10 — one tenant's payroll vocabulary never decides another's fill.
+ok("K15 a payroll word this tenant did not declare confers no authority here",
+   "Diversey" in lc.measured_fill([expense("Diversey", "Employee Salaries", 6033.26)],
+                                  K_MEASURED, ["Staff Wages"], grain="store")["fill"], True)
+ok("K16 nothing declared means nothing approved — never a fall back to house words",
+   lc.measured_fill(K_SHEET, K_MEASURED, [], grain="store")["fill"], K_MEASURED)
+
+# A FLAT ALLOCATION IS NOT AN APPROVED FIGURE — §4e's ruling reused, never made a second time.
+# Live: LuxeLink charges `DM Salaries` at an identical $1,275.00 to every store. October 2026,
+# `Nostrand` carried ONLY that, so its own staff read as costing $0.00 beyond the allocation.
+K_ALLOC = [expense(c, "DM Salaries", 1275.00) for c in ("a", "b", "c", "d")]
+K_ALLOC.append(expense("a", "Employee Salaries", 5000.00))
+k_alloc = lc.measured_fill(K_ALLOC, {c: 7000.0 for c in ("a", "b", "c", "d")},
+                           PAYROLL_NAMES, grain="store")
+ok("K17 a store carrying ONLY the estate-wide allocation still books its hours",
+   k_alloc["fill"], {"b": 7000.0, "c": 7000.0, "d": 7000.0})
+ok("K18 …and the excluded name is reported, so the screen can say why",
+   k_alloc["allocated_excluded"], ["dm salaries"])
+
+# IT IS THE SAME DECISION THE STATEMENT MAKES. `coa.build_inputs` held this rule inline; same rows,
+# same answer, or the two reports are back to disagreeing.
+ok("K19 the plan's suppression set IS the P&L's authority set over the measured stores",
+   set(k["suppressed"]),
+   {c for c in K_MEASURED
+    if c in lc.authoritative_codes(K_SHEET, [n for n in PAYROLL_NAMES
+                                             if n.lower() not in lc.allocated_names(K_SHEET,
+                                                                                    PAYROLL_NAMES)])})
+# NO MEASUREMENT AT ALL IS NOT A FILL OF ZERO (§19.50). Live: the house org's October clock
+# coverage is 62.94% against the 85% it requires, so the measurement REFUSES.
+k_none = lc.measured_fill(K_SHEET, None, PAYROLL_NAMES, grain="store")
+ok("K20 an unmeasurable period fills nothing and SAYS it could not measure",
+   [k_none["fill"], k_none["measured"], k_none["fill_amount"], k_none["suppressed_amount"]],
+   [{}, False, None, None])
+ok("K21 …and says so in words, so no screen can render it as $0.00 of labour",
+   "not a finding that they cost nothing" in (k_none["note"] or ""), True)
+
+# PAY ATTRIBUTABLE TO NO STORE is held OUT of the per-store decision and REPORTED, never dropped —
+# a salaried manager with no home store is real cost (live: LuxeLink $6,500.00 of market salary,
+# §STOREOPS-09). The caller books it only where nothing was suppressed, which is the rule the P&L's
+# company-wide cell has always used, so both readers decide alike.
+K_CW = dict(K_MEASURED); K_CW[None] = 6500.00
+k_cw = lc.measured_fill(K_SHEET, K_CW, PAYROLL_NAMES, grain="store")
+ok("K22 unattributable pay is not a store's fill",
+   sorted(k_cw["fill"]), ["Irving Park", "Narragansett"])
+near("K23 …and it is reported with its dollars rather than dropped",
+     k_cw["unattributed_amount"], 6500.00)
+ok("K24 …and it is NOT counted as refused either (it pairs with no approved figure)",
+   k_cw["suppressed_amount"], k["suppressed_amount"])
+ok("K25 nothing measurable at all leaves it None, not 0.00",
+   lc.measured_fill(K_SHEET, None, PAYROLL_NAMES)["unattributed_amount"], None)
+
+# A FOLD THAT RAISES must not lose a store's money: the decision falls back to the raw spelling,
+# which is the same contract `labour_actuals.as_expense_rows`' relabel keeps (its §D16).
+ok("K26 a key_of that raises leaves the key as it was rather than dropping the dollars",
+   lc.measured_fill([], {"Irving Park": 1077.04}, PAYROLL_NAMES, grain="store",
+                    key_of=lambda _: (_ for _ in ()).throw(ValueError("boom")))["fill"],
+   {"Irving Park": 1077.04})
 
 # ── report ────────────────────────────────────────────────────────────────────────────────────
 print("=" * 78)

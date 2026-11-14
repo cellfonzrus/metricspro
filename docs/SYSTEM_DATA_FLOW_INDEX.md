@@ -26516,6 +26516,7 @@ status word rather than a blank that reads as nil.
 | CORE-42 | core |
 | ACCOUNT-01 | account, commcalc, closing |
 | ACCOUNT-02 | account, commcalc |
+| ACCOUNT-03 | account, commcalc |
 | CORE-32 | core |
 | CORE-33 | core |
 | CORE-34 | core |
@@ -48938,3 +48939,128 @@ See also §13a (the canonical resolution this dereferences) · §13c (market enu
 spellings of one store is the normal case) · §ACCOUNT-01 (the same fold defect on the backend's
 payroll authority) · §19.18 (one fact, one home, dereferenced) · §COMMCALC-49.10 (a default that is
 really one tenant's vocabulary).
+
+
+## §ACCOUNT-03. ONE LABOUR AUTHORITY — WHOSE FIGURE BOOKS THIS STORE-MONTH (reported 2026-11-14)
+
+Owner, 2026-11-14: *"check Gross profit report it shows different numbers, we have spoken about this
+a lot of times if the source of data is the same why are th numbers different , this is conflicting
+and must be fixed in teh code itself"* — and, the same hour, the ruling that settles which figure is
+right: *"the luxelink salary is updated everyweek by the Dms and that is the approved salary you
+should be counting towards the expenses"*.
+
+### §ACCOUNT-03.1 What was on screen, measured live before a line was changed
+
+The Gross Profit report's expense column summed the Expenses sheet — which HOLDS the DM-approved
+`Employee Salaries` rows — and then added the payroll measured from the month's hours ON TOP, for
+every store. Measured on production 2026-11-14, LuxeLink October 2026:
+
+| store | DM-approved sheet figure | measured payroll added again | GP showed | the P&L showed |
+| --- | --- | --- | --- | --- |
+| `Diversey` | $7,308.26 | $12,555.70 | **$27,789.02** | $15,233.32 |
+| `Belmont` | $1,441.50 | $7,097.48 | **$14,213.98** | $7,116.50 |
+
+**$86,369.22 of one month's labour booked twice, at 15 of the 19 stores the month measured.** The
+expense column totalled $231,185.08 against $144,815.86. `Diversey` at $27,789.02 is the figure the
+owner reported by eye.
+
+### §ACCOUNT-03.2 THE CLASS — one question with two answers in two files
+
+The P&L never had the defect: `coa.build_inputs` held the rule INLINE (`if st in
+payroll_auth_stores: continue`) and was right. The GP report never decided it at all. So "whose
+labour figure books this store-month?" had one answer in `account/coa.py` and no answer in
+`commcalc/router.py`, which is the duplicate defect §19.18 forbids — and the reason the owner has
+been told twice that the two reports disagree.
+
+A second fault sat underneath it: the decision has to be made in ONE key space. The sheet spells a
+store `Utica` and `store_mapping` spells it `LUX-NY-UTICA`; the measured cells are keyed by
+canonical store. The first cut folded with the canonical→code map, which left the sheet's typed
+codes in a third space, so six LuxeLink stores' approved figures suppressed nothing.
+
+### §ACCOUNT-03.3 The one home, and every reader that dereferences it
+
+`commcalc/labour_coverage.measured_fill(entered_rows, measured_by_key, payroll_names, grain,
+key_of)` — PURE, derives no dollar. Returns `fill` (the measurement that may be added), `suppressed`
+/ `suppressed_by_key` / `suppressed_amount` (what it refuses to add twice, reported never hidden),
+`unattributed` / `unattributed_amount`, `grain`, `measured`, `allocated_excluded` and a `note`.
+
+- **The ruling, applied**: the entered (DM-approved) figure wins where it exists; the measurement
+  fills in only a store that has NO approved figure of its own.
+- **`grain`** is the org's `payroll_authority_grain`, defaulting to `labour_vocabulary.
+  HOUSE_AUTHORITY_GRAIN` — dereferenced, never respelled.
+- **A flat allocation is not an approved figure** (`allocated_names`, §4e, reused not re-ruled): a
+  store carrying only an estate-wide `DM Salaries` $1,275.00 still books its hours.
+- **`key_of` folds BOTH sides** into one space before the decision, and the refused dollars are
+  accumulated in that same pass — looking them back up in the caller's raw map is what made the
+  report say "$0.00 is NOT added" while holding back $19,653.18.
+- **Pay attributable to NO store** (a salaried manager with no home store — live, LuxeLink's
+  $6,500.00 of market salary, §STOREOPS-09) is held OUT of the per-store decision and REPORTED, then
+  booked only where nothing was suppressed: the rule the P&L's company-wide cell has always used, so
+  both readers decide alike. Dropping it would be a silent loss of real cost (§19.49).
+- **A `key_of` that raises** leaves the key as it was rather than losing the store's money — the
+  same contract `as_expense_rows`' relabel keeps.
+- **`measured_by_key=None` is not a fill of zero** (§19.50): `measured` False, both totals `None`.
+
+Readers: `account/coa.build_inputs` (the statement's `wages` line — its inline
+`payroll_auth_stores` set is DELETED) and, through `commcalc/labour_actuals.salary_fill_plan` /
+`.as_expense_rows`, all four code-keyed expense surfaces — the GP report, the expenses trend, the
+Sales Comparison expense line and the prospect/takeover evaluation.
+
+### §ACCOUNT-03.4 What this MOVES, and it is surfaced not silent
+
+Aligning the statement with the ruling it already reported moves money in one direction only: a
+store whose ONLY payroll row is the flat allocation now books its own labour instead of reading as
+though it paid nobody. LuxeLink October `wages` $54,044.69 → $57,727.81 (`Nostrand` +$3,683.12);
+July $98,430.59 → $111,615.64 (three stores). Nothing else on any statement moves.
+
+### §ACCOUNT-03.5 Proven on all four tenants, live
+
+| tenant | October 2026 | what it proves |
+| --- | --- | --- |
+| LuxeLink (`store` grain) | fill $12,240.47 · suppressed $86,369.22 | the mixed case |
+| house org (`org` grain) | `measured` **False** | 62.94% clock coverage REFUSES — not a $0.00 |
+| Vzone (`org` grain) | fill $20,010.00 = the P&L's whole `wages` line | GP and P&L agree to the cent |
+| NY LOGISTICS (no config row) | fill $9,662.12 = the P&L's whole `wages` line | same, on house words |
+
+House org September: suppressed $83,657.57 — the GP report was adding all of it a second time.
+
+### §ACCOUNT-03.6 Reported, never coded around
+
+`902 Ave U` holds **two** `commcalc.store_mapping` rows — `LUX-NY-AVENUEU` / "902 Avenue U" (active)
+and `Ave U` / "902 Ave U" (inactive) — and the shifts carry the inactive spelling, so $6,352.09 of
+October labour cannot be relabelled into the GP report's code space at all. The GP payload now names
+it with its amount (`labour_measured_fill.unkeyed` / `.unkeyed_amount`) rather than dropping it in
+silence. The fix is a mapping row, not code.
+
+### §ACCOUNT-03.7 Duplicate check (build gate) — what was checked, what was reused
+
+Searched the index for an existing home for "whose labour figure books this store-month": §4e
+(`labour_vocabulary`, the coverage states and `allocated_names`), §ACCOUNT-02 (`entered_vs_measured`
+and `payroll_expense_by_key`), §COMMCALC-23 (the carry rule and `labour_actuals`), §ACCOUNT-01 /
+§64 (the store-identity fold). All four are REUSED — `allocated_names`, `authoritative_codes`,
+`HOUSE_AUTHORITY_GRAIN`, the `key_of` contract and `store_identity.store_key` are dereferenced, not
+restated. The one thing that did not exist anywhere was the decision itself, which existed inline in
+one reader and nowhere in the other; it is now `measured_fill`, and both read it. No new table, no
+new endpoint, no migration.
+
+### §ACCOUNT-03.8 What the lock holds
+
+`harness_labour_coverage.py` **§K** (221 checks, up from 195): the live October regression to the
+cent, the opposite failure (a store losing its labour entirely), the $0.00 placeholder, the producer
+row, both grains with the house grain dereferenced, the key-space fold AND the dollars counted in
+it, the mechanism pinned without the fold, one tenant's vocabulary proven unable to decide another's
+fill, the flat allocation, the plan proven identical to the statement's authority set, unattributable
+pay reported rather than dropped, a raising fold, and the unmeasurable period as a tri-state.
+`harness_labour_actuals.py` §D/§E carry the same contract at the plumbing layer (90 checks). **`labour_actuals.as_expense_rows`' `booked_rows` is a REQUIRED
+POSITIONAL argument** — the structural lock: a future caller cannot materialise measured salary rows
+beside an expense sheet it never declared, which is exactly how the GP report came to double-book a
+month. Tests: `backend/tests/unit/test_one_labour_authority.py` (17) ·
+`backend/tests/integration/test_one_labour_authority_wiring.py` (13, over the real
+`coa.build_inputs` and the real `labour_actuals` plumbing, two tenants with different vocabularies,
+both grains, and a test asserting the inline rule is gone from `build_inputs`' source).
+
+**Cross-references:** §ACCOUNT-02 (the frozen copy, and the report this acts on) · §ACCOUNT-01 (the
+store-code fold) · §4e (the labour vocabulary, coverage states and `allocated_names`) · §19.18 (one
+fact, one home, dereferenced) · §19.50 (tri-state verdicts) · §14y (the evidence interlock that
+refuses) · §COMMCALC-23 (a carried month never inherits labour) · §COMMCALC-49.10 (every feature for
+every tenant) · §COMMCALC-18 (the per-store expense fold) · §CORE-34/35 (the gate index).

@@ -169,8 +169,31 @@ def series(client, org_id, periods, resolved, store_key_of=None):
     return {p: by_store(client, org_id, p, resolved, store_key_of) for p in (periods or [])}
 
 
-def as_expense_rows(actual, resolved, *, halves=None, store_col="store_code",
-                    period=None, amount_col="amount", key_as=None):
+def salary_fill_plan(actual, resolved, booked_rows, *, key_as=None, key_canon=None, grain=None):
+    """THE one call every caller makes before materialising a measured SALARY row: given the expense
+    rows this reader is ALREADY going to sum, which stores' hours may still be added?
+
+    It derives nothing of its own — `labour_coverage.measured_fill` is the one home for the decision
+    (index §ACCOUNT-03) and this is the plumbing that hands it the two sides in one key space. The
+    THE DECISION IS MADE IN CANONICAL STORE SPACE, never in the sheet's code space. The cells come
+    in keyed by canonical store; the sheet's rows are keyed by whatever code the tenant typed. Only
+    `key_canon` (store identity's own resolver) can fold BOTH of those onto one store, and the first
+    cut of this function folded with `key_as` — canonical → code — which leaves a sheet row spelled
+    `Utica` and a measured cell spelled `531 Utica Ave` → `LUX-NY-UTICA` in two different spaces, so
+    six LuxeLink stores' approved figures suppressed nothing and their hours booked on top anyway.
+    `key_as` is then used only to RELABEL what books, which is `as_expense_rows`' job.
+    """
+    from app.modules.commcalc import labour_coverage as _lcov
+    act = actual if isinstance(actual, dict) else {}
+    measured_ok = bool((act.get("measured") or {}).get(SALARY))
+    cells = ((act.get("by_half_store") or {}).get(SALARY) or {}) if measured_ok else None
+    r = resolved if isinstance(resolved, dict) else {}
+    return _lcov.measured_fill(booked_rows, cells, r.get("payroll_names"),
+                               grain=(grain or r.get("grain")), key_of=(key_canon or key_as))
+
+
+def as_expense_rows(actual, resolved, booked_rows, *, halves=None, store_col="store_code",
+                    period=None, amount_col="amount", key_as=None, key_canon=None, grain=None):
     """PURE: a month's derived labour → rows shaped like `store_expenses` rows, so a reader that
     already sums an expense sheet picks the month's OWN labour up with no arithmetic change.
 
@@ -203,9 +226,29 @@ def as_expense_rows(actual, resolved, *, halves=None, store_col="store_code",
                       or list(_lv.DEFAULT_PAYROLL_ROWS))[0],
              COMMISSION: (_lv._clean((resolved or {}).get("commission_names"))
                           or list(_lv.DEFAULT_COMMISSION_ROWS))[0]}
+    # ── THE SALARY HALF ASKS FIRST (owner report 2026-11-14, index §ACCOUNT-03) ─────────────────
+    # `booked_rows` is what the caller is ALREADY going to sum. A store whose approved payroll figure
+    # is in there must NOT also get its measured hours: that is the same labour twice, and it is why
+    # the GP report's expense column read $27,789.02 at one store against the P&L's $15,403.41.
+    # The decision is `labour_coverage.measured_fill`'s, reached through `salary_fill_plan`, and it
+    # is made in CANONICAL store space (`key_canon`) — the only space the sheet's typed codes and the
+    # measured cells can both be folded into. Its answer REPLACES the salary cells here, so this
+    # function cannot book a dollar the decision refused, and `key_as` then relabels every surviving
+    # cell into the sheet's code space exactly as it does for the commission half.
+    _plan = salary_fill_plan(act, resolved, booked_rows, key_as=key_as, key_canon=key_canon,
+                             grain=grain)
+    # Pay attributable to NO store is held out of the per-store decision by `measured_fill` and
+    # reported on the plan. It books here under exactly the rule the P&L's company-wide cell has
+    # always used — only where nothing was suppressed, so it cannot be a dollar already inside an
+    # entered figure. Dropping it instead would be a silent loss of real cost (§19.49).
+    _sal_cells = dict(_plan["fill"] or {})
+    if not _plan["suppressed"]:
+        _sal_cells.update(_plan["unattributed"] or {})
     out = []
     for h in use:
-        for store, amt in sorted((act.get("by_half_store") or {}).get(h, {}).items()):
+        _cells = (_sal_cells if h == SALARY
+                  else ((act.get("by_half_store") or {}).get(h) or {}))
+        for store, amt in sorted(_cells.items()):
             val = round(float(amt or 0.0), 2)
             if not val:
                 continue
