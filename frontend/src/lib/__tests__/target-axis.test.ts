@@ -94,7 +94,7 @@ describe('a failed read is not an answer', () => {
 })
 
 describe('the declared half', () => {
-  it('names exactly the categories whose target is a target_line row', async () => {
+  it('names exactly the categories this business declares, never the built-in four', async () => {
     const m = await freshModule()
     const r = await m.fetchTargetAxisResult('November 2026')
     expect(m.declaredCats(r.cats).map((c) => c.key)).toEqual(['new_line_count', 'tender:cash'])
