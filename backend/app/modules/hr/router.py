@@ -26,6 +26,8 @@ from app.modules.storeops.router import (scope_emp_ids, _tenant_pp_settings, _em
                                            require_person_write)
 from app.modules.storeops import payroll_salary
 from app.modules.storeops import pay_visibility as _payvis
+# THE ONE HOME for "is this store / this person still active" (index §CORE-44).
+from app.modules.core import roster_visibility as _rv
 # THE ONE HOME for "which hours is this employee paid for, and on what basis" (index §14y).
 from app.modules.storeops import payroll_hours_basis as _hours_basis
 # THE ONE punch/correction read on the pay path, and the interlock that gates paying from it (§14y).
@@ -1267,7 +1269,7 @@ def hr_employee_database_fields(authorization: str = Header(default="")):
     return {"fields": _EMPDB_BASE_FIELDS + _empdb_dd_fields(org_id)}
 
 
-def hr_employee_database(employee_ids: str = "", fields: str = "", include_inactive: bool = True,
+def hr_employee_database(employee_ids: str = "", fields: str = "", include_inactive: bool = False,
                           reveal: bool = False, authorization: str = Header(default="")):
     """(HTTP route: `hr_employee_database_route` below — mig-434 pay-visibility gate; this shared
     function stays ungated for harness callers, the same split storeops.get_payroll uses.)
@@ -1295,9 +1297,12 @@ def hr_employee_database(employee_ids: str = "", fields: str = "", include_inact
     field_keys = [f.strip() for f in fields.split(",") if f.strip()]
     want = (lambda k: (not field_keys) or (k in field_keys))
 
+    # ACTIVE-ONLY THROUGH THE ONE HOME (owner directive 2026-11-14, §CORE-44). The narrowing used to
+    # be `.eq("is_active", True)`, which DROPS NULL — and the column is `BOOLEAN DEFAULT true` and
+    # nullable, so an employee whose flag was never set is LIVE and was missing from this report
+    # whenever the Include-inactive box was unticked. Now filtered in Python, after the fetch, by the
+    # same predicate every other roster reader uses.
     q = so.table("employees").select("*").eq("org_id", org_id)
-    if not include_inactive:
-        q = q.eq("is_active", True)
     if ids:
         q = q.in_("employee_id", ids)
     try:
@@ -1307,11 +1312,10 @@ def hr_employee_database(employee_ids: str = "", fields: str = "", include_inact
         # migration 077) from PostgREST's schema cache — fall back to the always-safe core columns
         # rather than 500ing the whole report.
         q2 = so.table("employees").select("employee_id,name,home_store,role,is_active,email,phone").eq("org_id", org_id)
-        if not include_inactive:
-            q2 = q2.eq("is_active", True)
         if ids:
             q2 = q2.in_("employee_id", ids)
         emps = q2.order("name").execute().data or []
+    emps = _rv.visible(emps, include_inactive=include_inactive)
 
     emp_ids_in_scope = [e.get("employee_id") for e in emps if e.get("employee_id")]
 
@@ -1413,7 +1417,7 @@ def hr_employee_database(employee_ids: str = "", fields: str = "", include_inact
 
 
 @router.get("/employee-database")
-def hr_employee_database_route(employee_ids: str = "", fields: str = "", include_inactive: bool = True,
+def hr_employee_database_route(employee_ids: str = "", fields: str = "", include_inactive: bool = False,
                                 reveal: bool = False, authorization: str = Header(default="")):
     """HTTP surface for GET /hr/employee-database: hr_employee_database() + the PAY-VISIBILITY GATE
     (mig 434, storeops.pay_visibility). Pay-classified columns are matched BY KEY NAME against

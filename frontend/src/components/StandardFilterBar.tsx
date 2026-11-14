@@ -25,9 +25,10 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import type { SortFieldDecl, StandardFilterValue } from '@/lib/standard-filters'
 import type { StoreOpt } from '@/lib/market-store-cascade'
 import {
-  isStandardFilterActive, isStandardSortActive, monthSelectValue, monthNeedsOwnOption,
-  parseSortSelect, sortSelectOptions, sortSelectValue,
+  isStandardFilterActive, isStandardInactiveShown, isStandardSortActive, monthSelectValue,
+  monthNeedsOwnOption, parseSortSelect, sortSelectOptions, sortSelectValue,
 } from '@/lib/standard-filters'
+import { INACTIVE_LABEL, withIncludeInactive } from '@/lib/roster-visibility'
 
 type OptIn = EntityOption[] | string[] | undefined
 const toOpts = (o: OptIn): EntityOption[] =>
@@ -65,6 +66,14 @@ export type StandardFilterBarProps = {
    *  `value.sort`, and the page orders its rows with `sortStandard(rows, value, fields)` — the same
    *  state a sortable column header toggles, so the dropdown and the headers always agree. */
   sortFields?: SortFieldDecl[]
+  /** SHOW INACTIVE (owner directive 2026-11-14, §CORE-44) — how many rows the page is CURRENTLY
+   *  hiding because their store or person was made inactive, from
+   *  `standardInactiveHidden(rows, value, acc)`. Passing a number (0 included) is how a page DECLARES
+   *  it can answer "is this one active": the bar then renders the "Show inactive" checkbox, and names
+   *  the count when it is hiding anything. Omitted / null renders no checkbox at all — the same
+   *  posture as `sortFields`, because a control that cannot change what is on screen must not be
+   *  offered. The page hides the rows itself, through `filterRows`; the bar only holds the switch. */
+  inactiveHidden?: number | null
   /** Appended module-specific controls (allowed; never replaces the core set). */
   right?: React.ReactNode
   storeLabel?: string
@@ -75,15 +84,20 @@ export type StandardFilterBarProps = {
 export default function StandardFilterBar({
   value, onChange, show, periodMode = 'month', periods, storeOptions, marketOptions, repOptions,
   optionsUrl, right, storeLabel = 'Stores…', marketLabel = 'Markets…', repLabel = 'People…',
-  cascadeStores, sortFields,
+  cascadeStores, sortFields, inactiveHidden,
 }: StandardFilterBarProps) {
   const s = { period: true, stores: true, markets: true, reps: true, ...(show || {}) }
   const [fetched, setFetched] = useState<{ stores?: EntityOption[]; markets?: EntityOption[]; reps?: EntityOption[] }>({})
 
+  // THE OPTIONS FOLLOW THE TICK (owner directive 2026-11-14, §CORE-44). `GET /core/filter-options`
+  // is active-only by default now, so without this a user who ticked "Show inactive" would see the
+  // closed store's rows and still have no way to NAME that store in the picker. One parameter, one
+  // spelling, from the shared home.
+  const rosterUrl = optionsUrl ? withIncludeInactive(optionsUrl, !!value.showInactive) : ''
   useEffect(() => {
-    if (!optionsUrl) return
+    if (!rosterUrl) return
     let alive = true
-    apiCached(optionsUrl, LOOKUP).then((d: any) => {
+    apiCached(rosterUrl, LOOKUP).then((d: any) => {
       if (!alive || !d) return
       const stores: EntityOption[] = (d.stores || []).map((x: any) =>
         typeof x === 'string' ? { id: x, label: x } : { id: x.store ?? x.id ?? x.address, label: x.store ?? x.label ?? x.address, sublabel: x.market || undefined })
@@ -93,7 +107,7 @@ export default function StandardFilterBar({
       setFetched({ stores, markets, reps })
     }).catch(() => {})
     return () => { alive = false }
-  }, [optionsUrl])
+  }, [rosterUrl])
 
   const storeOpts = useMemo(() => (storeOptions ? toOpts(storeOptions) : fetched.stores || []), [storeOptions, fetched.stores])
   const marketOpts = useMemo(() => (marketOptions ? toOpts(marketOptions) : fetched.markets || []), [marketOptions, fetched.markets])
@@ -104,7 +118,12 @@ export default function StandardFilterBar({
   // the only way back to the report's own order is a reload. So Clear appears for either, and resets
   // both; `isStandardFilterActive` itself stays untouched, so no page starts claiming rows are hidden.
   const sortOpts = useMemo(() => sortSelectOptions(sortFields || []), [sortFields])
+  // A page that passed a count can answer the question; one that passed nothing cannot.
+  const canShowInactive = typeof inactiveHidden === 'number'
+  const hiding = canShowInactive && !value.showInactive ? (inactiveHidden as number) : 0
+  // Clear must undo "Show inactive" too — otherwise a reload is the only way back to the default.
   const active = isStandardFilterActive(value, periodMode === 'range') || isStandardSortActive(value)
+    || isStandardInactiveShown(value)
   // An EMPTY roster is not cascade mode — otherwise a page whose roster is still loading would render no
   // store/market control at all and silently fall back to nothing, instead of the plain pickers.
   const cascade = !!(cascadeStores && cascadeStores.length)
@@ -170,13 +189,27 @@ export default function StandardFilterBar({
           </select>
         </label>
       )}
+      {/* SHOW INACTIVE — only where the page can answer it (see `inactiveHidden`). The count is
+          stated beside the box because the DEFAULT hides rows: a report that silently shrinks is a
+          report that lies about its own total, and a historical money report keeps the rows and
+          names the count rather than dropping a store that has since closed. */}
+      {canShowInactive && (
+        <label style={lbl}>
+          <input type="checkbox" aria-label={INACTIVE_LABEL} checked={!!value.showInactive}
+            onChange={e => set({ showInactive: e.target.checked })} />
+          {INACTIVE_LABEL}
+          {hiding > 0 && (
+            <span style={{ color: 'var(--text2)' }}>({hiding} inactive hidden)</span>
+          )}
+        </label>
+      )}
       {/* A module's own controls sit WITH the core set (owner 2026-10-31: *"it should be next to the
           filters"*), and Clear is last on every bar — a button that appears and disappears in the
           middle of a row shifts everything to its right each time a filter is picked. */}
       {right}
       {active && (
         <button className="btn btn-secondary" style={{ fontSize: 12 }}
-          onClick={() => onChange({ period: periodMode === 'range' ? '' : value.period, periodTo: '', stores: [], markets: [], reps: [], sort: null })}>
+          onClick={() => onChange({ period: periodMode === 'range' ? '' : value.period, periodTo: '', stores: [], markets: [], reps: [], sort: null, showInactive: false })}>
           Clear filters
         </button>
       )}

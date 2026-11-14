@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
+import { visibleRoster } from '@/lib/roster-visibility'
 import { api } from '@/lib/client'
 import { notSavedNote } from '@/lib/rowSave'
 import { apiCached, CONFIG, LOOKUP } from '@/lib/cache'
@@ -38,8 +39,8 @@ export default function HRPeoplePage() {
       const r = await apiCached('/api/v1/core/roles', CONFIG); setRoles(r.roles || [])
       // 2026-07-25 fix: a new hire can only be assigned to an ACTIVE store (a closed store should
       // never gain new employees/hours).
-      const st = await apiCached('/api/v1/storeops/stores', LOOKUP); setStores((st || []).filter((s: any) => s.store_code && s.is_active !== false))
-      const e = await api('/api/v1/hr/employees'); setPeople((e.employees || []).filter((p: any) => p.is_active !== false))
+      const st = await apiCached('/api/v1/storeops/stores', LOOKUP); setStores(visibleRoster((st || []).filter((s: any) => s.store_code), false))
+      const e = await api('/api/v1/hr/employees'); setPeople(visibleRoster(e.employees || [], false))
     } catch (err: any) { setMsg('Load failed: ' + (err?.message || err)) }
   }
   useEffect(() => { loadAll() }, [])

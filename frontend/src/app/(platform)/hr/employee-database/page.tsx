@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
+import { INACTIVE_LABEL } from '@/lib/roster-visibility'
 import { api } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
@@ -69,7 +70,10 @@ export default function EmployeeDatabasePage() {
   const [revealError, setRevealError] = useState('')
   const [loading, setLoading] = useState(true)
   const [msg, setMsg] = useState('')
-  const [includeInactive, setIncludeInactive] = useState(true)
+  // OFF BY DEFAULT (owner directive 2026-11-14, §CORE-44): an inactive employee does not show
+  // until the box is ticked. This page already had the box; it opened with it ON, which is the
+  // directive backwards.
+  const [includeInactive, setIncludeInactive] = useState(false)
 
   const [storeOpts, setStoreOpts] = useState<EntityOption[]>([])
   const [marketOpts, setMarketOpts] = useState<EntityOption[]>([])
@@ -83,10 +87,12 @@ export default function EmployeeDatabasePage() {
       const [fr, rr, stores] = await Promise.all([
         api('/api/v1/hr/employee-database/fields'),
         api(`/api/v1/hr/employee-database?include_inactive=${includeInactive ? 'true' : 'false'}`),
-        // This is an audit/historical roster (defaults to including inactive EMPLOYEES) — the store
-        // filter should be able to reference a since-closed store too, so it always requests the full
-        // set (GET /stores now defaults to active-only, 2026-08-06 disabled-T-store fix).
-        apiCached('/api/v1/storeops/stores?include_inactive=true', LOOKUP).catch(() => []),
+        // THE STORE FILTER FOLLOWS THE SAME TICK (owner directive 2026-11-14, §CORE-44). This used
+        // to request the full store set unconditionally, on the reasoning that an audit roster should
+        // be able to reference a since-closed store — true, but that is exactly what the box is for.
+        // With it unticked the page now offers only live stores; ticking it brings the closed ones
+        // back on both axes at once, so the roster and its store filter can never disagree.
+        apiCached(`/api/v1/storeops/stores?include_inactive=${includeInactive ? 'true' : 'false'}`, LOOKUP).catch(() => []),
       ])
       const fields: FieldDef[] = fr?.fields || []
       setFieldsCatalog(fields)
@@ -195,7 +201,7 @@ export default function EmployeeDatabasePage() {
             storeOptions={storeOpts} marketOptions={marketOpts} repOptions={repOpts}
             repLabel="Employees…" storeLabel="Stores…" marketLabel="Markets…" />
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text2)' }}>
-            <input type="checkbox" checked={includeInactive} onChange={e => setIncludeInactive(e.target.checked)} /> Include inactive employees
+            <input type="checkbox" aria-label={INACTIVE_LABEL} checked={includeInactive} onChange={e => setIncludeInactive(e.target.checked)} /> {INACTIVE_LABEL}
           </label>
         </div>
 

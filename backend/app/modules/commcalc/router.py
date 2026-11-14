@@ -32437,8 +32437,10 @@ def _byod_pct_default(client, period, org_id=ORG_ID):
 # it just carries `is_active: false` so the UI can label it "(inactive)". What stops is seeding,
 # carrying forward, and offering a dead store as a pickable option.
 def _store_active(s) -> bool:
-    """`is_active IS NOT FALSE` for one storeops.stores row — NULL/absent means ACTIVE."""
-    return (s or {}).get('is_active') is not False
+    """DEREFERENCES THE ONE HOME — `core.roster_visibility.is_active` (index §CORE-44). NULL/absent
+    means ACTIVE, and the string 'false' does not mean active; the rule is stated once, there."""
+    from app.modules.core import roster_visibility as _rv
+    return _rv.is_active(s or {})
 
 
 _ROSTER_COLS = 'store_code,address,market,monthly_target,is_active'

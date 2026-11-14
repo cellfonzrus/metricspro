@@ -8,6 +8,11 @@
 // and "what a header click does next" since OWNER DIRECTIVE 2026-08-10; this module only gives that
 // rule a place in the shared bar (index §CORE-28). A second comparator would drift from the headers.
 import { nextSort, sortRows, type SortState } from './table-sort'
+// WHO IS STILL ACTIVE IS NOT RE-DERIVED HERE either (owner directive 2026-11-14, §CORE-44).
+// `lib/roster-visibility` is the ONE home for "is this store / this person active" — NULL means
+// active, and the string 'false' does not. This module only gives that rule a place in the shared
+// bar, so every adopting report honours the directive by declaring one accessor.
+import { rosterIsActive } from './roster-visibility'
 
 export type { SortState } from './table-sort'
 
@@ -23,6 +28,11 @@ export type StandardFilterValue = {
    *  bar's "Sort by" dropdown and a click on a sortable column header can never disagree about the
    *  order — they read and write this. `null`/absent = the order the report itself produced. */
   sort?: SortState
+  /** SHOW THE INACTIVE ONES (owner directive 2026-11-14, §CORE-44). Absent / false — the default —
+   *  means a store or person that has been made inactive is NOT shown. Ticking the bar's
+   *  "Show inactive" checkbox sets it true. It is a WIDENING, never a narrowing: see
+   *  `isStandardInactiveShown` for why it is kept out of `isStandardFilterActive`. */
+  showInactive?: boolean
 }
 
 /** A SORTABLE FIELD, DECLARED BY THE PAGE. The bar is handed these; it has no list of its own and no
@@ -115,6 +125,13 @@ export type FieldAccessors<T> = {
   rep?: (r: T) => string | null | undefined
   /** Returns a row date as anything Date-parseable / a YYYY-MM-DD-ish string, for the period filter. */
   date?: (r: T) => string | null | undefined
+  /** THE ROW'S ACTIVE FLAG, as the row carries it (`r.is_active`, `r.store?.is_active`, …). Declaring
+   *  it is what switches the directive on for a report: inactive rows then drop out unless
+   *  "Show inactive" is ticked. A page that declares NOTHING hides nothing — a report whose rows do
+   *  not carry the flag must not have rows removed behind its back, and must not be offered a
+   *  checkbox that silently does nothing. The value is judged by `rosterIsActive`, never by
+   *  truthiness. */
+  active?: (r: T) => unknown
 }
 
 const norm = (v: any): string => (v == null ? '' : String(v)).trim()
@@ -159,7 +176,7 @@ export function monthNeedsOwnOption(period: string | undefined, periods?: string
 }
 
 export function emptyStandardFilter(period = ''): StandardFilterValue {
-  return { period, periodTo: '', stores: [], markets: [], reps: [], sort: null }
+  return { period, periodTo: '', stores: [], markets: [], reps: [], sort: null, showInactive: false }
 }
 
 /** True when any of the four core filters is narrowing the result. Period alone counts only in range mode
@@ -170,6 +187,25 @@ export function isStandardFilterActive(sel: StandardFilterValue, countPeriod = f
     sel.stores.length > 0 || sel.markets.length > 0 || sel.reps.length > 0 ||
     (countPeriod && (!!sel.period || !!sel.periodTo))
   )
+}
+
+/** True when INACTIVE ROWS ARE BEING SHOWN. Deliberately NOT part of `isStandardFilterActive`: the
+ *  default (hiding them) is the platform's own posture rather than something the user chose, and
+ *  showing them hides nothing — so neither state means "a filter is narrowing this report". The bar
+ *  reads this separately, because Clear must still be able to put the default back. */
+export function isStandardInactiveShown(sel: StandardFilterValue): boolean {
+  return !!sel?.showInactive
+}
+
+/** HOW MANY ROWS THE DEFAULT IS HIDING — what a report needs in order to say so out loud instead of
+ *  quietly shrinking. 0 when the page declares no active accessor (nothing is being hidden) and 0
+ *  while "Show inactive" is on. Counted over the rows the page LOADED, before the other filters, so
+ *  the sentence means "this report is leaving out N inactive ones", not "N of the rows you can see". */
+export function standardInactiveHidden<T>(rows: T[], sel: StandardFilterValue,
+                                          acc: FieldAccessors<T>): number {
+  if (!acc.active || sel?.showInactive) return 0
+  return (rows || []).reduce(
+    (n, r) => (rosterIsActive({ is_active: acc.active!(r) }) ? n : n + 1), 0)
 }
 
 function periodOk(rowDate: string, sel: StandardFilterValue): boolean {
@@ -193,6 +229,9 @@ export function matchesStandardFilter<T>(row: T, sel: StandardFilterValue, acc: 
   if (sel.markets.length && acc.market) { const k = foldKey(acc.market(row)); if (!sel.markets.some(m => foldKey(m) === k)) return false }
   if (sel.reps.length && acc.rep) { const k = foldKey(acc.rep(row)); if (!sel.reps.some(r => foldKey(r) === k)) return false }
   if (acc.date && (sel.period || sel.periodTo) && !periodOk(acc.date(row) as string, sel)) return false
+  // THE DIRECTIVE, applied once for every adopting report: an inactive store or person is out unless
+  // the user asked to see them. Last, so it reads as the final word on a row that otherwise matched.
+  if (acc.active && !sel.showInactive && !rosterIsActive({ is_active: acc.active(row) })) return false
   return true
 }
 

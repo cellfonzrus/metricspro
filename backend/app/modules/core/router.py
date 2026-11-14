@@ -3063,16 +3063,35 @@ def list_employees(org_id: str = ORG_ID, authorization: str = Header(default="")
 
 
 @router.get("/filter-options")
-def filter_options(org_id: str = ORG_ID):
+def filter_options(org_id: str = ORG_ID, include_inactive: bool = False):
     """Org-scoped option source for the shared StandardFilterBar (RULE FIVE §3d): the tenant's stores
     (+their markets), distinct markets, and the rep/employee roster (union of the storeops roster and any
     app_users). PICK-DON'T-TYPE source — every value is a real org row, so a filter can never reference
     data outside the tenant. Each source is best-effort (a missing table/migration → that list is just
     empty; the endpoint never 500s). NOT heavy: stores/employees/store_mapping are small config tables.
-    Reps are 'First Last' with an email sublabel for same-name disambiguation (§3b)."""
+    Reps are 'First Last' with an email sublabel for same-name disambiguation (§3b).
+
+    ACTIVE-ONLY BY DEFAULT (owner directive 2026-11-14, index §CORE-44). This endpoint SELECTED the
+    active flag for employees and then ignored it, and never filtered stores at all — so because it
+    is the option source behind the shared StandardFilterBar, almost every report offered closed
+    stores and terminated people as things to filter by. `include_inactive=1` is what the bar's
+    "Show inactive" checkbox asks for; the rule itself is NOT re-derived here — it is
+    `core.roster_visibility`, the one home shared with every other reader and with the frontend."""
+    from app.modules.core import roster_visibility as _rv
     client = sb()
     stores: dict[str, str | None] = {}   # store display key → market
     markets: set[str] = set()
+    # SPELLINGS OF A STORE THAT IS NOT ACTIVE. Collected separately because a store reaches this
+    # endpoint through TWO vocabularies (`storeops.stores` and `commcalc.store_mapping`, folded into
+    # one option per physical store below) and only the first carries the flag: filtering just that
+    # read would let the mapping row re-add the very store the roster had excluded. A spelling that
+    # is active under ANY row wins — the flag lives on the store, not on the spelling.
+    inactive_keys: set[str] = set()
+    active_keys: set[str] = set()
+    inactive_rows: list[set[str]] = []      # one entry per inactive STORE, for an honest count
+
+    def _fold(v):
+        return (v or "").strip().lower()
 
     def _add_store(key, market):
         key = (key or "").strip()
@@ -3088,8 +3107,17 @@ def filter_options(org_id: str = ORG_ID):
     # 1) storeops.stores — the canonical tenant store list (address is the report store key; carries market)
     try:
         for r in (client.schema("storeops").table("stores")
-                  .select("store_code,address,market").eq("org_id", org_id)
+                  .select("store_code,address,market,is_active").eq("org_id", org_id)
                   .limit(5000).execute().data or []):
+            spellings = [s for s in (r.get("address"), r.get("store_code")) if (s or "").strip()]
+            if _rv.is_active(r):
+                active_keys.update(_fold(s) for s in spellings)
+            else:
+                folded = {_fold(s) for s in spellings}
+                inactive_keys |= folded
+                inactive_rows.append(folded)
+                if not include_inactive:
+                    continue
             _add_store(r.get("address") or r.get("store_code"), r.get("market"))
     except Exception:
         pass
@@ -3108,6 +3136,8 @@ def filter_options(org_id: str = ORG_ID):
         for e in (client.schema("storeops").table("employees")
                   .select("name,email,is_active").eq("org_id", org_id)
                   .limit(10000).execute().data or []):
+            if not include_inactive and not _rv.is_active(e):
+                continue        # a terminated person is not something to filter a report by
             nm = (e.get("name") or "").strip()
             if nm and nm not in reps:
                 reps[nm] = (e.get("email") or "").strip()
@@ -3115,8 +3145,10 @@ def filter_options(org_id: str = ORG_ID):
         pass
     try:
         for u in (client.schema("storeops").table("app_users")
-                  .select("full_name,email").eq("org_id", org_id)
+                  .select("full_name,email,is_active").eq("org_id", org_id)
                   .limit(10000).execute().data or []):
+            if not include_inactive and not _rv.is_active(u):
+                continue        # a disabled login is not a rep either
             nm = (u.get("full_name") or "").strip()
             if nm and nm not in reps:
                 reps[nm] = (u.get("email") or "").strip()
@@ -3167,11 +3199,24 @@ def filter_options(org_id: str = ORG_ID):
         print(f"WARN core filter_options canonical store fold failed: {e}")
         store_list = sorted(({"store": k, "market": v} for k, v in stores.items()),
                             key=lambda x: x["store"])
+    # THE FOLD CAN RE-ADD WHAT THE ROSTER EXCLUDED. `org_store_options` composes one option per
+    # physical store across both vocabularies, so an inactive store whose OTHER spelling rides on a
+    # mapping row would reappear here having been correctly skipped above. A spelling active under
+    # any row is kept (`active_keys`); one known only as inactive is dropped.
+    if not include_inactive and inactive_keys:
+        store_list = [o for o in store_list
+                      if _fold(o.get("store")) in active_keys
+                      or _fold(o.get("store")) not in inactive_keys]
     rep_list = [
         ({"id": nm, "label": nm, "sublabel": em} if em else {"id": nm, "label": nm})
         for nm, em in sorted(reps.items(), key=lambda kv: kv[0].lower())
     ]
-    return {"stores": store_list, "markets": market_list, "reps": rep_list}
+    return {"stores": store_list, "markets": market_list, "reps": rep_list,
+            # What the default left out, so a surface can say so rather than shrinking silently.
+            # One per STORE, not per spelling: a store reaches here under both its code and its
+            # address, and "2 inactive hidden" for one closed store is a lie of its own.
+            "inactive_hidden": 0 if include_inactive else
+            sum(1 for ks in inactive_rows if not (ks & active_keys))}
 
 
 # ── Grant universe + scope diagnostic (2026-08-03 reporting-vs-scheduling scope split) ───────────

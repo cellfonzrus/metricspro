@@ -1,0 +1,37 @@
+# ROSTER VISIBILITY — THE DEBT, STATED OUT LOUD (owner directive 2026-11-14, index §CORE-44).
+#
+# Each line is `<count> <path>`: how many times that module still decides "is this store / this
+# person active" with its OWN copy of the test, instead of reading
+# `app/modules/core/roster_visibility.py`. Only modules that actually read a roster relation
+# (`stores`, `employees`, `app_users`) are measured — the same words over another registry's own
+# flag are that registry's business.
+#
+# THE LEDGER MAY ONLY SHRINK. Wire a caller to the home, lower its number (delete the line at zero)
+# in the SAME pull request. Raising a number, or adding a path, fails
+# `backend/harness_roster_visibility.py`.
+#
+# `.eq("is_active", True)` counts here and is worse than a copy: it DROPS NULL, and the column is
+# `BOOLEAN DEFAULT true`, so it deletes every live row whose flag was never set. That was the live
+# employees-roster defect this directive uncovered.
+2 app/modules/account/coa.py
+2 app/modules/billing/router.py
+2 app/modules/chat/router.py
+1 app/modules/commcalc/agency.py
+12 app/modules/commcalc/router.py
+1 app/modules/core/import_health.py
+5 app/modules/core/onboarding.py
+2 app/modules/core/operator_api.py
+2 app/modules/crm/router.py
+1 app/modules/hr/letters.py
+7 app/modules/hr/router.py
+4 app/modules/marketing/router.py
+2 app/modules/notify/router.py
+8 app/modules/pos/router.py
+1 app/modules/pos/vendor_api.py
+3 app/modules/storeops/attention.py
+2 app/modules/storeops/google_reviews.py
+1 app/modules/storeops/overhead_allocation.py
+2 app/modules/storeops/payroll_approval.py
+5 app/modules/storeops/router.py
+1 app/modules/storevisit/attention_providers.py
+1 app/modules/storevisit/router.py

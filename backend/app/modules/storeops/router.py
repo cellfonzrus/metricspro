@@ -71,6 +71,7 @@ from app.modules.storeops.payroll_identity import (
 )
 from app.modules.storeops import payroll_salary
 from app.modules.storeops import pay_visibility as _payvis
+from app.modules.core import roster_visibility as _rv
 from app.modules.storeops import payroll_log_identity as _log_identity
 from app.modules.storeops.lunch_deduction import (
     get_lunch_config as _lunch_get_config,
@@ -199,28 +200,24 @@ def _biz_tz_for_store(org_id, store_code):
 # (which feeds pickers/dropdowns across the app) and GET /timeclock/stores (the kiosk clock-in picker,
 # whose own docstring falsely claimed "active store list") never filtered the flag at all.
 def _store_is_active(s: dict) -> bool:
-    """NULL-SAFE 'is this store active' check. `storeops.stores.is_active` is a NULLABLE column
-    (`DEFAULT true`, no NOT NULL) — the SAME trap `_inactive_ids_from` (below, ~line 554) was already
-    hard-won on the employee side: NULL/missing MUST read as ACTIVE, matching the column's own default
-    and every frontend picker's established `s.is_active !== false` convention. Only an EXPLICIT
-    `is_active=false` counts as inactive.
+    """DEREFERENCES THE ONE HOME — `core.roster_visibility.is_active` (index §CORE-44). Kept as a
+    name because 30-odd call sites in this module read it.
 
-    Deliberately a PYTHON-side post-fetch check, not a PostgREST `is_active=not.is.false` query filter.
-    That filter is real (PostgREST's `is` operator negated by a `not.` prefix does mean exactly
-    'IS NOT FALSE' server-side) and was evaluated — but postgrest-py's own `.is_()` only special-cases
-    Python `None` (-> the string "null"); a raw Python `False` passed to `.not_.is_("is_active", False)`
-    f-strings straight into the query as `not.is.False` (CAPITAL F, verified by constructing the actual
-    installed client), which is not one of PostgREST's recognized `true|false|null|unknown` literals —
-    a real footgun in the naive form, avoidable only by passing the literal string `"false"` instead.
-    Given no way to verify the raw wire behavior against live Postgres from this environment (read-only
-    prod probe, no write access) and the blast radius a wrong exclusionary DB filter would have (every
-    picker in the app), filtering here in Python — already fetched, already proven, harness-provable —
-    is the lower-risk choice. See docs/handoffs/people.md for the fuller write-up."""
-    return s.get("is_active") is not False
+    The rule it used to spell out here, now stated once in the home: `storeops.stores.is_active` is
+    NULLABLE with `DEFAULT true`, so NULL/missing MUST read as ACTIVE and only an EXPLICIT false is
+    inactive. The employee side of this same module used to answer the opposite (`.eq("is_active",
+    True)` drops NULL), which is exactly why the rule cannot live in a per-reader copy.
+
+    Still a PYTHON-side post-fetch check rather than a PostgREST query filter, for the reason the
+    original note gave: postgrest-py's `.is_()` special-cases only Python `None`, so a raw `False`
+    f-strings into the query as `not.is.False` (capital F), which PostgREST does not recognise. The
+    home states the correct raw filter (`roster_visibility.POSTGREST_ACTIVE_FILTER`) for the reads
+    that genuinely must narrow server-side. See docs/handoffs/people.md."""
+    return _rv.is_active(s)
 
 
 def _active_stores_only(stores_rows):
-    return [s for s in (stores_rows or []) if _store_is_active(s)]
+    return _rv.visible(stores_rows)
 
 
 @router.get("/stores")
@@ -260,10 +257,13 @@ def get_employees(include_inactive: bool = False, all_company: bool = False, aut
     Role permission `scheduling_reach` defaults to 'org', which is byte-identical to today's live,
     UNCONDITIONAL org-wide exemption; only a role explicitly configured scheduling_reach='span'
     narrows the roster back to the caller's reporting span even when all_company=true is asked for."""
-    q = sb().table("employees").select("*").eq("org_id", org_id)
-    if not include_inactive:
-        q = q.eq("is_active", True)
-    rows = q.order("name").execute().data or []
+    # ACTIVE-ONLY THROUGH THE ONE HOME (owner directive 2026-11-14, §CORE-44). This read used to
+    # narrow with `.eq("is_active", True)`, which DROPS NULL — and the column is `BOOLEAN DEFAULT
+    # true` and nullable, so an employee whose flag was never set is LIVE and was disappearing from
+    # every roster, picker and schedule this endpoint feeds, while the STORE read three functions up
+    # read the same shape of NULL as active. One question, two answers; now one.
+    rows = sb().table("employees").select("*").eq("org_id", org_id).order("name").execute().data or []
+    rows = _rv.visible(rows, include_inactive=include_inactive)
     # PAY VISIBILITY (mig 434, owner directive 2026-09-10 — "the dm should not be able to see the
     # salaries of any employees"). This roster is a `select("*")`, so it shipped every employee's
     # pay_rate/pay_amount to whoever could open the Employees / Schedule / Setup pages. Same gate,

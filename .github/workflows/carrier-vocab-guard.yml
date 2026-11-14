@@ -224,6 +224,12 @@ on:
       # index §CORE-27 — the toolbar gate: every report carries the standard filters and the
       # send bar. Named here as well as covered by the wildcards, per the §13e lesson.
       - "backend/harness_report_toolbar_coverage.py"
+      # index §CORE-44 — the roster visibility lock and its two debt ledgers.
+      - "backend/harness_roster_visibility.py"
+      - "backend/roster_visibility_pending.txt"
+      - "frontend/roster_visibility_pending.txt"
+      - "backend/app/modules/core/roster_visibility.py"
+      - "frontend/src/lib/roster-visibility.ts"
       - "frontend/src/lib/zero-sales-export.ts"
       - "frontend/src/components/ReportExportBar.tsx"
       - "frontend/src/components/StandardFilterBar.tsx"
@@ -2007,6 +2013,9 @@ jobs:
       - name: Run the report TOOLBAR coverage gate (every report carries the standard filters and the send bar by default; the population is read from the drill-down ledger rather than re-declared; both owes counts may only SHRINK — index §CORE-27)
         working-directory: backend
         run: python3 harness_report_toolbar_coverage.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the roster VISIBILITY lock (an inactive store or person does not show unless "Show inactive" is ticked; one home answers it for every caller, NULL means ACTIVE, and both hand-rolled-predicate ledgers may only SHRINK — index §CORE-44)
+        working-directory: backend
+        run: python3 harness_roster_visibility.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the cash-recon tile drill lock (every money tile the screen shows is DECLARED and its rows tie back to it; a planted cent, a dropped store-day, a flipped variance sign each break a tie-out; the feed tables are dereferenced from the lineage registry, never named in a report — index §CORE-17.3a)
         working-directory: backend
         run: python3 harness_cash_recon_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
