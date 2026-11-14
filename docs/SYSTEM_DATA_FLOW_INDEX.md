@@ -212,6 +212,7 @@ Primary code homes:
 | COMMCALC-69 | **A setting the reader cannot reach is not a setting that says nothing** | §COMMCALC-68's first night paid for itself: comp's own row said "0 rows, and nothing has landed for 33 day(s)", and the window it had asked the portal for was `2026-11-10..2026-11-10` — ONE day, against a `refresh_days` of 14 sitting in its own registry row. The reader asked for two columns migration 1042 (written 2026-10-03 for this exact defect, surfaced for approval, never applied) never added; PostgREST refused the whole select with 42703, and the handler re-read three columns, dropping `refresh_days`, `sweep_hour`, `sweep_minute`, `sweep_timezone` and `sweep_next_run_at` with the two that were genuinely absent. So an in-arrears carrier report was asked for today, every night, correctly returned nothing, and was recorded as a quiet source — no control was ever broken, which is why §COMMCALC-64/-66/-67's controls all took and still nothing landed. A column-block ladder, the shape §4b.1 has forbidden since 2026-09-22, which escaped its lock only because the column lists were named constants and the scan resolved literals. Both closed: the reader probes each optional column through `column_tolerant.present_columns` and reports `config_columns_missing`; `harness_any_columns_lock.py` now folds a named constant to its value before judging a TRY-FALLBACK, and carries g14/g15 so it cannot stop. The column itself is the owner's to apply — migration 1042 is money-touching by its own note. |
 | COMMCALC-71 | **A renamed figure is one column with two spellings — and a total of named parts is all of them or none** | The owner answered the question §COMMCALC-60 left open: the portal's `activations_total` IS the measurement we call gross adds. So it becomes a SPELLING on the one column, never a second column beside it, and the old spelling stays declared so a month spelled the old way keeps landing. Folding it in uncovered a second defect in the same line: `total_acts` (gross adds + upgrades) was summed with `portal_cell.total`, which adds up only the parts that arrived — right for alternative spellings of one figure, wrong for two different figures being added, because the new spelling alone would have been reported as the TOTAL with upgrades silently excluded. `total_all` is the both-parts-or-neither sum, and which of the two a caller wants is now a declared choice rather than a default. |
 | COMMCALC-72 | **A month-to-date figure is trended in ONE place, and an outlier is not a verdict** | "it shoudl also show trending and which stores are not trending towards the accessories goals … the outloers shoudl be highlighted in a different color". The projection was ALREADY HERE, inline TWICE in the Executive MTD report and already on two screens as "Trending Acc. $", so the third copy the action plan wanted was factored instead — and the draft of that home re-derived three more facts (`feed_period`'s month parsing, month length and open/closed) and the division itself (`demand_projection.velocity`) before the duplicate check caught them. What may a trend say when no day of the month has completed, what may it say when there is no target, and who may be called an outlier when four stores are the whole distribution? |
+| COMMCALC-73 | **A pull nobody recorded is a report that looks a month stale** | The owner pasted the Data Imports page: two of three tiles read *"Last upload: Oct 8, 2026 … via manual upload"* while the ePay owners-portal sweep had been landing their rows every night since 12 Nov (§COMMCALC-69), `raw_comp_report` 78,053 → 89,556. The rows arrived; the RECORD of their arrival did not. The sweep has THREE storage paths — the month replace, the per-day replace and the Daily-Transaction ingest hook — and each decided for itself whether to write a landing record. Exactly one did, which is why MI/ATU's tile was right and the other two were a month stale over current data. The two journals every "last upload" surface reads now have ONE writer, which `router`'s trace helper dereferences too (it could not before: the home lived in `router`, which imports the sweep), and the record plus the §6l post-landing hook are ONE call every storage path makes, locked by `harness_upload_trace_coverage` (f/j/k) so a new path cannot land silently. The third tile, the monthly sales archive, is NOT this defect: its promotion is switched off in its own registry row — reported, not patched. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -26478,6 +26479,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-70 | commcalc, storeops |
 | COMMCALC-71 | commcalc |
 | COMMCALC-72 | commcalc |
+| COMMCALC-73 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -47786,6 +47788,107 @@ Cross-references: §4b.1 (the one reading rule, and the lock this widens) · §C
 per-report verdict that made this readable at all) · §COMMCALC-67 / -66 / -64 (the controls this
 exonerates) · §19.41 (the empty-pull verdict that reported the 33 days honestly) · §19.18 (a
 registry written and its callers not reading it).
+
+## §COMMCALC-73. A PULL NOBODY RECORDED IS A REPORT THAT LOOKS A MONTH STALE (owner report 2026-11-14)
+
+Owner, with the Data Imports page pasted: *"please check and fix , i need these uploads to work
+automatically"*.
+
+### COMMCALC-73.1 WHAT THE PAGE SAID, AND WHAT WAS TRUE
+
+| tile | the tile said | measured against production, same hour |
+| --- | --- | --- |
+| Comprehensive comp report | Last upload: Oct 8, 2026 · 2,439 rows · via manual upload | `raw_comp_report` **89,556 rows**, every day 1 Oct – 11 Nov present, last unattended pull 13 Nov 04:30 UTC `ok` "12692 rows [2026-10-04..2026-11-12]" |
+| Commission payment detail | Last upload: Oct 8, 2026 · 495 rows · via manual upload | `raw_payment_detail` **281,115 rows**, newest `payment_date` 2026-11-12, own row says "21602 rows [November 2026, October 2026] (replace_by_day)" |
+| Sales report with IMEI | Last upload: Sep 3, 2026 · 24,890 rows · via auto-promotion | `raw_sales` has August only; Sep/Oct/Nov are **0 rows**, while `daily_sales_feed` took 9,677 rows at 2026-11-14 19:00 via the hourly email sweep |
+
+So the answer splits in two, and only the first half is a code defect: **two reports were already
+automatic and the page was reading a record nothing wrote**; the third is genuinely switched off.
+
+### COMMCALC-73.2 THE DEFECT
+
+"When did this report last receive data" is answered from two journals — `commcalc.upload_trace`
+(mig 202, whose own comment claims *"EVERY path"*) and the older `commcalc.upload_log` (mig 007,
+which the Upload-page history and the connectors page read per `file_type`). The ePay sweep has
+three storage paths, and each decided for itself whether to write to them:
+
+| path | stores | recorded the landing |
+| --- | --- | --- |
+| month replace (`_process_report`) | `raw_mi` | YES — `upload_log`, filename "epay auto-sweep" |
+| per-day replace (`_store_rows_by_day`, `mode: replace_by_day`) | `raw_comp_report`, `raw_payment_detail` | **no** |
+| the DTD `ingest` hook | `raw_epay_daily_tx` | **no** |
+
+One fact, three paths, one of them logging — which is exactly why MI/ATU's tile was the only one
+telling the truth. Each path DID call the §6l post-landing hook, so the calculation was kept current
+by data whose arrival no surface could see.
+
+### COMMCALC-73.3 THE RULE
+
+**Recording a landing and acting on it are two consequences of one fact, so they are one call.**
+A storage path cannot queue a recalculation without recording the landing, because there is a single
+function that does both and the lock refuses a second route to the hook.
+
+And the writer of a journal every surface reads lives where every lander can reach it. The trace
+home used to be `router._write_upload_trace`; `router` imports the sweep, so the sweep could not
+dereference it and grew a half-record instead. A one home that half the callers cannot import is the
+§19.18 class wearing a different hat.
+
+### COMMCALC-73.4 WHAT CHANGED
+
+- **`commcalc/ingest_record.py` is new and is the ONE WRITER of both ingest journals** —
+  `write_trace` (the only insert into `upload_trace` in the codebase), `write_log`, the
+  `TARGET_TABLE` map moved out of `router`, and `table_name()` so a schema-qualified declaration
+  (`commcalc.raw_epay_daily_tx`) and a bare one are recorded under one spelling. Non-raising by
+  contract: a journal that is not there can never be why a pull fails.
+- **`router._write_upload_trace` dereferences it** and keeps its own result-shape derivation; its map
+  is now `_ingest_record.TARGET_TABLE`, not a second copy.
+- **`epay_sweep.landed(...)` is the ONE landing call**, made by all three storage paths. It records
+  the landing (`source='portal'` → the tile's "portal pull", per-period and per-day saved counts in
+  the trace row's `periods` / `date_counts`) and then calls `auto_calc.landed` (§6l).
+- A **zero-row pull records no landing**. Whether a zero is the source's own answer is not a
+  journal's question and is already answered on the report's own row (§COMMCALC-68); a zero written
+  here would make every quiet day read as "an attempt saved nothing" on the tile forever.
+- The per-day path names the tile's period from the **newest day written**, not the first in sort
+  order — "November 2026" sorts before "October 2026", which would have labelled a fresh pull with a
+  stale month.
+
+### COMMCALC-73.5 TESTS AND THE LOCK
+
+`tests/unit/test_every_sweep_landing_is_recorded.py` (12 units) and
+`harness_upload_trace_coverage.py`, which grew from 35 to 42 checks:
+
+- **(f)** the only insert into `upload_trace` anywhere under `app/modules/commcalc` is the one home,
+  scanned by call chain rather than by literal so naming the table with a constant cannot hide it;
+  (f2)/(f3) the router dereferences the home and does not keep its own copy of the map.
+- **(j)** the post-landing hook is reached from exactly ONE place in the sweep, and that place
+  records the landing in the same call.
+- **(k)** every function in the sweep that replaces or upserts rows reaches that call — DERIVED from
+  the call graph with one level of indirection, never a name list, so a fourth storage path is red
+  by default.
+- **NEG6/NEG7** prove (j)/(k) can go red: a synthetic storage path that skips the call reads as
+  silent, and a synthetic second hook site is seen.
+
+Also fixed in passing: `harness_upload_last.py` had two assertions still looking for the targeted
+lookup's key in `eq` after the round-trip ratchet folded it into one `in_` read, so both had been
+passing vacuously.
+
+### COMMCALC-73.6 WHAT THIS DOES NOT FIX, said plainly
+
+**The sales tile is a switch, not a bug.** `report_definitions` for `report_key='sales'` carries
+`auto = false`, so the feed→`raw_sales` promotion never runs for this org, and September, October and
+November are empty in the archive while the hourly feed is healthy. Turning it on is a config row and
+is the owner's to apply; the three missing months then need building. Reported, never worked around
+in code.
+
+`upload_log` still has ~15 writers across `router` — pre-existing, and a journal whose newest row per
+report is all anyone reads tolerates it; `upload_trace` is the one that now has a single writer.
+`epay_daily_tx` still has no `report_definitions` row (carried from §COMMCALC-69), so the report that
+lands rows every half hour can now say when it last received data but still has nowhere to show a
+status.
+
+Cross-references: §COMMCALC-69 / -68 (why these two reports became automatic at all, and where a
+report's own verdict lives) · §6l (the post-landing hook this is now inseparable from) · §19.18 (a
+registry written and its callers not reading it) · §CORE-13 / §4b.1 (the sibling one-home locks).
 
 ## §COMMCALC-60. A FIGURE THE FEED SENDS THAT NOTHING READS IS NOT A FIGURE THIS PLATFORM HAS — one home for which store-DLAR column is which metric (owner ask 2026-11-10)
 
