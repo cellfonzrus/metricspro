@@ -1,4 +1,4 @@
-"""Unit: ONE answer to "is this store / this person still active" (index §CORE-44).
+"""Unit: ONE answer to "is this store / this person still active" (index §CORE-45).
 
 THE CLASS, not the instance. The owner's ask was *"once the store or employee is made inactive their
 data should [not] be showing on any module unless the checkbox is clicked for show inactive stores"*.

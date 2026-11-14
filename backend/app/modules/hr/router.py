@@ -26,7 +26,7 @@ from app.modules.storeops.router import (scope_emp_ids, _tenant_pp_settings, _em
                                            require_person_write)
 from app.modules.storeops import payroll_salary
 from app.modules.storeops import pay_visibility as _payvis
-# THE ONE HOME for "is this store / this person still active" (index §CORE-44).
+# THE ONE HOME for "is this store / this person still active" (index §CORE-45).
 from app.modules.core import roster_visibility as _rv
 # THE ONE HOME for "which hours is this employee paid for, and on what basis" (index §14y).
 from app.modules.storeops import payroll_hours_basis as _hours_basis
@@ -1297,7 +1297,7 @@ def hr_employee_database(employee_ids: str = "", fields: str = "", include_inact
     field_keys = [f.strip() for f in fields.split(",") if f.strip()]
     want = (lambda k: (not field_keys) or (k in field_keys))
 
-    # ACTIVE-ONLY THROUGH THE ONE HOME (owner directive 2026-11-14, §CORE-44). The narrowing used to
+    # ACTIVE-ONLY THROUGH THE ONE HOME (owner directive 2026-11-14, §CORE-45). The narrowing used to
     # be `.eq("is_active", True)`, which DROPS NULL — and the column is `BOOLEAN DEFAULT true` and
     # nullable, so an employee whose flag was never set is LIVE and was missing from this report
     # whenever the Include-inactive box was unticked. Now filtered in Python, after the fetch, by the

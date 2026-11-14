@@ -1,4 +1,4 @@
-"""Integration: an inactive store or person is not offered or listed anywhere (index §CORE-44).
+"""Integration: an inactive store or person is not offered or listed anywhere (index §CORE-45).
 
 OWNER DIRECTIVE 2026-11-14: *"once the store or employee is made inactive their data should [not] be
 showing on any module unless the checkox is clicked for show inactive stores"*.

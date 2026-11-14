@@ -23,7 +23,7 @@ export function storePickerOptions(stores: any[]): CheckboxOption[] {
       label: String(s.store_code).trim(),
       // The address is how an admin recognises a store, and "(inactive)" has to stay visible: a
       // policy or a setting may legitimately still cover a store that is closed.
-      // 'is this store active' is `lib/roster-visibility`'s question, not this adapter's (§CORE-44).
+      // 'is this store active' is `lib/roster-visibility`'s question, not this adapter's (§CORE-45).
       sublabel: [s.address || '', rosterIsActive(s) ? '' : '(inactive)'].filter(Boolean).join(' '),
     }))
 }

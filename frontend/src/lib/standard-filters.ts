@@ -8,7 +8,7 @@
 // and "what a header click does next" since OWNER DIRECTIVE 2026-08-10; this module only gives that
 // rule a place in the shared bar (index §CORE-28). A second comparator would drift from the headers.
 import { nextSort, sortRows, type SortState } from './table-sort'
-// WHO IS STILL ACTIVE IS NOT RE-DERIVED HERE either (owner directive 2026-11-14, §CORE-44).
+// WHO IS STILL ACTIVE IS NOT RE-DERIVED HERE either (owner directive 2026-11-14, §CORE-45).
 // `lib/roster-visibility` is the ONE home for "is this store / this person active" — NULL means
 // active, and the string 'false' does not. This module only gives that rule a place in the shared
 // bar, so every adopting report honours the directive by declaring one accessor.
@@ -28,7 +28,7 @@ export type StandardFilterValue = {
    *  bar's "Sort by" dropdown and a click on a sortable column header can never disagree about the
    *  order — they read and write this. `null`/absent = the order the report itself produced. */
   sort?: SortState
-  /** SHOW THE INACTIVE ONES (owner directive 2026-11-14, §CORE-44). Absent / false — the default —
+  /** SHOW THE INACTIVE ONES (owner directive 2026-11-14, §CORE-45). Absent / false — the default —
    *  means a store or person that has been made inactive is NOT shown. Ticking the bar's
    *  "Show inactive" checkbox sets it true. It is a WIDENING, never a narrowing: see
    *  `isStandardInactiveShown` for why it is kept out of `isStandardFilterActive`. */

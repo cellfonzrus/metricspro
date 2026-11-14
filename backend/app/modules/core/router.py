@@ -3071,7 +3071,7 @@ def filter_options(org_id: str = ORG_ID, include_inactive: bool = False):
     empty; the endpoint never 500s). NOT heavy: stores/employees/store_mapping are small config tables.
     Reps are 'First Last' with an email sublabel for same-name disambiguation (§3b).
 
-    ACTIVE-ONLY BY DEFAULT (owner directive 2026-11-14, index §CORE-44). This endpoint SELECTED the
+    ACTIVE-ONLY BY DEFAULT (owner directive 2026-11-14, index §CORE-45). This endpoint SELECTED the
     active flag for employees and then ignored it, and never filtered stores at all — so because it
     is the option source behind the shared StandardFilterBar, almost every report offered closed
     stores and terminated people as things to filter by. `include_inactive=1` is what the bar's

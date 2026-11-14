@@ -670,7 +670,7 @@ def _load(parts, name, ns):
 
 
 _HOLDER = [FAKE_DEFAULT]
-# `_rv` is the REAL `core.roster_visibility` module, not a stub: since 2026-11-14 (§CORE-44) the
+# `_rv` is the REAL `core.roster_visibility` module, not a stub: since 2026-11-14 (§CORE-45) the
 # shipped `get_employees` source hides inactive rows THROUGH it, and a stub here would let this
 # harness pass over a roster filter that no longer works. The fixtures below are all `is_active: True`,
 # so the active filter is a no-op for what this file measures (pay visibility) and the real module is

@@ -1,4 +1,4 @@
-# ROSTER VISIBILITY — THE FRONTEND DEBT (owner directive 2026-11-14, index §CORE-44).
+# ROSTER VISIBILITY — THE FRONTEND DEBT (owner directive 2026-11-14, index §CORE-45).
 #
 # Each line is `<count> <path>`: how many times that file still writes out `is_active !== false`
 # (or, worse, `=== true`, which hides every row whose flag was never set) instead of reading

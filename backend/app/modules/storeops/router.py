@@ -200,7 +200,7 @@ def _biz_tz_for_store(org_id, store_code):
 # (which feeds pickers/dropdowns across the app) and GET /timeclock/stores (the kiosk clock-in picker,
 # whose own docstring falsely claimed "active store list") never filtered the flag at all.
 def _store_is_active(s: dict) -> bool:
-    """DEREFERENCES THE ONE HOME — `core.roster_visibility.is_active` (index §CORE-44). Kept as a
+    """DEREFERENCES THE ONE HOME — `core.roster_visibility.is_active` (index §CORE-45). Kept as a
     name because 30-odd call sites in this module read it.
 
     The rule it used to spell out here, now stated once in the home: `storeops.stores.is_active` is
@@ -257,7 +257,7 @@ def get_employees(include_inactive: bool = False, all_company: bool = False, aut
     Role permission `scheduling_reach` defaults to 'org', which is byte-identical to today's live,
     UNCONDITIONAL org-wide exemption; only a role explicitly configured scheduling_reach='span'
     narrows the roster back to the caller's reporting span even when all_company=true is asked for."""
-    # ACTIVE-ONLY THROUGH THE ONE HOME (owner directive 2026-11-14, §CORE-44). This read used to
+    # ACTIVE-ONLY THROUGH THE ONE HOME (owner directive 2026-11-14, §CORE-45). This read used to
     # narrow with `.eq("is_active", True)`, which DROPS NULL — and the column is `BOOLEAN DEFAULT
     # true` and nullable, so an employee whose flag was never set is LIVE and was disappearing from
     # every roster, picker and schedule this endpoint feeds, while the STORE read three functions up

@@ -70,7 +70,7 @@ export default function EmployeeDatabasePage() {
   const [revealError, setRevealError] = useState('')
   const [loading, setLoading] = useState(true)
   const [msg, setMsg] = useState('')
-  // OFF BY DEFAULT (owner directive 2026-11-14, §CORE-44): an inactive employee does not show
+  // OFF BY DEFAULT (owner directive 2026-11-14, §CORE-45): an inactive employee does not show
   // until the box is ticked. This page already had the box; it opened with it ON, which is the
   // directive backwards.
   const [includeInactive, setIncludeInactive] = useState(false)
@@ -87,7 +87,7 @@ export default function EmployeeDatabasePage() {
       const [fr, rr, stores] = await Promise.all([
         api('/api/v1/hr/employee-database/fields'),
         api(`/api/v1/hr/employee-database?include_inactive=${includeInactive ? 'true' : 'false'}`),
-        // THE STORE FILTER FOLLOWS THE SAME TICK (owner directive 2026-11-14, §CORE-44). This used
+        // THE STORE FILTER FOLLOWS THE SAME TICK (owner directive 2026-11-14, §CORE-45). This used
         // to request the full store set unconditionally, on the reasoning that an audit roster should
         // be able to reference a since-closed store — true, but that is exactly what the box is for.
         // With it unticked the page now offers only live stores; ticking it brings the closed ones

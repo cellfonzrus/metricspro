@@ -1,4 +1,4 @@
-# ROSTER VISIBILITY — THE DEBT, STATED OUT LOUD (owner directive 2026-11-14, index §CORE-44).
+# ROSTER VISIBILITY — THE DEBT, STATED OUT LOUD (owner directive 2026-11-14, index §CORE-45).
 #
 # Each line is `<count> <path>`: how many times that module still decides "is this store / this
 # person active" with its OWN copy of the test, instead of reading

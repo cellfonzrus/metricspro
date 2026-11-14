@@ -37,7 +37,18 @@ THIS FAILS THE BUILD WHEN:
      the pages rendered. A configuration fact that only fails at RUNTIME has to be proved against the
      RUNNING deployment, so `scripts/check_deploy_reachability.py` and its workflow must exist, probe BOTH
      rewrite prefixes, and require the backend's own payload rather than any HTTP 200.
-  9. the Guard in src/app/(platform)/layout.tsx treats an UNREADABLE enforcement flag as a value
+  10. a frontend call names a backend path the site does not proxy (index §CORE-44, owner report
+     2026-11-14). `apiUrl()` prefixes NOTHING — it returns the path as given, because in the browser
+     the site proxies it. So the prefix IS the address: `api('/commcalc/x')` asks the Next app for a
+     page called /commcalc/x, gets its 404, and the caller's catch turns that into a default. Two
+     calls had been doing it: the TARGET AXIS ("what does this tenant sell, so what can have a
+     target") fell back to the four built-in categories, so every declared category was invisible on
+     every target screen and `commcalc.target_line` held zero rows in the whole database — no tenant
+     had ever been able to set one; and the rep shelf-aging card, which had never loaded. The class
+     is not the typo: it is that a MISSING ROUTE and a REAL ANSWER are indistinguishable to a caller,
+     which is rule 9's lesson at the address grain. Every literal path handed to the api helpers must
+     begin with a prefix `BACKEND_PATH_PREFIXES` actually proxies.
+ 9. the Guard in src/app/(platform)/layout.tsx treats an UNREADABLE enforcement flag as a value
      (index §40.13, owner incident 2026-10-03). The flag that decides sign-in-or-open lives in the
      database and reaches the browser over `GET /api/v1/core/auth-config`. The catch on that fetch
      used to call `setFetchedEnforce(false)`, so a backend the browser could not reach rendered
@@ -144,6 +155,40 @@ def origin_prefixers(files):
         for i, line in enumerate(text.splitlines(), 1):
             if _PREFIXED.search(line) and not line.lstrip().startswith(("//", "*", "#")):
                 bad.append(f"{rel}:{i}: builds `${{origin}}/api/v1…` itself — use apiUrl()/absoluteApiUrl(): {line.strip()[:120]}")
+    return bad
+
+
+# ── rule 10: a literal path handed to the api helpers is one the site actually proxies ─────────────
+# The helpers that address the backend. `apiUrl` and `absoluteApiUrl` are here too: they prefix
+# nothing either, so a path they are given is just as wrong.
+API_CALLERS = ("api", "apiUpload", "apiDownload", "apiFetchBase64", "apiUrl", "absoluteApiUrl")
+_API_CALL = re.compile(r"\b(" + "|".join(API_CALLERS) + r")\(\s*[`'\"](/[^`'\"]*)")
+
+
+def proxied_prefixes(home_text):
+    """The prefixes `BACKEND_PATH_PREFIXES` proxies, READ from the home — so adding one there is all
+    it takes, and nothing here has to be kept in step by hand."""
+    m = re.search(r"BACKEND_PATH_PREFIXES[^=]*=\s*\[([^\]]*)\]", home_text)
+    return tuple(sorted(re.findall(r"['\"]([^'\"]+)['\"]", m.group(1)))) if m else ()
+
+
+def unproxied_paths(files, prefixes):
+    bad = []
+    if not prefixes:
+        return ["the proxied prefixes could not be read from " + HOME + " — rule 10 would pass blind"]
+    for rel, text in sorted(files.items()):
+        if not rel.startswith("src/"):
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            if line.lstrip().startswith(("//", "*", "#")):
+                continue
+            for m in _API_CALL.finditer(line):
+                path = m.group(2)
+                if not any(path == p or path.startswith(p + "/") or path.startswith(p + "?")
+                           for p in prefixes):
+                    bad.append(f"{rel}:{i}: {m.group(1)}('{path}…') is not a path the site proxies "
+                               f"({', '.join(prefixes)}) — it reaches the Next app and 404s, and the "
+                               f"caller's catch will read that as an answer")
     return bad
 
 
@@ -336,6 +381,12 @@ def main():
           not host_literals(files), host_literals(files))
     print("3. nobody prefixes an origin onto a backend path")
     check("no `${origin}/api/v1…` outside the home", not origin_prefixers(files), origin_prefixers(files))
+    print("10. every literal api() path is one the site proxies (§CORE-44)")
+    _prefixes = proxied_prefixes(files.get(HOME, ""))
+    check("the proxied prefixes are READ from the home (the scan is not blind)",
+          "/api/v1" in _prefixes and "/health" in _prefixes, _prefixes)
+    check("no frontend call names a path the site does not proxy",
+          not unproxied_paths(files, _prefixes), unproxied_paths(files, _prefixes))
     print("4/5. the config installs the policy from the homes")
     check("rewrites, canonical redirect, connect-src, upload class all wired", not config_wiring(files), config_wiring(files))
     print("8. reachability is proved against the RUNNING deployment (§40.12)")
@@ -417,6 +468,19 @@ def main():
         "if (enforce === null && enforceUnreadable) return <Notice", "if (false) return <Notice")
     check("control 9b: a Guard that stops rendering the unreachable notice is caught",
           any("can't reach the server" in v for v in config_wiring(broken)))
+    check("control 10: the real defect shape — api(`/commcalc/x`) — is caught",
+          unproxied_paths({"src/lib/x.ts": "const r = await api(`/commcalc/targets/x/axis`)"},
+                          ("/api/v1", "/health")) != [])
+    check("control 10b: a correctly addressed call, and a proxied root, are both fine",
+          unproxied_paths({"src/lib/a.ts": "api(`/api/v1/commcalc/x`)",
+                           "src/app/p.tsx": "fetch(apiUrl('/health'))"},
+                          ("/api/v1", "/health")) == [])
+    check("control 10c: a path built from a variable is NOT judged (it cannot be, and client.ts "
+          "passes one)",
+          unproxied_paths({"src/lib/client.ts": "apiUrl(withOrgScope(path))"},
+                          ("/api/v1", "/health")) == [])
+    check("control 10d: the rule refuses to pass when the prefixes cannot be read",
+          unproxied_paths({"src/lib/a.ts": "api(`/nope`)"}, ()) != [])
     fake_router = ('router = APIRouter(prefix="/widgets")\n'
                    '@router.post("/{wid}/scrape")\n'
                    'def scrape(wid: str):\n'

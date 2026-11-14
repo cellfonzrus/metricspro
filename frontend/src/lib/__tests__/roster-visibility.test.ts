@@ -1,4 +1,4 @@
-// THE ONE FRONTEND ANSWER to "is this store / this person still active" (index §CORE-44) — the twin
+// THE ONE FRONTEND ANSWER to "is this store / this person still active" (index §CORE-45) — the twin
 // of `backend/app/modules/core/roster_visibility.py`, proved to give the SAME answers.
 //
 // Owner directive 2026-11-14: an inactive store or employee must not show in any module unless

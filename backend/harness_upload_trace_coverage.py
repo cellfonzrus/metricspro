@@ -29,8 +29,19 @@ WHAT FAILS THE BUILD
   (d) A DEAD REGISTER LINE. A listed endpoint that no longer exists → RED, so deletions stay honest.
   (e) THE PROSPECT UPLOAD IS NOT IN THE REGISTER, and reaches the trace home in a `finally` — the
       posture `upload_file` has, so an exception is traced rather than only a clean return.
-  (f) ONE TRACE HOME. A second insert into `upload_trace` from anywhere but `_write_upload_trace`
-      is a second answer to "what does an ingest record" → RED.
+  (f) ONE TRACE HOME. A second insert into `upload_trace` from anywhere but
+      `ingest_record.write_trace` is a second answer to "what does an ingest record" → RED. The home
+      moved out of `router._write_upload_trace` on 2026-11-14 (index §COMMCALC-73) so that the ePay
+      portal sweep could reach it: `router` imports the sweep, so a home inside `router` was
+      unreachable from it, and the sweep had grown its own half-record instead. `router` now
+      dereferences it.
+  (j) THE SWEEP CANNOT LAND SILENTLY. `epay_sweep` reaches `auto_calc.landed` from exactly ONE place,
+      `epay_sweep.landed`, which also records the landing. Recording and recalculating are two
+      consequences of the same fact; a second call site is a storage path that can land rows while
+      every "last upload" surface keeps showing the previous month — which is exactly what comp and
+      payment detail did for 37 days.
+  (k) EVERY STORAGE PATH REACHES IT, derived from the call graph: a function in `epay_sweep` that
+      replaces or upserts rows must reach `landed`, directly or through one helper.
   (g) A READ-ONLY endpoint is NOT required to trace. `/column-mapping/detect`, `.../sample` and the
       `analyze` previews write nothing, and demanding a trace row from them would make the lock noise
       and get it switched off. "Writes rows" is DERIVED from the call graph, never from a name list.
@@ -215,21 +226,109 @@ ok("(e5) it traces under its own source label", 'source="prospect-upload"' in CO
 ok("(e6) the impl is a separate function, so the wrapper cannot be bypassed",
    "async def _upload_prospect_feed_impl(" in CODE)
 
-# (f) ONE trace home
-tree = ast.parse(open(ROUTER).read())
-inserts = []
-for n in ast.walk(tree):
-    if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "insert":
+# (f) ONE trace home — across the whole module, not just the router
+def _trace_inserters(path):
+    """[(file, function)] for every insert into the trace table in `path`. The table may be named by
+    a constant (`TRACE_TABLE`), so the literal is not what is scanned for — the call chain is."""
+    src = open(path).read()
+    tree = ast.parse(src)
+    out = []
+    for n in ast.walk(tree):
+        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "insert"):
+            continue
         chain = _attr_chain(n.func)
-        if "upload_trace" in chain:
-            fn = None
+        line = src.splitlines()[n.lineno - 1] if n.lineno <= len(src.splitlines()) else ""
+        if "upload_trace" not in chain and "upload_trace" not in line and "TRACE_TABLE" not in line:
+            continue
+        fn = None
+        for f in ast.walk(tree):
+            if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and \
+                    f.lineno <= n.lineno <= (f.end_lineno or f.lineno):
+                fn = f.name
+        out.append((os.path.basename(path), fn))
+    return out
+
+COMMCALC = os.path.join(HERE, "app", "modules", "commcalc")
+_writers = []
+for _f in sorted(os.listdir(COMMCALC)):
+    if _f.endswith(".py"):
+        _writers += _trace_inserters(os.path.join(COMMCALC, _f))
+ok("(f) upload_trace is written from ONE place",
+   set(_writers) <= {("ingest_record.py", "write_trace")}, f"writers: {sorted(set(_writers))}")
+ok("(f2) the router dereferences that home rather than keeping its own insert",
+   "_ingest_record.write_trace(" in CODE and TRACE_HOME in CODE)
+ok("(f3) and the target-table map is not copied back into the router",
+   "_TRACE_TARGET_TABLE = _ingest_record.TARGET_TABLE" in CODE)
+
+# (j)/(k) the sweep cannot land rows silently
+SWEEP = os.path.join(COMMCALC, "epay_sweep.py")
+_sweep_tree = ast.parse(open(SWEEP).read())
+_sweep_fns = {f.name: f for f in ast.walk(_sweep_tree)
+              if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+
+def _hook_sites(tree):
+    """Which functions reach `auto_calc.landed(` (under any import alias)."""
+    hits = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
+                and n.func.attr == "landed" and "auto_calc" in _attr_chain(n.func):
             for f in ast.walk(tree):
                 if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and \
                         f.lineno <= n.lineno <= (f.end_lineno or f.lineno):
-                    fn = f.name
-            inserts.append(fn)
-ok("(f) upload_trace is written from ONE place", set(inserts) <= {TRACE_HOME},
-   f"writers: {sorted(set(inserts))}")
+                    hits.add(f.name)
+    return hits
+
+
+_hooks = _hook_sites(_sweep_tree)
+ok("(j1) the post-landing hook is reached from ONE place in the sweep", _hooks == {"landed"},
+   f"call sites: {sorted(_hooks)}")
+_landed_src = ast.get_source_segment(open(SWEEP).read(), _sweep_fns["landed"]) or "" \
+    if "landed" in _sweep_fns else ""
+ok("(j2) and that place records the landing in the same call",
+   "sweep_landed(" in _landed_src, "landed() must call ingest_record.sweep_landed")
+
+
+def _replaces_rows(fn):
+    """DERIVED: does this function put rows into a feed table? A replace helper, the DTD ingest, or a
+    direct upsert — never a name list."""
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Call):
+            chain = _attr_chain(n.func) if isinstance(n.func, ast.Attribute) else (
+                n.func.id if isinstance(n.func, ast.Name) else "")
+            if chain.endswith("_safe_replace") or chain.endswith("safe_replace") \
+                    or chain.endswith("_ei.ingest") or chain.endswith(".upsert"):
+                return True
+    return False
+
+
+def _reaches_landed(fn, fns=None, depth=1):
+    fns = _sweep_fns if fns is None else fns
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+            if n.func.id == "landed":
+                return True
+            if depth and n.func.id in fns and _reaches_landed(fns[n.func.id], fns, depth - 1):
+                return True
+    return False
+
+
+_paths = {name: _reaches_landed(fn) for name, fn in _sweep_fns.items()
+          if _replaces_rows(fn) and name != "landed"}
+ok("(k1) every storage path in the sweep reaches the one landing call",
+   _paths and all(_paths.values()), f"silent paths: {sorted(k for k, v in _paths.items() if not v)}")
+# DECLARED, not bounded by a count: a set a scan derived from the code must be compared to a set a
+# human wrote, or the scan going blind reads as a pass (harness_subject_set_lock). A NEW storage path
+# turns this red and NAMES itself, which is the point — it then has to be wired through `landed`.
+SWEEP_STORAGE_PATHS = {
+    "_process_report",     # the month replace (raw_mi)
+    "_store_rows_by_day",  # the per-day replace (raw_comp_report, raw_payment_detail)
+    "ingest_daily_tx",     # the DTD ingest hook (raw_epay_daily_tx)
+}
+ok("(k2) the storage paths are exactly the declared set (month, per-day, the DTD ingest)",
+   set(_paths) == SWEEP_STORAGE_PATHS,
+   f"derived: {sorted(_paths)} vs declared: {sorted(SWEEP_STORAGE_PATHS)}")
 
 # (g) a read-only upload endpoint is not asked to trace
 ok("(g1) read-only upload endpoints exist and are exempt", len(READONLY) > 0,
@@ -328,6 +427,36 @@ ok("NEG4 a trace outside a finally does NOT satisfy the finally check",
                           "    _write_upload_trace(\"org\")\n"))[0][5])
 ok("NEG5 the register cannot excuse an endpoint that does not exist",
    "zzz_not_a_real_endpoint" not in names)
+
+# NEG6/NEG7 — the sweep locks must be able to go red on synthetic sources.
+SYNTH_SILENT_PATH = """
+from app.modules.commcalc import auto_calc as _auto_calc
+
+def landed(client, org, spec, key, **kw):
+    _ingest_record.sweep_landed(client, org, **kw)
+    return _auto_calc.landed(client, org, **kw)
+
+def _store_quietly(client, org, spec, rows):
+    _safe_replace(client, spec["table"], rows, lambda q: q, label="x")
+    return {"rows": len(rows)}
+
+def _store_loudly(client, org, spec, rows):
+    _safe_replace(client, spec["table"], rows, lambda q: q, label="x")
+    return landed(client, org, spec, "k", rows=len(rows))
+"""
+_ns = ast.parse(SYNTH_SILENT_PATH)
+_nfns = {f.name: f for f in ast.walk(_ns) if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))}
+_npaths = {n: _reaches_landed(f, _nfns) for n, f in _nfns.items()
+           if _replaces_rows(f) and n != "landed"}
+ok("NEG6 a storage path that does not reach the landing call reads as silent",
+   _npaths == {"_store_quietly": False, "_store_loudly": True}, str(_npaths))
+SYNTH_TWO_HOOKS = SYNTH_SILENT_PATH + """
+def _second_hook(client, org, spec):
+    return _auto_calc.landed(client, org, table=spec["table"], periods=[], rows=1)
+"""
+ok("NEG7 a second post-landing hook call site is seen",
+   _hook_sites(ast.parse(SYNTH_TWO_HOOKS)) == {"landed", "_second_hook"},
+   str(_hook_sites(ast.parse(SYNTH_TWO_HOOKS))))
 
 for label, detail in PASS:
     print(f"  PASS  {label}")

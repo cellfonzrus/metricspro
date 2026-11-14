@@ -270,13 +270,17 @@ install(store)
 narrow = call(HOUSE, types="comp_report", limit=5)
 check("the monthly report outside the 5-row window is still found by the targeted lookup",
       narrow["reports"]["comp_report"]["rows_saved"] == 812)
+# The targeted lookup used to be one `.eq(upload_type)` read per missing key; the round-trip ratchet
+# folded it into ONE `.in_(key_col, missing)` read, so the key it narrows by is in `in`, not `eq`.
+# This assertion still looked in `eq` and had been silently passing nothing since (fixed 2026-11-14).
 check("the targeted lookup is per-key and org-scoped",
-      any(q["eq"].get("upload_type") == "comp_report" and q["eq"].get("org_id") == HOUSE for q in QUERY_LOG))
+      any("comp_report" in (q["in"].get("upload_type") or ()) and q["eq"].get("org_id") == HOUSE
+          for q in QUERY_LOG))
 install(store)
 unasked = call(HOUSE, limit=5)
 check("without `types` no targeted lookup runs (the window alone answers)",
       "comp_report" not in unasked["reports"]
-      and not any(q["eq"].get("upload_type") for q in QUERY_LOG))
+      and not any(q["in"].get("upload_type") or q["in"].get("file_type") for q in QUERY_LOG))
 
 # newest row outside the window saved NOTHING → the second .gt('rows_saved',0) pass finds the landed one
 store["commcalc.upload_trace"].append(

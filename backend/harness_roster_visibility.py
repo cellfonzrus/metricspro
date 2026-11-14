@@ -267,7 +267,7 @@ def section_e() -> None:
 
 
 def main() -> int:
-    print("harness_roster_visibility — one answer to 'is this store / person active' (§CORE-44)")
+    print("harness_roster_visibility — one answer to 'is this store / person active' (§CORE-45)")
     section_a()
     section_b()
     section_c()

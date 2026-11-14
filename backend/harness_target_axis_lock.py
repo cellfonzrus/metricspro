@@ -310,6 +310,27 @@ FE_AXIS_DECL = re.compile(
 fe_copies = [rel(p) for p in fe_files(FE)
              if rel(p) != HOME_FE and FE_AXIS_DECL.search(ts_code_only(p))]
 eq(fe_copies, [], "D2 no screen re-declares the category axis")
+
+# D6/D7/D8 — THE LIST ARRIVING IS PART OF THERE BEING ONE LIST (owner report 2026-11-14, §CORE-44).
+# §D2 held: no screen grew its own list. It said nothing while the one list never arrived at all. The
+# axis was asked for without the `/api/v1` prefix, so the request reached the Next app, 404'd, and the
+# catch answered with the built-ins — four categories on every target screen, every declared category
+# invisible, and `commcalc.target_line` empty in the whole database. A lock on "no second copy" has to
+# be joined by one on "the one copy is reachable, and says so when it is not".
+_fe_home_src = ts_code_only(os.path.join(ROOT, HOME_FE))
+ok(re.search(r"api\(\s*`/api/v1/commcalc/targets/", _fe_home_src) is not None,
+   "D6 the home asks the axis at a path the site proxies (/api/v1), not at a page name")
+ok(re.search(r"failed:\s*true", _fe_home_src) is not None
+   and re.search(r"failed\s*:\s*boolean", _fe_home_src) is not None,
+   "D7 a failed axis read is REPORTED, not returned as the tenant's own answer")
+# …and the two screens whose job is targets must actually say it. A flag nobody renders is the
+# §19.18 defect in miniature: the fact exists and no caller dereferences it.
+_axis_sayers = [p for p in (os.path.join(FE, "app", "(platform)", "commcalc", "targets", "page.tsx"),
+                            os.path.join(FE, "app", "(platform)", "commcalc", "targets", "settings",
+                                         "page.tsx"))
+                if os.path.isfile(p) and "axisFailed" in ts_code_only(p)]
+eq(len(_axis_sayers), 2,
+   "D8 Daily Targets and Target Settings both render the failed-axis notice")
 FE_LABEL_DECL = re.compile(r"""['"]Activations['"]\s*.{0,120}?['"]Upgrades['"]""", re.S)
 # TWO FILES SAY THESE WORDS AND ARE NOT THE TARGET AXIS. They are excused BY NAME, with the reason,
 # because loosening the scanner to let them through would also let a real copy through — and because

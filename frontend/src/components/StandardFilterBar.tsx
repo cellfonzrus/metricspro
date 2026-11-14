@@ -66,7 +66,7 @@ export type StandardFilterBarProps = {
    *  `value.sort`, and the page orders its rows with `sortStandard(rows, value, fields)` — the same
    *  state a sortable column header toggles, so the dropdown and the headers always agree. */
   sortFields?: SortFieldDecl[]
-  /** SHOW INACTIVE (owner directive 2026-11-14, §CORE-44) — how many rows the page is CURRENTLY
+  /** SHOW INACTIVE (owner directive 2026-11-14, §CORE-45) — how many rows the page is CURRENTLY
    *  hiding because their store or person was made inactive, from
    *  `standardInactiveHidden(rows, value, acc)`. Passing a number (0 included) is how a page DECLARES
    *  it can answer "is this one active": the bar then renders the "Show inactive" checkbox, and names
@@ -89,7 +89,7 @@ export default function StandardFilterBar({
   const s = { period: true, stores: true, markets: true, reps: true, ...(show || {}) }
   const [fetched, setFetched] = useState<{ stores?: EntityOption[]; markets?: EntityOption[]; reps?: EntityOption[] }>({})
 
-  // THE OPTIONS FOLLOW THE TICK (owner directive 2026-11-14, §CORE-44). `GET /core/filter-options`
+  // THE OPTIONS FOLLOW THE TICK (owner directive 2026-11-14, §CORE-45). `GET /core/filter-options`
   // is active-only by default now, so without this a user who ticked "Show inactive" would see the
   // closed store's rows and still have no way to NAME that store in the picker. One parameter, one
   // spelling, from the shared home.

@@ -333,7 +333,7 @@ try:
 
     # ── 8. Employee selection honored ───────────────────────────────────────────────────────────────
     # E2 is the INACTIVE fixture, so asking for it by id now needs the opt-in: the DEFAULT became
-    # active-only on 2026-11-14 (owner directive, index §CORE-44). The opt-in is passed here so the
+    # active-only on 2026-11-14 (owner directive, index §CORE-45). The opt-in is passed here so the
     # check still isolates what it is named for — that `employee_ids` narrows — rather than silently
     # also depending on the default. The default itself is pinned at 8b below.
     r_emp = call(hr_router.hr_employee_database, reveal=False, authorization="Bearer admin",
@@ -341,7 +341,7 @@ try:
     check("8 employee_ids narrows to exactly E2", [x["employee_id"] for x in r_emp["employees"]] == ["E2"], r_emp["employees"])
     r_emp_default = call(hr_router.hr_employee_database, reveal=False, authorization="Bearer admin",
                          employee_ids="E2")
-    check("8b asking for an INACTIVE employee by id returns nothing BY DEFAULT (§CORE-44) — the "
+    check("8b asking for an INACTIVE employee by id returns nothing BY DEFAULT (§CORE-45) — the "
           "report hides them until Show inactive is ticked, even when named",
           r_emp_default["employees"] == [], r_emp_default["employees"])
 

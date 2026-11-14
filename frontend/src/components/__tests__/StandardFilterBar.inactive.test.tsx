@@ -1,4 +1,4 @@
-// SHOW INACTIVE, ON THE SHARED BAR (owner directive 2026-11-14, index §CORE-44) — rendered, ticked
+// SHOW INACTIVE, ON THE SHARED BAR (owner directive 2026-11-14, index §CORE-45) — rendered, ticked
 // and read back in jsdom. The pure rules are proved in `lib/__tests__/standard-inactive.test.ts`;
 // this file proves the BAR dereferences them, that the control appears only where a page can actually
 // answer the question, and that hiding is never silent.

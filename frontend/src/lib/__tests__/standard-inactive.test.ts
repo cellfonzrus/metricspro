@@ -1,4 +1,4 @@
-// SHOW INACTIVE ON THE SHARED BAR (owner directive 2026-11-14, index §CORE-44) — the pure rules.
+// SHOW INACTIVE ON THE SHARED BAR (owner directive 2026-11-14, index §CORE-45) — the pure rules.
 // The component's half (the checkbox renders, emits, and the note says what was hidden) is proved in
 // `components/__tests__/StandardFilterBar.inactive.test.tsx`.
 //

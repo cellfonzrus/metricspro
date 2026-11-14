@@ -212,6 +212,7 @@ Primary code homes:
 | COMMCALC-69 | **A setting the reader cannot reach is not a setting that says nothing** | §COMMCALC-68's first night paid for itself: comp's own row said "0 rows, and nothing has landed for 33 day(s)", and the window it had asked the portal for was `2026-11-10..2026-11-10` — ONE day, against a `refresh_days` of 14 sitting in its own registry row. The reader asked for two columns migration 1042 (written 2026-10-03 for this exact defect, surfaced for approval, never applied) never added; PostgREST refused the whole select with 42703, and the handler re-read three columns, dropping `refresh_days`, `sweep_hour`, `sweep_minute`, `sweep_timezone` and `sweep_next_run_at` with the two that were genuinely absent. So an in-arrears carrier report was asked for today, every night, correctly returned nothing, and was recorded as a quiet source — no control was ever broken, which is why §COMMCALC-64/-66/-67's controls all took and still nothing landed. A column-block ladder, the shape §4b.1 has forbidden since 2026-09-22, which escaped its lock only because the column lists were named constants and the scan resolved literals. Both closed: the reader probes each optional column through `column_tolerant.present_columns` and reports `config_columns_missing`; `harness_any_columns_lock.py` now folds a named constant to its value before judging a TRY-FALLBACK, and carries g14/g15 so it cannot stop. The column itself is the owner's to apply — migration 1042 is money-touching by its own note. |
 | COMMCALC-71 | **A renamed figure is one column with two spellings — and a total of named parts is all of them or none** | The owner answered the question §COMMCALC-60 left open: the portal's `activations_total` IS the measurement we call gross adds. So it becomes a SPELLING on the one column, never a second column beside it, and the old spelling stays declared so a month spelled the old way keeps landing. Folding it in uncovered a second defect in the same line: `total_acts` (gross adds + upgrades) was summed with `portal_cell.total`, which adds up only the parts that arrived — right for alternative spellings of one figure, wrong for two different figures being added, because the new spelling alone would have been reported as the TOTAL with upgrades silently excluded. `total_all` is the both-parts-or-neither sum, and which of the two a caller wants is now a declared choice rather than a default. |
 | COMMCALC-72 | **A month-to-date figure is trended in ONE place, and an outlier is not a verdict** | "it shoudl also show trending and which stores are not trending towards the accessories goals … the outloers shoudl be highlighted in a different color". The projection was ALREADY HERE, inline TWICE in the Executive MTD report and already on two screens as "Trending Acc. $", so the third copy the action plan wanted was factored instead — and the draft of that home re-derived three more facts (`feed_period`'s month parsing, month length and open/closed) and the division itself (`demand_projection.velocity`) before the duplicate check caught them. What may a trend say when no day of the month has completed, what may it say when there is no target, and who may be called an outlier when four stores are the whole distribution? |
+| COMMCALC-73 | **A pull nobody recorded is a report that looks a month stale** | The owner pasted the Data Imports page: two of three tiles read *"Last upload: Oct 8, 2026 … via manual upload"* while the ePay owners-portal sweep had been landing their rows every night since 12 Nov (§COMMCALC-69), `raw_comp_report` 78,053 → 89,556. The rows arrived; the RECORD of their arrival did not. The sweep has THREE storage paths — the month replace, the per-day replace and the Daily-Transaction ingest hook — and each decided for itself whether to write a landing record. Exactly one did, which is why MI/ATU's tile was right and the other two were a month stale over current data. The two journals every "last upload" surface reads now have ONE writer, which `router`'s trace helper dereferences too (it could not before: the home lived in `router`, which imports the sweep), and the record plus the §6l post-landing hook are ONE call every storage path makes, locked by `harness_upload_trace_coverage` (f/j/k) so a new path cannot land silently. The third tile, the monthly sales archive, is NOT this defect: its promotion is switched off in its own registry row — reported, not patched. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -233,6 +234,7 @@ Primary code homes:
 | CORE-39 | **A setup gap carries the steps that close it, the page that closes it, and whoever may** | A financing row read "⚠️ Detection not configured" with nothing to press, and 29 files say a setup gap is open the same dead-end way. What closes this gap, where, may I — and when I may not, who in MY company can, and how do they get the same steps and a link to the exact screen? |
 | CORE-40 | **A money column that says a word is not saying zero** | Reported on the Cash Calendar: the day grid read "in: not measured" while the table directly beneath it read Expected in \$0.00, Net \$0.00 and TOTAL \$0.00. The report exists to never print a figure for money nobody measured, and its own table printed four. Nothing was wrong with the report: "how is a money value rendered" had SIX implementations, every one of them `Number(v) || 0`. How many states does a money cell have, and which of them is a claim about measurement rather than about money? |
 | CORE-41 | **Inheritance is not a decision — what each tenant is OFFERED** | "why is vidapay connector showing in boost ? we need to get these things under control before we roll out for outside customers — have an agent asses and create a dashboard for the super admin whereby these things can be gated out for the respective tenants right from the get go". Three mechanisms answered "is this on for this tenant" and all three answered by INHERITING a house row — on an org id that IS a real tenant, so that tenant could not be gated at all, and a new tenant arrived holding everything. Where does a human's decision about one tenant live, which mechanisms read it, and what stops one of them answering differently? |
+| CORE-44 | **The prefix is the address, and a missing route is not an answer** | "the targets are also not updating in target settings and daily targets, seem to be the same error" — and it was. `apiUrl()` prefixes nothing: in the browser the site proxies the path as given, so `/api/v1` IS the address. Two frontend calls omitted it, reached the Next app, got its 404, and had their `catch` answer for them. One of the two was the TARGET AXIS — "what does this tenant sell, so what can have a target" — which fell back to the four built-in categories. Every category a tenant had declared was therefore invisible on every target screen, no target for one could be typed, and `commcalc.target_line` held zero rows in the entire database: 13 categories for LuxeLink, 4 for the house, none of them ever targetable. The class is not the typo but that a MISSING ROUTE and a REAL ANSWER were indistinguishable to the caller, and that a lock on "only one copy of this fact exists" said nothing about "the one copy never arrives". |
 | CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
 | CORE-27 | **A report arrives with the standard filters and the send bar, or it does not arrive** | "Zero Sales does not have send notification bar, please note this also in teh indsex all reports must have the satandard filters and the send bar by default" — the sender and the filter bar each already had one home; what was missing was the content to send and anything that made either a default. What is a figure nobody can mail worth, and what fails the build when the 129th report ships without a toolbar? |
@@ -7495,7 +7497,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 
 | endpoint | code | what it is the one home of |
 | --- | --- | --- |
-| `GET /core/filter-options` | the org-scoped option source behind the shared `StandardFilterBar` — stores (+markets) from `storeops.stores` ∪ `commcalc.store_mapping`, reps from `storeops.employees` ∪ `storeops.app_users`. **ACTIVE-ONLY since 2026-11-14** through `core/roster_visibility`, with `include_inactive=1` and an `inactive_hidden` count so hiding is never silent | `core/router.filter_options` → `StandardFilterBar` `optionsUrl` | §CORE-44 · §3d |
+| `GET /core/filter-options` | the org-scoped option source behind the shared `StandardFilterBar` — stores (+markets) from `storeops.stores` ∪ `commcalc.store_mapping`, reps from `storeops.employees` ∪ `storeops.app_users`. **ACTIVE-ONLY since 2026-11-14** through `core/roster_visibility`, with `include_inactive=1` and an `inactive_hidden` count so hiding is never silent | `core/router.filter_options` → `StandardFilterBar` `optionsUrl` | §CORE-45 · §3d |
 | `POST /storeops/timeclock/clock-in` · `POST /storeops/timeclock/clock-out` | `storeops/router.py` (`_punch_geo_columns` → `core/store_geofence.evaluate_presence`) | WHERE a punch was made, judged against that punch's OWN store (never the rep's home store — a floater ends their shift where they worked it) and stored beside it. The clock-out carried NO location at all before 2026-11-01. **Never refuses a punch** on its location. Gated on `_punch_geo_present` so an un-migrated database behaves exactly as today (§STOREOPS-04) |
 | `GET /storeops/timeclock/geo-config` · `PUT …` | `storeops/router.py` → `core/store_geofence.resolve_config` | the tenant's punch-geofence policy, read and written through the SAME resolver the judging path uses, so a junk payload cannot write a fence the judging code would then obey. Manager/admin only (§STOREOPS-04) |
 | `GET /storeops/stores/geo-pins` · `PUT /storeops/stores/{store_code}/geo-pin` | `storeops/router.py` → `core/store_geofence.store_pin` | declaring where a store is, and which stores are NOT declared. Audited (`geo_pinned_by`/`geo_pinned_at`), org-scoped by construction (another tenant's store is a 404, never a pin), store code matched case-folded through `_norm_store` because `'b-1115'` once created a phantom store holding a day's money, and half a pin is a 400 rather than a store on the prime meridian (§STOREOPS-04) |
@@ -7871,7 +7873,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 
 | metric | basis | where it is decided |
 | --- | --- | --- |
-| **Is this store / this person still active?** | the roster row's own `is_active`, where **NULL means ACTIVE** (`BOOLEAN DEFAULT true`, nullable, mig `003`) and only an EXPLICIT false is inactive — the wire spellings `'false'` / `'f'` / `0` count as false, which a bare truthiness test gets backwards | `core/roster_visibility.is_active` / `.visible` / `.hidden_count` — THE one answer, with the browser twin `frontend/src/lib/roster-visibility.ts`. Active-only is the DEFAULT; `include_inactive` (one spelling) is the opt-in the `StandardFilterBar` "Show inactive" checkbox resolves to. `.eq("is_active", True)` is BANNED: it drops NULL, which deleted live employees from every roster. Lock: `harness_roster_visibility.py` (§CORE-44) |
+| **Is this store / this person still active?** | the roster row's own `is_active`, where **NULL means ACTIVE** (`BOOLEAN DEFAULT true`, nullable, mig `003`) and only an EXPLICIT false is inactive — the wire spellings `'false'` / `'f'` / `0` count as false, which a bare truthiness test gets backwards | `core/roster_visibility.is_active` / `.visible` / `.hidden_count` — THE one answer, with the browser twin `frontend/src/lib/roster-visibility.ts`. Active-only is the DEFAULT; `include_inactive` (one spelling) is the opt-in the `StandardFilterBar` "Show inactive" checkbox resolves to. `.eq("is_active", True)` is BANNED: it drops NULL, which deleted live employees from every roster. Lock: `harness_roster_visibility.py` (§CORE-45) |
 | **On what day will this earned money reach us?** | the carrier's DECLARED payout cycle — its own statement date, a declared weekday, declared days of the month, a declared day of the month, or a declared net-days lag | `payables/receipt_schedule.receipt_date` / `receipt_date_of_row` — THE one home, returning the date WITH the basis so no caller can show one without the other. **No house default**, unlike the outbound `billing_period`: inbound there is only an EARNING date, so a default would invent a payment date out of a sale date. Nothing declared → `cadence_undeclared`, no date, NOT measured. `is_measured` is an ALLOWLIST (§66). Lock: `harness_cash_calendar.py` (§PAYABLES-02) |
 | **What money is expected to come IN, and out of which feed?** | each tenant's OWN declared source (`commcalc.receipt_source_map`, mig `1115`), dated through the lineage registry's day column | `payables/expected_receipts.dated_receipts` — org-scoped on every read including the declaration itself, because two tenants' rows sit in the same physical tables. A declaration that cannot be READ is `declared: True` with the failure in words (§COMMCALC-29); a declaration TABLE that does not exist is `declared: False` with the migration named. An empty result is **never** \$0.00 (§PAYABLES-02) |
 | **What is left after offsetting — the net cash position, by day?** | this day's expected in minus this day's owed out, folded PER DAY and then added up (§CORE-17.3h), with the opening balance carried forward | `payables/cash_calendar.build` — pure, and it reads nothing: the OUT side is `owed_read.dated_owed`, the SAME read the Daily Owed surface and the weekly roll-up share (§COMMCALC-34), so the calendar cannot total what those screens disagree with. **An unmeasured side REFUSES to net**: `expected_in` / `net` / `running` go to None and the measured side is still shown in full (§PAYABLES-02) |
@@ -26480,6 +26482,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-70 | commcalc, storeops |
 | COMMCALC-71 | commcalc |
 | COMMCALC-72 | commcalc |
+| COMMCALC-73 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -26523,7 +26526,8 @@ status word rather than a blank that reads as nil.
 | CORE-36 | core |
 | CORE-37 | core |
 | CORE-43 | core |
-| CORE-44 | core, storeops, hr, commcalc |
+| CORE-44 | core |
+| CORE-45 | core, storeops, hr, commcalc |
 | STOREOPS-08 | storeops |
 | STOREOPS-09 | storeops, account |
 <!-- SECTION-REGISTER:END -->
@@ -45337,14 +45341,14 @@ See also §14t (the mechanism this extends, and mig `997`) · §47.17 / §59.10 
 default) · §19.18 (one fact, one home, dereferenced).
 
 
-## §CORE-44. AN INACTIVE STORE OR PERSON DOES NOT SHOW UNLESS "SHOW INACTIVE" IS TICKED (owner directive 2026-11-14)
+## §CORE-45. AN INACTIVE STORE OR PERSON DOES NOT SHOW UNLESS "SHOW INACTIVE" IS TICKED (owner directive 2026-11-14)
 
 Owner: *"once the store or employee is made inactive their data should [not] be shwoing on any module
 unless the checkox is clicked for show inactive stores"*. Asked whether hiding should take their past
 money with it: *"yes the past earning will show in that months totals and the year to date also"* —
 so **hiding is a ROW rule, never a MONEY rule.**
 
-### CORE-44.1 Duplicate check (the build gate)
+### CORE-45.1 Duplicate check (the build gate)
 
 Searched the index and the code for an existing mechanism before writing anything, and **reused all
 three that already existed** rather than building siblings:
@@ -45373,7 +45377,7 @@ section is the same defect finished.
 
 New: the PREDICATE's home, and the lock. Nothing else.
 
-### CORE-44.2 The class, not the instance
+### CORE-45.2 The class, not the instance
 
 The general fact that was wrong is not "one report still lists a closed store". It is that **every
 caller decided for itself what the active flag means, and the copies disagreed with each other**:
@@ -45398,7 +45402,7 @@ string `'false'` is TRUTHY** in both Python and JavaScript, so a flag that came 
 PostgREST, a CSV import or a form post reads as active at exactly the one caller that got it off the
 wire.
 
-### CORE-44.3 The one home, dereferenced
+### CORE-45.3 The one home, dereferenced
 
 | the question | the one home |
 | --- | --- |
@@ -45420,7 +45424,7 @@ filter follows the same tick instead of always requesting the full set).
 plan and the engine matches them, so hiding them there would make them un-assignable — the same
 reasoning as `keep_codes`.
 
-### CORE-44.4 The lock
+### CORE-45.4 The lock
 
 `backend/harness_roster_visibility.py`, in `carrier-vocab-guard.yml`, DB-free:
 
@@ -45440,7 +45444,7 @@ reasoning as `keep_codes`.
 - Four mutations confirmed RED: the home reading NULL as inactive, `filter_options` defaulting open
   again, a screen hand-rolling the test again, and the checkbox becoming a text field.
 
-### CORE-44.5 Tests, and every tenant
+### CORE-45.5 Tests, and every tenant
 
 TDD, written red first: `backend/tests/unit/test_roster_visibility.py` (9),
 `backend/tests/integration/test_inactive_is_hidden_everywhere.py` (12 — the REAL routes over the
@@ -45454,7 +45458,7 @@ The inactive rule is a **POLICY**, not a tenant's vocabulary, so a house default
 §COMMCALC-49.10's ban is on a default that is really one tenant's WORDS. What must never cross is the
 data, which is what the negative assertions pin.
 
-### CORE-44.6 Not money, and what hiding is allowed to do
+### CORE-45.6 Not money, and what hiding is allowed to do
 
 💰 **No migration, no money moved, no schema change.** Nothing in this work touches an amount: the
 only reads whose row set changed are an option list, two rosters and one roster report. Per the
@@ -47925,6 +47929,112 @@ per-report verdict that made this readable at all) · §COMMCALC-67 / -66 / -64 
 exonerates) · §19.41 (the empty-pull verdict that reported the 33 days honestly) · §19.18 (a
 registry written and its callers not reading it).
 
+## §COMMCALC-73. A PULL NOBODY RECORDED IS A REPORT THAT LOOKS A MONTH STALE (owner report 2026-11-14)
+
+Owner, with the Data Imports page pasted: *"please check and fix , i need these uploads to work
+automatically"*.
+
+### COMMCALC-73.1 WHAT THE PAGE SAID, AND WHAT WAS TRUE
+
+| tile | the tile said | measured against production, same hour |
+| --- | --- | --- |
+| Comprehensive comp report | Last upload: Oct 8, 2026 · 2,439 rows · via manual upload | `raw_comp_report` **89,556 rows**, every day 1 Oct – 11 Nov present, last unattended pull 13 Nov 04:30 UTC `ok` "12692 rows [2026-10-04..2026-11-12]" |
+| Commission payment detail | Last upload: Oct 8, 2026 · 495 rows · via manual upload | `raw_payment_detail` **281,115 rows**, newest `payment_date` 2026-11-12, own row says "21602 rows [November 2026, October 2026] (replace_by_day)" |
+| Sales report with IMEI | Last upload: Sep 3, 2026 · 24,890 rows · via auto-promotion | `raw_sales` has August only; Sep/Oct/Nov are **0 rows**, while `daily_sales_feed` took 9,677 rows at 2026-11-14 19:00 via the hourly email sweep |
+
+So the answer splits in two, and only the first half is a code defect: **two reports were already
+automatic and the page was reading a record nothing wrote**; the third is genuinely switched off.
+
+### COMMCALC-73.2 THE DEFECT
+
+"When did this report last receive data" is answered from two journals — `commcalc.upload_trace`
+(mig 202, whose own comment claims *"EVERY path"*) and the older `commcalc.upload_log` (mig 007,
+which the Upload-page history and the connectors page read per `file_type`). The ePay sweep has
+three storage paths, and each decided for itself whether to write to them:
+
+| path | stores | recorded the landing |
+| --- | --- | --- |
+| month replace (`_process_report`) | `raw_mi` | YES — `upload_log`, filename "epay auto-sweep" |
+| per-day replace (`_store_rows_by_day`, `mode: replace_by_day`) | `raw_comp_report`, `raw_payment_detail` | **no** |
+| the DTD `ingest` hook | `raw_epay_daily_tx` | **no** |
+
+One fact, three paths, one of them logging — which is exactly why MI/ATU's tile was the only one
+telling the truth. Each path DID call the §6l post-landing hook, so the calculation was kept current
+by data whose arrival no surface could see.
+
+### COMMCALC-73.3 THE RULE
+
+**Recording a landing and acting on it are two consequences of one fact, so they are one call.**
+A storage path cannot queue a recalculation without recording the landing, because there is a single
+function that does both and the lock refuses a second route to the hook.
+
+And the writer of a journal every surface reads lives where every lander can reach it. The trace
+home used to be `router._write_upload_trace`; `router` imports the sweep, so the sweep could not
+dereference it and grew a half-record instead. A one home that half the callers cannot import is the
+§19.18 class wearing a different hat.
+
+### COMMCALC-73.4 WHAT CHANGED
+
+- **`commcalc/ingest_record.py` is new and is the ONE WRITER of both ingest journals** —
+  `write_trace` (the only insert into `upload_trace` in the codebase), `write_log`, the
+  `TARGET_TABLE` map moved out of `router`, and `table_name()` so a schema-qualified declaration
+  (`commcalc.raw_epay_daily_tx`) and a bare one are recorded under one spelling. Non-raising by
+  contract: a journal that is not there can never be why a pull fails.
+- **`router._write_upload_trace` dereferences it** and keeps its own result-shape derivation; its map
+  is now `_ingest_record.TARGET_TABLE`, not a second copy.
+- **`epay_sweep.landed(...)` is the ONE landing call**, made by all three storage paths. It records
+  the landing (`source='portal'` → the tile's "portal pull", per-period and per-day saved counts in
+  the trace row's `periods` / `date_counts`) and then calls `auto_calc.landed` (§6l).
+- A **zero-row pull records no landing**. Whether a zero is the source's own answer is not a
+  journal's question and is already answered on the report's own row (§COMMCALC-68); a zero written
+  here would make every quiet day read as "an attempt saved nothing" on the tile forever.
+- The per-day path names the tile's period from the **newest day written**, not the first in sort
+  order — "November 2026" sorts before "October 2026", which would have labelled a fresh pull with a
+  stale month.
+
+### COMMCALC-73.5 TESTS AND THE LOCK
+
+`tests/unit/test_every_sweep_landing_is_recorded.py` (12 units) and
+`harness_upload_trace_coverage.py`, which grew from 35 to 42 checks:
+
+- **(f)** the only insert into `upload_trace` anywhere under `app/modules/commcalc` is the one home,
+  scanned by call chain rather than by literal so naming the table with a constant cannot hide it;
+  (f2)/(f3) the router dereferences the home and does not keep its own copy of the map.
+- **(j)** the post-landing hook is reached from exactly ONE place in the sweep, and that place
+  records the landing in the same call.
+- **(k)** every function in the sweep that replaces or upserts rows reaches that call — DERIVED from
+  the call graph with one level of indirection, never a name list — and the derived set is compared
+  to a DECLARED one rather than to a count (§CORE's subject-set lock: a scan that goes blind must not
+  read as a pass), so a fourth storage path goes red and names itself.
+- `harness_auto_calc_lock`'s check B now resolves ONE level of indirection within one file, so a
+  lander that reaches §6l through its module's single landing call is wired rather than silent;
+  N12/N13 keep that from becoming a hole (the shared call losing the hook → red, and indirection
+  through another module → still red).
+- **NEG6/NEG7** prove (j)/(k) can go red: a synthetic storage path that skips the call reads as
+  silent, and a synthetic second hook site is seen.
+
+Also fixed in passing: `harness_upload_last.py` had two assertions still looking for the targeted
+lookup's key in `eq` after the round-trip ratchet folded it into one `in_` read, so both had been
+passing vacuously.
+
+### COMMCALC-73.6 WHAT THIS DOES NOT FIX, said plainly
+
+**The sales tile is a switch, not a bug.** `report_definitions` for `report_key='sales'` carries
+`auto = false`, so the feed→`raw_sales` promotion never runs for this org, and September, October and
+November are empty in the archive while the hourly feed is healthy. Turning it on is a config row and
+is the owner's to apply; the three missing months then need building. Reported, never worked around
+in code.
+
+`upload_log` still has ~15 writers across `router` — pre-existing, and a journal whose newest row per
+report is all anyone reads tolerates it; `upload_trace` is the one that now has a single writer.
+`epay_daily_tx` still has no `report_definitions` row (carried from §COMMCALC-69), so the report that
+lands rows every half hour can now say when it last received data but still has nowhere to show a
+status.
+
+Cross-references: §COMMCALC-69 / -68 (why these two reports became automatic at all, and where a
+report's own verdict lives) · §6l (the post-landing hook this is now inseparable from) · §19.18 (a
+registry written and its callers not reading it) · §CORE-13 / §4b.1 (the sibling one-home locks).
+
 ## §COMMCALC-60. A FIGURE THE FEED SENDS THAT NOTHING READS IS NOT A FIGURE THIS PLATFORM HAS — one home for which store-DLAR column is which metric (owner ask 2026-11-10)
 
 Owner, verbatim: *"Use those other 21 columns and make them a part of the kpi reporting also filtered
@@ -48968,3 +49078,100 @@ See also §13a (the canonical resolution this dereferences) · §13c (market enu
 spellings of one store is the normal case) · §ACCOUNT-01 (the same fold defect on the backend's
 payroll authority) · §19.18 (one fact, one home, dereferenced) · §COMMCALC-49.10 (a default that is
 really one tenant's vocabulary).
+
+## §CORE-44. THE PREFIX IS THE ADDRESS, AND A MISSING ROUTE IS NOT AN ANSWER (owner report 2026-11-14)
+
+Owner: *"the targets are also not updating in target settings and daily targets, seem to be the same
+error"*. He was right about the shape.
+
+### §CORE-44.1 What was measured, live
+
+- `commcalc.target_line` (mig 1074, the home for a DECLARED category's target) held **zero rows in
+  the entire database** — every tenant, every month, since it shipped.
+- LuxeLink declares **13** categories beyond the four built-ins (`upgrade_count`, `new_line_count`,
+  `postpaid_count`, `fin_edge` and ten `tender:*` keys); the house declares **4** (`fin_acima` among
+  them). None had ever been targetable.
+- `https://app.metricspro.tech/commcalc/targets/November%202026/axis` → **404**.
+  `…/api/v1/commcalc/targets/November%202026/axis` → **401** (the route exists; it wants a token).
+- The four BUILT-IN targets were healthy throughout: 23 October and 24 November rows for LuxeLink,
+  the roster matching, `byod_pct_default` 35, and edits landing seconds before the report.
+
+### §CORE-44.2 THE CLASS
+
+`apiUrl()` **prefixes nothing**. In the browser it returns the path exactly as given, because
+`next.config.ts` proxies `BACKEND_PATH_PREFIXES` (`/api/v1`, `/health`) to the backend (§40). So the
+prefix IS the address: `api('/commcalc/x')` asks the **Next app** for a page called `/commcalc/x`,
+gets its 404 HTML, and the caller's `catch` turns that into whatever its fallback is.
+
+That is §CORE-40 and §40.13 at the address grain, and the reason it hid for months: **a route that
+does not exist and a real answer were indistinguishable to the caller.** The fallback was even
+well-reasoned — a blank target screen would be a regression — so it answered with the four built-in
+categories, which is a plausible answer for a wireless tenant and a wrong one for every tenant here.
+
+Note what did NOT catch it. `harness_target_axis_lock.py` §D2 exists precisely so no screen grows its
+own category list, and it was green: no screen had one. **A lock on "there is only one copy of this
+fact" says nothing about "the one copy never arrives."** Both halves are now locked.
+
+### §CORE-44.3 The design fix
+
+1. **The address, in both places it was wrong.** `frontend/src/lib/target-axis.ts` (the axis, silent)
+   and `…/targets/my/_components/ShelfAging.tsx` (the rep shelf card, which said it failed and had
+   therefore never loaded) now ask `/api/v1/…`.
+2. **A failed read is reported.** `fetchTargetAxisResult` / `useTargetAxis` return `failed` beside
+   `cats`. The fall back to the built-ins STAYS; what changes is that it is labelled. Daily Targets
+   and Target Settings both render *"Only the built-in categories are shown"*, so the screen whose
+   job is setting targets can no longer look complete while hiding the tenant's own categories.
+   A failure is still **never cached** — the next screen to mount asks again.
+3. **One row, one save.** Target Settings' bulk `saveSelected` called `putTarget` + `putFinancing`
+   and **not** `putLines`, while the single-row Save called all three. Two save paths for one row,
+   one of them writing a subset: the declared columns would have vanished a second time, silently,
+   for anyone editing 24 stores at once. It now calls the same three.
+
+### §CORE-44.4 Locked
+
+- **`harness_one_domain_lock.py` rule 10** (38 checks) — every literal path handed to `api`,
+  `apiUpload`, `apiDownload`, `apiFetchBase64`, `apiUrl` or `absoluteApiUrl` under `frontend/src`
+  must begin with a prefix the site actually proxies. The prefixes are **READ from the home's
+  `BACKEND_PATH_PREFIXES`**, so adding one there is all it takes and nothing is kept in step by hand;
+  the rule **refuses to pass** if it cannot read them, rather than passing blind. It went RED on
+  exactly the two real calls before either was touched. Four negative controls: the defect's own
+  shape is caught; a correct call and a proxied root both pass; a path built from a variable is not
+  judged (it cannot be — `client.ts` passes one); and the unreadable-prefixes case fires.
+- **`harness_target_axis_lock.py` §D6/D7/D8** (85 checks) — the home asks a proxied path, `failed` is
+  part of the result's type and is set on the failure branch, and BOTH target screens render it. A
+  flag no caller dereferences is §19.18 in miniature.
+- **`frontend/src/lib/__tests__/target-axis.test.ts`** (7 tests) — the address, the armed negative
+  control that the shipped shape is NOT asked, `failed` on a 404 with nothing declared claimed, a
+  failure not cached, a success not reported as failed and cached once per period, and an
+  empty-but-successful axis distinguished from a failed one. It compares against the home's own
+  `BUILTIN_CATS` rather than restating the four, because a second copy in a test is still a second
+  copy — §D2 caught the first draft doing it.
+
+### §CORE-44.5 EVERY TENANT (project rule 2026-10-30)
+
+The defect was universal, not per tenant — the address is the same for everyone — but its COST was
+proportional to how much each tenant declares, which is why the tenant with 13 declared categories is
+the one who reported it. The fix is measured against each tenant's own axis: the test runs a declared
+axis through `declaredCats` and asserts a failed read claims **nothing** declared rather than falling
+back to another vocabulary.
+
+### §CORE-44.6 Reported, not fixed in code
+
+The month selector (`frontend/src/lib/period-context.tsx`) persists `mp_period` in `localStorage`
+**indefinitely**, with no staleness guard. Measured the same day: target edits at 19:05 UTC on 14 Nov
+landed in **October 2026**, and November had not been touched since 9 Nov. For a finished month
+`_period_bounds` clamps "today" to the last day, so Daily Targets correctly shows zero open days and
+a today-target of 0 — which reads exactly like "not updating". Surfaced to the owner; whether a
+remembered month should expire is his call, not a silent change to every report's default.
+
+Not done: bulk-apply INPUTS for declared categories (the bulk editor still has fields for the five
+built-ins only; per-row typing plus "Save selected" now works). `commcalc.target_line` has never been
+written, so whether its INSERT grant survives migration 1074 — which ships no
+`grant … to service_role`, grandfathered under `harness_data_api_grant_guard.py`'s 1089 cutoff — is
+unproven from here; a write to production was not attempted. The first real save will say, and the
+endpoint already answers that case with a sentence naming migration 1074.
+
+Cross-references: §40 (the one home for the backend's location, and the rewrites that make a prefix an
+address) · §40.13 (unreadable is not off — the same rule on the sign-in gate) · §CORE-40 (a word is
+not a zero) · §COMMCALC-02 (the target axis and `target_line`) · §COMMCALC-49.10 (absent is not zero)
+· §19.18 (one fact, one home, dereferenced).
