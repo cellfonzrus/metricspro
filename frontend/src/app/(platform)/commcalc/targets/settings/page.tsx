@@ -38,7 +38,7 @@ export default function TargetSettingsPage() {
   // column here, so the page named "Target Settings" can actually set a target for the thing the
   // business sells. Empty for a tenant that declared nothing, which is why this page is unchanged
   // for every existing tenant.
-  const { cats: axisCats } = useTargetAxis(period)
+  const { cats: axisCats, failed: axisFailed } = useTargetAxis(period)
   const declared = declaredCats(axisCats)
   // Active-carrier lens: name financing vendors generically for a dual-carrier tenant.
   const [rows, setRows] = useState<TargetRow[]>([])
@@ -192,7 +192,10 @@ export default function TargetSettingsPage() {
     if (!toSave.length) { setBulkMsg('No stores selected.'); return }
     setSavingAll(true); setBulkMsg('Saving…')
     let ok = 0, fail = 0
-    for (const row of toSave) { try { await putTarget(row); await putFinancing(row); ok++ } catch { fail++ } }
+    // putLines IS CALLED HERE TOO (owner report 2026-11-14). The single-row Save wrote the declared
+    // categories and this path did not, so the same number saved one way and vanished the other —
+    // two save paths for one row, one of them writing a subset.
+    for (const row of toSave) { try { await putTarget(row); await putLines(row); await putFinancing(row); ok++ } catch { fail++ } }
     setRows(rs => rs.map(r => targetCodes.has(r.store_code) ? { ...r, _seeded: false } : r))
     setSavingAll(false)
     setBulkMsg(`Saved ${ok} store(s)${fail ? ` · ${fail} failed` : ''}.`)
@@ -220,6 +223,17 @@ export default function TargetSettingsPage() {
           per-day and per-rep targets from the StoreOps schedule.
         </p>
       </div>
+
+      {/* A FAILED READ IS NOT AN ANSWER (§CORE-44). Without this line the page silently offers the
+          four built-in categories and looks complete, which is how every declared category stayed
+          un-targetable without anyone being told. */}
+      {axisFailed && (
+        <div className="card" style={{ padding: '10px 16px', marginBottom: 16, fontSize: 13, borderColor: 'var(--c-bg-bfdbfe)' }}>
+          ⚠ <strong>Only the built-in categories are shown.</strong> The list of categories this
+          business counts could not be loaded, so anything else you count has no column here yet.
+          Reload the page; if it keeps saying this, the server could not be reached.
+        </div>
+      )}
 
       <div style={{ background: 'var(--c-bg-eff6ff)', border: '1px solid var(--c-bg-bfdbfe)', borderRadius: 10, padding: '10px 16px', marginBottom: 20, fontSize: 13, color: 'var(--c-fg-1e40af)' }}>
         💡 <strong>Activations</strong> = premium + BYOD acts (count). <strong>Upgrades</strong> = upgrade acts (count).

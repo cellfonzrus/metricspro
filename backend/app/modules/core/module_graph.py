@@ -3402,8 +3402,13 @@ FACTS: dict[str, dict] = {
         "question": 'What is this tenant actually targetable ON — with what label, in what unit, and '
                     'is its target a column on commcalc.targets or a commcalc.target_line row?',
         "homes": ('app/modules/commcalc/targets_engine.py',),
-        "index": ('COMMCALC-02',),
-        "locks": ('harness_target_axis_lock.py', 'harness_target_declared_axis.py'),
+        # CORE-44 — the axis having ONE home was never the whole fact: the browser's dereference of
+        # it (frontend/src/lib/target-axis.ts) asked for it at a path the site does not proxy, so the
+        # one list never arrived and a catch answered with the built-ins. Reachable, and audibly
+        # unreachable when it is not, is part of there being one answer.
+        "index": ('COMMCALC-02', 'CORE-44'),
+        "locks": ('harness_target_axis_lock.py', 'harness_target_declared_axis.py',
+                  'harness_one_domain_lock.py'),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
         # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
         "callers": {

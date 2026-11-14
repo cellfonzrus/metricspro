@@ -233,6 +233,7 @@ Primary code homes:
 | CORE-39 | **A setup gap carries the steps that close it, the page that closes it, and whoever may** | A financing row read "⚠️ Detection not configured" with nothing to press, and 29 files say a setup gap is open the same dead-end way. What closes this gap, where, may I — and when I may not, who in MY company can, and how do they get the same steps and a link to the exact screen? |
 | CORE-40 | **A money column that says a word is not saying zero** | Reported on the Cash Calendar: the day grid read "in: not measured" while the table directly beneath it read Expected in \$0.00, Net \$0.00 and TOTAL \$0.00. The report exists to never print a figure for money nobody measured, and its own table printed four. Nothing was wrong with the report: "how is a money value rendered" had SIX implementations, every one of them `Number(v) || 0`. How many states does a money cell have, and which of them is a claim about measurement rather than about money? |
 | CORE-41 | **Inheritance is not a decision — what each tenant is OFFERED** | "why is vidapay connector showing in boost ? we need to get these things under control before we roll out for outside customers — have an agent asses and create a dashboard for the super admin whereby these things can be gated out for the respective tenants right from the get go". Three mechanisms answered "is this on for this tenant" and all three answered by INHERITING a house row — on an org id that IS a real tenant, so that tenant could not be gated at all, and a new tenant arrived holding everything. Where does a human's decision about one tenant live, which mechanisms read it, and what stops one of them answering differently? |
+| CORE-44 | **The prefix is the address, and a missing route is not an answer** | "the targets are also not updating in target settings and daily targets, seem to be the same error" — and it was. `apiUrl()` prefixes nothing: in the browser the site proxies the path as given, so `/api/v1` IS the address. Two frontend calls omitted it, reached the Next app, got its 404, and had their `catch` answer for them. One of the two was the TARGET AXIS — "what does this tenant sell, so what can have a target" — which fell back to the four built-in categories. Every category a tenant had declared was therefore invisible on every target screen, no target for one could be typed, and `commcalc.target_line` held zero rows in the entire database: 13 categories for LuxeLink, 4 for the house, none of them ever targetable. The class is not the typo but that a MISSING ROUTE and a REAL ANSWER were indistinguishable to the caller, and that a lock on "only one copy of this fact exists" said nothing about "the one copy never arrives". |
 | CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
 | CORE-27 | **A report arrives with the standard filters and the send bar, or it does not arrive** | "Zero Sales does not have send notification bar, please note this also in teh indsex all reports must have the satandard filters and the send bar by default" — the sender and the filter bar each already had one home; what was missing was the content to send and anything that made either a default. What is a figure nobody can mail worth, and what fails the build when the 129th report ships without a toolbar? |
@@ -26521,6 +26522,7 @@ status word rather than a blank that reads as nil.
 | CORE-36 | core |
 | CORE-37 | core |
 | CORE-43 | core |
+| CORE-44 | core |
 | STOREOPS-08 | storeops |
 | STOREOPS-09 | storeops, account |
 <!-- SECTION-REGISTER:END -->
@@ -48830,3 +48832,100 @@ See also §13a (the canonical resolution this dereferences) · §13c (market enu
 spellings of one store is the normal case) · §ACCOUNT-01 (the same fold defect on the backend's
 payroll authority) · §19.18 (one fact, one home, dereferenced) · §COMMCALC-49.10 (a default that is
 really one tenant's vocabulary).
+
+## §CORE-44. THE PREFIX IS THE ADDRESS, AND A MISSING ROUTE IS NOT AN ANSWER (owner report 2026-11-14)
+
+Owner: *"the targets are also not updating in target settings and daily targets, seem to be the same
+error"*. He was right about the shape.
+
+### §CORE-44.1 What was measured, live
+
+- `commcalc.target_line` (mig 1074, the home for a DECLARED category's target) held **zero rows in
+  the entire database** — every tenant, every month, since it shipped.
+- LuxeLink declares **13** categories beyond the four built-ins (`upgrade_count`, `new_line_count`,
+  `postpaid_count`, `fin_edge` and ten `tender:*` keys); the house declares **4** (`fin_acima` among
+  them). None had ever been targetable.
+- `https://app.metricspro.tech/commcalc/targets/November%202026/axis` → **404**.
+  `…/api/v1/commcalc/targets/November%202026/axis` → **401** (the route exists; it wants a token).
+- The four BUILT-IN targets were healthy throughout: 23 October and 24 November rows for LuxeLink,
+  the roster matching, `byod_pct_default` 35, and edits landing seconds before the report.
+
+### §CORE-44.2 THE CLASS
+
+`apiUrl()` **prefixes nothing**. In the browser it returns the path exactly as given, because
+`next.config.ts` proxies `BACKEND_PATH_PREFIXES` (`/api/v1`, `/health`) to the backend (§40). So the
+prefix IS the address: `api('/commcalc/x')` asks the **Next app** for a page called `/commcalc/x`,
+gets its 404 HTML, and the caller's `catch` turns that into whatever its fallback is.
+
+That is §CORE-40 and §40.13 at the address grain, and the reason it hid for months: **a route that
+does not exist and a real answer were indistinguishable to the caller.** The fallback was even
+well-reasoned — a blank target screen would be a regression — so it answered with the four built-in
+categories, which is a plausible answer for a wireless tenant and a wrong one for every tenant here.
+
+Note what did NOT catch it. `harness_target_axis_lock.py` §D2 exists precisely so no screen grows its
+own category list, and it was green: no screen had one. **A lock on "there is only one copy of this
+fact" says nothing about "the one copy never arrives."** Both halves are now locked.
+
+### §CORE-44.3 The design fix
+
+1. **The address, in both places it was wrong.** `frontend/src/lib/target-axis.ts` (the axis, silent)
+   and `…/targets/my/_components/ShelfAging.tsx` (the rep shelf card, which said it failed and had
+   therefore never loaded) now ask `/api/v1/…`.
+2. **A failed read is reported.** `fetchTargetAxisResult` / `useTargetAxis` return `failed` beside
+   `cats`. The fall back to the built-ins STAYS; what changes is that it is labelled. Daily Targets
+   and Target Settings both render *"Only the built-in categories are shown"*, so the screen whose
+   job is setting targets can no longer look complete while hiding the tenant's own categories.
+   A failure is still **never cached** — the next screen to mount asks again.
+3. **One row, one save.** Target Settings' bulk `saveSelected` called `putTarget` + `putFinancing`
+   and **not** `putLines`, while the single-row Save called all three. Two save paths for one row,
+   one of them writing a subset: the declared columns would have vanished a second time, silently,
+   for anyone editing 24 stores at once. It now calls the same three.
+
+### §CORE-44.4 Locked
+
+- **`harness_one_domain_lock.py` rule 10** (38 checks) — every literal path handed to `api`,
+  `apiUpload`, `apiDownload`, `apiFetchBase64`, `apiUrl` or `absoluteApiUrl` under `frontend/src`
+  must begin with a prefix the site actually proxies. The prefixes are **READ from the home's
+  `BACKEND_PATH_PREFIXES`**, so adding one there is all it takes and nothing is kept in step by hand;
+  the rule **refuses to pass** if it cannot read them, rather than passing blind. It went RED on
+  exactly the two real calls before either was touched. Four negative controls: the defect's own
+  shape is caught; a correct call and a proxied root both pass; a path built from a variable is not
+  judged (it cannot be — `client.ts` passes one); and the unreadable-prefixes case fires.
+- **`harness_target_axis_lock.py` §D6/D7/D8** (85 checks) — the home asks a proxied path, `failed` is
+  part of the result's type and is set on the failure branch, and BOTH target screens render it. A
+  flag no caller dereferences is §19.18 in miniature.
+- **`frontend/src/lib/__tests__/target-axis.test.ts`** (7 tests) — the address, the armed negative
+  control that the shipped shape is NOT asked, `failed` on a 404 with nothing declared claimed, a
+  failure not cached, a success not reported as failed and cached once per period, and an
+  empty-but-successful axis distinguished from a failed one. It compares against the home's own
+  `BUILTIN_CATS` rather than restating the four, because a second copy in a test is still a second
+  copy — §D2 caught the first draft doing it.
+
+### §CORE-44.5 EVERY TENANT (project rule 2026-10-30)
+
+The defect was universal, not per tenant — the address is the same for everyone — but its COST was
+proportional to how much each tenant declares, which is why the tenant with 13 declared categories is
+the one who reported it. The fix is measured against each tenant's own axis: the test runs a declared
+axis through `declaredCats` and asserts a failed read claims **nothing** declared rather than falling
+back to another vocabulary.
+
+### §CORE-44.6 Reported, not fixed in code
+
+The month selector (`frontend/src/lib/period-context.tsx`) persists `mp_period` in `localStorage`
+**indefinitely**, with no staleness guard. Measured the same day: target edits at 19:05 UTC on 14 Nov
+landed in **October 2026**, and November had not been touched since 9 Nov. For a finished month
+`_period_bounds` clamps "today" to the last day, so Daily Targets correctly shows zero open days and
+a today-target of 0 — which reads exactly like "not updating". Surfaced to the owner; whether a
+remembered month should expire is his call, not a silent change to every report's default.
+
+Not done: bulk-apply INPUTS for declared categories (the bulk editor still has fields for the five
+built-ins only; per-row typing plus "Save selected" now works). `commcalc.target_line` has never been
+written, so whether its INSERT grant survives migration 1074 — which ships no
+`grant … to service_role`, grandfathered under `harness_data_api_grant_guard.py`'s 1089 cutoff — is
+unproven from here; a write to production was not attempted. The first real save will say, and the
+endpoint already answers that case with a sentence naming migration 1074.
+
+Cross-references: §40 (the one home for the backend's location, and the rewrites that make a prefix an
+address) · §40.13 (unreadable is not off — the same rule on the sign-in gate) · §CORE-40 (a word is
+not a zero) · §COMMCALC-02 (the target axis and `target_line`) · §COMMCALC-49.10 (absent is not zero)
+· §19.18 (one fact, one home, dereferenced).
