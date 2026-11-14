@@ -18,7 +18,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const calls: string[] = []
-let impl: (path: string) => Promise<any> = async () => ({ axis: [] })
+// What the one home sends back: an `axis` list, or a thrown error. Typed rather than `any` so the
+// test cannot drift into asserting on a shape the real reply never has.
+type AxisReply = { axis?: unknown[] }
+let impl: (path: string) => Promise<AxisReply> = async () => ({ axis: [] })
 
 vi.mock('@/lib/client', () => ({
   ORG_ID: 'org-1',
