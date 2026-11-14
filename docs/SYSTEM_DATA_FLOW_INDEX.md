@@ -45359,6 +45359,18 @@ three that already existed** rather than building siblings:
   `keep_codes` ("this store has real data in the period I am rendering"). That is what satisfies the
   owner's money ruling, and it was left exactly as it was.
 
+**AND THE SAME DEFECT WAS FIXED HALFWAY, ONCE BEFORE.** `backend/harness_inactive_store_filter.py`
+is the 2026-08-06 ancestor of this section, from the owner report *"t-902 / 531 etc all t-stores have
+been disabled but they still show in time clock, targets etc reports"*. It got the STORE side right
+and named this exact trap in its own docstring — *"a blanket `.eq("is_active", True)` would silently
+drop any store whose flag was never explicitly set — worse than the bug being fixed"* — citing the
+employee-side convention as the thing it was matching. **The employee side was never actually
+converted**: `GET /storeops/employees` still carried that very `.eq` fifteen months later, and
+`/core/filter-options` was never touched at all. That harness still passes, unchanged, because
+`_store_is_active` now dereferences the home rather than re-deriving it. A fix for the surface that
+reported the defect, and not for its siblings, is the patchwork the 2026-09-20 directive bans — this
+section is the same defect finished.
+
 New: the PREDICATE's home, and the lock. Nothing else.
 
 ### CORE-44.2 The class, not the instance
