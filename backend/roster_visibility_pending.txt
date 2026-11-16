@@ -13,7 +13,7 @@
 # `.eq("is_active", True)` counts here and is worse than a copy: it DROPS NULL, and the column is
 # `BOOLEAN DEFAULT true`, so it deletes every live row whose flag was never set. That was the live
 # employees-roster defect this directive uncovered.
-2 app/modules/account/coa.py
+1 app/modules/account/coa.py
 2 app/modules/billing/router.py
 2 app/modules/chat/router.py
 1 app/modules/commcalc/agency.py
