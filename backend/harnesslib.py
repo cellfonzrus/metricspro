@@ -169,6 +169,40 @@ COA_STORE_CODE_INDEX_SANCTION = (
     "store_code_to_address",
 )
 
+#: SANCTIONED 2026-11-16 (index §STOREOPS-10 / §ACCOUNT-05, owner report *"The payroll for luxelink
+#: is being calculated properly but it is not reflecting per store expenses in dashboard, gross
+#: profit or p&l ... fix the platform wide issue not for just this tenant"*). THE WAGE DERIVATION
+#: MOVED OUT OF coa.py ALTOGETHER.
+#:
+#: coa was a SECOND shifts × rate derivation of a question the Payroll Report already answers
+#: (`GET /storeops/payroll-by-store`), and it is the copy the dashboard, the Gross Profit report and
+#: the P&L booked. Measured live, October 2026, EVERY store of EVERY tenant disagreed with the
+#: report its own payroll screen prints: the house org $72,905.30 report vs $0.00 booked (a refusal
+#: nothing honoured), and $121,632.67 vs $116,826.26, $20,449.79 vs $20,010.00, $20,160.28 vs
+#: $18,328.79 at the other three. Each copy knew something the other did not, so neither was the
+#: answer.
+#:
+#: `derive_wage_cells` / `derive_wage_cells_with_basis` and their two nested helpers are therefore
+#: REMOVED, not edited: coa derives no wage of its own any more. `wages_by_store` and the new
+#: `wages_by_code` are thin twins over `_wage_measurement`, which keeps coa's evidence read and its
+#: refusal line for line and then dereferences the ONE home, `storeops/labour_cost.per_store`.
+#:
+#: ★ EVERY STORE AND COMPANY RESOLVER IN coa.py IS STILL PINNED BYTE-IDENTICAL. ★ Nothing here
+#: changes WHICH store money books to — `labour_cost.cells_by_address` folds through the same
+#: `_norm_store` key space coa always used, and the "no attributable store" bucket books
+#: company-wide exactly as before. What changes is HOW MANY DOLLARS, and they are now the Payroll
+#: Report's own, store for store and cent for cent across four tenants × Sep/Oct/Nov 2026.
+#:
+#: Locked by `harness_labour_cost_one_home.py` (a second derivation, a `pay_rate` multiplication in
+#: coa, or a caller that stops dereferencing the home, fails the build) and proven end to end by
+#: `harness_wages_salary_basis.py`.
+COA_LABOUR_COST_ONE_HOME_SANCTION = (
+    "wages_by_store", "wages_by_code", "_wage_measurement",
+    "derive_wage_cells", "derive_wage_cells_with_basis",
+    "derive_wage_cells_with_basis._add",                   # nested, removed with the derivation
+    "derive_wage_cells_with_basis.addr_for",               # nested, removed with the derivation
+)
+
 
 def coa_movement(base_src, now_src, sanctioned=()):
     """Compare two revisions of coa.py. Returns (removed, changed_outside_sanction, attribution_moved).

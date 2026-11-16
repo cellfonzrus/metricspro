@@ -345,7 +345,11 @@ COA_SANCTIONED = (("build_inputs", "_account_config")
                   # harnesslib for the live before/after over every tenant and month — every
                   # total identical to the cent, the only movement being a phantom key's
                   # dollars reaching the declared store whose shifts earned them.
-                  + harnesslib.COA_STORE_CODE_INDEX_SANCTION)
+                  + harnesslib.COA_STORE_CODE_INDEX_SANCTION
+                  # §STOREOPS-10 / §ACCOUNT-05 (2026-11-16): the wage derivation left coa.py for the
+                  # one home behind the Payroll Report. See the sanction's own comment in harnesslib
+                  # for what every tenant's books read before and after; no resolver moved.
+                  + harnesslib.COA_LABOUR_COST_ONE_HOME_SANCTION)
 _coa_base = _git("show", "%s:%s" % (base or "HEAD", coa_path)).stdout
 _coa_now = open(os.path.join(HERE, "app/modules/account/coa.py"), encoding="utf-8").read()
 if _coa_base.strip():
