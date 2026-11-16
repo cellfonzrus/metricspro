@@ -151,13 +151,13 @@ print("\n§D as_expense_rows — THE SHAPE A SHEET-READER ALREADY SUMS")
 ACT = {"period": "September 2026", "by_half_store": bhs, "by_half": bh,
        "by_store": LA.totals_by_store(bhs), "measured": {LA.SALARY: True, LA.COMMISSION: True},
        "halves": [LA.SALARY, LA.COMMISSION]}
-rows = LA.as_expense_rows(ACT, HOUSE, period="September 2026")
+rows = LA.as_expense_rows(ACT, HOUSE, [], period="September 2026")
 eq("D1 one row per store per half (the unattributed row included)", len(rows), 6)
 eq("D2 the rows are named by the VOCABULARY, never by a literal in this module",
    sorted({r["expense_name"] for r in rows}),
    sorted(set(LV.DEFAULT_PAYROLL_ROWS) | set(LV.DEFAULT_COMMISSION_ROWS)))
 eq("D3 a tenant's own names win wholesale",
-   sorted({r["expense_name"] for r in LA.as_expense_rows(ACT, NAMED)}),
+   sorted({r["expense_name"] for r in LA.as_expense_rows(ACT, NAMED, [])}),
    ["DM Salaries", "Rep Commission"])
 ok("D4 every row is stamped `labour_actual`, so the carry rule can never take it to another month",
    all(r["source_key"] == "labour_actual" for r in rows))
@@ -168,40 +168,41 @@ eq("D6 the money lands on `amount` and the store on `store_code` by default",
    sorted(set(rows[0]) ), sorted(["store_code", "expense_name", "amount", "source_key", "period"]))
 eq("D7 the rows carry the month they measure", {r["period"] for r in rows}, {"September 2026"})
 eq("D8 the period is omitted when the caller does not key by it",
-   "period" in LA.as_expense_rows(ACT, HOUSE)[0], False)
+   "period" in LA.as_expense_rows(ACT, HOUSE, [])[0], False)
 eq("D9 the total of the rows IS the total of the fold",
    round(sum(r["amount"] for r in rows), 2), round(sum(bh.values()), 2))
 eq("D10 the GP report's SALARY-ONLY read takes exactly the salary dollars (it already books "
    "commission on `rep_pay`)",
-   round(sum(r["amount"] for r in LA.as_expense_rows(ACT, HOUSE, halves=[LA.SALARY])), 2),
+   round(sum(r["amount"] for r in LA.as_expense_rows(ACT, HOUSE, [], halves=[LA.SALARY])), 2),
    bh[LA.SALARY])
 _un = dict(ACT, measured={LA.SALARY: True, LA.COMMISSION: False})
 eq("D11 an UNMEASURED half contributes nothing — never a zero (§19.49)",
-   {r["expense_name"] for r in LA.as_expense_rows(_un, HOUSE)},
+   {r["expense_name"] for r in LA.as_expense_rows(_un, HOUSE, [])},
    set(LV.DEFAULT_PAYROLL_ROWS))
 eq("D12 nothing measured at all ⇒ no rows, so the caller must SAY it is unknown",
-   LA.as_expense_rows(dict(ACT, measured={}), HOUSE), [])
+   LA.as_expense_rows(dict(ACT, measured={}), HOUSE, []), [])
 eq("D13 a half the vocabulary does not claim is never materialised",
-   {r["expense_name"] for r in LA.as_expense_rows(dict(ACT, halves=[LA.SALARY]), HOUSE)},
+   {r["expense_name"] for r in LA.as_expense_rows(dict(ACT, halves=[LA.SALARY]), HOUSE, [])},
    set(LV.DEFAULT_PAYROLL_ROWS))
 eq("D14 a $0.00 store is not given a row (a zero row reads as a measured zero)",
    LA.as_expense_rows(dict(ACT, by_half_store={LA.SALARY: {"A": 0.0}},
-                           halves=[LA.SALARY], measured={LA.SALARY: True}), HOUSE), [])
+                           halves=[LA.SALARY], measured={LA.SALARY: True}), HOUSE, []), [])
 eq("D15 `key_as` relabels canonical → store CODE for a sheet keyed by code",
    [r["store_code"] for r in LA.as_expense_rows(
        dict(ACT, by_half_store={LA.SALARY: {"1 S 60TH ST": 5.0}}, halves=[LA.SALARY],
-            measured={LA.SALARY: True}), HOUSE, key_as=lambda k: "B-60TH")], ["B-60TH"])
+            measured={LA.SALARY: True}), HOUSE, [], key_as=lambda k: "B-60TH")], ["B-60TH"])
 eq("D16 a `key_as` that raises leaves the key as it was rather than losing the money",
    [r["store_code"] for r in LA.as_expense_rows(
        dict(ACT, by_half_store={LA.SALARY: {"X": 5.0}}, halves=[LA.SALARY],
-            measured={LA.SALARY: True}), HOUSE,
+            measured={LA.SALARY: True}), HOUSE, [],
        key_as=lambda k: (_ for _ in ()).throw(ValueError("boom")))], ["X"])
 eq("D17 the column names are the caller's, for a reader that keys differently",
-   sorted(LA.as_expense_rows(ACT, HOUSE, halves=[LA.SALARY], store_col="store",
+   sorted(LA.as_expense_rows(ACT, HOUSE, [], halves=[LA.SALARY], store_col="store",
                              amount_col="amt")[0]),
    sorted(["store", "expense_name", "amt", "source_key"]))
 for bad in (None, {}, "junk"):
-    eq(f"D18 nonsense input ⇒ no rows, never a raise ({bad!r})", LA.as_expense_rows(bad, HOUSE), [])
+    eq(f"D18 nonsense input ⇒ no rows, never a raise ({bad!r})",
+       LA.as_expense_rows(bad, HOUSE, []), [])
 
 print("\n§E THE REGRESSION — over the REAL carry rule, end to end")
 # August has a sheet; September has none. The owner's rule: September keeps August's RENT and takes
@@ -229,7 +230,8 @@ eq("E3 …but it inherits the RENT only", [r["expense_name"] for r in cell["rows
 eq("E4 what did NOT carry is reported with its dollars, so a surface can SAY why (§19.49)",
    cell["carried_excluded"],
    {"Employee Salaries": 146808.84, "Employee Commission": 12703.71})
-_fixed = list(cell["rows"]) + LA.as_expense_rows(SEP_ACTUAL, HOUSE, period="September 2026")
+_fixed = list(cell["rows"]) + LA.as_expense_rows(SEP_ACTUAL, HOUSE, cell["rows"],
+                                                 period="September 2026")
 eq("E5 September's total is August's rent plus September's OWN labour",
    round(sum(r["amount"] for r in _fixed), 2), round(116650.14 + 112447.98, 2))
 ok("E6 …and it is NOT the figure the defect produced", round(sum(r["amount"] for r in _fixed), 2)
@@ -240,7 +242,7 @@ _off = EX.effective_series(AUG, ["September 2026"], LV.derived_row_names(OFF))["
 eq("E8 a tenant with mode='off' is left exactly as it was — the pre-2026-10-20 behaviour",
    round(sum(r["amount"] for r in _off["rows"]), 2), 276162.69)
 eq("E9 …and nothing is added back for it either", LA.as_expense_rows(
-    dict(SEP_ACTUAL, halves=LA.wanted_halves(OFF)), OFF), [])
+    dict(SEP_ACTUAL, halves=LA.wanted_halves(OFF)), OFF, []), [])
 _own = EX.effective_series(AUG, ["August 2026"], LV.derived_row_names(HOUSE))["August 2026"]
 eq("E10 a month with its OWN sheet is untouched — the rule only ever concerns a CARRIED month",
    (round(sum(r["amount"] for r in _own["rows"]), 2), _own["carried_from"],
@@ -308,7 +310,7 @@ try:
        (_b["measured"][LA.COMMISSION], _b["by_half"].get(LA.COMMISSION)), (False, None))
     eq("F5 …and the half that DID read is still reported", _b["measured"][LA.SALARY], True)
     eq("F6 nothing is materialised for the unmeasured half", 
-       {r["expense_name"] for r in LA.as_expense_rows(_b, HOUSE)},
+       {r["expense_name"] for r in LA.as_expense_rows(_b, HOUSE, [])},
        set(LV.DEFAULT_PAYROLL_ROWS))
     _coa.wages_by_store = lambda c, o, p: (_ for _ in ()).throw(RuntimeError("roster unreachable"))
     _n = LA.by_store(_Client({"rep_commissions": []}), "org", "September 2026", HOUSE)

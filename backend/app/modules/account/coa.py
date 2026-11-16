@@ -2143,13 +2143,12 @@ def build_inputs(client, org_id, period):
     # in this module. Reading them here would double-count every dollar. Salary/commission-KIND
     # closing-expense lines are likewise never posted as system lines by the producer.
     has_payroll_gross = False
-    # mig 994 (owner directive 2026-09-08): the SET of store addresses whose payroll figure for this
-    # period is authoritative, alongside the org-wide flag. `has_payroll_gross` alone could not tell
-    # "this org entered payroll" from "THIS STORE entered payroll", so one row anywhere suppressed
-    # the hours estimate for every store — a store with no entry then booked $0.00 rather than its
-    # own actual-else-scheduled hours. Populated unconditionally (it costs nothing and keeps the
-    # coverage report honest); only CONSUMED when payroll_authority_grain == 'store'.
-    payroll_auth_stores = set()
+    # mig 994 (owner directive 2026-09-08) gave this reader a per-STORE authority set built inline
+    # from the rows below (`payroll_auth_stores`). It is GONE: the same question is answered for
+    # every reader by `labour_coverage.measured_fill`, dereferenced where the estimate is booked, and
+    # a second copy of it here is the duplicate defect that let the Gross Profit report disagree with
+    # this statement for a month (index §ACCOUNT-03). `has_payroll_gross` — "an authoritative payroll
+    # figure exists SOMEWHERE this period" — is still set below, and still only relabels the line.
     _exp_carried_from = None
     # The commission double-book plan (owner decision 2026-09-08), resolved inside the try below and
     # initialised here so an unreadable expense feed leaves it None — no plan, no suppression, and
@@ -2248,8 +2247,6 @@ def build_inputs(client, org_id, period):
                 # tenant-entered payroll figure exists for this period, so the estimate must not be
                 # added on top of it.
                 has_payroll_gross = True
-                if sa:
-                    payroll_auth_stores.add(sa)
                 routed = payroll_routes.get(ename.lower())
                 if routed:
                     line_key = routed
@@ -2266,8 +2263,6 @@ def build_inputs(client, org_id, period):
                 # ONLY an authoritative exact-gross key suppresses the shifts×rate fallback.
                 if sk in _WAGES_AUTHORITATIVE_KEYS:
                     has_payroll_gross = True
-                    if sa:
-                        payroll_auth_stores.add(sa)
             else:
                 # Drill label = the row's own expense_name (the tenant's category name for a closing
                 # expense, 'Additional Payroll' for the payroll excess), falling back to the route's
@@ -2329,22 +2324,42 @@ def build_inputs(client, org_id, period):
     #: from, never a second read of it. `None` means it was never read (the org-grain authoritative
     #: path does not need it to book) and is NOT the same fact as "read, and it measured nothing".
     _wage_cells = None
-    if has_payroll_gross and _grain == "store":
+    #: THE PLAN — the ONE answer to "whose labour figure books this store-month", DEREFERENCED from
+    #: `commcalc/labour_coverage.measured_fill` and never re-derived here (owner report 2026-11-14,
+    #: index §ACCOUNT-03). This statement used to decide it inline (`if st in payroll_auth_stores`)
+    #: and was right; the Gross Profit report never decided it at all and summed the Expenses sheet
+    #: — which HOLDS the approved salary rows — then added the measured payroll ON TOP. Live LuxeLink
+    #: October 2026: $86,369.22 of one month's labour booked twice at 15 of 19 measured stores, `Diversey`
+    #: reading $27,789.02 against this statement's $15,403.41. One question, one home, both readers.
+    _fill_plan = None
+    try:
+        _wage_cells = wages_by_store(client, org_id, period)
+    except _payevid.EvidenceRefused as e:
+        _wage_refusal = str(e)
+        _warn("StoreOps hours wages estimate REFUSED — clock evidence", e)
+    except Exception as e:
+        _warn("StoreOps hours wages estimate skipped", e)
+    if _wage_cells is not None:
         try:
-            _wage_cells = wages_by_store(client, org_id, period)
-            for st, amt in _wage_cells.items():
-                if st in payroll_auth_stores:
-                    continue                    # this store's own entry is authoritative
-                if st is None:
-                    _est_skipped_cw = round(_est_skipped_cw + safe_float(amt), 2)
-                    continue                    # unattributable — reported, never booked
-                add("wages", st, amt)
-                _est_added[st] = amt
-        except _payevid.EvidenceRefused as e:
-            _wage_refusal = str(e)
-            _warn("StoreOps hours wages estimate (store grain) REFUSED — clock evidence", e)
+            _fill_plan = _lcov_mod().measured_fill(
+                exp_rows, _wage_cells, payroll_names, grain=_grain,
+                key_of=lambda c: code2addr.get(_norm_store(c), _norm_store(c)))
         except Exception as e:
-            _warn("StoreOps hours wages estimate (store grain) skipped", e)
+            _warn("labour fill plan skipped", e)
+    if _fill_plan is not None:
+        # The COMPANY-WIDE cell (an employee attributable to no store) carries no key, so the plan
+        # never holds it, and the rule it books under is unchanged: booked only where NO entered
+        # payroll figure exists anywhere this period — otherwise it cannot be shown to be absent from
+        # the entered store figures, and it is REPORTED on the note (`_est_skipped_cw`) instead.
+        _cw = _fill_plan["unattributed_amount"]
+        for st, amt in (_fill_plan["fill"] or {}).items():
+            add("wages", st, amt)
+            if has_payroll_gross:
+                _est_added[st] = amt        # this line MIXES entered payroll with an estimate
+        if has_payroll_gross:
+            _est_skipped_cw = _cw
+        elif _cw:
+            add("wages", None, _cw)
     if has_payroll_gross:
         # Only relabel when the line actually carries money. Under ruling K2's default presentation the
         # authoritative salaries stay on `store_opex`, so `wages` is legitimately $0.00 — calling an
@@ -2353,16 +2368,6 @@ def build_inputs(client, org_id, period):
         # keeps the estimate label and says so in its note.
         if (L["wages"]["by_store"] or L["wages"]["company_wide"]) and not _est_added:
             L["wages"]["label"] = "Gross Payroll"
-    else:
-        try:
-            _wage_cells = wages_by_store(client, org_id, period)
-            for st, amt in _wage_cells.items():
-                add("wages", st, amt)
-        except _payevid.EvidenceRefused as e:
-            _wage_refusal = str(e)
-            _warn("StoreOps shifts x rate wages estimate REFUSED — clock evidence", e)
-        except Exception as e:
-            _warn("StoreOps shifts x rate wages estimate skipped", e)
 
     # ── SILENT ZERO GUARD on the salary line (owner directive 2026-09-08) ──────────────────────
     # Three states, never two: MEASURED, genuinely zero, and NOT MEASURED. A store with no payroll

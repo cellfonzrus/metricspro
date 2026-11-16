@@ -3391,10 +3391,16 @@ FACTS: dict[str, dict] = {
         "homes": ('app/modules/commcalc/labour_coverage.py',),
         "index": ('19.50',),
         "locks": ('harness_expense_one_path.py',),
-        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04,
+        # and tried again on 2026-11-14). The lock verifies it against the real import graph.
         "callers": {
             'app/modules/account/coa.py': ('_lcov',),
             'app/modules/commcalc/gp_report.py': ('_lcov',),
+            # The labour FILL decision (§ACCOUNT-03) is a gated verdict of exactly this shape: an
+            # unmeasurable period returns `measured: False` with both totals None, never a $0.00
+            # fill that reads as "these stores paid nobody". `salary_fill_plan` is the plumbing the
+            # four code-keyed expense surfaces reach it through.
+            'app/modules/commcalc/labour_actuals.py': ('_lcov',),
             'app/modules/commcalc/router.py': ('_labour', '_lcov'),
         },
     },
