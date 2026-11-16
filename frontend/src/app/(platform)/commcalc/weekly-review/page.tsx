@@ -5,6 +5,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import ReportExportBar from '@/components/ReportExportBar'
 import DrillDownPanel, { type DrillPanel } from '@/components/DrillDownPanel'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 import {
   WR_WINDOW_WORD, detailCount, reviewsOf, rowMoney, rowText, screenFigure, weeklyReviewSheets,
   type Review, type ReviewItem, type ReviewPack, type ReviewRow,
@@ -123,13 +124,24 @@ function ItemCard({ item, panel, refusal }: {
   )
 }
 
+/** What each column of an item's table COMPARES, aligned with its headers below — the raw figure, not
+ *  the formatted cell, so "$1,000" does not sort before "$9" and a missing figure stays missing. At
+ *  module scope because `useTableSort` memoises on the reader's identity. */
+const ROW_VALUES: Record<string, (r: ReviewRow) => (string | number | boolean | null | undefined)[]> = {
+  profit: r => [r.address || r.store_code, r.revenue, r.net_profit],
+  accessory: r => [r.store_code, r.target, r.achieved, r.gap],
+  commission: r => [r.rep, r.store_code, r.payout],
+  rep_watch: r => [r.rep, r.store_code, r.verdict],
+  aging: r => [r.label, r.sell_within_days, r.devices, r.missed, r.owed],
+  payroll: r => [r.store_code, r.amount],
+}
+
 /** The rows behind a measured item, in the shape that item carries. Rendering only; the server
  *  decided what a row says. */
 function ItemRows({ item }: { item: ReviewItem }) {
   const head: React.CSSProperties = { textAlign: 'left', fontSize: 11, color: 'var(--text3)',
                                       padding: '4px 8px 4px 0', fontWeight: 600 }
   const cell: React.CSSProperties = { fontSize: 12, padding: '3px 8px 3px 0' }
-  const rows = item.rows.slice(0, 25)
   const headers: Record<string, string[]> = {
     profit: ['Store', 'Revenue', 'Net profit'],
     accessory: ['Store', 'Target', 'Achieved', 'Gap'],
@@ -156,12 +168,21 @@ function ItemRows({ item }: { item: ReviewItem }) {
       default: return ['—']
     }
   }
-  const cols = headers[item.key]
-  if (!cols) return null
+  const cols = headers[item.key] || []
+  // Sort the WHOLE set and then take the first 25: sorting the 25 already taken would answer
+  // "the largest of an arbitrary 25", which reads like the largest of all.
+  const getCell = useCallback(
+    (r: ReviewRow, field: string) => (ROW_VALUES[item.key]?.(r) || [])[Number(field)],
+    [item.key])
+  const { sorted, sort, toggle } = useTableSort(item.rows, getCell)
+  const rows = sorted.slice(0, 25)
+  if (!headers[item.key]) return null
   return (
     <div style={{ marginTop: 10, overflowX: 'auto' }}>
       <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-        <thead><tr>{cols.map(h => <th key={h} style={head}>{h}</th>)}</tr></thead>
+        <thead><tr>{cols.map((h, j) => (
+          <SortableTh key={h} field={String(j)} sort={sort} onSort={toggle} style={head}>{h}</SortableTh>
+        ))}</tr></thead>
         <tbody>
           {rows.map((r, i) => (
             <tr key={i}>{cells(r).map((c, j) => <td key={j} style={cell}>{c}</td>)}</tr>
