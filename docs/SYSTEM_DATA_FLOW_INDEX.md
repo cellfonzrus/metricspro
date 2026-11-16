@@ -49678,15 +49678,42 @@ tenant-month that books at all.
 | period | Cellfonz R Us | LuxeLink | Vzone | NY LOGISTICS |
 |---|---|---|---|---|
 | 2026-09 | $86,085.89 = | $131,616.28 = | $19,790.12 = | $9,897.43 = |
-| 2026-10 | **REFUSED** ($72,905.30 reported) | $121,632.67 = | $20,449.79 = | $20,160.28 = |
-| 2026-11 | **REFUSED** ($27,735.04 reported) | $101,782.79 = | $19,790.12 = | $11,310.29 = |
+| 2026-10 | $72,905.30 = | $121,632.67 = | $20,449.79 = | $20,160.28 = |
+| 2026-11 | $27,735.04 = | $101,782.79 = | $19,790.12 = | $11,310.29 = |
 
-**THE REFUSAL STAYS ON THE BOOKS' SIDE, DELIBERATELY** (§19.50 tri-state). `payroll_evidence`
-refuses a period whose clock coverage is below the org's bar (the house org: 62.94% of October's
-510 scheduled employee-days against the 85.00% it requires). A REPORT may show a figure the BOOKS
-may not carry, and that is the one place the two surfaces legitimately differ — the statement's note
-says which it is. Whether the house org's $72,905.30 should book is an owner ruling, surfaced with
-the figure and NOT taken inside this change.
+**ALL TWELVE TENANT-MONTHS AGREE STORE FOR STORE AND CENT FOR CENT.**
+
+### STOREOPS-10.4a THE REFUSAL BECOMES A REPORTED COVERAGE (owner ruling 2026-11-16)
+
+Asked, with the Payroll Report publishing $72,905.30 against books carrying $0.00, *"Should
+Cellfonz R Us book its October payroll, or keep refusing it?"*, the owner chose **"Book it — report
+the coverage"** over keeping the refusal and over lowering the bar.
+
+**WITHHOLDING THE LINE PROTECTED NOBODY.** It published **$0.00 of payroll** — which reads like a
+counted figure, makes every store look profitable (the dangerous direction, §19.50) and sat beside a
+report showing the money. One question must not have two answers depending on which screen asks it.
+
+**NOTHING IS LOWERED AND NOTHING IS HIDDEN.** `payroll_evidence.refusal` is UNCHANGED and is still
+the answer for a path that is about to PAY. A path that BOOKS a figure payroll already published
+carries the other sentence — `payroll_evidence.coverage_sentence`, the new one home for *what the
+figure rests on*: `"Clock coverage for this period is 62.94% — 321 of 510 scheduled employee-days
+carry a punch or a correction. The remaining 189 day(s) are paid from the schedule. That is missing
+clock data to collect, not a payroll figure."` It is carried back through `wages_by_store(...,
+verdict=)` and printed on the `wages` line's note. A fully measured period says nothing, because a
+note nobody needs is noise. `coa`'s own `_wage_refusal` string is GONE: the statement prints the one
+home's sentence rather than writing one of its own.
+
+**MONEY MOVED, as ruled:** house org October $0.00 → $72,905.30, November $0.00 → $27,735.04.
+
+### STOREOPS-10.4b A FAILED PUNCH READ MUST NOT DELETE THE WAGE LINE
+
+The producer read `storeops.timelog` unguarded. Harmless while only the report called it; fatal once
+the BOOKS do — a tenant whose punch table is absent or unreadable would have raised through
+`coa._wage_measurement` and taken the whole month's payroll with it. That is the exact failure
+`payroll_evidence`'s blocker doctrine already refuses to make ("we could not look" and "nobody
+clocked" must not print the same), and it is what `harness_eep_pl_wiring.py` §p13/p20/p21/w6 has
+guarded since the last time it happened. The read is now guarded, the schedule still pays, and the
+failure is REPORTED on the result as `punch_read_failed` rather than swallowed.
 
 **IT MOVES MONEY, and that is the whole point.** LuxeLink October wages $116,826.26 → $121,632.67,
 Vzone → $20,449.79, NY LOGISTICS → $18,328.79 → $20,160.28. Part of the move is the salary BASIS: a

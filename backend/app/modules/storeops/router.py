@@ -874,14 +874,18 @@ def _employees_with_pay_fields(org_id, base_fields, eq: dict = None, so=None):
     # path could not honour it while this read did not project it, so it is asked for FIRST and the
     # ladder falls back column by column (§4b.1 ANY-SUBSET): a pre-1073 database keeps exactly the
     # rows, and exactly the money, it has today.
+    # ABSENCE IS NEVER ZERO (§CORE-17.3i). The ladder falls back on a MISSING COLUMN; it must not
+    # swallow a failed READ. An empty roster here is a $0.00 payroll for the whole org, which reads
+    # like a counted figure — so the last rung's exception is raised, exactly as it always was.
+    _last = None
     for fields in (f"{base_fields},{payroll_salary.PAY_FIELDS},{_hours_basis.CHANGE_FIELD}",
                    f"{base_fields},{payroll_salary.PAY_FIELDS}",
                    base_fields):
         try:
             return _q(fields).execute().data or []
-        except Exception:
-            continue
-    return []
+        except Exception as e:
+            _last = e
+    raise _last
 
 
 def _warn_salary_override_failed(response, org_id, endpoint, exc):
@@ -1851,6 +1855,8 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
     #: finance copy of this computation did read it. Two answers to one question; the row is passed
     #: now, so there is one.
     emp_by_id = {e.get("employee_id"): e for e in employees if e.get("employee_id")}
+    #: A failed PUNCH read, carried to the result rather than swallowed (see the read below).
+    _punch_read_failed = None
     inactive_ids = _inactive_ids_from(employees)
     # Salary pay-basis (Deliverable 4) — per-(employee, store) hours/$ bookkeeping, gathered ONLY for
     # employees who are actually salaried (empty set -> zero extra cost for an all-hourly tenant). See
@@ -1899,11 +1905,21 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
     # knows which (emp, day) is punch-driven, EXACTLY as /payroll does above — the two reconcile.
     tl = []
     if lo and hi:
-        tl = sorted((so.table("timelog").select("employee_id,hours,clock_out,work_date,store_code")
-                     .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi)
-                     .limit(20000).execute().data) or [],
-                    key=lambda r: (str(r.get("employee_id") or ""), str(r.get("work_date") or ""),
-                                   str(r.get("store_code") or ""), str(r.get("clock_out") or "")))
+        # A PUNCH READ THAT FAILS MUST NOT DELETE THE WAGE LINE (2026-11-16, §STOREOPS-10). This
+        # function is now the ONE producer the books read, and a tenant whose `storeops.timelog` is
+        # absent or unreadable would otherwise raise through `coa._wage_measurement` and take the
+        # whole month's payroll with it — the exact failure `payroll_evidence` already refuses to
+        # make (its blocker doctrine: "we could not look" and "nobody clocked" must not print the
+        # same). The schedule still pays; the failure is REPORTED on the result, never swallowed.
+        try:
+            tl = sorted((so.table("timelog").select("employee_id,hours,clock_out,work_date,store_code")
+                         .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi)
+                         .limit(20000).execute().data) or [],
+                        key=lambda r: (str(r.get("employee_id") or ""), str(r.get("work_date") or ""),
+                                       str(r.get("store_code") or ""), str(r.get("clock_out") or "")))
+        except Exception as _e:
+            tl, _punch_read_failed = [], str(_e)
+            print(f"WARN payroll punch read failed for org {org_id}: {_e}")
     _hb_cfg = _hours_basis_cfg(org_id, so=so)
     manual_days, punch_days = _punch_driven_day_maps(shifts, tl, _hb_cfg)
     for s in shifts:
@@ -2097,7 +2113,12 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
     ks = scope_keyset(authorization, org_id)
     if ks is not None:
         rows = [r for r in rows if in_keyset(ks, r.get("store_code"))]
-    return {"month": month, "stores": sorted(rows, key=lambda x: x["store_code"])}
+    out = {"month": month, "stores": sorted(rows, key=lambda x: x["store_code"])}
+    if _punch_read_failed:
+        # Additive, and only when it happened — the same convention `lunch_deduction_data_capped`
+        # already uses. A reader that shows this figure can say the punches could not be read.
+        out["punch_read_failed"] = _punch_read_failed
+    return out
 
 
 @router.get("/payroll-by-store")

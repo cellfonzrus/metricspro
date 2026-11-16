@@ -734,7 +734,7 @@ def monthly_salary_equivalent(pay_basis, pay_amount):
 # and `storeops/overhead_allocation` dereferences it. It is a conversion, not a second measurement.
 
 
-def wages_by_store(client, org_id, period):
+def wages_by_store(client, org_id, period, verdict=None):
     """THE PAYROLL REPORT'S OWN per-store figure for the period → {store_address: wages}
     (None key = labour attributable to no store, booked company-wide).
 
@@ -744,20 +744,20 @@ def wages_by_store(client, org_id, period):
     `store_code_to_address`, which is `store_identity`'s fold (§64) — the key space is finance's,
     the money is payroll's. A period whose clock evidence may not be paid from RAISES
     `payroll_evidence.EvidenceRefused` rather than returning zeros (§14y)."""
-    return _wage_measurement(client, org_id, period, None)
+    return _wage_measurement(client, org_id, period, None, verdict=verdict)
 
 
-def wages_by_code(client, org_id, period):
+def wages_by_code(client, org_id, period, verdict=None):
     """THE SAME measurement as `wages_by_store`, keyed by the shift's own `store_code` instead of the
     canonical store ADDRESS — for a reader that books in code space (the GP report, index
     §ACCOUNT-02). ONE figure, two key spaces: the shaping in `storeops/labour_cost` takes the
     code→address map as an argument, so handing it an EMPTY map keys each cell by its own code. A
     reverse address→code lookup is what this exists to avoid: it is many-to-one (§ACCOUNT-01's
     fold), so inverting it would pay one measurement to two codes."""
-    return _wage_measurement(client, org_id, period, {})
+    return _wage_measurement(client, org_id, period, {}, verdict=verdict)
 
 
-def _wage_measurement(client, org_id, period, code2addr):
+def _wage_measurement(client, org_id, period, code2addr, verdict=None):
     """I/O core of `wages_by_store` / `wages_by_code` — one evidence verdict, one DEREFERENCE.
     `code2addr=None` means "read the org's canonical map" (the address space the P&L books in);
     an explicit map (including `{}`, the GP report's own code space) is used as handed over.
@@ -774,13 +774,20 @@ def _wage_measurement(client, org_id, period, code2addr):
     so = client.schema("storeops")
     if code2addr is None:
         code2addr = store_code_to_address(client, org_id)
-    # ── THE EVIDENCE, AND THE VERDICT ON IT (owner directive 2026-10-12, index §14y) ───────────
-    # UNCHANGED, and deliberately still asked HERE rather than inside the producer. A refusal is a
-    # statement about whether this period's clock evidence may be PAID FROM, and the answer is the
-    # books' to act on: this function's whole output is money, and a tenant with no shifts and a
-    # tenant whose clock data never arrived must never produce the same cells. The Payroll Report
-    # shows the figure either way — that is a REPORT, not a booking — so the two surfaces can
-    # legitimately differ here and only here, and the statement's note says which it is.
+    # ── THE EVIDENCE, AND WHAT IS SAID ABOUT IT (owner ruling 2026-11-16, index §14y) ─────────
+    # OWNER, answering "should Cellfonz R Us book its October payroll, or keep refusing it?" with
+    # the Payroll Report already publishing $72,905.30 against books carrying $0.00:
+    # *"Book it — report the coverage"*.
+    #
+    # SO THE FIGURE BOOKS AND THE COVERAGE IS STATED. Withholding the line did not protect anyone:
+    # it published $0.00 of payroll, which reads like a counted figure and makes every store look
+    # profitable — the dangerous direction (§19.50) — while the report beside it showed the money.
+    # One question must not have two answers depending on which screen asks it.
+    #
+    # NOTHING IS LOWERED AND NOTHING IS HIDDEN. `payroll_evidence.refusal` is unchanged and is still
+    # the answer for a path that is about to PAY; this path BOOKS a figure payroll already
+    # published, so it carries the other sentence — what the figure rests on — back to its caller
+    # through `verdict`, and the statement prints it. A thin month stays visible by name.
     emps = (so.table("employees").select("*").eq("org_id", org_id).execute().data) or []
     shifts = (so.table("shifts")
               .select("employee_id,store_code,scheduled_hours,actual_hours,shift_date,is_deleted")
@@ -789,8 +796,9 @@ def _wage_measurement(client, org_id, period, code2addr):
     _res = _payevid.period_evidence(so, org_id, f"{month}-01", nxt, shifts, employee_rows=emps,
                                     cfg=_hours_basis.load_config(so, org_id))
     _ref = _payevid.refusal(_res)
-    if _ref:
-        raise _payevid.EvidenceRefused(_ref)
+    if isinstance(verdict, dict):
+        verdict.update({"refusal": _ref, "coverage": _res.get("coverage") or {},
+                        "note": _payevid.coverage_sentence(_res)})
     # THE DEREFERENCE. `so` is handed over so the producer reads the SAME database this statement
     # is being built from — never a second client, and never a second derivation.
     cells = _labour_cost.per_store(org_id, start=f"{month}-01",
@@ -2235,11 +2243,13 @@ def build_inputs(client, org_id, period):
     # figures, and booking a dollar we cannot prove is un-duplicated is worse than reporting it.
     _grain = acct_cfg.get("payroll_authority_grain", "org")
     _est_added, _est_skipped_cw = {}, 0.0
-    #: THE REFUSAL, carried to the line's note below. `wages_by_store` raises
-    #: `payroll_evidence.EvidenceRefused` when this period's clock evidence may not be paid from
-    #: (index §14y, owner directive 2026-10-12) — the estimate is then NOT booked, and the statement
-    #: SAYS SO instead of carrying a silent $0.00 that reads like a counted figure.
-    _wage_refusal = None
+    #: WHAT THIS PERIOD'S WAGE FIGURE RESTS ON, carried to the line's note below (owner ruling
+    #: 2026-11-16 *"Book it — report the coverage"*, index §ACCOUNT-05). The figure BOOKS and the
+    #: coverage is STATED. Withholding the line did not protect anyone: it published $0.00 of
+    #: payroll, which reads like a counted figure and makes every store look profitable, while the
+    #: Payroll Report beside it showed the money. `wages_by_store` fills this dict; the sentence is
+    #: `payroll_evidence.coverage_sentence`'s, not one written here.
+    _wage_verdict = {}
     #: THE MEASUREMENT, kept so the note below can be CHECKED against the entered figures that
     #: suppressed it (owner report 2026-11-12, §ACCOUNT-02) — the same dict the branches below book
     #: from, never a second read of it. `None` means it was never read (the org-grain authoritative
@@ -2254,12 +2264,9 @@ def build_inputs(client, org_id, period):
     #: reading $27,789.02 against this statement's $15,403.41. One question, one home, both readers.
     _fill_plan = None
     try:
-        _wage_cells = wages_by_store(client, org_id, period)
-    except _payevid.EvidenceRefused as e:
-        _wage_refusal = str(e)
-        _warn("StoreOps hours wages estimate REFUSED — clock evidence", e)
+        _wage_cells = wages_by_store(client, org_id, period, verdict=_wage_verdict)
     except Exception as e:
-        _warn("StoreOps hours wages estimate skipped", e)
+        _warn("payroll figure unavailable for this period", e)
     if _wage_cells is not None:
         try:
             _fill_plan = _lcov_mod().measured_fill(
@@ -2313,7 +2320,7 @@ def build_inputs(client, org_id, period):
         # path, which never needed it to book. A refusal stays a refusal: `None` is handed over and
         # the comparison reports that it was not checked, never a $0.00 agreement.
         _measured_by_key = None
-        if _wage_cells is None and not _wage_refusal:
+        if _wage_cells is None and not _wage_verdict.get("note"):
             try:
                 _wage_cells = wages_by_store(client, org_id, period)
             except Exception as e:
@@ -2342,11 +2349,12 @@ def build_inputs(client, org_id, period):
         # GP payload (`labour_coverage`), which is where a reader drills; putting a nested dict on an
         # inputs line would ride into every snapshot for no gain.
         _bits = [b for b in (_cov.get("note"),) if b]
-        if _wage_refusal:
+        if _wage_verdict.get("note"):
             # REPORTED, NOT HIDDEN (CLAUDE.md: a defect found in live data is reported, never
-            # "fixed" by writing code that hides it). The wage estimate is absent from this line and
-            # the reader is told exactly why, in the interlock's own sentence.
-            _bits.append("The hours-based wage estimate is NOT included on this line: " + _wage_refusal)
+            # "fixed" by writing code that hides it). The figure IS on this line — the owner ruled
+            # on 2026-11-16 that it books — and the reader is told what it rests on, in the one
+            # home's own sentence. A thin month is visible by name rather than absorbed.
+            _bits.append(_wage_verdict["note"])
         if _est_added:
             _bits.append(
                 f"{len(_est_added)} store(s) with no payroll figure of their own are shown at their "

@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.modules.storeops import labour_cost as lc            # noqa: E402
 from app.modules.storeops import payroll_salary as ps         # noqa: E402
+from app.modules.storeops import payroll_evidence as _pe      # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FAIL = 0
@@ -94,7 +95,10 @@ check("the door hands the producer the period AND the caller's own database hand
       (lambda seen: (lc.per_store("ORG", start="2026-10-01", end="2026-10-31", so="HANDLE",
                                   producer=lambda **kw: seen.update(kw) or {"stores": []}), seen)[1]
        )({}) == {"month": None, "start": "2026-10-01", "end": "2026-10-31",
-                 "org_id": "ORG", "so": "HANDLE"})
+                 "org_id": "ORG", "so": "HANDLE", "authorization": ""})
+check("the door asks the producer for the WHOLE org, never the caller's own store keyset — a "
+      "statement narrowed to whoever triggered the compute would understate the books in silence",
+      'authorization=""' in LCSRC)
 
 # ── §B  THE SENTINEL IS DEREFERENCED, NOT RE-SPELLED ────────────────────────────────────────────
 print("§B  the 'no store' sentinel has ONE spelling")
@@ -146,8 +150,26 @@ check("…and shapes it through `labour_cost`, never a key rule of its own",
       wm.count("_labour_cost.cells_by_address(") == 2 and "for code" not in wm)
 check("…and hands the producer ITS OWN storeops handle, so one database answers",
       "so=so" in wm)
-check("the clock-evidence verdict STAYS on the books' side and still RAISES",
-      "_payevid.refusal(" in wm and "raise _payevid.EvidenceRefused(" in wm)
+# OWNER RULING 2026-11-16 — "Book it — report the coverage". The figure BOOKS and the coverage is
+# STATED; withholding the line published $0.00 of payroll beside a report showing the money.
+check("the clock-evidence verdict is still CONSULTED — a caller that stops asking reads as one that "
+      "never asked, and the lock cannot tell the difference", "_payevid.refusal(" in wm)
+check("…and it no longer WITHHOLDS the line: the figure books",
+      "raise _payevid.EvidenceRefused(" not in wm and "raise" not in wm)
+check("…the coverage sentence is carried back to the caller, from its ONE home",
+      "_payevid.coverage_sentence(" in wm and "verdict.update(" in wm)
+check("the statement PRINTS it rather than writing a sentence of its own",
+      '_wage_verdict["note"]' in COA and "_wage_refusal" not in COA)
+check("the coverage sentence is `payroll_evidence`'s, and states the gap as missing clock data",
+      "missing clock data" in _pe.coverage_sentence(
+          {"coverage": {"scheduled_days": 510, "measured_days": 321, "pct": 62.94}})
+      and "62.94%" in _pe.coverage_sentence(
+          {"coverage": {"scheduled_days": 510, "measured_days": 321, "pct": 62.94}}))
+check("a fully measured period says nothing — a note nobody needs is noise",
+      _pe.coverage_sentence({"coverage": {"scheduled_days": 10, "measured_days": 10, "pct": 100.0}}) is None
+      and _pe.coverage_sentence({}) is None)
+check("`refusal` is UNCHANGED and still answers for a path that is about to PAY",
+      _pe.refusal({"refused": True, "reason": "r"}) == "r" and _pe.refusal({"refused": False, "reason": "r"}) is None)
 check("both key spaces still have exactly one entry point",
       "def wages_by_store(" in COA and "def wages_by_code(" in COA
       and COA.count("_wage_measurement(client, org_id, period") == 3)
@@ -158,6 +180,10 @@ prod = ROUTER[ROUTER.index("def get_payroll_by_store("):ROUTER.index("@router.ge
 check("the shift rows are ORDERED before money is accumulated into floats",
       "shifts = sorted(" in prod, "live: $6,083.83 / $6,083.84 at `Cicero` on alternate runs")
 check("the punch rows are ordered too", "tl = sorted(" in prod)
+check("a punch read that FAILS does not delete the wage line — the schedule still pays and the "
+      "failure is reported, never swallowed",
+      "_punch_read_failed" in prod and prod.count("_punch_read_failed") >= 3
+      and 'out["punch_read_failed"]' in prod)
 check("the salary override walks the roster in a fixed order",
       "sorted(salaried.items()" in src("app/modules/storeops/payroll_salary.py"))
 check("the per-store allocation breaks ties on the store key, not on row order",

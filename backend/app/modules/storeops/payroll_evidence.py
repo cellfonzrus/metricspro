@@ -459,6 +459,40 @@ def paid_hours_rows(res, shifts, *, emp_by_id=None, cfg=None):
     return [out_by_pos[i] for i in range(len(rows_all))]
 
 
+def coverage_sentence(res):
+    """PURE: one sentence stating what this period's clock evidence actually covers, or None when
+    there is nothing a reader needs told.
+
+    OWNER RULING 2026-11-16 — *"Book it — report the coverage"*, answering "should Cellfonz R Us
+    book its October payroll, or keep refusing it?" with the Payroll Report already publishing
+    $72,905.30 against books carrying $0.00.
+
+    WHY THIS EXISTS BESIDE `refusal`. A refusal and a coverage figure are not the same statement.
+    `refusal` answers "may this period's hours be PAID FROM" — a question for a path that is about
+    to run payroll. A surface that merely BOOKS the figure the payroll report already published
+    needs the other sentence: what the figure rests on, so a thin month is visible rather than
+    absorbed. Withholding the line instead published $0.00 of payroll, which reads like a counted
+    figure and makes every store look profitable — the dangerous direction (§19.50).
+
+    The sentence states the measured share, names the gap as MISSING CLOCK DATA, and says plainly
+    that it is a defect to fix rather than a payroll figure. It never lowers a bar and never hides
+    a day: `refusal` is unchanged and still the answer for a path that pays.
+    """
+    res = res if isinstance(res, dict) else {}
+    cov = res.get("coverage") or {}
+    sched = int(cov.get("scheduled_days") or 0)
+    if not sched:
+        return None
+    measured = int(cov.get("measured_days") or 0)
+    pct = float(cov.get("pct") or 0.0)
+    if measured >= sched:
+        return None
+    gap = sched - measured
+    return (f"Clock coverage for this period is {pct:.2f}% — {measured} of {sched} scheduled "
+            f"employee-days carry a punch or a correction. The remaining {gap} day(s) are paid "
+            f"from the schedule. That is missing clock data to collect, not a payroll figure.")
+
+
 def refusal(res):
     """The one sentence a caller surfaces when the evidence may not be paid from, else None.
 

@@ -393,7 +393,14 @@ MONEY_MODULE_DELTA = {
     #   sanction, with the same measurement, is `harnesslib.COA_STORE_CODE_INDEX_SANCTION`.
     #   SANCTIONED 2026-11-12 (index §ACCOUNT-02, owner report "the expenses ... shoudl include the
     #   salaries"): `wages_by_store`'s I/O body moved WHOLE into `_wage_measurement`, and
-    #   `wages_by_code` is the SAME measurement keyed by the shift's own store_code — for the GP
+    #   SANCTIONED 2026-11-16 (§ACCOUNT-05 / owner ruling "Book it — report the coverage"):
+#   `wages_by_store` / `wages_by_code` / `_wage_measurement` take an optional `verdict` out-dict and
+#   no longer RAISE on a thin clock month — the figure books and the coverage is stated on the
+#   line's note, in `payroll_evidence.coverage_sentence`'s own words. Measured live both sides, all
+#   four tenants x Sep/Oct/Nov 2026: every tenant-month equals `GET /storeops/payroll-by-store`
+#   store for store and cent for cent, the house org's October moving $0.00 -> $72,905.30 and
+#   November $0.00 -> $27,735.04 exactly as the owner ruled.
+#   `wages_by_code` is the SAME measurement keyed by the shift's own store_code — for the GP
     #   report, which books in code space and would otherwise need the address->code inversion that
     #   §ACCOUNT-01's fold makes many-to-one. ONE derivation, two key spaces, no second read.
     #   MEASURED live against production both sides, all four tenants x Sep/Oct/Nov 2026: every total
@@ -403,7 +410,7 @@ MONEY_MODULE_DELTA = {
                                # `_wage_measurement` 2026-11-16 (§ACCOUNT-05): it no longer DERIVES.
                                # Its evidence read and refusal are unchanged, line for line; what
                                # followed them is now one dereference of `storeops/labour_cost`.
-                               "_wage_measurement",
+                               "_wage_measurement", "wages_by_code",
                                "store_resolver", "store_code_to_address",
                                "_squash_key", "_lead_num_key"},
                               {"_lcov_mod", "build_inputs.add_comm",

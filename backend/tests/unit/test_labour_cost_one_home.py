@@ -97,7 +97,16 @@ class TestTheDoor:
 
         lc.per_store("ORG-7", start="2026-10-01", end="2026-10-31", so="HANDLE", producer=fake)
         assert seen == {"month": None, "start": "2026-10-01", "end": "2026-10-31",
-                        "org_id": "ORG-7", "so": "HANDLE"}
+                        "org_id": "ORG-7", "so": "HANDLE", "authorization": ""}
+
+    def test_it_asks_for_the_whole_org_never_the_callers_own_store_keyset(self):
+        """The producer narrows its rows to the caller's stores when handed a token. A statement is
+        computed for the WHOLE org, server side — a figure silently narrowed to whoever triggered
+        the compute would understate the books with nothing said."""
+        seen = {}
+        lc.per_store("ORG-7", month="2026-10",
+                     producer=lambda **kw: seen.update(kw) or {"stores": []})
+        assert seen["authorization"] == ""
 
     def test_one_tenants_answer_is_never_another_tenants(self):
         """The org id is the producer's only tenant input here — this door adds no scope of its own

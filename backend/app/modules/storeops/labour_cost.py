@@ -130,5 +130,11 @@ def per_store(org_id, *, month=None, start=None, end=None, so=None,
     test); omitted, the producer reads through its own. `producer` is injectable for the same
     reason and defaults to the live one — it is never a second implementation."""
     fn = producer or _producer_fn()
-    out = fn(month=month, start=start, end=end, org_id=org_id, so=so) or {}
+    # `authorization=""` IS DELIBERATE AND EXPLICIT (security review 2026-11-16). The producer
+    # narrows its rows to the CALLER's store keyset when it is handed a token, which is right for a
+    # person reading the report and wrong for the books: a statement is computed for the whole org,
+    # server side, and a figure silently narrowed to whoever happened to trigger the compute would
+    # UNDERSTATE the P&L without saying so. Passing it explicitly also keeps a FastAPI `Header`
+    # default — which is TRUTHY — from ever reaching the scope check through this door.
+    out = fn(month=month, start=start, end=end, org_id=org_id, so=so, authorization="") or {}
     return fold_rows(out.get("stores") if isinstance(out, dict) else out)
