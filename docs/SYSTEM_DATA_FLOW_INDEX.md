@@ -26544,6 +26544,7 @@ status word rather than a blank that reads as nil.
 | STOREOPS-08 | storeops |
 | STOREOPS-09 | storeops, account |
 | STOREOPS-10 | storeops, account |
+| ACCOUNT-05 | storeops, account |
 | ACCOUNT-06 | account, commcalc |
 <!-- SECTION-REGISTER:END -->
 
@@ -49626,7 +49627,18 @@ report-kind registry the upload surfaces read) · §19.18 (one fact, one home, d
 
 ---
 
-## §STOREOPS-10 / §ACCOUNT-05. ONE HOME FOR WHAT A STORE'S LABOUR COST (owner report 2026-11-16)
+## §ACCOUNT-05. The finance module's side of §STOREOPS-10
+
+`backend/app/modules/account/coa.py` no longer derives a wage of its own: `_wage_measurement`
+dereferences `backend/app/modules/storeops/labour_cost.py`, keeping its evidence read and its
+refusal line for line, and `derive_wage_cells` / `derive_wage_cells_with_basis` are deleted. That
+is one change with two faces, so it is one section — **§STOREOPS-10 immediately below**, which this
+id has named since 2026-11-16 and which the code comments cite as `§ACCOUNT-05`. Registered as its
+own heading so the index's numeric space stays closed; the facts, the measurements and the locks
+are all there, not here. See also §ACCOUNT-06, which decides WHICH source that measurement answers
+to for a tenant.
+
+## §STOREOPS-10. ONE HOME FOR WHAT A STORE'S LABOUR COST (owner report 2026-11-16)
 
 Owner, verbatim: *"The payroll for luxelink is being calculated properly but it is not reflecting
 per store expenses in dashboard, gross profit or p&l , they thoudl all be updated from here and it
