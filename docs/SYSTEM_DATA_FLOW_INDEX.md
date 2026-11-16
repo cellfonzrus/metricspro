@@ -7892,7 +7892,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Reconciled paid hours**, and the sentence saying why | the window the two clock records agree on (house default), or the ruling read literally, or ours alone — declared per org | `payroll_hours_basis.reconcile_clock_records`. Measured 2026-10-09 across 16 pairs: today 146.42h/$2,156.45 · literal 143.63h/$2,113.60 · house default 142.98h/$2,102.63 (§14z) |
 | **Employees a payroll run would price at $0.00** | an active hourly employee with no `pay_rate` | `clock_variance.employees_without_rate` → `payroll_run_gate`, which REFUSES and names them. Measured 2026-10-10: 13 of 46 house hourly employees (§14z) |
 | **Who needs improvement — by metric, by store, or by sales rep?** | the verdicts the action-plan endpoint already reached (a category's severity from `targets_engine.build_action_items`, a KPI's pass/fail AND what nothing fed from `kpi_failing.evaluate`, at-risk dollars from the calculated commission rows), grouped three ways | `frontend/src/lib/action-plan-tiles.ts` — `planMetrics` reads THIS tenant's declared axis off the payload and `buildTiles` takes it as a REQUIRED argument, so nothing declared means no tiles rather than house words. A tile's figure is the CARDINALITY of the list it prints (never a re-summed target, achieved or need — that fold stays `targets_drilldown.team_totals`'), and a metric nothing fed reads `not measured` with no figure at all. Lock: `harness_action_plan_tiles.py` (§COMMCALC-57) |
-| **Is this store going to FINISH the month on target, and who is not?** | the month-to-date figure the targets engine already summed, carried across the month at the rate it was earned | `commcalc/month_trend.py` — `month_window` (the completed-days divisor, "completed" being strictly before the plan's own as-of day), `open_days_window` (the same window over a store's OWN open days, for a store that was not open all month — §COMMCALC-72.7), `factor`, `project`, `verdict`, `trend_of`, `outliers`. The SAME window and factor behind "Trending Acc. $" on Daily Targets and "Trending Acc. Sales" on Executive MTD, which were two inline copies until 2026-11-12. Served per category by `targets_engine.compute_scope`, summed per team by `aggregate_stores`. Lock: `harness_month_trend_one_home.py` (§COMMCALC-72) |
+| **Is this store going to FINISH the month on target, and who is not?** | the month-to-date figure the targets engine already summed, carried across the month at the rate it was earned | `commcalc/month_trend.py` — `month_window` (the completed-days divisor, "completed" being strictly before the plan's own as-of day), `open_days_window` (the same window over a store's OWN open days, for a store that was not open all month — §COMMCALC-72.8), `factor`, `project`, `verdict`, `trend_of`, `outliers`. The SAME window and factor behind "Trending Acc. $" on Daily Targets and "Trending Acc. Sales" on Executive MTD, which were two inline copies until 2026-11-12. Served per category by `targets_engine.compute_scope`, summed per team by `aggregate_stores`. Lock: `harness_month_trend_one_home.py` (§COMMCALC-72) |
 
 - **Which of my stores is running down, and in which month-of-life rung?** — ONE home `commcalc/commission_leg_store_trend` (`pivot` / `partial_months` / `totals_row` / `ties_to` / `ladder_public`), a PURE pivot of `router._commission_leg_trend_compute`'s own money; the rungs are `commission_legs.months_present`'s, from the DATA. Lock `harness_commission_leg_store_trend.py` (76). Live 2026-10-15, house org, May–Sep complete months: 28 stores, every month ties exactly; company **−$25,534.27 / −19.4%** of which M1 is only −3.7% — M2–M12 −17.9% and the Unlabelled rung **−50.6%**; `1710 W 4th St` −46.1% with its M1 −38.9% (shrinking now) against `117 E Burnside Ave` whose **M1 moved 0.0%** while M2–M12 fell 35.9% and **M4 fell $594.60** (a cohort lost four months ago) — §COMMCALC-12.
 - **Where is the M2–M12 commission on the P&L, and which store's trailing legs are running down?** — the commission line is shown in TWO parts: the money this month's own activations earned, and `account/ma_store_pnl.CARRIER_COMM_TRAILING_LINE` ("Carrier commissions & incentives — M2–M12 (trailing legs, activated in an earlier month)"), an `auto_opt` revenue line INSERTED into `coa.PL_SPEC` beside the line it divides. ONE home for the split: `ma_store_pnl.split_leg_bookings`, re-pointing the trailing-rung dollars of bookings that already exist — the rung is the booking's OWN (`ma_commission_bookings` / `ma_tx_bookings` emit a lockstep `legs` tag from the `ma_field_leg` / `month_leg_of` call they already make), the bucket is `commission_legs.bucket_for_leg`, the switch is `pl_carrier_comm_leg_split` (mig `1086`, house answer ON). **Every P&L total is identical to the cent either way** — both halves are revenue lines of one section — and `harness_prospect_eval.py` §V2 (`no_total_moved`) asserts it by name. Per STORE with every uploaded month side by side: `prospect_eval.commission_leg_store_months`, which is §COMMCALC-12's own pivot fed by the prospect's uploads (no second pivot, no second money path). Today's only caller is the Store Takeover Evaluation; the live P&L is excused in writing — §COMMCALC-15.5. — §COMMCALC-15.
@@ -49005,41 +49005,6 @@ still appear, or its missing figure becomes a missing store. **The at-risk money
 because a tier is earned across all of a rep's KPIs and a payout attributed to one of them would be
 a figure nobody computed.
 
-### COMMCALC-72.7 A DAY A SCOPE WAS NOT OPEN IS NOT A DAY IT COMPLETED (owner 2026-11-16)
-
-LuxeLink opened four New York stores on 12–13 November. On the 16th the Daily Targets page divided
-three or four trading days of sales by the **fifteen calendar days** of the month and projected each
-store at about **half its real rate** — so four brand-new stores read as failing targets they had
-never been measured against honestly. The same arithmetic understates any store closed part of a
-month, and overstates nothing.
-
-**The class, not the instance.** "Days completed" meant CALENDAR days, which is only the same thing
-when the scope was open all month. The fix is a second window in the SAME home, not a special case
-for new stores:
-
-| fact | one home | who reads it |
-| --- | --- | --- |
-| the window a scope's run rate is measured over | `month_trend.open_days_window(completed, total)` — same dict shape as `month_window`, `basis: 'open_days'`, **None** when there is nothing to measure | `month_trend.trend_of(..., open_days=(done, total))`, `router._targets_trending_by_code` |
-| which days a STORE was open | `targets_engine.open_days_by_store(shifts, today, month_end)` — built on the same `scope_hours_by_day` + `project_future_hours` pair `compute_scope` uses | `get_targets_summary`, `get_accessory_target_plan` |
-
-- **Nothing moves for a normal store.** 15 of 30 and 13 of 26 are the same factor. Only a scope that
-  was not open all month moves, and it moves to the truth.
-- **No schedule means no answer, never a denominator.** A store absent from the mapping keeps the
-  calendar window; `open_days_window` returns `None` rather than inventing one.
-- **The siblings were fixed in the same PR.** The per-category trend (`compute_scope`) and the
-  whole-store trending column beside it on the same page (`_targets_trending_by_code`, folded out of
-  Executive MTD) now read ONE window — two figures on one page disagreeing is the duplicate defect
-  §16–18 already forbid. The restatement is announced in `trending.open_days_restated` and per row in
-  `trend_basis` / `open_days_elapsed` / `open_days_total`, because a column that changes basis
-  silently is one nobody can argue with. Executive MTD's own page keeps the org calendar factor for
-  the org total (the org *was* open all month) and has no schedule read on that path — stated here
-  rather than left as a question.
-- **Tenant-neutral:** a window is a policy, not a tenant's vocabulary; every tenant's stores are
-  measured against their own schedules.
-
-Added to the lock as **§J (12 checks)** and proved by `backend/tests/unit/test_open_days_window.py`
-(16) and `backend/tests/unit/test_targets_trending_open_days.py` (7).
-
 ### COMMCALC-72.6 LOCKED
 
 `backend/harness_month_trend_one_home.py` — **96 checks, 9 negative controls**, CI job *"One
@@ -49076,6 +49041,41 @@ store), `frontend/src/lib/__tests__/trend-state.test.ts` (7) and the `focusPlan`
 Related: §COMMCALC-57 (the tiles this extends) · §COMMCALC-49.2 (the velocity home it dereferences)
 · §19.18 (one fact, one home, dereferenced — never copied) · §23e (the silent-zero rule) ·
 §CORE-17.3m (the team fold) · §CORE-34/35 (the gate index listing this job).
+
+### COMMCALC-72.8 A DAY A SCOPE WAS NOT OPEN IS NOT A DAY IT COMPLETED (owner 2026-11-16)
+
+LuxeLink opened four New York stores on 12–13 November. On the 16th the Daily Targets page divided
+three or four trading days of sales by the **fifteen calendar days** of the month and projected each
+store at about **half its real rate** — so four brand-new stores read as failing targets they had
+never been measured against honestly. The same arithmetic understates any store closed part of a
+month, and overstates nothing.
+
+**The class, not the instance.** "Days completed" meant CALENDAR days, which is only the same thing
+when the scope was open all month. The fix is a second window in the SAME home, not a special case
+for new stores:
+
+| fact | one home | who reads it |
+| --- | --- | --- |
+| the window a scope's run rate is measured over | `month_trend.open_days_window(completed, total)` — same dict shape as `month_window`, `basis: 'open_days'`, **None** when there is nothing to measure | `month_trend.trend_of(..., open_days=(done, total))`, `router._targets_trending_by_code` |
+| which days a STORE was open | `targets_engine.open_days_by_store(shifts, today, month_end)` — built on the same `scope_hours_by_day` + `project_future_hours` pair `compute_scope` uses | `get_targets_summary`, `get_accessory_target_plan` |
+
+- **Nothing moves for a normal store.** 15 of 30 and 13 of 26 are the same factor. Only a scope that
+  was not open all month moves, and it moves to the truth.
+- **No schedule means no answer, never a denominator.** A store absent from the mapping keeps the
+  calendar window; `open_days_window` returns `None` rather than inventing one.
+- **The siblings were fixed in the same PR.** The per-category trend (`compute_scope`) and the
+  whole-store trending column beside it on the same page (`_targets_trending_by_code`, folded out of
+  Executive MTD) now read ONE window — two figures on one page disagreeing is the duplicate defect
+  §16–18 already forbid. The restatement is announced in `trending.open_days_restated` and per row in
+  `trend_basis` / `open_days_elapsed` / `open_days_total`, because a column that changes basis
+  silently is one nobody can argue with. Executive MTD's own page keeps the org calendar factor for
+  the org total (the org *was* open all month) and has no schedule read on that path — stated here
+  rather than left as a question.
+- **Tenant-neutral:** a window is a policy, not a tenant's vocabulary; every tenant's stores are
+  measured against their own schedules.
+
+Added to the lock as **§J (12 checks)** and proved by `backend/tests/unit/test_open_days_window.py`
+(16) and `backend/tests/unit/test_targets_trending_open_days.py` (7).
 
 
 ---
