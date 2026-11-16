@@ -51751,7 +51751,7 @@ async def _weekly_review_facts(client, org_id, authorization, week, period):
         gp = await get_gp_report(period, org_id=org_id, authorization=authorization)
         facts["profit"] = [r for r in (gp.get("store_rows") or []) if r.get("store_code")]
     except Exception as e:
-        facts["profit"] = _wrev.Unreadable(f"the Gross Profit report could not be read ({e})")
+        facts["profit"] = _wrev.Unreadable(f"the Gross Profit report could not be read ({str(e)[:200]})")
 
     try:
         rows = await get_commissions(period, authorization=authorization, org_id=org_id)
@@ -51760,7 +51760,7 @@ async def _weekly_review_facts(client, org_id, authorization, week, period):
                                 "total_payout": r.get("total_payout"),
                                 "units": r.get("units")} for r in (rows or [])]
     except Exception as e:
-        facts["commission"] = _wrev.Unreadable(f"the rep commission rows could not be read ({e})")
+        facts["commission"] = _wrev.Unreadable(f"the rep commission rows could not be read ({str(e)[:200]})")
 
     try:
         plan = get_accessory_target_plan(period, authorization=authorization, org_id=org_id)
@@ -51768,7 +51768,7 @@ async def _weekly_review_facts(client, org_id, authorization, week, period):
                                "target": r.get("current_target"),
                                "achieved": r.get("mtd_acc")} for r in (plan.get("rows") or [])]
     except Exception as e:
-        facts["accessory"] = _wrev.Unreadable(f"the accessory target plan could not be read ({e})")
+        facts["accessory"] = _wrev.Unreadable(f"the accessory target plan could not be read ({str(e)[:200]})")
 
     # WHO IS BEHIND IS NOT DECIDED HERE. The Daily Action Plan already judges a rep against their own
     # store and against the tenant's declared KPI targets; this reads that verdict.
@@ -51786,7 +51786,7 @@ async def _weekly_review_facts(client, org_id, authorization, week, period):
                                                if short else "keeping up"))})
         facts["rep_watch"] = reps
     except Exception as e:
-        facts["rep_watch"] = _wrev.Unreadable(f"the rep verdict could not be read ({e})")
+        facts["rep_watch"] = _wrev.Unreadable(f"the rep verdict could not be read ({str(e)[:200]})")
 
     try:
         from app.modules.asset.router import get_aging as _get_aging
@@ -51794,7 +51794,7 @@ async def _weekly_review_facts(client, org_id, authorization, week, period):
         facts["aging"] = {"rows": _weekly_review_aging_rows(aging),
                           "by_carrier": (aging.get("aging_policy") or {}).get("by_carrier") or []}
     except Exception as e:
-        facts["aging"] = _wrev.Unreadable(f"the inventory aging report could not be read ({e})")
+        facts["aging"] = _wrev.Unreadable(f"the inventory aging report could not be read ({str(e)[:200]})")
 
     # PAYROLL IS THE WEEK'S OWN, not the month's: `/storeops/payroll-by-store` takes a start/end range
     # and it is the ONE labour authority (§ACCOUNT-03), so the review never measures labour itself.
@@ -51805,7 +51805,7 @@ async def _weekly_review_facts(client, org_id, authorization, week, period):
         facts["payroll"] = [{"store_code": r.get("store_code") or r.get("store"),
                              "amount": r.get("amount")} for r in (pay.get("stores") or [])]
     except Exception as e:
-        facts["payroll"] = _wrev.Unreadable(f"payroll could not be read ({e})")
+        facts["payroll"] = _wrev.Unreadable(f"payroll could not be read ({str(e)[:200]})")
 
     try:
         from datetime import timedelta as _td, date as _dt
@@ -51989,14 +51989,23 @@ async def run_weekly_review_now(as_of: str = "", authorization: str = Header(def
 
 
 @router.post("/weekly-review/run-due")
-async def run_weekly_review_due(dry_run: bool = False, org_id_filter: str = ""):
+async def run_weekly_review_due(dry_run: bool = False, org_id_filter: str = "",
+                                x_notify_secret: str = Header(default="")):
     """THE STANDING WEEKLY RUN — generate each tenant's pack on ITS declared closing day, so the
     Monday review with the district managers opens a pack that was already made (owner 2026-11-16).
 
     Registered as one `cron.schedule` line that calls this daily; a tenant whose closing weekday is
     not today is skipped, which keeps the cadence in the tenant's config rather than in the schedule.
-    NEVER raises: one tenant's failure cannot stop another's pack."""
+    NEVER raises: one tenant's failure cannot stop another's pack.
+
+    THE GATE IS THE SWEEP GATE, not the review's admin gate. This route reads EVERY tenant under the
+    root client — there is no caller whose own org could scope it — so it is guarded exactly as every
+    other pg_cron entrypoint in the house is (`NOTIFY_RUN_SECRET`, `core.run_secret`). Without that,
+    an anonymous stranger could name another tenant in `org_id_filter`, read back its coverage and
+    make the server build every tenant's pack on demand."""
     from datetime import datetime as _dtm, timezone as _tzc
+    if not verify_notify_secret(x_notify_secret):
+        raise HTTPException(403, "forbidden")
     root = get_supabase()
     try:
         tenants = root.schema("storeops").table("tenants").select("org_id").execute().data or []

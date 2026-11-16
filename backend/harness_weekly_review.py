@@ -203,6 +203,15 @@ check("e5. an unresolvable caller is refused — the gate degrades CLOSED",
       W.review_allowed(None) is False and W.review_allowed({}) is False)
 check("e6. the frontend MIRRORS it and says so",
       "canOpenWeeklyReview" in RBAC and "review_allowed" in RBAC)
+_due = [h for h in _handlers if h.split("\n", 1)[0].startswith('"/weekly-review/run-due"')]
+check("e8. the standing run carries the SWEEP gate — it reads every tenant under the root client, so "
+      "no caller's own org could scope it, and without a gate a stranger could name another tenant "
+      "in `org_id_filter` (found by the security pass 2026-11-16, before go-live)",
+      len(_due) == 1 and "verify_notify_secret(x_notify_secret)" in _due[0]
+      and "x_notify_secret" in _due[0].split('"""')[0] + _due[0],
+      "the run-due handler must refuse a caller with no NOTIFY_RUN_SECRET")
+check("e9. …and an admin token is not that secret — the two gates are different authorities",
+      len(_due) == 1 and "_require_weekly_review" not in _due[0])
 check("e7. the nav entry is admin-gated too, so the tile is not offered to anyone else",
       re.search(r"href: '/commcalc/weekly-review'[^}]*module: 'admin'", RBAC) is not None)
 

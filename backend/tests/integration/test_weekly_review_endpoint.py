@@ -24,6 +24,7 @@ import pytest
 REVIEW = "/api/v1/commcalc/weekly-review"
 CONFIG = "/api/v1/commcalc/weekly-review/config"
 RUN_NOW = "/api/v1/commcalc/weekly-review/run-now"
+RUN_DUE = "/api/v1/commcalc/weekly-review/run-due"
 
 HOUSE = "00000000-0000-0000-0000-000000000001"
 ORG_B = "00000000-0000-0000-0000-0000000000b2"
@@ -253,3 +254,26 @@ def test_F2_the_on_demand_run_writes_only_its_own_snapshot(wired, api_client):
     snaps = wired.rows("commcalc.weekly_review_run")
     assert [s["week_ending"] for s in snaps] == ["2026-11-15"]
     assert snaps[0]["org_id"] == HOUSE
+
+
+# ── §G the standing run is a SWEEP, and a sweep has the sweep's gate ──────────────────────────────
+# Found by the security pass on 2026-11-16, before this went live: /run-due reads EVERY tenant under
+# the root client, so there is no caller whose own org could scope it. It had no gate at all, which
+# let an anonymous stranger name another tenant in `org_id_filter`, read back that tenant's coverage
+# and make the server build every tenant's pack on demand. The gate is the house sweep gate.
+def test_G1_the_standing_run_refuses_a_caller_with_no_sweep_secret(api_client):
+    assert api_client.post(RUN_DUE).status_code == 403
+    assert api_client.post(RUN_DUE, params={"org_id_filter": ORG_B}).status_code == 403
+    assert api_client.post(RUN_DUE, headers={"x-notify-secret": "wrong"}).status_code == 403
+
+
+def test_G2_an_admin_token_is_not_a_sweep_secret(wired, api_client):
+    """The review's own admin gate does NOT open the cross-tenant sweep: a tenant admin holds
+    authority over ONE tenant, and this route answers for all of them."""
+    r = api_client.post(RUN_DUE, headers=_as(wired, HOUSE, ADMIN))
+    assert r.status_code == 403
+
+
+def test_G3_a_refused_standing_run_reads_nothing_and_writes_nothing(wired, api_client):
+    api_client.post(RUN_DUE, params={"org_id_filter": ORG_B})
+    assert wired.rows("commcalc.weekly_review_run") == []
