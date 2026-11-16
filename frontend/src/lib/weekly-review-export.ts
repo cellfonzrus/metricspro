@@ -8,6 +8,7 @@
 // export BLANK with its state in words — never 0, which in a cell reads as "we checked and it is
 // zero". That distinction is the whole point of a review pack: a district manager acts on it.
 import type { ExportSheet } from '@/lib/export'
+import { moneyText } from '@/lib/report-totals'
 
 /** A row behind an item, in the shape the server serves for THAT item. Every value a row carries is
  *  a figure, a word or an absence — never a nested object — so one row type serves all seven items
@@ -62,12 +63,12 @@ export function cellFigure(item: ReviewItem): number | '' {
   return item.state === 'measured' && item.figure !== null ? item.figure : ''
 }
 
-/** A figure for the SCREEN: an em dash when nobody measured it, never 0. */
+/** A figure for the SCREEN: an em dash when nobody measured it, never 0. Money goes through the
+ *  platform's ONE money home (`report-totals.moneyText`), which already rules that an absent value
+ *  is not $0.00 — this report has no business answering that question a second time. */
 export function screenFigure(item: ReviewItem): string {
   if (item.state !== 'measured' || item.figure === null) return '—'
-  if (item.unit === 'money') {
-    return item.figure.toLocaleString(undefined, { style: 'currency', currency: 'USD' })
-  }
+  if (item.unit === 'money') return moneyText(item.figure, { absent: '—' })
   if (item.unit === 'pct') return `${item.figure > 0 ? '+' : ''}${item.figure.toFixed(1)}%`
   return item.figure.toLocaleString()
 }
@@ -155,10 +156,9 @@ export function rowText(v: ReviewRow[string]): string {
   return v === null || v === undefined ? '—' : String(v)
 }
 
-/** A row's cell as money, blank-safe: an absent figure is an em dash, never $0.00. */
+/** A row's cell as money, blank-safe: an absent figure is an em dash, never $0.00, and a WORD stays
+ *  itself. All three rulings are the money home's, dereferenced rather than restated here. */
 export function rowMoney(v: ReviewRow[string]): string {
-  if (v === null || v === undefined || v === '') return '—'
-  const n = Number(v)
-  return Number.isNaN(n) ? String(v)
-    : n.toLocaleString(undefined, { style: 'currency', currency: 'USD' })
+  if (typeof v === 'boolean') return rowText(v)
+  return moneyText(v, { absent: '—' })
 }

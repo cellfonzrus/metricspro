@@ -4,7 +4,8 @@
 // and the figure has to be blank.
 import { describe, it, expect } from 'vitest'
 import {
-  WR_STATE_WORD, WR_WINDOW_WORD, cellFigure, screenFigure, reviewsOf, weeklyReviewSheets,
+  WR_STATE_WORD, WR_WINDOW_WORD, cellFigure, screenFigure, reviewsOf, rowMoney,
+  weeklyReviewSheets,
   type ReviewItem, type ReviewPack,
 } from './weekly-review-export'
 
@@ -108,5 +109,21 @@ describe('the detail sheets', () => {
                       [item({ state: 'not_measured', figure: null, reason: 'no rows' })]),
       markets: [] }))
     expect(sheets.map(s => s.name)).toEqual(['Review'])
+  })
+})
+
+describe('money is the platform\'s one home, not a second copy', () => {
+  it('shows an em dash for an absent figure and a real $0.00 for a measured zero', () => {
+    expect(rowMoney(null)).toBe('—')
+    expect(rowMoney('')).toBe('—')
+    expect(rowMoney(0)).toContain('0.00')
+  })
+
+  it('leaves a WORD as itself — a measurement claim is not a money claim', () => {
+    expect(rowMoney('no target saved')).toBe('no target saved')
+  })
+
+  it('formats a measured money item through the same home', () => {
+    expect(screenFigure(item({ unit: 'money', figure: 1234.5 }))).toContain('1,234.50')
   })
 })
