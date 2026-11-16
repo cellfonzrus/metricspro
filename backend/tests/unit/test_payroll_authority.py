@@ -108,11 +108,15 @@ class TestTheDollarsReportedAreTheDollarsDropped:
         return lc.measured_fill(self.ALLOC, {"Diversey": 12555.70, "Belmont": 7097.48},
                                 NAMES, grain="store")
 
-    def test_a_flat_allocation_measures_no_stores_own_staff_so_it_keeps_booking(self):
+    def test_the_allocation_gives_way_too_so_one_managers_pay_cannot_book_twice(self):
+        """§4e keeps a flat allocation from deciding whether a store HAS a measurement of its own
+        staff. It does NOT make the allocation a different cost: live LuxeLink October 2026 spreads
+        `DM Salaries` at $1,275.00 over 15 stores while the managers it pays for are ON the measured
+        payroll. So it is excluded from the COVERAGE question and included in the SUPERSEDING one."""
         plan = self.plan()
         assert "dm salaries" in plan["allocated_excluded"]
-        assert "dm salaries" not in plan["superseded_names"]
-        assert plan["superseded_amount"] == 6199.76
+        assert "dm salaries" in plan["superseded_names"]
+        assert plan["superseded_amount"] == 8749.76       # 6033.26 + 166.50 + 1275.00 + 1275.00
 
     def test_the_sheet_reader_drops_exactly_what_the_plan_reported(self):
         plan = self.plan()
@@ -121,9 +125,10 @@ class TestTheDollarsReportedAreTheDollarsDropped:
                         - sum(r["amount"] for r in kept), 2)
         assert dropped == plan["superseded_amount"]
 
-    def test_the_allocation_survives_the_sheet_reader(self):
+    def test_the_allocation_survives_at_a_store_the_report_did_not_measure(self):
         kept = la.without_superseded(self.ALLOC, self.plan())
-        assert len([r for r in kept if r["expense_name"] == "DM Salaries"]) == 4
+        assert sorted((r["store_code"], r["expense_name"]) for r in kept) == [
+            ("Irving Park", "DM Salaries"), ("Narragansett", "DM Salaries")]
 
     def test_a_store_the_report_never_measured_keeps_its_row(self):
         kept = la.without_superseded(self.ALLOC, self.plan())

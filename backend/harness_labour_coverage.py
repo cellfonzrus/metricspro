@@ -886,35 +886,43 @@ ok("L9a …and the dollars reported are the dollars a reader applying the plan R
                                   source_key=r.get("source_key"),
                                   key=r["store_code"])), 2), _l["superseded_amount"])
 
-# ── A FLAT ALLOCATION IS NOT A STORE'S OWN PAYROLL, SO THE REPORT NEVER REPLACED IT (§4e) ──────
-# Two stores paying the same $1,275.00 prove nothing, which is why §K's fixture supersedes its
-# 'DM Salaries' with the rest. At the live threshold (one identical amount at 3+ stores, §4e) the
-# name IS an allocation: the Payroll Report measures a store's own staff and never that spread, so
-# dropping it would delete a real cost and book nothing back. It keeps booking — and because the
-# plan names the vocabulary it decided over, a reader applying it row by row keeps it too.
+# ── A FLAT ALLOCATION GIVES WAY TOO, AND THAT IS A MONEY DECISION MADE ON EVIDENCE ────────────
+# §4e keeps an allocation from deciding whether a store HAS a measurement of its own staff. It does
+# NOT make the allocation a different cost: live LuxeLink October 2026 spreads 'DM Salaries' at
+# $1,275.00 over 15 stores while the managers it pays for are ON the measured payroll (one salaried
+# with no home store, booking company-wide). Keeping the spread beside the measurement books that
+# pay twice. So the superseding vocabulary is the FULL one — and `superseded_names` says so, which
+# is what keeps the dollars reported equal to the dollars dropped.
 L_ALLOC_SHEET = [expense("Diversey", "Employee Salaries", 6033.26),
                  expense("Belmont", "Employee Salaries", 166.50),
                  expense("Diversey", "DM Salaries", 1275.00),
                  expense("Belmont", "DM Salaries", 1275.00),
                  expense("Irving Park", "DM Salaries", 1275.00),
                  expense("Narragansett", "DM Salaries", 1275.00)]
-_l_alloc = lc.measured_fill(L_ALLOC_SHEET, K_MEASURED, PAYROLL_NAMES, grain="store")
-ok("L10 the allocation is detected and held OUT of the vocabulary the plan decided over",
-   ("dm salaries" in _l_alloc["allocated_excluded"],
-    "dm salaries" in _l_alloc["superseded_names"]), (True, False))
-near("L10a …so only the stores' OWN typed salary stops booking, not the spread",
-     _l_alloc["superseded_amount"], 6199.76)   # 6033.26 + 166.50
-ok("L10b …and the one test says so row by row, at a store that IS superseded",
+_l_alloc = lc.measured_fill(L_ALLOC_SHEET, {"Diversey": 12555.70, "Belmont": 7097.48},
+                            PAYROLL_NAMES, grain="store")
+ok("L10 the allocation is still held out of the COVERAGE question (§4e, unchanged)",
+   "dm salaries" in _l_alloc["allocated_excluded"], True)
+ok("L10a …and is NOT held out of the superseding one, so the same pay cannot book twice",
+   "dm salaries" in _l_alloc["superseded_names"], True)
+near("L10b the dollars that stop booking are the store's own salary AND its share of the spread",
+     _l_alloc["superseded_amount"], 8749.76)   # 6033.26 + 166.50 + 1275.00 + 1275.00
+ok("L10c the one test says so row by row, at a store the report measured",
    (lc.superseded_row(_l_alloc, expense_name="DM Salaries", key="Diversey"),
     lc.superseded_row(_l_alloc, expense_name="Employee Salaries", key="Diversey")),
-   (False, True))
-ok("L10c a platform-WRITTEN payroll row goes by its source key, as the dollars were summed",
+   (True, True))
+ok("L10d …and a store it did NOT measure keeps every one of them",
+   (lc.superseded_row(_l_alloc, expense_name="DM Salaries", key="Irving Park"),
+    lc.superseded_row(_l_alloc, expense_name="Employee Salaries", key="Narragansett")),
+   (False, False))
+ok("L10e a row that is not payroll AT ALL is never superseded, measured store or not",
+   lc.superseded_row(_l_alloc, expense_name="Rent / Lease", key="Diversey"), False)
+ok("L10f a platform-WRITTEN payroll row goes by its source key, as the dollars were summed",
    (lc.superseded_row(_l_alloc, expense_name="Anything At All",
                       source_key=sorted(lc.AUTHORITATIVE_SOURCE_KEYS)[0], key="Diversey"),
     lc.superseded_row(_l_alloc, expense_name="Employee Salaries",
                       source_key="some-other-feed", key="Diversey")), (True, False))
-ok("L10d a row at a store the plan never superseded is never dropped, whatever it is named",
-   lc.superseded_row(_l_alloc, expense_name="Employee Salaries", key="Irving Park"), False)
+
 ok("L11 the plan says which authority it decided under, so a caller never has to assume",
    (_l["authority"], lc.measured_fill(K_SHEET, K_MEASURED, PAYROLL_NAMES,
                                       authority="entered")["authority"]),

@@ -587,9 +587,22 @@ def measured_fill(entered_rows, measured_by_key, payroll_names,
     #: is superseded only at a store the Payroll Report actually measured a non-zero figure for.
     #: A store with a typed salary and NO measurement KEEPS its row — dropping it would delete a
     #: real cost and book nothing in its place, which is the silent zero §19.50 forbids.
+    #:
+    #: THE VOCABULARY HERE IS THE FULL ONE, **not** the narrowed `measuring` set, and that is a
+    #: money decision made on evidence rather than on symmetry with the coverage question above.
+    #: `allocated_names` excludes a flat allocation from deciding whether a store HAS a measurement
+    #: of its own staff — it does not say the allocation is a different cost. Measured live
+    #: (LuxeLink, October 2026): the estate-wide 'DM Salaries' spreads $1,275.00 over 15 stores,
+    #: $19,125.00, while the managers it pays for are ON the payroll the report measures — one
+    #: salaried at $78,000/yr with no home store (booking company-wide) and one at $58,000/yr at
+    #: his store. Keeping the spread beside the measurement would book that pay TWICE and put the
+    #: books $13,757.15 ABOVE the payroll run, which is the defect this whole change exists to end.
+    #: So under the Payroll Report's authority every typed row of the tenant's payroll vocabulary
+    #: gives way at a store the report measured — allocation included — and a store it did NOT
+    #: measure keeps all of them.
     superseded = {}
     if not entered_outranks(authority):
-        for key, amt in payroll_expense_by_key(entered_rows, measuring, key_of=key_of).items():
+        for key, amt in payroll_expense_by_key(entered_rows, payroll_names, key_of=key_of).items():
             if fill.get(key):
                 superseded[key] = round(_f(amt), 2)
     sprs_amt = round(sum(superseded.values()), 2)
@@ -606,11 +619,11 @@ def measured_fill(entered_rows, measured_by_key, payroll_names,
     return {"fill": fill, "fill_amount": round(sum(fill.values()), 2),
             "suppressed": sorted(suppressed), "suppressed_by_key": suppressed,
             "superseded": superseded, "superseded_amount": sprs_amt,
-            #: THE NAMES the decision was made over — the SAME narrowed vocabulary the dollars were
-            #: summed from, so a reader applying the plan row by row drops exactly the rows that
-            #: were counted. Handing back only the dollars is how one reader dropped a flat
-            #: allocation the other had not counted (§4e); `superseded_row` below is the one test.
-            "superseded_names": sorted(measuring),
+            #: THE NAMES the decision was made over — the SAME vocabulary the dollars were summed
+            #: from, so a reader applying the plan row by row drops exactly the rows that were
+            #: counted. Handing back only the dollars is how one reader can drop a row the other
+            #: never counted; `superseded_row` is the one test both of them use.
+            "superseded_names": sorted(_names(payroll_names)),
             "authority": resolve_payroll_authority(authority),
             "unattributed": unattributed,
             "unattributed_amount": round(sum(unattributed.values()), 2),

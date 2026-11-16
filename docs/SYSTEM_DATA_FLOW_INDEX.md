@@ -49869,10 +49869,16 @@ measured a NON-ZERO figure for. A store not running payroll keeps whatever was t
 is precisely the case the owner kept the typed figure for. A measured $0.00 is not evidence the
 store was paid, so it supersedes nothing either.
 
-**A FLAT ALLOCATION IS NEVER SUPERSEDED** (§4e reused): an estate-wide `DM Salaries` measures no
-store's own staff, so the Payroll Report did not replace it and it keeps booking. That is why
-`superseded_names` is published — a reader applying the plan row by row drops exactly the rows the
-dollars were summed from.
+**A FLAT ALLOCATION GIVES WAY TOO — a money decision made on evidence, not on symmetry.** §4e keeps
+an allocation from deciding whether a store HAS a measurement of its own staff, and that is
+unchanged. It does NOT make the allocation a different cost. Measured live (LuxeLink, October 2026):
+the estate-wide `DM Salaries` spreads $1,275.00 over 15 stores — $19,125.00 — while the managers it
+pays for are ON the payroll the report measures (one salaried at $78,000/yr with no home store, so
+booking company-wide; one at $58,000/yr at his store). Keeping the spread beside the measurement
+books that pay TWICE and puts the books $13,757.15 ABOVE the payroll run, which is the defect this
+change exists to end. So the superseding vocabulary is the tenant's FULL payroll vocabulary, and
+`superseded_names` publishes it — a reader applying the plan row by row then drops exactly the rows
+the dollars were summed from. A store the report did NOT measure keeps all of them.
 
 ### ACCOUNT-06.3 The per-tenant switch
 
@@ -49888,7 +49894,9 @@ commission vocabulary.
 
 LuxeLink October 2026, the P&L's `wages` line: **$57,721.13 → $116,264.81**, with `902 Ave U`
 keeping its typed $6,459.55 because the Payroll Report did not measure it — the owner's carve-out,
-working.
+working. Measured across every tenant × September/October/November, the ONLY month that moves is
+LuxeLink's October: the other eleven tenant-months are identical to the cent, because they either
+carry no typed payroll rows or are already on the measured figure.
 
 ### ACCOUNT-06.5 The locks (they fail the BUILD, not the review)
 
