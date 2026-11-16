@@ -12,6 +12,21 @@ THE RULE, which those callers established and this keeps unchanged:
 
     projected month-end = (month-to-date ÷ days COMPLETED) × days the month holds
 
+AND A DAY A SCOPE WAS NOT OPEN IS NOT A DAY IT COMPLETED (owner 2026-11-16, measured defect).
+"Days completed" meant CALENDAR days above, which is only the same thing when the scope was open
+all month. LuxeLink opened four New York stores on 12–13 November; on the 16th the Daily Targets
+page divided three or four trading days of sales by the fifteen calendar days of the month and
+projected each store at **about half its real rate**. The same arithmetic understates any store
+closed part of a month, and overstates nothing — so it had been quietly marking stores as failing
+targets they were never measured against honestly.
+
+`open_days_window` is therefore the second window this module knows: a scope's OWN open days — the
+days it was actually scheduled — in place of the calendar. It returns the SAME dict shape, so
+`factor`, `project` and `verdict` are untouched; the fix is in what the window IS, which is this
+module's one job. A scope open every day gets the same answer as before (15 of 30 and 13 of 26 are
+both a factor of 2), so nothing moves for a normal store. Only a scope that was not open all month
+moves, and it moves to the truth.
+
 "Completed" means strictly before today, because today is still in progress. Counting today would
 divide a part-day's sales by a whole day and read every store as collapsing each morning. For a
 month that has finished there is nothing to project: elapsed is the whole month and the factor is 1.
@@ -126,6 +141,34 @@ def month_window(period, today: _dt.date | None = None,
             'open_month': True, 'no_overlap': False, 'basis': 'mtd'}
 
 
+def open_days_window(completed, total, open_month=True):
+    """The window a SCOPE'S OWN OPEN DAYS make, in place of the calendar month. PURE.
+
+    `completed` : open days strictly before today — the days the month-to-date figure was summed over
+    `total`     : open days the whole month holds for this scope (entered + projected)
+
+    Returns the same dict shape `month_window` returns, so every caller below is unchanged — or
+    **None when the scope has no schedule to measure**, which is the honest answer and tells the
+    caller to fall back to the calendar window rather than inventing a denominator.
+
+    `complete` is False when nothing has completed, exactly as for the calendar window: a run rate
+    off no finished day is not a trend, and `project` already refuses one.
+    """
+    try:
+        done, tot = int(completed or 0), int(total or 0)
+    except (TypeError, ValueError):
+        return None
+    if tot <= 0:
+        return None
+    done = max(0, min(done, tot))
+    if not open_month:
+        # A month that has finished has nothing left to project, exactly as for the calendar window:
+        # every open day it held is complete, so the factor is 1 and the figure is the actual.
+        done = tot
+    return {'days_in_month': tot, 'elapsed': max(1, done), 'complete': done > 0,
+            'open_month': bool(open_month), 'no_overlap': False, 'basis': 'open_days'}
+
+
 def factor(window: dict) -> float:
     """What a month-to-date figure is multiplied by to reach month end. 1.0 for a finished month."""
     w = window or {}
@@ -186,13 +229,24 @@ def verdict(projected, target) -> dict:
 
 
 def trend_of(mtd, target, period, today: _dt.date | None = None, unit: str = 'dollars',
-             span_from: _dt.date | None = None, span_to: _dt.date | None = None) -> dict:
+             span_from: _dt.date | None = None, span_to: _dt.date | None = None,
+             open_days=None) -> dict:
     """The whole answer a surface asks for: the projection, the verdict, and every term behind them.
 
     Every term is returned beside the answer for the same reason `demand_projection.projection`
     returns its own — a figure a manager is going to act on has to be arguable with.
+
+    `open_days` is `(completed, total)` for a scope that was not open the whole month. Given and
+    measurable, it REPLACES the calendar window (see `open_days_window`), and the returned `basis`
+    says which window was used, so a surface can show the difference instead of having to trust it.
+    A caller that knows nothing about a scope's opening days passes nothing and is unchanged. An
+    explicit `span_from`/`span_to` is the caller naming the window itself and always wins.
     """
-    w = month_window(period, today=today, span_from=span_from, span_to=span_to)
+    w = None
+    if open_days is not None and span_from is None and span_to is None:
+        w = open_days_window(*open_days, open_month=is_open_month(period, today))
+    if w is None:
+        w = month_window(period, today=today, span_from=span_from, span_to=span_to)
     projected = project(mtd, w, unit=unit)
     v = verdict(projected, target)
     return {'projected': projected, 'kind': v['kind'], 'gap': v['gap'],
