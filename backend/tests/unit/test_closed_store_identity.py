@@ -101,3 +101,38 @@ class TestTheGrossProfitRowRule:
         """So the drop is about closure, not about emptiness — a live store that sold nothing in a
         month must still show its rent."""
         assert "1 Open St" in self._report([])
+
+
+class TestTheRosterAnswersWhetherAStoreIsClosed:
+    """Owner, shown three of the four as "still open": *"All these 4 stores are closed"*.
+
+    He was right and the mapping flag was not. `storeops.stores` is the home for the store roster
+    and §CORE-45 for the predicate; `commcalc.store_mapping.is_active` is a flag about a MAPPING
+    ROW. Live they disagree — all four closed LuxeLink stores are `is_active=false` in the roster
+    while a second, stale `LUX-*` mapping row still says active — so a report reading the mapping
+    flag calls a closed store open. Two copies of one fact, which is the §19.18 defect itself.
+    """
+    def _report(self, expenses, roster):
+        return {r["store"] for r in calc_gp_report(
+            [], [], [], [], expenses, [], MAPPING, PERIOD,
+            store_active_by_code=roster)["store_rows"]}
+
+    def test_the_roster_overrides_a_stale_active_mapping_row(self):
+        assert "1 Open St" not in self._report([], {"LIVE-1": False})
+
+    def test_but_the_closed_store_is_still_listed_for_a_period_it_has_data_in(self):
+        assert "1 Open St" in self._report(
+            [{"store_code": "LIVE-1", "amount": 1.0}], {"LIVE-1": False})
+
+    def test_the_roster_wins_both_ways(self):
+        """Not a one-directional hide: a store the mapping calls closed and the roster calls open is
+        listed, so this cannot become a quiet way to drop stores."""
+        assert "902 Ave U" in self._report([], {"AVE-U": True})
+
+    def test_a_store_the_roster_has_never_heard_of_keeps_the_mapping_answer(self):
+        """UNREADABLE IS NOT CLOSED. A partial or missing roster must never take a store off the
+        report, which would take its money with it."""
+        assert "1 Open St" in self._report([], {"SOMETHING-ELSE": False})
+
+    def test_an_empty_roster_changes_nothing(self):
+        assert "1 Open St" in self._report([], {})

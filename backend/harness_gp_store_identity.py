@@ -344,6 +344,38 @@ check("I4 with NOTHING this period the closed store is NOT a line of the report 
 check("I5 …while a LIVE store with nothing is still listed, so the drop is about closure and not "
       "about emptiness", "9 Elm St" in {r["store"] for r in R["store_rows"]})
 
+# ── THE ROSTER ANSWERS "IS THIS STORE CLOSED", NOT THE CARRIER MAPPING (owner 2026-11-16) ─────────
+# *"All these 4 stores are closed"*. He was right and the mapping flag was not: live, all four are
+# `is_active=false` in `storeops.stores` while a SECOND, stale `LUX-*` mapping row still says
+# active, so reading the mapping flag called three closed stores open. `store_active_by_code` is the
+# roster, keyed by store_code, and it DECIDES wherever it knows the store.
+_R_ROSTER = calc_gp_report([], [], [], [], [], [], MAPPING, PERIOD,
+                           resolve_store_canonical=RESOLVE,
+                           store_active_by_code={"S-9": False})
+check("I6 THE REGRESSION: a store the MAPPING calls active and the ROSTER calls closed is treated "
+      "as closed", "9 Elm St" not in {r["store"] for r in _R_ROSTER["store_rows"]})
+_R_ROSTER2 = calc_gp_report([], [], [], [], [{"store_code": "S-9", "amount": 100.0}], [],
+                            MAPPING, PERIOD, resolve_store_canonical=RESOLVE,
+                            store_active_by_code={"S-9": False})
+check("I7 …and still listed for a period it HAS data in, with the money on it",
+      round({r["store"]: r for r in _R_ROSTER2["store_rows"]}["9 Elm St"]["exp_total"], 2) == 100.0)
+_R_ROSTER3 = calc_gp_report([], [], [], [], [], [], MAPPING, PERIOD,
+                            resolve_store_canonical=RESOLVE,
+                            store_active_by_code={"S-CLOSED": True})
+check("I8 the roster wins BOTH ways — a store the mapping calls closed and the roster calls open "
+      "is listed, so the override is not a one-directional hide",
+      "77 Closed Rd" in {r["store"] for r in _R_ROSTER3["store_rows"]})
+check("I9 a store the ROSTER has never heard of falls back to the mapping flag, so an unreadable "
+      "or partial roster can never take a store off the report",
+      "9 Elm St" in {r["store"] for r in calc_gp_report(
+          [], [], [], [], [], [], MAPPING, PERIOD, resolve_store_canonical=RESOLVE,
+          store_active_by_code={"SOMETHING-ELSE": False})["store_rows"]})
+check("I10 ONE physical store, ANY live code: a store whose second code is closed in the roster is "
+      "still open on the strength of the live one (`1598 Mount Ephraim Ave` is claimed by two)",
+      "1598 Mount Ephraim Ave" in {r["store"] for r in calc_gp_report(
+          [], [], [], [], [], [], MAPPING, PERIOD, resolve_store_canonical=RESOLVE,
+          store_active_by_code={"S-1598": True, "S-2778": False})["store_rows"]})
+
 print()
 print("=" * 78)
 print(f"RESULT: {P} passed, {F} failed")

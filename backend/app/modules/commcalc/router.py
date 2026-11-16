@@ -25005,6 +25005,26 @@ def _compute_gp(client, org_id, period, market=""):
     except Exception as _rce:
         print(f'WARN gp canonical store resolver unavailable: {_rce}')
         _resolve_canonical = None
+    # ── IS THIS STORE CLOSED: THE ROSTER ANSWERS, keyed by store_code (owner 2026-11-16) ─────────
+    # `commcalc.store_mapping.is_active` is a flag about a MAPPING ROW, not about a store, and live
+    # the two disagree: all four closed LuxeLink stores are `is_active=false` in `storeops.stores`
+    # while a second, stale `LUX-*` mapping row still says active. The roster is the home for the
+    # store list and §CORE-45 for the predicate, so the report reads BOTH here and never re-derives
+    # either. `include_inactive=True` because a closed store must still be KEYABLE — it is the
+    # report's own row rule that decides whether it is listed (§ACCOUNT-04).
+    _gp_store_active = {}
+    try:
+        for _sr in _storeops_roster(client, org_id, include_inactive=True):
+            _sc_code = str((_sr or {}).get('store_code') or '').strip()
+            if _sc_code:
+                _gp_store_active[_sc_code] = _store_active(_sr)
+    except Exception as _sre:                                      # pragma: no cover - I/O guard
+        # UNREADABLE IS NOT CLOSED. With no roster the report falls back to the mapping flag, which
+        # is exactly how it behaved before this read existed — never to hiding a store it cannot ask
+        # about, which would take its money off the report.
+        print(f'WARN gp store roster unavailable, closure falls back to the mapping flag: {_sre}')
+        _gp_store_active = {}
+
     result = calc_gp_report(sales, pay_detail, mi_rows, rep_comms, expenses, catalog, store_map, period,
                             comp_rows=comp_rows, gp_category_map=gp_cat_map,
                             item_gp_map=gp_item_map, gp_categories=gp_cats,
@@ -25019,7 +25039,8 @@ def _compute_gp(client, org_id, period, market=""):
                             # — not only when it opted into per-line config classification, because
                             # "is this a device department" is one question with one home and the
                             # P&L reads the same declaration whatever this report's mode is.
-                            box_departments=_gp_box_depts)
+                            box_departments=_gp_box_depts,
+                            store_active_by_code=_gp_store_active)
     result['expenses_carried_from'] = _exp_carried_from
     # WHOSE LABOUR FIGURE BOOKED, said out loud: the stores whose approved payroll row suppressed
     # their measured hours, and the dollars that were therefore NOT added a second time.

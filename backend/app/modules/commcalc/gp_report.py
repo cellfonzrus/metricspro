@@ -291,6 +291,7 @@ def calc_gp_report(
     carrier_rules: list = None,
     carrier_class_config: dict = None,
     box_departments=None,
+    store_active_by_code: dict = None,
 ) -> dict:
     """
     Returns store_rows (by store) and rep_rows (by rep).
@@ -823,7 +824,22 @@ def calc_gp_report(
         # not hidden, it is unkeyable and silently gone), and the closed store is listed for every
         # period it HAS data in and dropped only when it has none. A test on the row's own money,
         # so nothing this skips is counted in any total below.
-        if not store_identity.get(store, {}).get('is_active', True):
+        # IS THIS STORE CLOSED IS THE ROSTER'S ANSWER, NOT THE CARRIER MAPPING'S (owner report
+        # 2026-11-16: *"All these 4 stores are closed"*). `storeops.stores` is the home for the
+        # store roster and §CORE-45 is the home for the predicate; `commcalc.store_mapping` carries
+        # a flag of its own about a MAPPING ROW, and live the two disagree — all four closed
+        # LuxeLink stores are `is_active=false` in the roster while a second, stale mapping row
+        # spelled `LUX-*` still says active. Reading the mapping flag would have called three closed
+        # stores open. So `store_active_by_code` (the roster, keyed by store_code) DECIDES wherever
+        # it knows the store, and the mapping flag is only the fallback for a tenant whose roster
+        # could not be read. A store is live if ANY of its claiming codes is live in the roster.
+        _live = bool(store_identity.get(store, {}).get('is_active', True))
+        if store_active_by_code:
+            _flags = [store_active_by_code[_c] for _c in (exp_codes or ())
+                      if _c in store_active_by_code]
+            if _flags:
+                _live = any(_flags)
+        if not _live:
             if not any((total_rev, rep_pay, exp_total, net_phone_cost)):
                 continue
 
