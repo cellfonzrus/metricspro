@@ -2063,11 +2063,64 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
     # now tracked in emp_store_hours/emp_store_dollars exactly like the active path, so this call nets
     # them correctly (subtract the real hourly $, add the derived salary allocated proportional to
     # those same hours) instead of adding the derived salary on top of an untouched hourly figure.
+    # ── A MANAGER'S PAY FOLLOWS THE STORES THEY COVER (owner 2026-11-16, §STOREOPS-11) ──────────
+    # *"brendas salary is attached to diversey nbut her salary should be divided among the store she
+    # is handling"*. Measured live before this: her whole month booked to one store, because she
+    # logged no hours and the rule underneath was "zero hours ⇒ 100% to `home_store`".
+    #
+    # WHICH STORES is NOT decided here. `overhead_allocation.coverage_for` is the one home for it
+    # (§STOREOPS-09.4's ladder), asked with `seed_from_placement=False` so that only an explicit
+    # `storeops.org_managers` assignment counts: a placement is not a statement of responsibility,
+    # and reading it as one spreads ordinary store staff's pay over stores they never worked at.
+    # HOW a covered salary is spread is `overhead_allocation.allocate`, bound to this tenant's own
+    # declared basis, so the even split has exactly one implementation.
+    #
+    # THE INTERLOCK. `overhead_allocation` spreads its OWN population (salaried, attached to no
+    # store) over the same covered set once a tenant switches `overhead_config` to `derive`. A
+    # person both paths would spread is one salary booked twice, so the populations are made
+    # disjoint HERE, against the mode actually live for this org, by dereferencing
+    # `classify_employee` — never by a rule restated in a second module.
+    _covered_by_emp: dict = {}
+    _spread_covered = None
+    if lo and hi and salaried_ids:
+        try:
+            from app.modules.storeops import overhead_allocation as _oh
+            from app.modules.account.coa import monthly_salary_equivalent as _meq
+            _client = get_supabase()
+            _oh_rows = (_client.schema("commcalc").table("account_config")
+                        .select("overhead_config").eq("org_id", org_id).limit(1)
+                        .execute().data) or []
+            _oh_cfg = _oh.resolve_config(
+                _oh_rows[0].get("overhead_config") if _oh_rows else None)
+            _ctx = _oh.org_coverage_context(_client, org_id, _oh_cfg, so=so)
+            # The tenant's DECLARED basis, honoured whatever it is — including
+            # `market_then_store`, which needs the canonical store→market answer the context
+            # already carries. Passing it keeps a tenant that declared a basis from silently
+            # getting the house one.
+            _mkt_by_code = _ctx.get("market_by_code") or {}
+            _spread_covered = (lambda amount, codes: _oh.allocate(
+                amount, codes, _oh_cfg, market_of=(lambda c: _mkt_by_code.get(c, "")))[0])
+            if _ctx.get("ok"):
+                for _e in employees:
+                    _eid = _e.get("employee_id")
+                    if not _eid or _eid not in salaried_ids:
+                        continue
+                    if _oh_cfg.get("mode") == "derive" and _oh.classify_employee(_e, _oh_cfg, _meq)[0]:
+                        continue
+                    _codes, _how = _oh.coverage_for(_ctx, _e, _oh_cfg, client=_client,
+                                                     org_id=org_id, seed_from_placement=False)
+                    if _codes:
+                        _covered_by_emp[_eid] = _codes
+        except Exception as e:
+            _covered_by_emp, _spread_covered = {}, None
+            _warn_salary_override_failed(response, org_id,
+                                         "GET /payroll-by-store (manager coverage)", e)
     if lo and hi and salaried_ids:
         try:
             by_store = payroll_salary.apply_to_by_store(
                 by_store, employees, emp_store_hours, emp_store_dollars, _tenant_pp_settings(org_id, so=so),
-                _date.fromisoformat(lo), _date.fromisoformat(hi) - timedelta(days=1))
+                _date.fromisoformat(lo), _date.fromisoformat(hi) - timedelta(days=1),
+                covered_by_emp=_covered_by_emp, spread=_spread_covered)
         except Exception as e:
             _warn_salary_override_failed(response, org_id, "GET /payroll-by-store", e)
 
@@ -2114,6 +2167,16 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
     if ks is not None:
         rows = [r for r in rows if in_keyset(ks, r.get("store_code"))]
     out = {"month": month, "stores": sorted(rows, key=lambda x: x["store_code"])}
+    if _covered_by_emp:
+        # SAY THAT A SALARY WAS SPLIT, and over how many stores (§STOREOPS-11). A store manager
+        # reading an unexplained share of somebody else's pay on their own P&L is how a correct
+        # figure gets reported as a defect; additive, and only when it actually happened. Names no
+        # employee and no amount — this payload is pay-gated per store, so the attribution facts
+        # travel without re-exposing a person's salary through a second door.
+        out["manager_coverage"] = {"people": len(_covered_by_emp),
+                                   "stores": sorted({c for cs in _covered_by_emp.values()
+                                                     for c in cs}),
+                                   "basis": "an even share per covered store"}
     if _punch_read_failed:
         # Additive, and only when it happened — the same convention `lunch_deduction_data_capped`
         # already uses. A reader that shows this figure can say the punches could not be read.

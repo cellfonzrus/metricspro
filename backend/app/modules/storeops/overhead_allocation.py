@@ -794,6 +794,148 @@ def line_note(result: dict, recon: Optional[dict] = None) -> str:
 
 
 # ── 7. IO layer — org-scoped, thin, and the ONLY part that touches a client ──────────────────────
+#
+# THE COVERAGE QUESTION, ASKED ONCE FOR THE WHOLE PLATFORM (owner ask 2026-11-16: *"brendas salary
+# is attached to diversey nbut her salary should be divided among the store she is handling"*).
+# `org_coverage_context` + `coverage_for` are the IO half of the ladder that `covered_stores` is the
+# pure half of. They were lifted OUT of `gather` so a second reader — the Payroll Report, which is
+# the one door onto what a store's labour cost (§STOREOPS-10) — asks this org the SAME question
+# through the SAME rungs instead of resolving coverage a second way. `gather` now dereferences
+# them, so there is still exactly one ladder (§STOREOPS-09 lock 6(d)) and one downward walk.
+
+
+def org_coverage_context(client, org_id: str, cfg: dict, *, so=None) -> dict:
+    """The once-per-period org reads the coverage ladder needs: the store roster, the canonical
+    store→market index and its inverse, the org tree with its ONE downward walk, every explicit
+    manager ASSIGNMENT, and the declared level vocabulary.
+
+    NEVER raises: every read degrades to empty, and an empty context makes `coverage_for` answer
+    `COVER_NONE`, which is REPORTED rather than spread. `ok` is False when the store roster itself
+    could not be read, so a caller can tell "this org covers nothing" from "I could not look"."""
+    cfg = resolve_config(cfg if isinstance(cfg, dict) else None)
+    so = so if so is not None else client.schema("storeops")
+    ctx = {"ok": False, "stores": [], "org_codes": [], "market_by_code": {}, "codes_by_market": {},
+           "unit_by_id": {}, "managed_by_emp": {}, "levels": [], "vocabulary": [],
+           "subtree": (lambda uid: set())}
+    try:
+        stores = (so.table("stores").select("store_code,is_active,org_unit_id")
+                  .eq("org_id", org_id).limit(50000).execute().data) or []
+    except Exception:
+        return ctx
+    if not cfg["include_inactive_stores"]:
+        stores = [s for s in stores if s.get("is_active") is not False]
+    ctx["ok"] = True
+    ctx["stores"] = stores
+    org_codes = [_s(s.get("store_code")) for s in stores if _s(s.get("store_code"))]
+    ctx["org_codes"] = org_codes
+    # STORE -> MARKET through the ONE canonical union index (§13a, owner directive 2026-09-03),
+    # never off `stores.market` directly: a store that exists only in `store_mapping`/`store_aliases`
+    # would otherwise read as marketless and silently change everybody else's share.
+    _mkt: Dict[str, str] = {}
+    try:
+        from app.core.scope import market_by_code as _market_by_code
+        _mkt = {_s(k).upper(): _s(v) for k, v in (_market_by_code(client, org_id) or {}).items()}
+    except Exception:
+        _mkt = {}
+    market_by_code = {c: _mkt.get(c.upper(), "") for c in org_codes}
+    ctx["market_by_code"] = market_by_code
+    codes_by_market: Dict[str, List[str]] = {}
+    for _c, _m in market_by_code.items():
+        if _s(_m):
+            codes_by_market.setdefault(_s(_m), []).append(_c)
+    ctx["codes_by_market"] = codes_by_market
+    try:
+        units = (so.table("org_units").select("id,parent_id,level_id,name,code")
+                 .eq("org_id", org_id).limit(50000).execute().data) or []
+    except Exception:
+        units = []
+    try:
+        levels = (so.table("org_levels").select("id,name,rank").eq("org_id", org_id)
+                  .limit(50000).execute().data) or []
+    except Exception:
+        levels = []
+    ctx["levels"] = levels
+    ctx["vocabulary"] = level_vocabulary(levels)
+    try:
+        from app.modules.storeops import org_chain as _oc
+        _lvl_names, unit_by_id = _oc.index_tree(levels, units)
+        _children = _oc.children_index(unit_by_id)
+        ctx["unit_by_id"] = unit_by_id
+        ctx["subtree"] = lambda uid: _oc.subtree_ids(uid, unit_by_id, _children)
+    except Exception:
+        pass
+    # WHICH UNITS EACH PERSON IS ASSIGNED TO MANAGE — `storeops.org_managers`, the org's own
+    # STATEMENT of responsibility. Org-scoped by hand.
+    managed: Dict[str, List[str]] = {}
+    try:
+        for m in ((so.table("org_managers").select("unit_id,employee_id").eq("org_id", org_id)
+                   .limit(50000).execute().data) or []):
+            managed.setdefault(_s(m.get("employee_id")), []).append(_s(m.get("unit_id")))
+    except Exception:
+        managed = {}
+    ctx["managed_by_emp"] = managed
+    return ctx
+
+
+def coverage_for(ctx: dict, emp: dict, cfg: dict, *, client=None, org_id=None,
+                 seed_from_placement: bool = True) -> Tuple[List[str], str]:
+    """(covered store codes, how) for ONE roster row, through `covered_stores`' ladder and nothing
+    else. Pure dispatch over `ctx` plus at most one RPC; never raises.
+
+    `seed_from_placement` IS THE WHOLE DIFFERENCE BETWEEN THE TWO CALLERS, and it is a question
+    about EVIDENCE, not a switch of convenience. `employees.org_unit_id` says where a person is
+    PLACED; `storeops.org_managers` says what they are RESPONSIBLE FOR. They are not the same claim.
+
+      • `gather` passes True, unchanged: its population is already filtered to a salaried person
+        with NO home store, whose placement is the only evidence there is, and whose pay otherwise
+        lands nowhere at all. That rung is gated by `span_fallback` and documented (§STOREOPS-09.4).
+      • The Payroll Report path passes False, and MEASUREMENT is why — see the index section for
+        the figures, which name live stores and so cannot live in this file (RULE TWO). The shape:
+        in one measured tenant THIRTEEN employees carry an `org_unit_id` and almost all are rank
+        and file, three of them salaried STORE staff placed under the same market node as the
+        market manager. Read their placement as coverage and roughly $135,000 a year of ordinary
+        store pay spreads over ten stores those people never worked at, while their own store loses
+        its own employee's salary. A column that means one thing, read as the answer to another.
+
+    So the salary of someone whose pay ALREADY lands on a store only ever moves on an explicit
+    assignment. `org_managers` is empty for the tenant that asked, which means this ships INERT and
+    switches on store by store as the org names who manages what — the honest default for all four
+    tenants, not just the one measured."""
+    eid = _s(emp.get("employee_id"))
+    if not eid:
+        return [], COVER_NONE
+    org_codes = ctx.get("org_codes") or []
+    code_set = set(org_codes)
+    subtree = ctx.get("subtree") or (lambda uid: set())
+    managed = [u for u in ((ctx.get("managed_by_emp") or {}).get(eid) or []) if _s(u)]
+    # RUNG 1 — the org's own span RPC (mig 050, index §13), used AS-IS.
+    span: List[str] = []
+    if client is not None and org_id is not None:
+        try:
+            rows = (client.rpc("org_span_for_manager",
+                               {"p_org_id": str(org_id), "p_employee_id": eid}).execute().data) or []
+            span = [_s(r.get("store_code") if isinstance(r, dict) else r) for r in rows]
+        except Exception:
+            span = []
+    span = [c for c in span if c in code_set]
+    # THE UNION RULE, owner 2026-11-13: a higher level covers the union of everything beneath it,
+    # and `subtree` IS that union — the one downward walk, never re-walked here.
+    seeds = list(managed)
+    if seed_from_placement and _s(emp.get("org_unit_id")):
+        seeds.append(_s(emp.get("org_unit_id")))
+    sub = set()
+    for uid in seeds:
+        try:
+            sub |= set(subtree(uid))
+        except Exception:
+            pass
+    unit = [_s(s.get("store_code")) for s in (ctx.get("stores") or [])
+            if _s(s.get("org_unit_id")) in sub and _s(s.get("store_code"))]
+    mkt = [c for c in market_unit_stores(sub, ctx.get("unit_by_id") or {},
+                                         ctx.get("codes_by_market") or {}) if c in code_set]
+    return covered_stores(span, unit, org_codes, cfg, market_codes=mkt)
+
+
 # NOTE ON ORG SCOPING: the CI org-scope guard scans ONLY commcalc/router.py, so nothing here is
 # covered by it. Every read below therefore carries an explicit `.eq("org_id", org_id)` by hand, and
 # the org_id is the caller's — never a value read out of a row.
@@ -820,69 +962,17 @@ def gather(client, org_id: str, period: str, cfg: dict, code_to_key=None) -> dic
         return {"skipped": "salary conversion unavailable", "config": cfg}
 
     so = client.schema("storeops")
-    try:
-        stores = (so.table("stores").select("store_code,is_active,org_unit_id")
-                  .eq("org_id", org_id).limit(50000).execute().data) or []
-    except Exception:
+    # THE COVERAGE CONTEXT — the store roster, the canonical market index, the org tree with its one
+    # downward walk, and every explicit manager assignment, read ONCE through the shared half of the
+    # ladder. This function used to resolve all of it inline; the Payroll Report needs the same
+    # answer, and two resolutions of one question is the defect the index forbids.
+    ctx = org_coverage_context(client, org_id, cfg, so=so)
+    if not ctx.get("ok"):
         return {"skipped": "store roster unreadable", "config": cfg}
-    if not cfg["include_inactive_stores"]:
-        stores = [s for s in stores if s.get("is_active") is not False]
-    org_codes = [_s(s.get("store_code")) for s in stores if _s(s.get("store_code"))]
-    # STORE -> MARKET is resolved through the ONE canonical union index (§13a, owner directive
-    # 2026-09-03), NEVER off `stores.market` directly: these rows already carry a store_code, so
-    # `core.scope.market_by_code` is the helper for them. Reading one vocabulary here would make a
-    # store that exists only in `store_mapping`/`store_aliases` marketless, and under the
-    # market-then-store basis a marketless store silently changes everybody else's share.
-    _mkt: Dict[str, str] = {}
-    try:
-        from app.core.scope import market_by_code as _market_by_code
-        _mkt = {_s(k).upper(): _s(v) for k, v in (_market_by_code(client, org_id) or {}).items()}
-    except Exception:
-        _mkt = {}
-    market_by_code = {c: _mkt.get(c.upper(), "") for c in org_codes}
-    # The INVERSE index, for the market rung of the coverage ladder: {market: [store_code, …]}. It is
-    # the same canonical answer read the other way round, not a second resolution.
-    codes_by_market: Dict[str, List[str]] = {}
-    for _c, _m in market_by_code.items():
-        if _s(_m):
-            codes_by_market.setdefault(_s(_m), []).append(_c)
-    # THE ORG TREE. `name` and `code` are read because the market rung matches a unit against the
-    # org's own market vocabulary; `level_id` because the per-level lines are named from the level
-    # the person sits at. The DOWNWARD walk itself is `org_chain.subtree_ids` — the platform's one
-    # home for "everything beneath this node", which is precisely the union rule the owner's
-    # 2026-11-13 ask rests on. A local re-walk here would be the second traversal the index forbids.
-    try:
-        units = (so.table("org_units").select("id,parent_id,level_id,name,code")
-                 .eq("org_id", org_id).limit(50000).execute().data) or []
-    except Exception:
-        units = []
-    try:
-        levels = (so.table("org_levels").select("id,name,rank").eq("org_id", org_id)
-                  .limit(50000).execute().data) or []
-    except Exception:
-        levels = []
-    try:
-        from app.modules.storeops import org_chain as _oc
-        _lvl_names, unit_by_id = _oc.index_tree(levels, units)
-        _children = _oc.children_index(unit_by_id)
-        _subtree = lambda uid: _oc.subtree_ids(uid, unit_by_id, _children)   # noqa: E731
-    except Exception:
-        unit_by_id, _children = {}, {}
-        _subtree = lambda uid: set()                                         # noqa: E731
-    # Which units each person MANAGES — the second rung of `level_of_person`. Org-scoped by hand.
-    managed_by_emp: Dict[str, List[str]] = {}
-    try:
-        for m in ((so.table("org_managers").select("unit_id,employee_id").eq("org_id", org_id)
-                   .limit(50000).execute().data) or []):
-            managed_by_emp.setdefault(_s(m.get("employee_id")), []).append(_s(m.get("unit_id")))
-    except Exception:
-        managed_by_emp = {}
-    vocab = level_vocabulary(levels)
-
-    def subtree_codes(unit_id: str) -> List[str]:
-        seen = _subtree(unit_id)
-        return [_s(s.get("store_code")) for s in stores
-                if _s(s.get("org_unit_id")) in seen and _s(s.get("store_code"))]
+    stores = ctx["stores"]
+    org_codes = ctx["org_codes"]
+    market_by_code = ctx["market_by_code"]
+    vocab = ctx["vocabulary"]
 
     try:
         emps = (so.table("employees")
@@ -913,28 +1003,15 @@ def gather(client, org_id: str, period: str, cfg: dict, code_to_key=None) -> dic
         if not is_oh:
             continue
         eid = _s(e.get("employee_id"))
-        span: List[str] = []
-        try:
-            rows = (client.rpc("org_span_for_manager",
-                               {"p_org_id": str(org_id), "p_employee_id": eid}).execute().data) or []
-            span = [_s(r.get("store_code") if isinstance(r, dict) else r) for r in rows]
-        except Exception:
-            span = []
-        span = [c for c in span if c in set(org_codes)]
         _uid = _s(e.get("org_unit_id"))
-        _managed = managed_by_emp.get(eid) or []
-        # THE UNION RULE, owner 2026-11-13: a higher level covers the union of everything beneath it.
-        # `_subtree` IS that union — the one downward walk — so a regional unit's set already
-        # contains every district unit's set beneath it with no per-level arithmetic of its own.
-        _sub = set(_subtree(_uid)) if _uid else set()
-        for _mu in _managed:
-            _sub |= set(_subtree(_mu))
-        unit = [_s(s.get("store_code")) for s in stores
-                if _s(s.get("org_unit_id")) in _sub and _s(s.get("store_code"))]
-        mkt_codes = [c for c in market_unit_stores(_sub, unit_by_id, codes_by_market)
-                     if c in set(org_codes)]
-        codes, how = covered_stores(span, unit, org_codes, cfg, market_codes=mkt_codes)
-        lvl, lvl_how = level_of_person(_uid, _managed, unit_by_id, vocab)
+        _managed = (ctx.get("managed_by_emp") or {}).get(eid) or []
+        # THE LADDER, dereferenced. `seed_from_placement=True` keeps this caller's behaviour exactly
+        # as it shipped: its population is a salaried person with NO home store, for whom placement
+        # is the only evidence there is and whose pay otherwise lands nowhere. The Payroll Report
+        # path passes False — see `coverage_for` for why the two answers differ.
+        codes, how = coverage_for(ctx, e, cfg, client=client, org_id=org_id,
+                                  seed_from_placement=True)
+        lvl, lvl_how = level_of_person(_uid, _managed, ctx.get("unit_by_id") or {}, vocab)
         people.append({"employee_id": eid, "label": _s(e.get("name")) or eid,
                        "role": _s(e.get("role")), "why": why, "salary_month": sal,
                        "commission": comm_by_emp.get(eid, 0.0),

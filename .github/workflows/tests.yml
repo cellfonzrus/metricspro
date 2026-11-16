@@ -931,6 +931,10 @@ jobs:
         working-directory: backend
         if: always()   # a red harness must not hide the 60 after it
         run: python3 harness_ma_slice_replace.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_manager_coverage_allocation
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_manager_coverage_allocation.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: harness_management_incentive
         working-directory: backend
         if: always()   # a red harness must not hide the 60 after it
