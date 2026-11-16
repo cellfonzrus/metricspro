@@ -49,7 +49,7 @@ type ReviewWithDrill = Review & {
 const card: React.CSSProperties = { padding: '14px 16px', marginBottom: 12 }
 const tabBtn = (on: boolean): React.CSSProperties => ({
   padding: '6px 12px', borderRadius: 8, fontSize: 13, cursor: 'pointer',
-  border: `1px solid ${on ? 'var(--accent, #2563eb)' : 'var(--border)'}`,
+  border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
   background: on ? 'var(--surface2)' : 'var(--surface)', fontWeight: on ? 700 : 400,
 })
 
