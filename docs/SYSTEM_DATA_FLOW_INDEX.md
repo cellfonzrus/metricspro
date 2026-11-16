@@ -49892,11 +49892,24 @@ commission vocabulary.
 
 ### ACCOUNT-06.4 LIVE, before and after
 
-LuxeLink October 2026, the P&L's `wages` line: **$57,721.13 → $116,264.81**, with `902 Ave U`
-keeping its typed $6,459.55 because the Payroll Report did not measure it — the owner's carve-out,
-working. Measured across every tenant × September/October/November, the ONLY month that moves is
-LuxeLink's October: the other eleven tenant-months are identical to the cent, because they either
-carry no typed payroll rows or are already on the measured figure.
+Measured against production, the P&L's `wages` line, every tenant × September/October/November:
+
+| month | tenant | before | after |
+|---|---|---|---|
+| 2026-09 | Cellfonz R Us | $127,289.93 | $126,585.35 |
+| 2026-10 | **LuxeLink** | **$57,721.13** | **$121,632.67** |
+| 2026-09 | LuxeLink | $131,616.28 | $131,616.28 |
+| 2026-11 | LuxeLink | $101,688.51 | $101,688.51 |
+| — | Vzone, NY LOGISTICS, the other six tenant-months | unchanged to the cent | unchanged to the cent |
+
+**LuxeLink October now equals the Payroll Report exactly** — $114,989.81 across 20 stores plus
+$6,642.86 of pay attributable to no store, store for store and cent for cent, which is what
+§STOREOPS-10 set out to make true and ruling K2 was holding back. Cellfonz September moves
+$704.58 the same way. Ten of the twelve tenant-months do not move at all, because they carry no
+typed payroll rows at a measured store.
+
+Four of LuxeLink's 24 stores have NO measurement for October; they keep whatever was typed for
+them and the coverage note names them, which is the owner's carve-out and §19.50 both.
 
 ### ACCOUNT-06.5 The locks (they fail the BUILD, not the review)
 
