@@ -51648,7 +51648,7 @@ _WEEKLY_REVIEW_RUN_TABLE = "weekly_review_run"
 def _weekly_review_config(client, org_id):
     """(config, source) — the tenant's weekly-review config over the house defaults. The closing
     weekday and whether the standing run is on are POLICY (RULE TWO); no tenant vocabulary lives
-    here. A missing table degrades to the house defaults, so the report works before mig 1122."""
+    here. A missing table degrades to the house defaults, so the report works before mig 1123."""
     cfg, source = dict(_wrev.HOUSE_CONFIG), {k: "house" for k in _wrev.HOUSE_CONFIG}
     try:
         rows = (client.schema("commcalc").table(_WEEKLY_REVIEW_CFG_TABLE).select("*")
@@ -51950,7 +51950,7 @@ def put_weekly_review_config(body: WeeklyReviewConfigIn, authorization: str = He
                   "updated_at": _datetime.now(_timezone.utc).isoformat()},
                  on_conflict="org_id").execute())
     except Exception:
-        raise HTTPException(400, "Couldn't save — is the weekly_review_config migration (1122) "
+        raise HTTPException(400, "Couldn't save — is the weekly_review_config migration (1123) "
                                  "applied?")
     return get_weekly_review_config(authorization=authorization, org_id=org_id)
 

@@ -49909,7 +49909,7 @@ a panel whose provenance is a guess (`report_drilldown.origin`'s own rule).
 Depends on: §64 (which store is this string), §61 (the accessory target plan), §59 (who is behind),
 §COMMCALC-26 / §CORE-17.3y (a carrier's own selling window), §ACCOUNT-03 (the one labour authority),
 §CORE-27 (every report carries the standard filters and the send bar), §COMMCALC-49.10 (a tenant's
-declaration is a required argument). Feeds: the Management Overview dashboard (mig 1122 tile).
+declaration is a required argument). Feeds: the Management Overview dashboard (mig 1123 tile).
 Neighbours: §59.9 (the manager report cards — a per-MANAGER check-off, a different grain and a
 different question), §63 (this month's declared focus — written by a human; this pack is generated).
 
@@ -49919,7 +49919,7 @@ Overview tile, standard filters + send bar.
 `POST /commcalc/weekly-review/run-now`, `POST /commcalc/weekly-review/run-due`.
 §18 (tables): `commcalc.weekly_review_config` (policy: closing weekday, standing-run switch,
 recipients), `commcalc.weekly_review_run` (the generated pack, one row per tenant per week) —
-migration `1122`, both granted to `service_role`.
+migration `1123`, both granted to `service_role`.
 
 Files: `backend/app/modules/commcalc/weekly_review.py` (**new**),
 `backend/app/modules/commcalc/weekly_review_drilldown.py` (**new**),
@@ -49927,7 +49927,7 @@ Files: `backend/app/modules/commcalc/weekly_review.py` (**new**),
 `backend/harness_drilldown_pending.txt`, `backend/tests/unit/test_weekly_review.py` (**new**),
 `backend/tests/unit/test_weekly_review_drilldown.py` (**new**),
 `backend/tests/integration/test_weekly_review_endpoint.py` (**new**),
-`database/migrations/1122_weekly_performance_review.sql` (**new**),
+`database/migrations/1123_weekly_performance_review.sql` (**new**),
 `frontend/src/app/(platform)/commcalc/weekly-review/page.tsx` (**new**),
 `frontend/src/lib/weekly-review-export.ts` (**new**),
 `frontend/src/lib/weekly-review-export.test.ts` (**new**), `frontend/src/lib/rbac.ts`,

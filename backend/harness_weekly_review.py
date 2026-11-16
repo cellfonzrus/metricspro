@@ -91,7 +91,7 @@ EXPORT = src("frontend/src/lib/weekly-review-export.ts", base=ROOT)
 RBAC = src("frontend/src/lib/rbac.ts", base=ROOT)
 INDEX = src("docs/SYSTEM_DATA_FLOW_INDEX.md", base=ROOT)
 LEDGER = src("harness_drilldown_pending.txt")
-MIGRATION = src("database/migrations/1122_weekly_performance_review.sql", base=ROOT)
+MIGRATION = src("database/migrations/1123_weekly_performance_review.sql", base=ROOT)
 
 #: The router's own block, bounded at both ends, so a feature appended to router.py later is never
 #: mistaken for this one (the zero-sales lock's BLOCK-with-an-END rule).

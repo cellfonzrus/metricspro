@@ -1,4 +1,4 @@
--- 1122_weekly_performance_review.sql — THE WEEKLY PERFORMANCE REVIEW: the tenant's review policy,
+-- 1123_weekly_performance_review.sql — THE WEEKLY PERFORMANCE REVIEW: the tenant's review policy,
 -- the stored pack, and the Management Overview tile that opens it. Band 1000+ (platform).
 -- Additive + idempotent (safe to re-run). NOT money-touching: nothing here reads or writes a rate,
 -- plan, tier, payout or any calculation input — the report only READS surfaces that already exist.
