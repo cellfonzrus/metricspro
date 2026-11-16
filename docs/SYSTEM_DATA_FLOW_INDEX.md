@@ -26524,6 +26524,7 @@ status word rather than a blank that reads as nil.
 | ACCOUNT-01 | account, commcalc, closing |
 | ACCOUNT-02 | account, commcalc |
 | ACCOUNT-03 | account, commcalc |
+| ACCOUNT-04 | account, commcalc, core |
 | CORE-32 | core |
 | CORE-33 | core |
 | CORE-34 | core |
@@ -49253,6 +49254,13 @@ October labour cannot be relabelled into the GP report's code space at all. The 
 it with its amount (`labour_measured_fill.unkeyed` / `.unkeyed_amount`) rather than dropping it in
 silence. The fix is a mapping row, not code.
 
+**SEQUEL (2026-11-16).** Asked about it, the owner answered *"902 is closed for good, it set to
+inactive"* — and that answer named a SECOND, larger defect: the store was unkeyable because
+`store_identity_index` SKIPPED a closed mapping row, so a closed store had no identity at all. See
+**§ACCOUNT-04**, which makes the $6,352.09 keyable and recovered $106,617.08 of LuxeLink expenses the
+Gross Profit report had been dropping. The mapping-row merge is still the data fix and is still
+outstanding.
+
 ### §ACCOUNT-03.7 Duplicate check (build gate) — what was checked, what was reused
 
 Searched the index for an existing home for "whose labour figure books this store-month": §4e
@@ -49285,6 +49293,93 @@ store-code fold) · §4e (the labour vocabulary, coverage states and `allocated_
 fact, one home, dereferenced) · §19.50 (tri-state verdicts) · §14y (the evidence interlock that
 refuses) · §COMMCALC-23 (a carried month never inherits labour) · §COMMCALC-49.10 (every feature for
 every tenant) · §COMMCALC-18 (the per-store expense fold) · §CORE-34/35 (the gate index).
+## §ACCOUNT-04. IDENTITY IS NOT VISIBILITY — A CLOSED STORE KEEPS ITS NAME (owner ruling 2026-11-16)
+
+Owner, asked which `902 Ave U` mapping row was right: *"902 is closed for good , it set to
+inactive"*. The answer settled the question and exposed a larger defect behind it.
+
+### §ACCOUNT-04.1 THE DEFECT, measured live
+
+`account/store_identity.store_identity_index` — THE home for "which store is this string?" (§64) —
+**skipped a row whose `is_active` was false**. A closed store therefore had no identity, and a
+reader keying money by store code could not place it. The money was not hidden from the report; it
+was absent from it, and nothing said so.
+
+Live, LuxeLink, 2026-11-16. Four of its 43 mapping rows are closed, and the Gross Profit report was
+dropping **$106,617.08** of expenses filed under them:
+
+| closed code | canonical store | July | August | October | dropped |
+| --- | --- | --- | --- | --- | --- |
+| `kedzie` | `18226 Kedzie Ave` (LIVE as `LUX-CHI-KEDZIE`) | $9,455.48 | $12,440.00 | $2,940.00 | $24,835.48 |
+| `Irving Park` | `6500 W Irving Park Rd` (LIVE as `LUX-CHI-IRVING`) | $11,490.91 | $13,350.00 | $3,850.00 | $28,690.91 |
+| `Narragansett` | `2640 Narragansett` (LIVE as `LUX-CHI-NARRAGAN`) | $11,559.74 | $14,740.00 | $3,840.00 | $30,139.74 |
+| `Ave U` | `902 Ave U` (CLOSED) | $10,870.95 | $12,080.00 | — | $22,950.95 |
+
+Three of the four are the SECOND spelling of a store that is open, so §COMMCALC-18's rule — one
+physical store collects EVERY code's expenses, exactly once — was being defeated by the skip: the
+closed row never reached `codes`, so the live store lost the expenses filed under its other name.
+The fourth is the genuinely closed store, which also holds the $6,352.09 of October labour of
+§ACCOUNT-03.6. **The P&L had all of it**: `coa.effective_expense_rows` returns the month's rows
+whole and never consulted this index, which is exactly why the two reports disagreed again.
+
+### §ACCOUNT-04.2 THE CLASS
+
+**Identity is not visibility.** They are two questions and the house already has a home for each:
+§64 answers "which store is this", §CORE-45 (`core/roster_visibility`) answers "is it still active".
+An index that refuses to NAME a closed store cannot implement either rule — it cannot hide the row,
+because hiding is a row rule, and it cannot keep the money, because unkeyable money is gone. Both of
+the owner's rulings hold at once: *"once the store or employee is made inactive their data should
+[not] be shwoing on any module unless the checkox is clicked"* (§CORE-45) and
+`roster_visibility`'s own *"a report that quietly drops a closed store's September money is a report
+that lies about September"*.
+
+### §ACCOUNT-04.3 The fix, and where each rule now lives
+
+- `store_identity_index(mapping_rows, resolve=None, include_inactive=True)` indexes **every** row.
+  Each identity carries `is_active`, **read from `core.roster_visibility.is_active`** (§CORE-45) and
+  not spelled a second time, so NULL means active and the string `'false'` does not. A store with
+  one live row anywhere is live, and the live row folds FIRST so the identity a reader gets is the
+  live store's. A caller that wants a LIST rather than a lookup passes `include_inactive=False`.
+- `commcalc/gp_report.calc_gp_report` makes closure a **ROW rule on the row's own money**: a closed
+  store is listed for every period it HAS data in and dropped only when it has none. Nothing the
+  test skips is counted in any total.
+- `store_identity.shared_identity_pairs` still narrows to live rows, **explicitly excused**: it is a
+  WITHHOLDING relation (a caller reading it suppresses a real cross-address finding), and a closed
+  row at an old address is precisely the relocation shape it looks for, so broadening it is a
+  money-visible change to be measured on its own rather than carried in on an identity fix. Its own
+  copy of the predicate is gone; it reads the §CORE-45 home too.
+
+### §ACCOUNT-04.4 What this MOVES, and it is surfaced not silent
+
+The Gross Profit report's expense column rises by the table in §ACCOUNT-04.1 and displayed gross
+profit falls by the same amounts, at four LuxeLink stores in July, August and October 2026. Nothing
+moves BETWEEN stores and no figure is created: every dollar is already on the Expenses sheet and
+already in the P&L, which is why this makes the two reports agree instead of disagree. The GP report
+is computed live, so it lands on deploy with no Recompute. The other three tenants hold zero closed
+mapping rows, so nothing of theirs changes.
+
+### §ACCOUNT-04.5 Duplicate check (build gate) — what was checked, what was reused
+
+Searched the index for an existing home for "is this store still active": **§CORE-45**
+(`core/roster_visibility` — `is_active`, `visible`, `INCLUDE_INACTIVE_PARAM`), which is DEREFERENCED
+here rather than restated, and whose `include_inactive` spelling is the one this index now uses.
+Searched for an existing home for store identity: **§64 / §ACCOUNT-01**, which is the file being
+fixed — no sibling was created. §COMMCALC-18 (the per-store expense fold) is the rule this restores
+rather than a second copy of it. No new table, no new endpoint, no migration.
+
+### §ACCOUNT-04.6 What the lock holds
+
+`harness_gp_store_identity.py` **§B (rewritten) and §I (new)**, 61 checks up from 56: the closed
+store HAS an identity and says it is closed; a narrowed list is the only thing that hides it; NULL
+and `'false'`; one live row among closed ones; the live row folded first; the withholding relation
+proven still narrow; and, through the real `calc_gp_report`, the closed store's $6,352.09 booked and
+in the report's own total, dropped only when the period is empty, while a LIVE empty store is still
+listed. Tests: `backend/tests/unit/test_closed_store_identity.py` (17).
+
+**Cross-references:** §ACCOUNT-03 (the labour authority this completes) · §CORE-45 (the visibility
+home) · §64 / §ACCOUNT-01 (the identity home) · §COMMCALC-18 (the per-store expense fold) · §19.18
+(one fact, one home, dereferenced) · §19.49 (unkeyable is not zero).
+
 ## §CORE-44. THE PREFIX IS THE ADDRESS, AND A MISSING ROUTE IS NOT AN ANSWER (owner report 2026-11-14)
 
 Owner: *"the targets are also not updating in target settings and daily targets, seem to be the same
