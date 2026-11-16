@@ -315,7 +315,7 @@ def store_state(code, auth, hours, carried_from, is_active=True):
 def labour_coverage(store_codes, exp_rows, shifts, payroll_names, period,
                     carried_from=None, active_codes=None, hours_basis_cfg=None,
                     evidence=None, hours_interlock=None, measured_by_code=None,
-                    measured_key_of=None):
+                    measured_key_of=None, authority=None):
     """PURE: the whole report. DISPLAY-ONLY — moves no figure.
 
     Returns {'period', 'carried_from', 'scanned', 'states': {code: state},
@@ -378,7 +378,7 @@ def labour_coverage(store_codes, exp_rows, shifts, payroll_names, period,
     # space, chosen by the caller — the `commission_expense_by_key` pattern, not a second one.
     _evm = entered_vs_measured(payroll_expense_by_key(exp_rows, measuring, key_of=measured_key_of),
                                measured_by_code, allocated_excluded=sorted(allocated),
-                               carried_from=carried_from)
+                               carried_from=carried_from, authority=authority)
     if _evm.get("note") and _evm["verdict"] == VERDICT_MEASURED:
         _note = " ".join(x for x in (_note, _evm["note"]) if x)
     if _lock.get("refused") and _lock.get("reason"):
@@ -388,6 +388,35 @@ def labour_coverage(store_codes, exp_rows, shifts, payroll_names, period,
             "scanned": len(codes), "states": states, "detail": detail,
             "counts": counts, "gaps": gaps, "allocated_names": sorted(allocated),
             "hours_interlock": _lock or None, "entered_vs_measured": _evm, "note": _note}
+
+
+def superseded_row(plan, expense_name=None, source_key=None, key=None):
+    """PURE: does THIS typed expense row stop booking, because the Payroll Report measured the same
+    labour? The ONE test, dereferenced by every reader that applies a `measured_fill` plan — the
+    P&L's booking loop in `coa.build_inputs` and the Gross Profit sheet through
+    `labour_actuals.without_superseded`. Neither re-derives it (owner directive 2026-09-20: one
+    fact, one home, dereferenced).
+
+    It mirrors `payroll_expense_by_key`'s membership test exactly, because the dollars reported as
+    superseded MUST be the dollars that stop booking: a platform-written payroll row counts by its
+    `source_key`, a typed row by its expense NAME, and only names in the plan's own narrowed
+    vocabulary count. A FLAT ALLOCATION (§4e) is not in that vocabulary, so a store's estate-wide
+    'DM Salaries' keeps booking even where the store's own typed salary does not — it measures no
+    store's staff, so the Payroll Report did not replace it.
+
+    `key` is the row's key IN THE PLAN'S KEY SPACE (the caller's `key_of` output). A row whose key
+    was never superseded books unchanged, which is the owner's carve-out for a store not running
+    payroll.
+    """
+    sup = (plan or {}).get("superseded") or {}
+    k = _norm(key)
+    if not k or not sup.get(k):
+        return False
+    sk = str(source_key or "").strip()
+    if sk:
+        return sk in AUTHORITATIVE_SOURCE_KEYS
+    names = {str(n).strip().lower() for n in ((plan or {}).get("superseded_names") or ())}
+    return str(expense_name or "").strip().lower() in names
 
 
 def coverage_note(scanned, counts, carried_from, period, allocated=()):
@@ -416,8 +445,44 @@ def coverage_note(scanned, counts, carried_from, period, allocated=()):
             f"cost.{tail}")
 
 
+# ── WHICH SOURCE IS THE AUTHORITY (owner decision 2026-11-16, index §ACCOUNT-06) ────────────────
+# Ruling K2 (2026-08-10) made a HAND-ENTERED payroll row outrank the platform's own measurement, to
+# stop a tenant that typed its salaries into the Expenses sheet getting the typed rows AND an
+# estimate on top. That was right while the measurement WAS an estimate. Since §STOREOPS-10 it is
+# not an estimate: the books read the Payroll Report's own producer, the figure the payroll run
+# publishes.
+#
+# So the owner was asked, with the figures, and chose **a per-tenant switch with the Payroll Report
+# on by default**: *"they should all be updated from here"*, *"payroll and commisison are running at
+# actuals"*. Live LuxeLink October 2026, the cost of the old ruling: the typed sheet carried
+# $77,668.69 LESS than the hours and punches measure, at 12 stores, and the P&L printed $57,721.13
+# of wages against a payroll that ran $121,632.67.
+#
+# These two strings are the ONE vocabulary for that choice. The house default is MEASURED, so a
+# tenant that has declared nothing — and a tenant whose config column does not exist yet — gets the
+# Payroll Report. `entered` restores ruling K2 verbatim for a tenant that asks for it.
+PAYROLL_AUTHORITY_MEASURED = "measured"
+PAYROLL_AUTHORITY_ENTERED = "entered"
+HOUSE_PAYROLL_AUTHORITY = PAYROLL_AUTHORITY_MEASURED
+PAYROLL_AUTHORITIES = (PAYROLL_AUTHORITY_MEASURED, PAYROLL_AUTHORITY_ENTERED)
+
+
+def resolve_payroll_authority(value):
+    """PURE: a stored config value -> one of PAYROLL_AUTHORITIES. Anything unrecognised, blank or
+    missing resolves to the HOUSE default, so a tenant with no row and a database without the
+    column behave identically and neither can land in a third state."""
+    v = str(value or "").strip().lower()
+    return v if v in PAYROLL_AUTHORITIES else HOUSE_PAYROLL_AUTHORITY
+
+
+def entered_outranks(authority=None):
+    """PURE: does a typed payroll row outrank the Payroll Report for this tenant? The ONE predicate
+    every reader asks — nobody compares the string themselves."""
+    return resolve_payroll_authority(authority) == PAYROLL_AUTHORITY_ENTERED
+
+
 def measured_fill(entered_rows, measured_by_key, payroll_names,
-                  grain=None, key_of=None):
+                  grain=None, key_of=None, authority=None):
     """THE one decision: whose labour figure books this store-month — the ENTERED (approved) figure,
     or the platform's own measurement. Returns the measurement that may be ADDED, and the dollars it
     refuses to add a second time. PURE; derives no dollar of its own.
@@ -474,10 +539,20 @@ def measured_fill(entered_rows, measured_by_key, payroll_names,
         except Exception:
             return _norm(v)
 
-    auth = {k for k in (_fold(c) for c in authoritative_codes(entered_rows, measuring)) if k}
+    authority = resolve_payroll_authority(authority)
+    # UNDER THE PAYROLL REPORT'S AUTHORITY NOTHING IS SUPPRESSED. The entered rows do not outrank
+    # the measurement, so no store's measured figure is held back; what stops booking instead is the
+    # TYPED ROW, named in `superseded` below so both readers drop the same dollars.
+    auth = ({k for k in (_fold(c) for c in authoritative_codes(entered_rows, measuring)) if k}
+            if entered_outranks(authority) else set())
     if measured_by_key is None:
+        # NOTHING WAS MEASURED, so nothing can supersede a typed row either — whatever is on the
+        # Expenses sheet is the only labour figure there is, and it keeps booking under either
+        # authority. Superseding it here would delete a real cost and book nothing back.
         return {"fill": {}, "fill_amount": None, "suppressed": [], "suppressed_by_key": {},
                 "unattributed": {}, "unattributed_amount": None, "suppressed_amount": None,
+                "superseded": {}, "superseded_amount": None, "superseded_names": [],
+                "authority": authority,
                 "grain": grain, "measured": False, "allocated_excluded": sorted(allocated),
                 "note": ("Labour could not be measured for this period, so no store's hours were "
                          "added. This is not a finding that they cost nothing.")}
@@ -504,13 +579,39 @@ def measured_fill(entered_rows, measured_by_key, payroll_names,
             continue
         fill[key] = round(fill.get(key, 0.0) + _f(amt), 2)
     sup_amt = round(sum(suppressed.values()), 2)
+    #: THE TYPED ROWS THAT STOP BOOKING, under the Payroll Report's authority. Named here so that
+    #: BOTH readers drop the same dollars — the defect this module exists to prevent is one reader
+    #: deciding and the other summing the sheet.
+    #:
+    #: NEVER A SILENT DELETION (the same rule `suppression_plan` keeps for commission): a typed row
+    #: is superseded only at a store the Payroll Report actually measured a non-zero figure for.
+    #: A store with a typed salary and NO measurement KEEPS its row — dropping it would delete a
+    #: real cost and book nothing in its place, which is the silent zero §19.50 forbids.
+    superseded = {}
+    if not entered_outranks(authority):
+        for key, amt in payroll_expense_by_key(entered_rows, measuring, key_of=key_of).items():
+            if fill.get(key):
+                superseded[key] = round(_f(amt), 2)
+    sprs_amt = round(sum(superseded.values()), 2)
     note = None
     if suppressed:
         note = (f"${sup_amt:,.2f} of measured payroll at {len(suppressed)} store(s) is NOT added: "
                 f"those stores have an entered payroll figure of their own, which is the approved "
                 f"salary and books on its own row. Adding both would count the same labour twice.")
+    elif superseded:
+        note = (f"The Payroll Report is this tenant's salary authority, so the payroll it measured "
+                f"books and the ${sprs_amt:,.2f} typed into the Expenses sheet at "
+                f"{len(superseded)} store(s) does not — the same labour, from the source that runs "
+                f"it. A store whose payroll was NOT measured keeps whatever was typed for it.")
     return {"fill": fill, "fill_amount": round(sum(fill.values()), 2),
             "suppressed": sorted(suppressed), "suppressed_by_key": suppressed,
+            "superseded": superseded, "superseded_amount": sprs_amt,
+            #: THE NAMES the decision was made over — the SAME narrowed vocabulary the dollars were
+            #: summed from, so a reader applying the plan row by row drops exactly the rows that
+            #: were counted. Handing back only the dollars is how one reader dropped a flat
+            #: allocation the other had not counted (§4e); `superseded_row` below is the one test.
+            "superseded_names": sorted(measuring),
+            "authority": resolve_payroll_authority(authority),
             "unattributed": unattributed,
             "unattributed_amount": round(sum(unattributed.values()), 2),
             "suppressed_amount": sup_amt,
@@ -567,7 +668,7 @@ MATERIAL_MIN_GAP = 1.0
 
 def entered_vs_measured(entered_by_key, measured_by_key,
                         tolerance_pct=MATERIAL_TOLERANCE_PCT, min_gap=MATERIAL_MIN_GAP,
-                        allocated_excluded=(), carried_from=None):
+                        allocated_excluded=(), carried_from=None, authority=None):
     """PURE: an ENTERED salary figure against the salary the platform MEASURES for the same month.
     DISPLAY-ONLY — moves no figure and nets nothing.
 
@@ -633,10 +734,19 @@ def entered_vs_measured(entered_by_key, measured_by_key,
             bits.append(f"${under:,.2f} LESS than the hours and punches measure")
         if over:
             bits.append(f"${over:,.2f} MORE than the hours and punches measure")
+        # WHICH WAY THE SENTENCE RUNS DEPENDS ON WHICH SOURCE WINS (§ACCOUNT-06). Saying "the
+        # figure on screen is whatever was last saved to the Expenses sheet" under the Payroll
+        # Report's authority would be the opposite of what the reader is looking at — a right
+        # number nobody can explain is the thing this house does not ship.
+        _tail = (" An entered payroll figure outranks the platform's own measurement, so the "
+                 "figure on screen is whatever was last saved to the Expenses sheet — re-fill the "
+                 "salaries for this month, or the labour cost here is not this month's."
+                 if entered_outranks(authority) else
+                 " The Payroll Report is this tenant's salary authority, so the figure on screen is "
+                 "the measured one and the typed rows are reference only — this is a gap between "
+                 "the sheet and the payroll, not a gap in what you are reading.")
         note = (f"The entered salary at {len(stores)} store(s) carries " + " and ".join(bits)
-                + ". An entered payroll figure outranks the platform's own measurement, so the "
-                  "figure on screen is whatever was last saved to the Expenses sheet — re-fill the "
-                  "salaries for this month, or the labour cost here is not this month's.")
+                + "." + _tail)
     return {"verdict": VERDICT_MEASURED, "stores": stores,
             "total_understated": under, "total_overstated": over,
             "unmeasured_keys": sorted(unmeasured),

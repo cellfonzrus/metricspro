@@ -745,7 +745,13 @@ K_SHEET = [expense("Diversey", "Employee Salaries", 6033.26),
            expense("Narragansett", "Rent / Lease", 3840.00)]      # no salary row at all
 K_MEASURED = {"Diversey": 12555.70, "Belmont": 7097.48,
               "Irving Park": 1077.04, "Narragansett": 1128.22}
-k = lc.measured_fill(K_SHEET, K_MEASURED, PAYROLL_NAMES, grain="store")
+#: §K PROVES RULING K2 (2026-08-10) — a typed payroll row outranking the measurement. The owner
+#: made that the OPT-IN authority on 2026-11-16 ("the typer paytol was only for reference take it
+#: out, only use that if the store is not running payroll"), so every check here is pinned to it
+#: EXPLICITLY. Pinning rather than deleting is the point: a tenant can still ask for this, and the
+#: day one does, these are the claims that have to hold. The new default is proved in §L.
+_K2 = lc.PAYROLL_AUTHORITY_ENTERED
+k = lc.measured_fill(K_SHEET, K_MEASURED, PAYROLL_NAMES, grain="store", authority=_K2)
 ok("K1 THE REGRESSION — a store with an approved figure contributes NO measured hours",
    sorted(k["suppressed"]), ["Belmont", "Diversey"])
 near("K2 …and the dollars refused are REPORTED, never quietly dropped",
@@ -763,41 +769,41 @@ ok("K6 the plan books nothing of its own — no key on it could post a dollar",
 ok("K7 a zero-amount payroll row is not an approved figure",
    "Irving Park" in lc.measured_fill(
        K_SHEET + [expense("Irving Park", "Employee Salaries", 0.0)],
-       K_MEASURED, PAYROLL_NAMES, grain="store")["fill"], True)
+       K_MEASURED, PAYROLL_NAMES, grain="store", authority=_K2)["fill"], True)
 ok("K8 a PRODUCER row is an approved figure with no vocabulary at all",
    lc.measured_fill([expense("Irving Park", "x", 9000.0, source_key="payroll_gross")],
-                    K_MEASURED, [], grain="store")["fill"].get("Irving Park"), None)
+                    K_MEASURED, [], grain="store", authority=_K2)["fill"].get("Irving Park"), None)
 
 # GRAIN is the org's own `payroll_authority_grain`, and the HOUSE value is DEREFERENCED, never
 # respelled here — a second spelling of it is how an org-grain tenant silently went per-store.
 ok("K9 org grain: ONE approved row anywhere suppresses every store's measurement",
-   lc.measured_fill(K_SHEET, K_MEASURED, PAYROLL_NAMES, grain="org")["fill"], {})
+   lc.measured_fill(K_SHEET, K_MEASURED, PAYROLL_NAMES, grain="org", authority=_K2)["fill"], {})
 ok("K10 org grain with NO approved row anywhere fills every store",
    lc.measured_fill([expense("Diversey", "Rent / Lease", 10.0)], K_MEASURED, PAYROLL_NAMES,
-                    grain="org")["fill"], K_MEASURED)
+                    grain="org", authority=_K2)["fill"], K_MEASURED)
 ok("K11 the house grain is dereferenced from the vocabulary home",
-   lc.measured_fill(K_SHEET, K_MEASURED, PAYROLL_NAMES)["grain"], _lv.HOUSE_AUTHORITY_GRAIN)
+   lc.measured_fill(K_SHEET, K_MEASURED, PAYROLL_NAMES, authority=_K2)["grain"], _lv.HOUSE_AUTHORITY_GRAIN)
 
 # THE KEY SPACE. Live, the sheet spells one store `Utica` and `store_mapping` spells it
 # `LUX-NY-UTICA`. Deciding in two key spaces is how one store answered twice.
 K_FOLD = {"Utica": "utica", "LUX-NY-UTICA": "utica"}.get
 k_fold = lc.measured_fill([expense("Utica", "Employee Salaries", 1365.00)],
-                          {"LUX-NY-UTICA": 3888.74}, PAYROLL_NAMES, grain="store", key_of=K_FOLD)
+                          {"LUX-NY-UTICA": 3888.74}, PAYROLL_NAMES, grain="store", key_of=K_FOLD, authority=_K2)
 ok("K12 both sides fold through the caller's key_of before the decision is made",
    [k_fold["fill"], k_fold["suppressed"]], [{}, ["utica"]])
 near("K13 …and the refused dollars are counted in that same folded space, not looked back up",
      k_fold["suppressed_amount"], 3888.74)
 ok("K14 WITHOUT the fold the same rows double-book — the mechanism itself is pinned",
    lc.measured_fill([expense("Utica", "Employee Salaries", 1365.00)],
-                    {"LUX-NY-UTICA": 3888.74}, PAYROLL_NAMES, grain="store")["fill"],
+                    {"LUX-NY-UTICA": 3888.74}, PAYROLL_NAMES, grain="store", authority=_K2)["fill"],
    {"LUX-NY-UTICA": 3888.74})
 
 # RULE TWO / §COMMCALC-49.10 — one tenant's payroll vocabulary never decides another's fill.
 ok("K15 a payroll word this tenant did not declare confers no authority here",
    "Diversey" in lc.measured_fill([expense("Diversey", "Employee Salaries", 6033.26)],
-                                  K_MEASURED, ["Staff Wages"], grain="store")["fill"], True)
+                                  K_MEASURED, ["Staff Wages"], grain="store", authority=_K2)["fill"], True)
 ok("K16 nothing declared means nothing approved — never a fall back to house words",
-   lc.measured_fill(K_SHEET, K_MEASURED, [], grain="store")["fill"], K_MEASURED)
+   lc.measured_fill(K_SHEET, K_MEASURED, [], grain="store", authority=_K2)["fill"], K_MEASURED)
 
 # A FLAT ALLOCATION IS NOT AN APPROVED FIGURE — §4e's ruling reused, never made a second time.
 # Live: LuxeLink charges `DM Salaries` at an identical $1,275.00 to every store. October 2026,
@@ -805,7 +811,7 @@ ok("K16 nothing declared means nothing approved — never a fall back to house w
 K_ALLOC = [expense(c, "DM Salaries", 1275.00) for c in ("a", "b", "c", "d")]
 K_ALLOC.append(expense("a", "Employee Salaries", 5000.00))
 k_alloc = lc.measured_fill(K_ALLOC, {c: 7000.0 for c in ("a", "b", "c", "d")},
-                           PAYROLL_NAMES, grain="store")
+                           PAYROLL_NAMES, grain="store", authority=_K2)
 ok("K17 a store carrying ONLY the estate-wide allocation still books its hours",
    k_alloc["fill"], {"b": 7000.0, "c": 7000.0, "d": 7000.0})
 ok("K18 …and the excluded name is reported, so the screen can say why",
@@ -833,7 +839,7 @@ ok("K21 …and says so in words, so no screen can render it as $0.00 of labour",
 # §STOREOPS-09). The caller books it only where nothing was suppressed, which is the rule the P&L's
 # company-wide cell has always used, so both readers decide alike.
 K_CW = dict(K_MEASURED); K_CW[None] = 6500.00
-k_cw = lc.measured_fill(K_SHEET, K_CW, PAYROLL_NAMES, grain="store")
+k_cw = lc.measured_fill(K_SHEET, K_CW, PAYROLL_NAMES, grain="store", authority=_K2)
 ok("K22 unattributable pay is not a store's fill",
    sorted(k_cw["fill"]), ["Irving Park", "Narragansett"])
 near("K23 …and it is reported with its dollars rather than dropped",
@@ -841,7 +847,7 @@ near("K23 …and it is reported with its dollars rather than dropped",
 ok("K24 …and it is NOT counted as refused either (it pairs with no approved figure)",
    k_cw["suppressed_amount"], k["suppressed_amount"])
 ok("K25 nothing measurable at all leaves it None, not 0.00",
-   lc.measured_fill(K_SHEET, None, PAYROLL_NAMES)["unattributed_amount"], None)
+   lc.measured_fill(K_SHEET, None, PAYROLL_NAMES, authority=_K2)["unattributed_amount"], None)
 
 # A FOLD THAT RAISES must not lose a store's money: the decision falls back to the raw spelling,
 # which is the same contract `labour_actuals.as_expense_rows`' relabel keeps (its §D16).
@@ -849,6 +855,194 @@ ok("K26 a key_of that raises leaves the key as it was rather than dropping the d
    lc.measured_fill([], {"Irving Park": 1077.04}, PAYROLL_NAMES, grain="store",
                     key_of=lambda _: (_ for _ in ()).throw(ValueError("boom")))["fill"],
    {"Irving Park": 1077.04})
+
+# ══ §L — THE PAYROLL REPORT IS THE AUTHORITY (owner ruling 2026-11-16, index §ACCOUNT-06) ══════
+# *"the typer paytol was only for reference take it out, only use that if the store is not running
+# payroll"*, and on the card that asked which source outranks which: "Per-tenant switch, Payroll on
+# by default". §K above is the SAME fixtures under the opt-in authority; this is the default.
+ok("L1 the HOUSE authority is the Payroll Report — a tenant that declared nothing gets it",
+   lc.resolve_payroll_authority(None), lc.PAYROLL_AUTHORITY_MEASURED)
+ok("L2 …and so does a value this platform does not recognise, so a typo is never a third state",
+   lc.resolve_payroll_authority("whatever"), lc.PAYROLL_AUTHORITY_MEASURED)
+ok("L3 a tenant that asks for the typed sheet gets ruling K2 back, verbatim",
+   lc.resolve_payroll_authority("ENTERED "), lc.PAYROLL_AUTHORITY_ENTERED)
+ok("L4 one predicate answers it, and nobody compares the string themselves",
+   (lc.entered_outranks(None), lc.entered_outranks("entered")), (False, True))
+
+_l = lc.measured_fill(K_SHEET, K_MEASURED, PAYROLL_NAMES, grain="store")
+ok("L5 NOTHING is suppressed: a typed row no longer holds back a store's measured payroll",
+   (_l["suppressed"], _l["suppressed_amount"]), ([], 0.0))
+ok("L6 …so every measured store's own figure books, including the two §K held back",
+   _l["fill"], K_MEASURED)
+near("L7 …which is the whole measurement, not a part of it", _l["fill_amount"],
+     round(sum(K_MEASURED.values()), 2))
+ok("L8 the TYPED rows at those stores are named as superseded instead — the same labour, once",
+   sorted(_l["superseded"]), ["Belmont", "Diversey"])
+near("L9 …with the dollars that stop booking, so a reader can explain the move",
+     _l["superseded_amount"], 8749.76)   # 6033.26 + 1275.00 + 166.50 + 1275.00
+ok("L9a …and the dollars reported are the dollars a reader applying the plan ROW BY ROW drops",
+   round(sum(float(r["amount"]) for r in K_SHEET
+             if lc.superseded_row(_l, expense_name=r["expense_name"],
+                                  source_key=r.get("source_key"),
+                                  key=r["store_code"])), 2), _l["superseded_amount"])
+
+# ── A FLAT ALLOCATION IS NOT A STORE'S OWN PAYROLL, SO THE REPORT NEVER REPLACED IT (§4e) ──────
+# Two stores paying the same $1,275.00 prove nothing, which is why §K's fixture supersedes its
+# 'DM Salaries' with the rest. At the live threshold (one identical amount at 3+ stores, §4e) the
+# name IS an allocation: the Payroll Report measures a store's own staff and never that spread, so
+# dropping it would delete a real cost and book nothing back. It keeps booking — and because the
+# plan names the vocabulary it decided over, a reader applying it row by row keeps it too.
+L_ALLOC_SHEET = [expense("Diversey", "Employee Salaries", 6033.26),
+                 expense("Belmont", "Employee Salaries", 166.50),
+                 expense("Diversey", "DM Salaries", 1275.00),
+                 expense("Belmont", "DM Salaries", 1275.00),
+                 expense("Irving Park", "DM Salaries", 1275.00),
+                 expense("Narragansett", "DM Salaries", 1275.00)]
+_l_alloc = lc.measured_fill(L_ALLOC_SHEET, K_MEASURED, PAYROLL_NAMES, grain="store")
+ok("L10 the allocation is detected and held OUT of the vocabulary the plan decided over",
+   ("dm salaries" in _l_alloc["allocated_excluded"],
+    "dm salaries" in _l_alloc["superseded_names"]), (True, False))
+near("L10a …so only the stores' OWN typed salary stops booking, not the spread",
+     _l_alloc["superseded_amount"], 6199.76)   # 6033.26 + 166.50
+ok("L10b …and the one test says so row by row, at a store that IS superseded",
+   (lc.superseded_row(_l_alloc, expense_name="DM Salaries", key="Diversey"),
+    lc.superseded_row(_l_alloc, expense_name="Employee Salaries", key="Diversey")),
+   (False, True))
+ok("L10c a platform-WRITTEN payroll row goes by its source key, as the dollars were summed",
+   (lc.superseded_row(_l_alloc, expense_name="Anything At All",
+                      source_key=sorted(lc.AUTHORITATIVE_SOURCE_KEYS)[0], key="Diversey"),
+    lc.superseded_row(_l_alloc, expense_name="Employee Salaries",
+                      source_key="some-other-feed", key="Diversey")), (True, False))
+ok("L10d a row at a store the plan never superseded is never dropped, whatever it is named",
+   lc.superseded_row(_l_alloc, expense_name="Employee Salaries", key="Irving Park"), False)
+ok("L11 the plan says which authority it decided under, so a caller never has to assume",
+   (_l["authority"], lc.measured_fill(K_SHEET, K_MEASURED, PAYROLL_NAMES,
+                                      authority="entered")["authority"]),
+   (lc.PAYROLL_AUTHORITY_MEASURED, lc.PAYROLL_AUTHORITY_ENTERED))
+ok("L12 the note says which source won, rather than the §K sentence pointing the other way",
+   bool(_l["note"]) and "Payroll Report" in _l["note"]
+   and "typed into the Expenses sheet" in _l["note"], True)
+
+# ── A STORE NOT RUNNING PAYROLL IS THE CASE THE OWNER KEPT THE TYPED FIGURE FOR ────────────────
+# The ruling is conditional, and this is the condition. Superseding a typed row at a store the
+# Payroll Report did not measure would delete a real cost and book nothing back — the silent zero
+# §19.50 forbids, in the direction that makes a store look profitable.
+_l_unmeasured = lc.measured_fill(
+    [expense("Diversey", "Employee Salaries", 6033.26),
+     expense("Closed Store", "Employee Salaries", 4100.00)],
+    {"Diversey": 12555.70}, PAYROLL_NAMES, grain="store")
+ok("L13 a store with NO measured payroll keeps its typed row — it is not superseded",
+   sorted(_l_unmeasured["superseded"]), ["Diversey"])
+ok("L14 …and the measured store's typed row still goes, so the condition cuts one way only",
+   _l_unmeasured["superseded"]["Diversey"], 6033.26)
+_l_zero = lc.measured_fill([expense("Quiet", "Employee Salaries", 900.00)],
+                           {"Quiet": 0.0}, PAYROLL_NAMES, grain="store")
+ok("L15 a MEASURED ZERO does not supersede either — $0.00 is not evidence the store was paid",
+   _l_zero["superseded"], {})
+ok("L16 nothing measured at all supersedes nothing, whatever the sheet says (§19.50)",
+   lc.measured_fill(K_SHEET, None, PAYROLL_NAMES)["superseded"], {})
+ok("L17 …and that is reported as unknown, never as $0.00 of superseded dollars",
+   lc.measured_fill(K_SHEET, None, PAYROLL_NAMES)["superseded_amount"], None)
+
+# ── BOTH SIDES OF THE DECISION ARE FOLDED, as everywhere else in this module ──────────────────
+_l_fold = lc.measured_fill([expense("Utica", "Employee Salaries", 1365.00)],
+                           {"531 Utica Ave": 2200.00}, PAYROLL_NAMES, grain="store",
+                           key_of=lambda c: {"Utica": "LUX-NY-UTICA",
+                                             "531 Utica Ave": "LUX-NY-UTICA"}.get(c, c))
+ok("L18 the typed row and the measurement meet in the caller's ONE key space",
+   (sorted(_l_fold["superseded"]), _l_fold["superseded_amount"]), (["LUX-NY-UTICA"], 1365.00))
+ok("L19 …and the measured figure is what books there",
+   _l_fold["fill"], {"LUX-NY-UTICA": 2200.00})
+
+# ── THE OPT-IN AUTHORITY IS BYTE-IDENTICAL TO THE DAY BEFORE ──────────────────────────────────
+# A tenant that asks for the typed sheet must get exactly ruling K2, with nothing superseded, or
+# the switch is not a switch.
+_l_k2 = lc.measured_fill(K_SHEET, K_MEASURED, PAYROLL_NAMES, grain="store", authority="entered")
+ok("L20 under the opt-in authority nothing is superseded at all",
+   (_l_k2["superseded"], _l_k2["superseded_amount"]), ({}, 0.0))
+ok("L21 …and the suppression §K proves is back, unchanged",
+   (sorted(_l_k2["suppressed"]), _l_k2["fill"]), (sorted(k["suppressed"]), k["fill"]))
+
+# ── THE SENTENCE RUNS THE WAY THE BOOKING DOES ────────────────────────────────────────────────
+_evm_kw = {"entered_by_key": {"Diversey": 6033.26}, "measured_by_key": {"Diversey": 12555.70}}
+ok("L22 under the typed sheet's authority the banner still says the sheet is what you are reading",
+   "whatever was last saved to the Expenses sheet"
+   in lc.entered_vs_measured(authority="entered", **_evm_kw)["note"], True)
+ok("L23 under the Payroll Report's authority it says the opposite, because the figures did",
+   "the figure on screen is the measured one"
+   in lc.entered_vs_measured(**_evm_kw)["note"], True)
+ok("L24 …and it still reports the gap, which is a sheet to collect, not a figure to doubt",
+   lc.entered_vs_measured(**_evm_kw)["total_understated"], 6522.44)
+
+# ══ §M — THE LOCK: THE WIRING CANNOT COME UNDONE (owner directive 2026-09-20) ═══════════════════
+# "A design fix ships with a check that FAILS THE BUILD if a caller stops dereferencing the shared
+# fact, or if a second copy appears." These are the checks. They read source, so they fail the build
+# the moment a reader starts deciding for itself which typed rows stop booking.
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def _src(rel):
+    with open(os.path.join(_ROOT, rel), "r", encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _code_only(src):
+    """The module's CODE, with comments and docstrings removed. RULE TWO bans a tenant's name in
+    code; a comment that NAMES the tenant the defect was measured on is evidence, and the house
+    rules require it. A lock that cannot tell them apart would punish the evidence."""
+    import ast as _ast
+    import io as _io
+    import tokenize as _tok
+    skip = set()
+    for node in _ast.walk(_ast.parse(src)):
+        if (isinstance(node, _ast.Expr) and isinstance(node.value, _ast.Constant)
+                and isinstance(node.value.value, str)):
+            for ln in range(node.lineno, (node.end_lineno or node.lineno) + 1):
+                skip.add(ln)
+    out = []
+    for t in _tok.generate_tokens(_io.StringIO(src).readline):
+        if t.type == _tok.COMMENT or t.start[0] in skip:
+            continue
+        out.append(t.string)
+    return " ".join(out)
+
+
+_COA = _src("app/modules/account/coa.py")
+_ACT = _src("app/modules/commcalc/labour_actuals.py")
+_LCOV = _src("app/modules/commcalc/labour_coverage.py")
+_ROUTER = _src("app/modules/commcalc/router.py")
+
+ok("M1 the P&L's booking loop DEREFERENCES the one test",
+   "superseded_row(" in _COA, True)
+ok("M2 …and the Gross Profit sheet dereferences the SAME one",
+   "_lcov.superseded_row(" in _ACT, True)
+ok("M3 neither reader holds a membership rule of its own — no second copy to drift",
+   ('(_fill_plan.get("superseded") or {}).get(' not in _COA
+    and 'payroll_names") or ()' not in _ACT.split("def without_superseded")[1].split("def ")[0]),
+   True)
+ok("M4 the one test lives in the one home, with the plan that produced it",
+   "def superseded_row(" in _LCOV and "def superseded_row(" not in _COA + _ACT + _ROUTER, True)
+ok("M5 RULE TWO — no tenant, carrier, store or product name in CODE (comments are evidence)",
+   not any(w in _code_only(_LCOV).lower()
+           for w in ("luxelink", "cellfonz", "vzone", "boost", "total wireless")), True)
+ok("M6 nobody outside the home compares the authority string themselves",
+   all(('"entered"' not in _code_only(f) and "'entered'" not in _code_only(f))
+       for f in (_COA, _ACT, _ROUTER)), True)
+ok("M7 the house default is the Payroll Report, spelled ONCE",
+   (lc.HOUSE_PAYROLL_AUTHORITY, _LCOV.count('PAYROLL_AUTHORITY_MEASURED = ')), ("measured", 1))
+
+# ── THE MIGRATION (it is the SWITCH, never the ruling — the code ships the default) ────────────
+_MIG = _src("../database/migrations/1122_payroll_authority_source.sql").lower()
+ok("M8 the migration is additive and idempotent, so a re-run is safe",
+   ("add column if not exists" in _MIG and "drop column" not in _MIG.split("-- revert")[0]), True)
+ok("M9 …carries a REVERT note",
+   "-- revert:" in _MIG, True)
+ok("M10 …constrains the column to exactly the values the code understands",
+   all(v in _MIG for v in ("'measured'", "'entered'")) and "check (" in _MIG, True)
+ok("M11 …and grants what it touches (house convention: PostgREST reaches every relation)",
+   "to service_role" in _MIG, True)
+ok("M12 the ruling needs NO migration to take effect — the house default is in the code",
+   lc.resolve_payroll_authority(None), lc.PAYROLL_AUTHORITY_MEASURED)
 
 # ── report ────────────────────────────────────────────────────────────────────────────────────
 print("=" * 78)

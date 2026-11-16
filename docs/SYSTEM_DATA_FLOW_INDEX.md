@@ -26544,6 +26544,7 @@ status word rather than a blank that reads as nil.
 | STOREOPS-08 | storeops |
 | STOREOPS-09 | storeops, account |
 | STOREOPS-10 | storeops, account |
+| ACCOUNT-06 | account, commcalc |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -49801,3 +49802,105 @@ store-month — unchanged; this changes which measurement it is handed) · §ACC
 visibility) · §64 (which store is this string) · §19.18 (one fact, one home, dereferenced) · §19.50
 (an absence is reported with its reason) · §16 (reports) · §17 (endpoints) · §18 (tables — none
 added: this change ships no migration).
+
+
+## §ACCOUNT-06. WHICH SOURCE IS A TENANT'S SALARY AUTHORITY (owner ruling 2026-11-16)
+
+Owner, verbatim: *"the typer paytol was only for reference take it out, only use that if the store
+is not running payroll"* — and, on the decision card that asked which source should outrank which,
+**"Per-tenant switch, Payroll on by default"**.
+
+### THE DEFECT this closes
+
+§STOREOPS-10 made the books read the Payroll Report's own figure, and September and November
+immediately booked it to the cent. **October did not.** Ruling K2 (2026-08-10) made a hand-entered
+payroll row OUTRANK the platform's measurement, and October carries typed salary rows where
+September and November carry none — so whether a store's real payroll reached the P&L depended on
+whether somebody had typed something into the Expenses sheet that month. Measured live, LuxeLink
+October 2026:
+
+| | |
+|---|---|
+| Payroll Report (what the run paid) | **$121,632.67** |
+| what the P&L's `wages` line booked | **$57,721.13** |
+| the typed sheet's shortfall, 12 stores | **$77,668.69** |
+
+Ruling K2 was RIGHT while the measurement was an estimate — it stopped a tenant that typed its
+salaries getting the typed rows AND a shifts × rate estimate on top. Since §STOREOPS-10 the
+measurement is not an estimate: it is the figure the payroll run publishes. So the ruling is kept,
+as the OPT-IN, and the Payroll Report becomes the house default.
+
+### ACCOUNT-06.1 Duplicate check (the build gate)
+
+Searched the index for an existing mechanism answering "whose labour figure books this store-month"
+before building. FOUND and EXTENDED, not joined:
+
+* §ACCOUNT-03 `commcalc/labour_coverage.measured_fill` — exactly that question, already the one home
+  both readers dereference. The authority is a new ARGUMENT to it, resolved inside it; no second
+  decision point exists and none was created.
+* §ACCOUNT-02 `labour_vocabulary.resolve` — the one home for a tenant's labour declarations. The new
+  setting is published through it with the rest, so a caller reads one resolved config.
+* §4e `allocated_names` — "a flat allocation is not a measurement of a store's own staff". Reused
+  verbatim; it is what keeps an estate-wide `DM Salaries` booking.
+* §19.50 — absence is never zero. Reused: nothing measured supersedes nothing.
+
+No new report, endpoint, table or derivation. One migration adds ONE column.
+
+### ACCOUNT-06.2 The mechanism
+
+`commcalc/labour_coverage` is the one home, and nothing outside it compares the string:
+
+* `PAYROLL_AUTHORITY_MEASURED` (`'measured'`, the Payroll Report) / `PAYROLL_AUTHORITY_ENTERED`
+  (`'entered'`, ruling K2 verbatim) · `HOUSE_PAYROLL_AUTHORITY` = measured.
+* `resolve_payroll_authority(value)` — NULL, blank or an unrecognised value is the house default, so
+  a typo in the column can never put a tenant in a third state.
+* `entered_outranks(authority)` — the ONE predicate. No caller compares the string itself.
+* `measured_fill(..., authority=)` — under the house authority nothing is SUPPRESSED (every measured
+  store's own figure books) and the typed rows at those stores are returned as **`superseded`**
+  instead, with `superseded_amount` and `superseded_names`.
+* `superseded_row(plan, expense_name=, source_key=, key=)` — the ONE test for "does this typed row
+  stop booking", mirroring `payroll_expense_by_key`'s membership exactly, so **the dollars reported
+  as superseded are the dollars that stop booking**. Both readers dereference it:
+  `coa.build_inputs`' booking loop (the P&L and the dashboard) and
+  `labour_actuals.without_superseded` (the Gross Profit sheet).
+
+**NEVER A SILENT DELETION.** A typed row is superseded only at a store the Payroll Report actually
+measured a NON-ZERO figure for. A store not running payroll keeps whatever was typed for it — which
+is precisely the case the owner kept the typed figure for. A measured $0.00 is not evidence the
+store was paid, so it supersedes nothing either.
+
+**A FLAT ALLOCATION IS NEVER SUPERSEDED** (§4e reused): an estate-wide `DM Salaries` measures no
+store's own staff, so the Payroll Report did not replace it and it keeps booking. That is why
+`superseded_names` is published — a reader applying the plan row by row drops exactly the rows the
+dollars were summed from.
+
+### ACCOUNT-06.3 The per-tenant switch
+
+`commcalc.account_config.payroll_authority_source` (migration **1122**, additive + idempotent,
+check-constrained to `'measured' | 'entered' | NULL`). NULL = the house default, so **nothing has to
+run for the ruling to take effect** — the column only buys the ability for one tenant to opt BACK to
+its typed sheet. Read in `coa._account_config` through its OWN defensive query: a column added to a
+neighbouring select would take that select's other columns down with it on a pre-1122 schema
+(PostgREST fails the whole select), silently returning every tenant to the house grain and an empty
+commission vocabulary.
+
+### ACCOUNT-06.4 LIVE, before and after
+
+LuxeLink October 2026, the P&L's `wages` line: **$57,721.13 → $116,264.81**, with `902 Ave U`
+keeping its typed $6,459.55 because the Payroll Report did not measure it — the owner's carve-out,
+working.
+
+### ACCOUNT-06.5 The locks (they fail the BUILD, not the review)
+
+* `harness_labour_coverage.py` §L (L1–L24 + the row-level tests) — the new default, the superseded
+  plan, the unmeasured-store carve-out, the flat allocation, the key-space fold, and the flipped
+  banner. §K is UNCHANGED and pinned to `authority='entered'`: ruling K2 still has to hold, byte for
+  byte, the day a tenant asks for it.
+* `harness_labour_vocabulary.py` — proves the setting resolves through `coa._account_config` on a
+  schema that does NOT have the column.
+
+Cross-references: §ACCOUNT-02 (the labour vocabulary) · §ACCOUNT-03 (whose figure books a
+store-month — this chooses its authority) · §STOREOPS-10 / §ACCOUNT-05 (the measurement it now
+trusts) · §4e (a flat allocation is not a measurement) · §19.18 (one fact, one home, dereferenced) ·
+§19.50 (absence is never zero) · §16 (reports — none added) · §17 (endpoints — none added) · §18
+(tables — one COLUMN added, `commcalc.account_config.payroll_authority_source`, migration 1122).

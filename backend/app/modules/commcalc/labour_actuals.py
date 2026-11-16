@@ -170,7 +170,8 @@ def series(client, org_id, periods, resolved, store_key_of=None):
     return {p: by_store(client, org_id, p, resolved, store_key_of) for p in (periods or [])}
 
 
-def salary_fill_plan(actual, resolved, booked_rows, *, key_as=None, key_canon=None, grain=None):
+def salary_fill_plan(actual, resolved, booked_rows, *, key_as=None, key_canon=None, grain=None,
+                     authority=None):
     """THE one call every caller makes before materialising a measured SALARY row: given the expense
     rows this reader is ALREADY going to sum, which stores' hours may still be added?
 
@@ -189,8 +190,48 @@ def salary_fill_plan(actual, resolved, booked_rows, *, key_as=None, key_canon=No
     measured_ok = bool((act.get("measured") or {}).get(SALARY))
     cells = ((act.get("by_half_store") or {}).get(SALARY) or {}) if measured_ok else None
     r = resolved if isinstance(resolved, dict) else {}
+    # WHICH SOURCE IS THE AUTHORITY (owner ruling 2026-11-16, §ACCOUNT-06) is the org's own
+    # declaration, carried through from the caller's resolved config — never decided here and never
+    # defaulted to a house word in this file: `measured_fill` resolves it in its one home.
     return _lcov.measured_fill(booked_rows, cells, r.get("payroll_names"),
-                               grain=(grain or r.get("grain")), key_of=(key_canon or key_as))
+                               grain=(grain or r.get("grain")), key_of=(key_canon or key_as),
+                               authority=(authority if authority is not None
+                                          else r.get("payroll_authority_source")))
+
+
+def without_superseded(booked_rows, plan, *, key_canon=None, store_col="store_code"):
+    """PURE: the caller's expense rows with the TYPED payroll rows the Payroll Report supersedes
+    taken out (owner ruling 2026-11-16: *"the typer paytol was only for reference take it out, only
+    use that if the store is not running payroll"*, index §ACCOUNT-06).
+
+    It decides NOTHING: `plan['superseded']` is `labour_coverage.measured_fill`'s answer and this is
+    the plumbing that applies it to a sheet a reader is about to sum. The P&L applies the same
+    answer in its own booking loop, so the two surfaces drop the same dollars — a reader that
+    dropped them and one that did not is the §ACCOUNT-03 defect wearing the other hat.
+
+    A store the Payroll Report did not measure never reaches `superseded`, so its typed row is
+    returned untouched: that is the case the owner kept the typed figure for. WHICH rows count is
+    `labour_coverage.superseded_row`'s answer, read from the plan's own vocabulary — this module
+    holds no second list of payroll names to drift from it.
+    """
+    from app.modules.commcalc import labour_coverage as _lcov
+    if not ((plan or {}).get("superseded") or {}):
+        return list(booked_rows or [])
+    out = []
+    for r in (booked_rows or []):
+        code = str(r.get(store_col) or "").strip()
+        key = code
+        if key_canon and code:
+            try:
+                key = str(key_canon(code) or "").strip() or code
+            except Exception:
+                key = code
+        # THE ONE TEST (`labour_coverage.superseded_row`) — never a second membership rule here.
+        if _lcov.superseded_row(plan, expense_name=r.get("expense_name"),
+                                source_key=r.get("source_key"), key=key):
+            continue
+        out.append(r)
+    return out
 
 
 def as_expense_rows(actual, resolved, booked_rows, *, halves=None, store_col="store_code",

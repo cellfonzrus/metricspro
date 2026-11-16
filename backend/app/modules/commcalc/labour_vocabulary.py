@@ -141,7 +141,16 @@ def resolve_mode(mode):
     return m if m in MODES else HOUSE
 
 
-def resolve(payroll_cfg=None, commission_cfg=None, grain_cfg=None, mode=None, routes_cfg=None):
+def _authority(value):
+    """The org's salary authority, RESOLVED by its one home (`labour_coverage`). Imported inside the
+    function so this module stays importable on its own, exactly like every other cross-reference
+    here."""
+    from app.modules.commcalc import labour_coverage as _lcov
+    return _lcov.resolve_payroll_authority(value)
+
+
+def resolve(payroll_cfg=None, commission_cfg=None, grain_cfg=None, mode=None, routes_cfg=None,
+            authority_cfg=None):
     """PURE: the ONE resolution of "which expense rows are labour already booked elsewhere".
 
     `payroll_cfg` / `commission_cfg` — the tenant's `account_config.payroll_expense_names` /
@@ -182,6 +191,7 @@ def resolve(payroll_cfg=None, commission_cfg=None, grain_cfg=None, mode=None, ro
         return {"mode": OFF, "payroll_names": [], "commission_names": [],
                 "payroll_source": OFF, "commission_source": OFF, "payroll_routes": {},
                 "payroll_routes_source": OFF,
+                "payroll_authority_source": _authority(authority_cfg),
                 "grain": stored_grain, "grain_source": EXPLICIT,
                 "apply_protection_tokens": apply_protection_tokens([], [])}
 
@@ -194,6 +204,10 @@ def resolve(payroll_cfg=None, commission_cfg=None, grain_cfg=None, mode=None, ro
     routes = stored_routes or default_payroll_routes(pay)
     return {"mode": m, "payroll_names": pay, "commission_names": com,
             "payroll_source": pay_src, "commission_source": com_src,
+            # WHICH SOURCE IS THE SALARY AUTHORITY (§ACCOUNT-06) travels WITH the vocabulary,
+            # because every reader that needs one needs the other, and a second config read is a
+            # second chance for the two to disagree. Resolved by its one home, never spelled here.
+            "payroll_authority_source": _authority(authority_cfg),
             "payroll_routes": routes,
             "payroll_routes_source": EXPLICIT if stored_routes else HOUSE,
             "grain": grain, "grain_source": EXPLICIT if pay_src == EXPLICIT else HOUSE,

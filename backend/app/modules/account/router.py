@@ -477,6 +477,9 @@ class AccountPutConfigIn(LaxModel):
     distributor_payable_basis: Any = None
     distributor_payable_line: Any = None
     asset_ledger_open_statuses: Any = None
+    # mig 1122 — WHICH SOURCE IS THIS TENANT'S SALARY AUTHORITY (owner ruling 2026-11-16,
+    # §ACCOUNT-06). MONEY-TOUCHING: it decides which figure the P&L's `wages` line carries.
+    payroll_authority_source: Any = None
 
 
 @router.put("/config")
@@ -623,6 +626,22 @@ def put_config(body: AccountPutConfigIn, org_id: str = ORG_ID):
                 seen.add(t.lower())
                 picked.append(t)
         row["asset_ledger_open_statuses"] = picked or None
+    # ── WHICH SOURCE IS THIS TENANT'S SALARY AUTHORITY (mig 1122, owner ruling 2026-11-16) ──────
+    # *"the typer paytol was only for reference take it out, only use that if the store is not
+    # running payroll"*, with a per-tenant switch so a tenant still on the typed sheet can ask for
+    # ruling K2 back. The VALUES and the resolution are `labour_coverage`'s, never respelled here
+    # (§ACCOUNT-06); an EXPLICIT null clears the column back to the house default. MONEY-TOUCHING —
+    # the caller must recompute afterwards.
+    if "payroll_authority_source" in body.model_fields_set:
+        from app.modules.commcalc import labour_coverage as _lcov
+        if body.payroll_authority_source in (None, ""):
+            row["payroll_authority_source"] = None       # ⇒ the house default (the Payroll Report)
+        else:
+            a = str(body.payroll_authority_source).strip().lower()
+            if a not in _lcov.PAYROLL_AUTHORITIES:
+                raise HTTPException(400, "payroll_authority_source must be one of: "
+                                         + ", ".join(_lcov.PAYROLL_AUTHORITIES))
+            row["payroll_authority_source"] = a
     try:
         sb().schema("commcalc").table("account_config").upsert(row, on_conflict="org_id").execute()
     except Exception as e:
