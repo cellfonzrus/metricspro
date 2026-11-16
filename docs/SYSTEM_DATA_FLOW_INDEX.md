@@ -26543,6 +26543,7 @@ status word rather than a blank that reads as nil.
 | CORE-45 | core, storeops, hr, commcalc |
 | STOREOPS-08 | storeops |
 | STOREOPS-09 | storeops, account |
+| STOREOPS-10 | storeops, account |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -49586,3 +49587,182 @@ Cross-references: §COMMCALC-58 (the per-store pull, whose transport this replac
 repairs) · §COMMCALC-74 (what the appliance's page says, and the support id it hands over) ·
 §COMMCALC-73 (one writer of the ingest journals) · §COMMCALC-07 (the pull transport) · §16 (the
 report-kind registry the upload surfaces read) · §19.18 (one fact, one home, dereferenced).
+
+---
+
+## §STOREOPS-10 / §ACCOUNT-05. ONE HOME FOR WHAT A STORE'S LABOUR COST (owner report 2026-11-16)
+
+Owner, verbatim: *"The payroll for luxelink is being calculated properly but it is not reflecting
+per store expenses in dashboard, gross profit or p&l , they thoudl all be updated from here and it
+is quick fix but hasbnt been happening , if the gaen tcannot do it assign somnebody senior ot fix
+teh platform wide issue not for just this tenant"*.
+
+### THE DEFECT — two derivations of one question, drifted at every store of every tenant
+
+`GET /storeops/payroll` and its store-grain twin `/payroll-by-store` publish the Payroll Report.
+`account/coa.derive_wage_cells` was a SECOND shifts × rate derivation, and it was what the
+dashboard, the Gross Profit report and the P&L actually booked. Measured live against production
+on the day, October 2026:
+
+| tenant | Payroll Report | what the books carried | gap |
+|---|---|---|---|
+| Cellfonz R Us | $72,905.30 | **$0.00** (a refusal nothing else honoured) | $72,905.30 |
+| LuxeLink | $121,632.66 | $116,826.26 | $4,806.40 |
+| Vzone | $20,449.79 | $20,010.00 | $439.79 |
+| NY LOGISTICS | $20,160.28 | $18,328.79 | $1,831.49 |
+
+**Every store of every tenant disagreed**, and each copy knew something the other did not — which
+is how two paths drift rather than one being simply wrong:
+
+| the Payroll Report's path | the accounting copy |
+|---|---|
+| the salaried pay-basis override (`payroll_salary.apply_to_by_store`) | the per-EMPLOYEE `pay_from_schedule` tick (mig 1073) |
+| the lunch auto-deduction | the clock-evidence verdict (`payroll_evidence`) |
+| an inactive employee's real activity | |
+
+So neither was the answer, and no amount of reconciling the two numbers could have produced one.
+
+### STOREOPS-10.1 Duplicate check (the build gate)
+
+Searched the index for an existing mechanism answering "what did this store's labour cost this
+month" before building anything. FOUND, and EXTENDED rather than joined:
+
+* §14y `storeops/payroll_hours_basis` — the one home for *which hours* are paid. Both derivations
+  already dereferenced it; the drift was never in the hours rule.
+* §ACCOUNT-02 / §ACCOUNT-03 `commcalc/labour_coverage.measured_fill` — the one home for *whose*
+  figure books a store-month (approved sheet row vs measurement). Untouched: it decides between
+  figures, and this changes which measurement it is handed.
+* §STOREOPS-07 `GET /payroll-by-store` — the producer. Now the ONLY one.
+* §64 `account/store_identity` — the one home for "which store is this string". Dereferenced for
+  the code → address fold; no key rule is stated in the new module.
+
+NOT a new derivation, a new table, a new endpoint or a new report. One module, `labour_cost`, is
+the DOOR onto the existing producer, and one deletion removes the sibling.
+
+### STOREOPS-10.2 The mechanism
+
+`backend/app/modules/storeops/labour_cost.py` — the one home for "what did this period's labour
+cost, per store". It derives no dollar, states no hours, rate or tax rule, and names no tenant,
+carrier, store or product (RULE TWO). It calls the producer and shapes its answer into the two key
+spaces its readers hold:
+
+* `per_store(org_id, month=|start=,end=, so=, producer=)` → `{store_code: {hours, amount}}`.
+* `cells_by_code(cells)` → `{store_code: $}` — the Gross Profit report's space.
+* `cells_by_address(cells, code2addr, norm=)` → `{address or None: $}` — the P&L's space.
+* `is_unattributed(code)` → the TWO producer spellings that mean "this pay belongs to no store":
+  an empty code, and `payroll_salary.UNASSIGNED_STORE`. DEREFERENCED, never re-spelled — booking
+  that bucket as a store would have put a store called "Unassigned" on the P&L holding real money
+  (live, October 2026: NY LOGISTICS $8,857.15, LuxeLink $6,642.86).
+
+`account/coa._wage_measurement` keeps its evidence read and its refusal, line for line, and then
+DEREFERENCES this door — handing over its own StoreOps handle, so one database answers. Every
+reader downstream (`wages_by_store`, `wages_by_code`, `labour_coverage`, `labour_actuals`,
+`build_inputs`, the GP report, the dashboard tiles) is fixed at once rather than one at a time.
+
+`coa.derive_wage_cells` / `derive_wage_cells_with_basis` are **DELETED**, not moved.
+`monthly_salary_equivalent` STAYS: a conversion is not a measurement, and
+`storeops/overhead_allocation` dereferences it.
+
+### STOREOPS-10.3 Two defects this exposed, FIXED rather than excused
+
+1. **The per-rep `pay_from_schedule` tick never reached the Payroll Report.** Both
+   `_shift_actual_contribution` and its basis-carrying twin resolved every row with
+   `employee_row=None`, so only the ORG default could ever apply — while the finance copy read the
+   tick. The owner ruled the same day that paying from the schedule is a per-REP option; the row is
+   now carried through, and `_employees_with_pay_fields` projects the column (§4b.1 any-subset
+   ladder, so a pre-1073 database is unchanged).
+2. **The same month answered two figures.** The money is accumulated in floats over rows the
+   database returns in no guaranteed order, and the cents rounding then landed either side: live,
+   LuxeLink October answered **$6,083.83 and $6,083.84 at `Cicero` on alternate runs of the same
+   question**. Shifts and punches are ordered, the salary override walks the roster in a fixed
+   order, and `allocate_across_stores` breaks ties on the store key. A figure the books carry must
+   be reproducible or it cannot be reconciled against.
+
+### STOREOPS-10.4 LIVE, all four tenants × three months, both sides
+
+After: the books equal the Payroll Report **store for store and cent for cent** in every
+tenant-month that books at all.
+
+| period | Cellfonz R Us | LuxeLink | Vzone | NY LOGISTICS |
+|---|---|---|---|---|
+| 2026-09 | $86,085.89 = | $131,616.28 = | $19,790.12 = | $9,897.43 = |
+| 2026-10 | $72,905.30 = | $121,632.67 = | $20,449.79 = | $20,160.28 = |
+| 2026-11 | $27,735.04 = | $101,782.79 = | $19,790.12 = | $11,310.29 = |
+
+**ALL TWELVE TENANT-MONTHS AGREE STORE FOR STORE AND CENT FOR CENT.**
+
+### STOREOPS-10.4a THE REFUSAL BECOMES A REPORTED COVERAGE (owner ruling 2026-11-16)
+
+Asked, with the Payroll Report publishing $72,905.30 against books carrying $0.00, *"Should
+Cellfonz R Us book its October payroll, or keep refusing it?"*, the owner chose **"Book it — report
+the coverage"** over keeping the refusal and over lowering the bar.
+
+**WITHHOLDING THE LINE PROTECTED NOBODY.** It published **$0.00 of payroll** — which reads like a
+counted figure, makes every store look profitable (the dangerous direction, §19.50) and sat beside a
+report showing the money. One question must not have two answers depending on which screen asks it.
+
+**NOTHING IS LOWERED AND NOTHING IS HIDDEN.** `payroll_evidence.refusal` is UNCHANGED and is still
+the answer for a path that is about to PAY. A path that BOOKS a figure payroll already published
+carries the other sentence — `payroll_evidence.coverage_sentence`, the new one home for *what the
+figure rests on*: `"Clock coverage for this period is 62.94% — 321 of 510 scheduled employee-days
+carry a punch or a correction. The remaining 189 day(s) are paid from the schedule. That is missing
+clock data to collect, not a payroll figure."` It is carried back through `wages_by_store(...,
+verdict=)` and printed on the `wages` line's note. A fully measured period says nothing, because a
+note nobody needs is noise. `coa`'s own `_wage_refusal` string is GONE: the statement prints the one
+home's sentence rather than writing one of its own.
+
+**MONEY MOVED, as ruled:** house org October $0.00 → $72,905.30, November $0.00 → $27,735.04.
+
+### STOREOPS-10.4b A FAILED PUNCH READ MUST NOT DELETE THE WAGE LINE
+
+The producer read `storeops.timelog` unguarded. Harmless while only the report called it; fatal once
+the BOOKS do — a tenant whose punch table is absent or unreadable would have raised through
+`coa._wage_measurement` and taken the whole month's payroll with it. That is the exact failure
+`payroll_evidence`'s blocker doctrine already refuses to make ("we could not look" and "nobody
+clocked" must not print the same), and it is what `harness_eep_pl_wiring.py` §p13/p20/p21/w6 has
+guarded since the last time it happened. The read is now guarded, the schedule still pays, and the
+failure is REPORTED on the result as `punch_read_failed` rather than swallowed.
+
+**IT MOVES MONEY, and that is the whole point.** LuxeLink October wages $116,826.26 → $121,632.67,
+Vzone → $20,449.79, NY LOGISTICS → $18,328.79 → $20,160.28. Part of the move is the salary BASIS: a
+salaried person now books what the period PAYS (`payroll_salary.derive_salary_pay` — 31/364ths of a
+year for 1–31 October) rather than a twelfth of the annual figure, so $78,000 a year reads $6,642.86
+where the books read $6,500.00. Surfaced to the owner with the figures before merge.
+
+### STOREOPS-10.5 The locks (they fail the BUILD, not the review)
+
+* `backend/harness_labour_cost_one_home.py` — 36 proofs. §A the pure shaping and both key spaces ·
+  §B the "no store" sentinel has ONE spelling, dereferenced from `payroll_salary` · §C the finance
+  module holds NO `pay_rate` arithmetic and no `derive_wage_cell*` under any name · §D the
+  dereference is wired and the refusal still raises · §E the producer orders its rows and its
+  roster · §F no pay-path call resolves a shift row with a hardcoded `None` employee.
+* `backend/harness_wages_salary_basis.py` — REWRITTEN to prove the same five salary-basis rules END
+  TO END through `coa.wages_by_store` → `labour_cost` → the producer. A rule proved only against a
+  deleted function is a rule nothing holds.
+* `backend/harness_any_columns.py` §C4–C6 and `backend/harness_store_code_case.py` §D — repointed
+  the same way; claims unchanged.
+* `backend/harness_finance_sync_in_async.py` — the deliberate money-module tripwire, re-verified and
+  re-pinned with the measurement above.
+* `backend/harnesslib.FakeDB` — the pay-path database double, now shared by the three harnesses that
+  needed one rather than copied three times.
+* `backend/tests/unit/test_labour_cost_one_home.py` (22) ·
+  `backend/tests/integration/test_payroll_reaches_store_expenses.py` (13, two tenants of different
+  shapes, including no-leakage and reproducibility).
+
+### STOREOPS-10.6 DATA, reported and NOT coded around
+
+* The house org's October and November clock coverage (62.94% / and November lower) is a
+  missing-punch defect, not a payroll figure. It is REPORTED by the refusal and fixed by collecting
+  the punches, never by lowering the bar in code.
+* **Employer payroll tax does not flow.** The Payroll Report's own "Cost of Payroll" tile is actual
+  pay PLUS employer tax ($13,311.69 of LuxeLink's October $134,944.36). The P&L's `payroll_expenses`
+  line carries that burden only when a human books it from the HR Payroll Expenses page. Reported;
+  wiring it is its own change, with its own owner approval, because it ADDS cost to every store.
+
+Cross-references: §14y (which hours are paid — one home, both paths already used it) · §STOREOPS-07
+(the producer, and why its RPC fast path was retired) · §STOREOPS-08 (the employer burden the
+Payroll Report carries, and the one tax rule) · §ACCOUNT-02 / §ACCOUNT-03 (whose figure books a
+store-month — unchanged; this changes which measurement it is handed) · §ACCOUNT-04 (identity is not
+visibility) · §64 (which store is this string) · §19.18 (one fact, one home, dereferenced) · §19.50
+(an absence is reported with its reason) · §16 (reports) · §17 (endpoints) · §18 (tables — none
+added: this change ships no migration).

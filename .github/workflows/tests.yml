@@ -899,6 +899,10 @@ jobs:
         working-directory: backend
         if: always()   # a red harness must not hide the 60 after it
         run: python3 harness_kpi_failing.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_labour_cost_one_home
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_labour_cost_one_home.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: harness_labour_coverage
         working-directory: backend
         if: always()   # a red harness must not hide the 60 after it
@@ -1083,6 +1087,13 @@ jobs:
         working-directory: backend
         if: always()   # a red harness must not hide the 60 after it
         run: python3 harness_store_cash_on_hand.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §ACCOUNT-01 — A DECLARED STORE CODE IS CASE-BLIND, and §STOREOPS-10 §D: the proof now
+      # reaches the ONE labour-cost home, which imports the storeops router, so it runs HERE (a job
+      # that installs the backend) rather than in the dependency-free carrier-vocab-guard job.
+      - name: harness_store_code_case
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_store_code_case.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: harness_store_market_resolution
         working-directory: backend
         if: always()   # a red harness must not hide the 60 after it

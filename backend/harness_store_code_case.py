@@ -139,7 +139,21 @@ EMPS = [{"employee_id": "E1", "pay_rate": 1.0, "is_active": True, "home_store": 
 SHIFTS = [{"employee_id": "E1", "store_code": c, "scheduled_hours": h,
            "actual_hours": 0, "shift_date": "2026-10-15"}
           for c, h in LUX_OCT_DRIFT.items()]
-cells = coa.derive_wage_cells(EMPS, SHIFTS, sid.build_code_index(LUX_MAPPING))
+# Run END TO END through the one home (§ACCOUNT-05): `coa.derive_wage_cells` — the finance module's
+# own second derivation — is deleted, and the fold this section proves must hold where the figure
+# now comes from, which is the Payroll Report's producer. The claim is unchanged.
+import harnesslib as _hl                                                      # noqa: E402
+from app.modules.storeops import router as _sr                                # noqa: E402
+_ORG = "ORG-STORE-CODE-CASE"
+_DB = _hl.FakeDB({
+    "employees": [dict(e, org_id=_ORG) for e in EMPS],
+    "shifts": [dict(x, org_id=_ORG, is_deleted=False, id=f"s{i}")
+               for i, x in enumerate(SHIFTS)],
+    "timelog": [],
+    "store_mapping": [dict(r, org_id=_ORG) for r in LUX_MAPPING],
+})
+_sr.get_supabase = lambda: _DB
+cells = coa.wages_by_store(_DB, _ORG, "2026-10")
 check("D1 no wage cell is keyed on a store the org never declared — the four phantoms are gone",
       not (set(cells) & set(LUX_OCT_DRIFT)), sorted(k for k in cells if k in LUX_OCT_DRIFT))
 check("D2 every drifted dollar lands on the DECLARED address of its own store",

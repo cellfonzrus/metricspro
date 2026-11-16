@@ -1890,9 +1890,9 @@ jobs:
       # and a whole month's salary line was $1,928.85 of hours on four stores that do not exist.
       # Section F of the lock above fails the build on a second map; this is the proof, with the live
       # regression and the cross-tenant assertions as fixtures.
-      - name: Run the store-code case proof (one fold, one code→address map, no phantom store; every tenant's own declarations — index §ACCOUNT-01)
-        working-directory: backend
-        run: python3 harness_store_code_case.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # MOVED 2026-11-16 to tests.yml harness-suite-3: §D of that proof now dereferences the ONE
+      # labour-cost home (§STOREOPS-10), which imports the storeops router, which imports `requests`.
+      # This job installs nothing, so the step would have died with ModuleNotFoundError before check one.
       # index §COMMCALC-70 — AND THE CODE IS CANONICAL FROM BIRTH. Folding on read makes each reader
       # correct; it does not make the stored fact true. The kiosk had written 2,058 punches under a
       # spelling no org declares (180 of them in November, after the read-side fold landed) and the

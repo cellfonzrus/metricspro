@@ -17,7 +17,7 @@ of those rows from the platform's own data:
 
 `account/coa.build_inputs` then books the SAME two sources again, on their own P&L lines:
 
-  · the `wages` line  ← `coa.wages_by_store` → `derive_wage_cells` (the same StoreOps hours)
+  · the `wages` line  ← `coa.wages_by_store` → `storeops/labour_cost` (the Payroll Report's figure)
   · the `rep_comm` line ← `commcalc.rep_commissions.total_payout` (the same rep commissions)
 
 Both copies were subtracted from gross profit. The only thing standing between a tenant and that

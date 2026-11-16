@@ -220,7 +220,10 @@ def run():
     check("C3 default_config carries the two report keys empty (a config nobody read reports nothing missing)",
           msp.default_config()["config_columns_missing"] == [] and msp.default_config()["config_migrations_missing"] == [])
 
-    # wages: the same rows into the same derive_wage_cells, with and without the mig-416/417 columns
+    # wages: the same rows into the SAME producer, with and without the mig-416/417 columns. The
+    # comparison used to be against `coa.derive_wage_cells` — the finance module's own second
+    # derivation, deleted 2026-11-16 (§ACCOUNT-05). The claim is unchanged and is now made against
+    # the figure the Payroll Report itself publishes, which is what the books read.
     emps_full = [{"org_id": ORG, "employee_id": "E1", "pay_rate": 20.0, "home_store": "S1", "pay_basis": "hourly", "pay_amount": None, "is_active": True},
                  {"org_id": ORG, "employee_id": "E2", "pay_rate": 0.0, "home_store": "S2", "pay_basis": "monthly", "pay_amount": 3000.0, "is_active": True}]
     shifts = [{"org_id": ORG, "employee_id": "E1", "store_code": "S1", "scheduled_hours": 8, "actual_hours": 8, "shift_date": "2026-07-03", "is_deleted": False},
@@ -231,10 +234,25 @@ def run():
     db_pre = Client({**tables(), "employees": emps_pre416, "shifts": shifts})
     code2addr = coa.store_code_to_address(db_full, ORG)
     w_full, w_pre = coa.wages_by_store(db_full, ORG, P), coa.wages_by_store(db_pre, ORG, P)
-    check("C4 wages_by_store == derive_wage_cells over the same roster rows (salary columns present)",
-          w_full == coa.derive_wage_cells(emps_full, shifts, code2addr) and w_full.get(H.STORE_A) == 160.0, w_full)
-    check("C5 …and on a pre-416 roster (no salary columns) == derive_wage_cells over the hourly-only rows — hourly-only, exactly as before",
-          w_pre == coa.derive_wage_cells(emps_pre416, shifts, code2addr) and w_pre.get(H.STORE_A) == 160.0, w_pre)
+    def _reported(db):
+        """The Payroll Report's own per-store figure, in the books' address space."""
+        from app.modules.storeops import router as _sr, payroll_salary as _ps
+        out = {}
+        _pm, _py = coa.parse_period(P)          # P may be the month-NAME spelling the feeds use
+        _lo = f"{_py:04d}-{_pm:02d}-01"
+        _hi = f"{_py:04d}-{_pm:02d}-28"             # any day inside the month; the range is inclusive
+        import calendar as _cal
+        _hi = f"{_py:04d}-{_pm:02d}-{_cal.monthrange(_py, _pm)[1]:02d}"
+        for r in _sr.get_payroll_by_store(start=_lo, end=_hi, org_id=ORG,
+                                          so=db.schema("storeops"))["stores"]:
+            c = str(r["store_code"]).strip()
+            k = None if c.casefold() in ("", _ps.UNASSIGNED_STORE.casefold()) else code2addr.get(c, c)
+            out[k] = round(out.get(k, 0.0) + float(r["amount"]), 2)
+        return out
+    check("C4 wages_by_store IS the Payroll Report's per-store figure (salary columns present)",
+          w_full == _reported(db_full) and w_full.get(H.STORE_A) == 160.0, (w_full, _reported(db_full)))
+    check("C5 …and on a pre-416 roster (no salary columns) it is the same hourly figure, exactly as before",
+          w_pre == _reported(db_pre) and w_pre.get(H.STORE_A) == 160.0, w_pre)
     check("C6 …and the two differ only by what the salary columns add (the salaried store), never on the hourly one",
           w_full.get(H.STORE_A) == w_pre.get(H.STORE_A) and (w_full.get(H.STORE_B) or 0) != (w_pre.get(H.STORE_B) or 0), (w_full, w_pre))
 

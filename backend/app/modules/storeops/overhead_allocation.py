@@ -14,7 +14,7 @@ WHAT THIS MODULE IS AND IS NOT
 ------------------------------
 It is NOT a second wage derivation and it computes NO new dollar of pay. The platform already has:
 
-  • `account/coa.derive_wage_cells`  — THE per-store wage estimate (hourly hours x rate; salaried
+  • `account/coa.wages_by_store`     — THE per-store wage figure (hourly hours x rate; salaried
     monthly-equivalent allocated across the stores the person actually worked). Untouched.
   • `account/coa.monthly_salary_equivalent` — THE weekly/monthly/annual -> monthly conversion. This
     module never re-implements it; the caller injects it (`monthly_equivalent=`) so there is exactly
@@ -26,7 +26,7 @@ It is NOT a second wage derivation and it computes NO new dollar of pay. The pla
     manager cover" answer. Consulted FIRST and used AS-IS.
 
 What it ADDS is the one thing none of those can express: a salaried person who is attached to NO
-store at all. `derive_wage_cells` gives such a person the key `None` — "company-wide" — and under
+store at all. `coa.wages_by_store` gives such a person the key `None` — "company-wide" — and under
 `payroll_authority_grain='store'` (live for the reporting tenant) `coa.build_inputs` deliberately
 does NOT book a company-wide cell, because it cannot prove the dollars are absent from the entered
 per-store figures. Correct, and it means their pay lands NOWHERE. The owner's answer is not to book
@@ -71,7 +71,7 @@ is never quietly moved to a company line, and it is never dropped.
 
 CENTS. Each person's per-store shares are cents-rounded with the LAST store (deterministic sort
 order) absorbing the residue, so every individual's stores sum EXACTLY to their monthly figure and
-the org total is exact by construction. Same convention as `derive_wage_cells`.
+the org total is exact by construction. Same convention as `coa.wages_by_store`.
 
 RULE TWO. No tenant, store, role, employee or carrier name appears in this file. Which roles count
 as overhead beyond the structural test, the line labels, the basis, the coverage fallback and
@@ -227,13 +227,13 @@ def classify_employee(emp: dict, cfg: dict, monthly_equivalent: Callable[[object
 
     THE STRUCTURAL TEST, which needs no role string and therefore no RULE TWO violation:
       active  AND  salaried (a usable monthly equivalent)  AND  no home_store
-    That is exactly the person `derive_wage_cells` can only key as company-wide, i.e. exactly the
+    That is exactly the person `coa.wages_by_store` can only key as company-wide, i.e. exactly the
     person whose pay currently lands nowhere. An org may WIDEN it with `roles` (a DM who is pinned
     to a store for scheduling but is paid to cover a market); it can never be narrowed, because a
     salaried person attached to no store has no other home in the books.
 
     An INACTIVE employee is never overhead: they are no longer earning, and booking a leaver's
-    salary across stores would overstate every store's cost. Mirrors `derive_wage_cells`'s own
+    salary across stores would overstate every store's cost. Mirrors `coa.wages_by_store`'s own
     inactive-and-no-hours rule."""
     if emp.get("is_active") is False:
         return False, WHY_INACTIVE, 0.0
@@ -448,7 +448,7 @@ def _spread(amount: float, codes: Sequence[str], weights: Optional[Dict[str, flo
 
     Deterministic: codes are taken in the order given (callers pass them sorted) and the LAST one
     absorbs the rounding residue, so sum(result.values()) == round(amount, 2) EXACTLY. Same
-    convention as `coa.derive_wage_cells`, so the two allocations round alike."""
+    convention as `coa.wages_by_store`, so the two allocations round alike."""
     n = len(codes)
     if n <= 0:
         return {}
