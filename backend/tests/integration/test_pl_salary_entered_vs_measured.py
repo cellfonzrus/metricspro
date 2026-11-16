@@ -105,10 +105,24 @@ def test_one_tenants_payroll_words_never_answer_for_another(books):
     assert "$3,100.00" in note          # still measured against ITS OWN row
 
 
-def test_wiring_the_check_in_moves_no_money(books):
-    """DISPLAY-ONLY. The $166.50 entered row still books, by itself, exactly as before — the
-    $4,000.00 measurement it suppresses is still NOT added. Which route should win is the owner's
-    call (it moves money) and is deliberately NOT taken here."""
+def test_the_payroll_report_is_what_books_and_the_typed_row_stops(books):
+    """WHICH ROUTE WINS WAS THE OWNER'S CALL, and it was made on 2026-11-16 (index §ACCOUNT-06):
+    *"the typer paytol was only for reference take it out, only use that if the store is not running
+    payroll"*. So the $4,000.00 the payroll run measured books and the typed $166.50 does not — the
+    same labour, once, from the source that runs it. The check-in sentence this file is about stays
+    display-only: it reports the gap, it does not create it."""
+    line = _wages(books, OTHER)
+    assert _booked(line) == 4000.00
+    assert line["by_store"] == {"Belmont": 4000.00}
+
+
+def test_the_opt_in_tenant_still_books_its_typed_row_alone(books):
+    """And the per-tenant switch is a switch: ruling K2 verbatim, the $166.50 booking by itself and
+    the measurement it suppresses still NOT added."""
+    row = dict(next(r for r in books.rows("commcalc.account_config") if r["org_id"] == OTHER))
+    row["payroll_authority_source"] = "entered"
+    books.seed("commcalc.account_config",
+               [r for r in books.rows("commcalc.account_config") if r["org_id"] != OTHER] + [row])
     line = _wages(books, OTHER)
     assert _booked(line) == 166.50
     assert line["by_store"] == {"Belmont": 166.50}

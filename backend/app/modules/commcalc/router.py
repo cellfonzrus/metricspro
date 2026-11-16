@@ -24848,6 +24848,11 @@ def _compute_gp(client, org_id, period, market=""):
     _gp_sheet = list(expenses)
     _gp_fill = _lact.salary_fill_plan(_gp_lab.get(period) or {}, _gp_vocab, _gp_sheet,
                                       key_as=_gp_code, key_canon=_gp_canon)
+    # ── THE TYPED ROW IS REFERENCE, NOT THE BOOK (owner ruling 2026-11-16, §ACCOUNT-06) ──────────
+    # Under the Payroll Report's authority the sheet's typed salary rows stop being summed here, and
+    # the measured rows below take their place. The P&L drops the SAME rows, by the SAME plan, in
+    # its own booking loop — the decision is made once, in `labour_coverage.measured_fill`.
+    _gp_sheet = _lact.without_superseded(_gp_sheet, _gp_fill, key_canon=_gp_canon)
     # NOT A SILENT LOSS. A filled store the mapping carries no code for cannot be relabelled into
     # this report's key space, so its dollars would simply vanish from the expense column. They are
     # named here with their amount instead — the fix is a mapping row, never code (§ACCOUNT-03).
@@ -25102,7 +25107,10 @@ def _compute_gp(client, org_id, period, market=""):
             carried_from=_exp_carried_from, active_codes=_lc_active,
             hours_basis_cfg=_lc_ev.get('cfg'), evidence=_lc_ev.get('evidence'),
             hours_interlock=_lc_ev.get('interlock'),
-            measured_by_code=_lc_measured)
+            measured_by_code=_lc_measured,
+            # WHICH SOURCE WON (§ACCOUNT-06), read from the SAME resolved vocabulary this report
+            # already books with, so the banner cannot describe a rule the figures did not follow.
+            authority=(_gp_vocab or {}).get('payroll_authority_source'))
         # Labour booked by BOTH routes: the GP row deducts `rep_pay` (rep_commissions) SEPARATELY
         # from `exp_total`, so a commission-named expense row is the same dollars twice. The owner
         # ruled on 2026-09-08 that rep_commissions is the authoritative route, so the report above

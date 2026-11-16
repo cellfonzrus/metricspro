@@ -6,6 +6,11 @@ different , this is conflicting and must be fixed in teh code itself"* — and, 
 ruling that settles which figure is right: *"the luxelink salary is updated everyweek by the Dms and
 that is the approved salary you should be counting towards the expenses"*.
 
+OWNER RULING 2026-11-16 (index §ACCOUNT-06), which these tests now carry: *"the typer paytol was
+only for reference take it out, only use that if the store is not running payroll"*. The Payroll
+Report is the house authority; the ruling above is the per-tenant OPT-IN, and every test that proves
+it seeds `payroll_authority_source='entered'` explicitly through `_opt_in_to_the_typed_sheet`.
+
 The unit tests and `harness_labour_coverage.py` §K prove the DECISION. These prove the WIRING, over
 the real `coa.build_inputs` and the real `labour_actuals` plumbing the GP report calls (house
 database double, no network): that the statement no longer carries its own copy of the rule, that
@@ -106,24 +111,49 @@ def _wages(db, org, period=PERIOD):
     return coa.build_inputs(db, org, period)["wages"]["by_store"]
 
 
+def _config(db, org, **changes):
+    """Replace one tenant's `account_config` row, leaving every other tenant's alone — the shape
+    these tests need over and over, and the shape a cross-tenant claim depends on."""
+    row = dict(next(r for r in db.rows("commcalc.account_config") if r["org_id"] == org))
+    row.update(changes)
+    db.seed("commcalc.account_config",
+            [r for r in db.rows("commcalc.account_config") if r["org_id"] != org] + [row])
+    return db
+
+
+def _opt_in_to_the_typed_sheet(db, org):
+    """Ruling K2 (2026-08-10 / 2026-11-14) as the per-tenant OPT-IN it became on 2026-11-16."""
+    return _config(db, org, payroll_authority_source="entered")
+
+
 # 20 days x 8h: Belmont $25 -> $4,000.00 · Nostrand $20 -> $3,200.00 · Irving $15 -> $2,400.00
 BELMONT, NOSTRAND, IRVING = "5601 W Belmont Ave", "3560 Nostrand Avenue", "6500 W Irving Park Rd"
 
 
 class TestTheStatement:
-    def test_an_approved_figure_is_what_books_and_the_hours_are_not_added_on_top(self, books):
-        """The owner's ruling, as the statement books it: the DM-approved figure wins."""
+    def test_the_payroll_report_is_what_books_and_the_typed_row_stops(self, books):
+        """THE HOUSE DEFAULT (owner ruling 2026-11-16). Belmont's typed $166.50 was reference, and
+        the payroll that actually ran books instead. Its share of the $1,275.00 DM allocation goes
+        with it: the manager that spread pays for is ON the payroll the report measured, so keeping
+        the spread beside it would book one manager's pay twice."""
         w = _wages(books, OTHER)
+        assert w[BELMONT] == 4000.00
+
+    def test_the_opt_in_tenant_still_gets_ruling_K2_verbatim(self, books):
+        """And the switch is a switch: a tenant that asks for its typed sheet books exactly what it
+        booked the day before, the DM-approved figure winning and no hours added on top."""
+        w = _wages(_opt_in_to_the_typed_sheet(books, OTHER), OTHER)
         assert w[BELMONT] == 1441.50              # 166.50 entered + 1275.00 allocation, no hours
 
     def test_a_store_with_only_the_flat_allocation_still_books_its_own_labour(self, books):
         """THE MONEY MOVE this change makes, asserted so it can never happen in silence. A $1,275.00
         allocation charged identically to every store is not a measurement of Nostrand's staff, so
-        its hours still fill in — otherwise the statement reads as though it paid nobody."""
-        assert _wages(books, OTHER)[NOSTRAND] == 1275.00 + 3200.00
+        the payroll that ran is what books here — otherwise the statement reads as though this store
+        paid nobody but a share of a manager."""
+        assert _wages(books, OTHER)[NOSTRAND] == 3200.00
 
     def test_a_store_with_no_payroll_row_at_all_keeps_its_labour_cost(self, books):
-        assert _wages(books, OTHER)[IRVING] == 1275.00 + 2400.00
+        assert _wages(books, OTHER)[IRVING] == 2400.00
 
     def test_the_statement_keeps_no_copy_of_the_authority_rule(self):
         """The lock: the inline set this reader used to build (`payroll_auth_stores`) is gone, so
@@ -136,7 +166,9 @@ class TestTheStatement:
 
     def test_an_unmeasurable_period_fills_nothing_and_is_not_a_zero(self, books):
         """Clock evidence below the org's threshold REFUSES (live: the house org's October is
-        62.94% against 85%). The entered figures still book; no store is filled at $0.00."""
+        62.94% against 85%). Nothing measured supersedes nothing (§19.50), so the typed figures
+        still book under EITHER authority and no store is filled at $0.00 — deleting a typed row
+        with nothing to put in its place is the silent zero this platform forbids."""
         books.seed("storeops.shifts", [s for s in books.rows("storeops.shifts")
                                        if s["org_id"] != OTHER])
         w = _wages(books, OTHER)
@@ -147,9 +179,10 @@ class TestTheStatement:
 
 class TestEveryTenant:
     def test_each_tenant_is_measured_against_its_own_payroll_vocabulary(self, books):
-        """Owner directive 2026-10-30. `Staff Wages` is the house org's word for payroll, so its
-        store has an approved figure and books no hours."""
-        assert _wages(books, HOUSE)["1 House St"] == 100.00
+        """Owner directive 2026-10-30. `Staff Wages` is the house org's own word for payroll, so it
+        is that row — and no other tenant's word — that the Payroll Report supersedes here."""
+        assert _wages(books, HOUSE)["1 House St"] == 3200.00        # 20d x 8h x $20, the measure
+        assert _wages(_opt_in_to_the_typed_sheet(books, HOUSE), HOUSE)["1 House St"] == 100.00
 
     def test_one_tenants_payroll_word_never_decides_anothers_fill(self, books):
         """`Employee Salaries` is not in the house org's vocabulary. Seeding one there must confer
@@ -162,9 +195,12 @@ class TestEveryTenant:
             {"id": "x8", "org_id": HOUSE, "period": PERIOD, "store_code": "HOUSE-1",
              "expense_name": "Employee Salaries", "expense_type": "Fixed", "amount": 9999.00,
              "source_key": None}])
-        # The 9,999.00 row is ordinary opex here, and the $100.00 `Staff Wages` row is still the
-        # approved figure — so the store books its entered payroll and no hours, as before.
-        assert _wages(books, HOUSE)["1 House St"] == 100.00
+        # The 9,999.00 row is ordinary opex here: not being in this tenant's vocabulary, it is
+        # neither an approved figure NOR a row the Payroll Report can supersede, and it is not
+        # routed to the wage line either — so it moves this line by nothing at all, under either
+        # authority. Only the tenant's OWN `Staff Wages` row gives way to the measured payroll.
+        assert _wages(books, HOUSE)["1 House St"] == 3200.00
+        assert _wages(_opt_in_to_the_typed_sheet(books, HOUSE), HOUSE)["1 House St"] == 100.00
 
     def test_a_tenant_with_no_config_row_is_decided_by_the_HOUSE_vocabulary_only(self, books):
         """NY LOGISTICS has no `account_config` row at all, so `labour_vocabulary` resolves to the
@@ -175,18 +211,24 @@ class TestEveryTenant:
         books.seed("commcalc.account_config",
                    [r for r in books.rows("commcalc.account_config") if r["org_id"] != OTHER])
         w = _wages(books, OTHER)
-        assert w[BELMONT] == 166.50                 # approved under a house name -> no hours added
-        assert [w[NOSTRAND], w[IRVING]] == [3200.00, 2400.00]    # allocation only -> hours fill
+        # `Employee Salaries` IS a house name, so Belmont's typed row is the one the Payroll Report
+        # supersedes and the measured payroll books in its place. `DM Salaries` is this tenant's own
+        # word, declared nowhere now: it is ordinary opex, neither superseded nor routed to the wage
+        # line, so it moves this line by nothing — every store here carries its measurement alone.
+        assert w[BELMONT] == 4000.00
+        assert [w[NOSTRAND], w[IRVING]] == [3200.00, 2400.00]
 
     def test_an_org_grain_tenant_suppresses_every_store_from_one_approved_row(self, books):
-        """Vzone and the house org are `payroll_authority_grain='org'`. One approved row anywhere
-        suppresses every store's measurement — byte-identical to every statement before mig 994."""
-        books.seed("commcalc.account_config", [
-            r for r in books.rows("commcalc.account_config") if r["org_id"] != OTHER]
-            + [{"id": "c1", "org_id": OTHER,
-                "payroll_expense_names": ["DM Salaries", "Employee Salaries"],
-                "payroll_authority_grain": "org"}])
-        w = _wages(books, OTHER)
+        """`payroll_authority_grain` decides how far ONE approved row reaches, and it only ever
+        reaches under the typed sheet's authority: one approved row anywhere then suppresses every
+        store's measurement, byte-identical to every statement before mig 994. Under the house
+        authority nothing is suppressed at all, so the grain moves no money — which is the whole
+        point of the new default and is asserted here so it cannot regress in silence."""
+        _config(books, OTHER, payroll_authority_grain="org")
+        w_default = _wages(books, OTHER)
+        assert [w_default[BELMONT], w_default[NOSTRAND], w_default[IRVING]] == \
+            [4000.00, 3200.00, 2400.00]
+        w = _wages(_opt_in_to_the_typed_sheet(books, OTHER), OTHER)
         assert [w[BELMONT], w[NOSTRAND], w[IRVING]] == [1441.50, 1275.00, 1275.00]
 
 
@@ -204,13 +246,25 @@ class TestBothReportsAnswerTheSame:
         plan = _lcov.measured_fill(rows, measured, names, grain="store",
                                    key_of=lambda c: {"Belmont": BELMONT, "Nostrand": NOSTRAND,
                                                      "Irving": IRVING}.get(c, c))
-        assert plan["fill"] == {NOSTRAND: 3200.00, IRVING: 2400.00}
-        assert plan["suppressed"] == [BELMONT]
-        # …and the statement booked exactly that, on top of the entered rows.
+        # Under the house authority every measured store's own figure books, and the typed rows at
+        # those stores are SUPERSEDED instead — the flat allocation with them, because the manager
+        # it spreads is inside the payroll the report measured.
+        assert plan["fill"] == {BELMONT: 4000.00, NOSTRAND: 3200.00, IRVING: 2400.00}
+        assert plan["suppressed"] == []
+        assert plan["superseded"] == {BELMONT: 1441.50, NOSTRAND: 1275.00, IRVING: 1275.00}
+        # …and the statement booked exactly that, on top of the rows that keep booking.
         w = _wages(books, OTHER)
-        assert w[NOSTRAND] - 1275.00 == plan["fill"][NOSTRAND]
-        assert w[IRVING] - 1275.00 == plan["fill"][IRVING]
-        assert w[BELMONT] == 1441.50
+        assert w[NOSTRAND] == plan["fill"][NOSTRAND]
+        assert w[IRVING] == plan["fill"][IRVING]
+        assert w[BELMONT] == plan["fill"][BELMONT]
+        # THE DEFECT THIS FILE EXISTS FOR, in the other direction: the GP report sums the sheet, so
+        # it must drop exactly the dollars the statement stopped booking — no more, no less.
+        kept = _lact.without_superseded(rows, plan,
+                                        key_canon=lambda c: {"Belmont": BELMONT,
+                                                             "Nostrand": NOSTRAND,
+                                                             "Irving": IRVING}.get(c, c))
+        assert round(sum(r["amount"] for r in rows) - sum(r["amount"] for r in kept), 2) \
+            == plan["superseded_amount"] == 3991.50
         # The GP report reaches it through `as_expense_rows`, which cannot be called without
         # declaring the rows it is already summing — `booked_rows` is positional and required —
         # and which folds BOTH sides into canonical space (`key_canon`) before deciding, then
@@ -224,7 +278,7 @@ class TestBothReportsAnswerTheSame:
                                         key_canon=lambda c: _canon.get(c, c),
                                         key_as=lambda a: _code.get(a, a))
         assert sorted((r["store_code"], r["amount"]) for r in emitted) == \
-            [("Irving", 2400.00), ("Nostrand", 3200.00)]
+            [("Belmont", 4000.00), ("Irving", 2400.00), ("Nostrand", 3200.00)]
 
     def test_without_the_canonical_fold_the_same_rows_double_book(self, books):
         """Pins the MECHANISM, so a future change cannot quietly drop the fold: with the sheet in
