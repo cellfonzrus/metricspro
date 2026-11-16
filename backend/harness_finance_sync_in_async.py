@@ -230,7 +230,13 @@ EXPECTED_DELTA = {
     # get_pl (2026-09-26, index §4c): its body MOVED, unchanged, into the new `pl_single_month` (THE
     # single-month P&L read the month-range export loops); get_pl now returns it. JSON-identical for every
     # scope / filter / month — proven by backend/harness_pl_range.py §A against the old body verbatim.
-    AROUTER: {"compute", "run_due", "get_recon", "get_pl"},
+    # +`put_config` 2026-11-16 (§ACCOUNT-06): ONE new optional body field,
+    # `payroll_authority_source`, validated against `labour_coverage.PAYROLL_AUTHORITIES` and
+    # written to its own column. It is a config SETTER — it books nothing, computes nothing and
+    # touches no other key of the upserted row, and a tenant that never sends the field is
+    # byte-identical to before. Which figure the column then selects is proven by
+    # backend/harness_labour_coverage.py §L/§M and tests/unit/test_payroll_authority.py.
+    AROUTER: {"compute", "run_due", "get_recon", "get_pl", "put_config"},
     PCOSTS: {"_anthropic_cost", "fetch_cost"},
     BROUTER: {"refresh_platform_costs"},
 }
