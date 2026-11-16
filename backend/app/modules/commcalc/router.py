@@ -52042,10 +52042,11 @@ async def run_weekly_review_due(dry_run: bool = False, org_id_filter: str = "",
             pack = await _weekly_review_pack(root, oid, "", today.isoformat(), cfg)
             stored = False if dry_run else _weekly_review_store_run(root, oid, pack,
                                                                     generated_by="weekly run")
+            # The coverage block whole, rather than its counts spelled out again here: the state
+            # words have ONE home (`weekly_review.MEASURED` / `NOT_MEASURED`) and a sweep's log is
+            # not a second place to keep them.
             results.append({"org_id": oid, "week_ending": pack["week"]["week_ending"],
-                            "stored": stored,
-                            "measured": pack["company"]["coverage"]["measured"],
-                            "not_measured": pack["company"]["coverage"]["not_measured"]})
+                            "stored": stored, "coverage": pack["company"]["coverage"]})
         except Exception as e:
             results.append({"org_id": oid, "error": str(e)[:200]})
     return {"ran": len(results), "dry_run": bool(dry_run), "results": results}
