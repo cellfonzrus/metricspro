@@ -59,6 +59,7 @@ from app.modules.commcalc import month_focus as _mfocus   # 2026-10-09 — the m
 from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set + the feed maps (one home; pure, stdlib)
 from app.modules.commcalc import boost_terms as _bt   # 2026-10-05 — THE Boost engine's resolved terms + KPI bars (one home; pure)
 from app.modules.commcalc import zero_sales as _zs   # 2026-09-22 — zero-sales states/runs/alerts (pure)
+from app.modules.commcalc import weekly_review as _wrev   # 2026-11-16 — the Monday review pack (pure)
 from app.modules.commcalc import labour_coverage as _labour  # shared shift reader + the silent-zero shape
 from app.modules.commcalc import invoice_tenders as _invt   # 2026-09-21 — the invoice tender split (pure; classes injected from closing)
 from app.modules.commcalc import whatif
@@ -51623,3 +51624,411 @@ def put_accessory_model_spec(body: Optional[PutAccessoryModelSpecIn] = None,
         except Exception:
             pass
     return {"saved": True, "written": written, "cleared": removed, "org_id": org_id}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# WEEKLY PERFORMANCE REVIEW — the Monday review pack (owner 2026-11-16, index §COMMCALC-76)
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# Owner, verbatim: *"Add the performance deck to the management tile but allow access only for the
+# admins , make this report every week at the end of the week so the same can be reviewed every
+# monday with the dm, it should have invenotry aging for rteh repsective carrier also as one of the
+# items to review., make a separate report for each market and one consolidated for the entire
+# company , is there any way we can make this on demand"* — then: *"let us make it on demand"*.
+#
+# NOTHING IS DERIVED HERE. Every item's facts come from the surface that already owns the number —
+# the GP report, the pay engine's own rows, the accessory target plan, the shared sales cells, the
+# Daily Action Plan's own verdict, the aging report's per-carrier windows and the one payroll
+# authority. The fold is pure (`commcalc/weekly_review.py`); this handler is the READ, and a read
+# that fails is handed in as `Unreadable` so the pack says which item it could not measure instead
+# of printing a confident zero.
+_WEEKLY_REVIEW_CFG_TABLE = "weekly_review_config"
+_WEEKLY_REVIEW_RUN_TABLE = "weekly_review_run"
+
+
+def _weekly_review_config(client, org_id):
+    """(config, source) — the tenant's weekly-review config over the house defaults. The closing
+    weekday and whether the standing run is on are POLICY (RULE TWO); no tenant vocabulary lives
+    here. A missing table degrades to the house defaults, so the report works before mig 1122."""
+    cfg, source = dict(_wrev.HOUSE_CONFIG), {k: "house" for k in _wrev.HOUSE_CONFIG}
+    try:
+        rows = (client.schema("commcalc").table(_WEEKLY_REVIEW_CFG_TABLE).select("*")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    if rows:
+        for k in list(cfg):
+            if rows[0].get(k) is not None:
+                cfg[k], source[k] = rows[0][k], "tenant"
+    return cfg, source
+
+
+def _weekly_review_caller(authorization, org_id):
+    """The resolved caller, or None. Never raises — an unresolvable caller is refused by the gate."""
+    try:
+        from app.modules.core.router import _resolve_caller, _uid_from_token
+        uid = _uid_from_token(authorization)
+        return _resolve_caller(sb(), uid, org_id) if uid else None
+    except Exception:
+        return None
+
+
+def _require_weekly_review(authorization, org_id):
+    """ADMINISTRATORS ONLY, enforced on the server (owner: "allow access only for the admins").
+
+    Hiding the tile is not a gate: the refusal lives here so a typed URL, a saved link or a direct
+    API call is refused the same way. `weekly_review.review_allowed` is the one rule and the page
+    mirrors it in `rbac.ts`."""
+    caller = _weekly_review_caller(authorization, org_id)
+    if not _wrev.review_allowed(caller):
+        raise HTTPException(403, "The Weekly Performance Review is restricted to administrators. "
+                                 "Ask an admin to give your role the 'admin' module on "
+                                 "/admin/roles.")
+    return caller
+
+
+def _weekly_review_period(day):
+    """The PERIOD (month) a review week is reviewed in — the month its closing day falls in. The
+    month-keyed items (profit, commission, accessories, the rep verdict) are month-to-date figures
+    and each item says so through its own `window`, so a weekly pack never implies that a monthly
+    number is a week's work."""
+    from datetime import date as _d
+    y, m, dd = [int(x) for x in str(day)[:10].split("-")]
+    return _d(y, m, dd).strftime("%B %Y")
+
+
+def _weekly_review_store_week(client, org_id, week):
+    """{STORE CODE -> {'boxes': n, 'revenue': $}} for one week, from the SHARED sales cells.
+
+    The same union + the same `_sales_cell_agg` the Sales Report, Daily Targets and Zero Sales read,
+    so a box counted here is a box counted there. Returns {} when the window carries no rows, which
+    the fold reports as not measured rather than as a week of no sales."""
+    rows = []
+    for period in _zero_sales_months(week["date_from"], week["date_to"]):
+        try:
+            prows, _meta = _sales_rows_union_txn_range(client, org_id, period,
+                                                       week["date_from"], week["date_to"],
+                                                       cols=_ACTUALS_COLS)
+        except Exception as e:
+            print(f"WARN weekly-review sales read failed for {period}: {e}")
+            prows = []
+        rows.extend(prows)
+    in_window = {d for d in _zs.day_range(week["date_from"], week["date_to"])}
+    rows = [r for r in rows if str(r.get("trans_date") or "")[:10] in in_window]
+    if not rows:
+        return {}
+    acfg = _accessory_config(client, org_id)
+    cells = _sales_cell_agg(rows, acfg, store_key=_canonical_store_key_fn(client, org_id))
+    out = {}
+    for (store, _rep, _day), cell in cells.items():
+        key = str(store or "").strip().upper()
+        if not key:
+            continue
+        slot = out.setdefault(key, {"boxes": 0, "revenue": 0.0})
+        slot["boxes"] += int(cell.get("box_count") or 0)
+        slot["revenue"] = round(slot["revenue"] + float(cell.get("revenue") or 0.0), 2)
+    return out
+
+
+def _weekly_review_aging_rows(aging):
+    """Every device row the aging report served, in one list. `buckets` is the owed>0 subset and the
+    zero / unknown-age lists are the rest; each row is already stamped with its carrier's own
+    `aging_bucket` by `device_aging_policy`, which is why this never re-buckets a device."""
+    rows = []
+    for b in (aging.get("buckets") or {}).values():
+        rows.extend(b.get("rows") or [])
+    rows.extend((aging.get("zero_inventory") or {}).get("rows") or [])
+    rows.extend((aging.get("unknown_age") or {}).get("rows") or [])
+    return rows
+
+
+async def _weekly_review_facts(client, org_id, authorization, week, period):
+    """Read every item's facts ONCE for the whole tenant. Each read is independently guarded: an item
+    whose source is down is handed in as `Unreadable` with the reason, and the other six still
+    produce their numbers."""
+    facts, store_week, prior_week_cells = {}, {}, {}
+
+    try:
+        gp = await get_gp_report(period, org_id=org_id, authorization=authorization)
+        facts["profit"] = [r for r in (gp.get("store_rows") or []) if r.get("store_code")]
+    except Exception as e:
+        facts["profit"] = _wrev.Unreadable(f"the Gross Profit report could not be read ({e})")
+
+    try:
+        rows = await get_commissions(period, authorization=authorization, org_id=org_id)
+        facts["commission"] = [{"rep": r.get("storeops_name") or r.get("epay_salesperson") or "",
+                                "store_code": r.get("store_code") or r.get("store"),
+                                "total_payout": r.get("total_payout"),
+                                "units": r.get("units")} for r in (rows or [])]
+    except Exception as e:
+        facts["commission"] = _wrev.Unreadable(f"the rep commission rows could not be read ({e})")
+
+    try:
+        plan = get_accessory_target_plan(period, authorization=authorization, org_id=org_id)
+        facts["accessory"] = [{"store_code": r.get("store_code"),
+                               "target": r.get("current_target"),
+                               "achieved": r.get("mtd_acc")} for r in (plan.get("rows") or [])]
+    except Exception as e:
+        facts["accessory"] = _wrev.Unreadable(f"the accessory target plan could not be read ({e})")
+
+    # WHO IS BEHIND IS NOT DECIDED HERE. The Daily Action Plan already judges a rep against their own
+    # store and against the tenant's declared KPI targets; this reads that verdict.
+    try:
+        plan = await get_action_plan(period, authorization=authorization, org_id=org_id)
+        reps = []
+        for s in (plan.get("stores") or []):
+            for r in (s.get("reps") or []):
+                short = ((r.get("commission") or {}).get("short_kpis") or [])
+                behind = bool(r.get("below_store")) or bool(short)
+                reps.append({"rep": r.get("rep"), "store_code": s.get("store_code"),
+                             "behind": behind,
+                             "verdict": ("behind their own store's conversion" if r.get("below_store")
+                                         else (f"short on {', '.join(str(k) for k in short[:3])}"
+                                               if short else "keeping up"))})
+        facts["rep_watch"] = reps
+    except Exception as e:
+        facts["rep_watch"] = _wrev.Unreadable(f"the rep verdict could not be read ({e})")
+
+    try:
+        from app.modules.asset.router import get_aging as _get_aging
+        aging = await _get_aging(org_id=org_id)
+        facts["aging"] = {"rows": _weekly_review_aging_rows(aging),
+                          "by_carrier": (aging.get("aging_policy") or {}).get("by_carrier") or []}
+    except Exception as e:
+        facts["aging"] = _wrev.Unreadable(f"the inventory aging report could not be read ({e})")
+
+    # PAYROLL IS THE WEEK'S OWN, not the month's: `/storeops/payroll-by-store` takes a start/end range
+    # and it is the ONE labour authority (§ACCOUNT-03), so the review never measures labour itself.
+    try:
+        from app.modules.storeops.router import get_payroll_by_store as _payroll
+        pay = _payroll(start=week["date_from"], end=week["date_to"],
+                       authorization=authorization or "", org_id=org_id)
+        facts["payroll"] = [{"store_code": r.get("store_code") or r.get("store"),
+                             "amount": r.get("amount")} for r in (pay.get("stores") or [])]
+    except Exception as e:
+        facts["payroll"] = _wrev.Unreadable(f"payroll could not be read ({e})")
+
+    try:
+        from datetime import timedelta as _td, date as _dt
+        prior_end = (_dt.fromisoformat(week["date_from"]) - _td(days=1)).isoformat()
+        prior = {"date_from": (_dt.fromisoformat(prior_end) - _td(days=6)).isoformat(),
+                 "date_to": prior_end}
+        store_week = _weekly_review_store_week(client, org_id, week)
+        prior_week_cells = _weekly_review_store_week(client, org_id, prior)
+    except Exception as e:
+        print(f"WARN weekly-review growth read failed: {e}")
+        store_week, prior_week_cells = {}, {}
+    return facts, store_week, prior_week_cells
+
+
+def _weekly_review_growth_by_scope(scopes, store_week, prior_week):
+    """One growth fact per scope, folded from the SAME per-store cells the company pack folds — so a
+    market's growth and the company's growth can never be two different measurements."""
+    out = {}
+    for s in scopes:
+        codes = [c for c in (s.get("store_codes") or [])]
+        def fold(src):
+            rows = [src[c] for c in codes if c in src]
+            if not rows:
+                return None
+            return {"boxes": sum(r["boxes"] for r in rows),
+                    "revenue": round(sum(r["revenue"] for r in rows), 2)}
+        out[s["key"]] = {"growth": {"current": fold(store_week), "prior": fold(prior_week)}}
+    return out
+
+
+async def _weekly_review_pack(client, org_id, authorization, as_of, cfg, markets=None):
+    """THE PACK: one review per declared market, one consolidated for the company, and a named scope
+    for the stores no market claims."""
+    week = _wrev.week_window(as_of, cfg["week_ends_on"])
+    period = _weekly_review_period(week["week_ending"])
+    facts, store_week, prior_week = await _weekly_review_facts(client, org_id, authorization,
+                                                               week, period)
+    # THE TENANT'S OWN MARKET VOCABULARY — `core.scope.market_index`, the one union of both market
+    # spellings. Never a house list: a market a tenant did not declare must not appear on its pack.
+    try:
+        from app.core import scope as _cscope
+        index = _cscope.market_index(client, org_id)
+        declared = {v["market"]: sorted({str(c).strip().upper()
+                                         for c in (v.get("codes") or v.get("keys") or set())})
+                    for v in (index.get("by_market") or {}).values()}
+        roster = [str(s.get("store_code") or "").strip().upper()
+                  for s in (index.get("stores") or []) if s.get("store_code")]
+    except Exception as e:
+        print(f"WARN weekly-review market index failed: {e}")
+        declared, roster = {}, []
+    present = [r.get("store_code") for r in (facts.get("profit") or [])
+               if isinstance(facts.get("profit"), list)]
+    codes = sorted({str(c).strip().upper() for c in list(roster) + list(present) if c})
+    if markets:
+        wanted = {str(m).strip().lower() for m in markets}
+        declared = {k: v for k, v in declared.items() if str(k).strip().lower() in wanted}
+        codes = sorted({c for v in declared.values() for c in v if c in set(codes)})
+    scope_list = _wrev.scopes(markets=declared, store_codes=codes)
+    pack = _wrev.build(scope_list, facts=facts, week=week, as_of=str(as_of)[:10],
+                       facts_by_scope=_weekly_review_growth_by_scope(scope_list, store_week,
+                                                                     prior_week))
+    # WHERE EACH MEASURED FIGURE CAME FROM (§CORE-17.3). Declared in
+    # `weekly_review_drilldown.py` and folded by the shared mechanism over the SAME rows this pack
+    # serves — and REFUSED, in words naming the report that does answer, wherever the relation
+    # behind a row is not certain at this level. A composed figure with a guessed table would be a
+    # provenance claim nothing checked.
+    from app.modules.commcalc import weekly_review_drilldown as _wrdd
+    for _r in [pack.get("company"), pack.get("unplaced")] + list(pack.get("markets") or []):
+        if not _r:
+            continue
+        _panels, _refused = _wrdd.review_drilldowns(_r)
+        _r["drilldown"], _r["drilldown_refused"] = _panels, _refused
+    pack["period"] = period
+    pack["config"] = dict(cfg)
+    pack["filters"] = {"markets": sorted(declared.keys())}
+    return pack
+
+
+@router.get("/weekly-review")
+async def get_weekly_review(as_of: str = "", markets: Optional[List[str]] = Query(default=None),
+                            authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """THE WEEKLY PERFORMANCE REVIEW, ON DEMAND (owner 2026-11-16: *"let us make it on demand"*).
+
+    One pack per declared market, one consolidated for the company, and a named scope for any store
+    no market claims. ADMINISTRATORS ONLY — enforced here, never by hiding the tile.
+
+    `as_of` (default today) picks which week: always the LAST COMPLETED week on the tenant's declared
+    closing weekday, so the Monday meeting reads a whole week rather than the part-week it sits in.
+    Every item states whether it was measured and, when it was not, why — a review item that printed
+    0 for a read that failed would send a district manager after a store that is fine."""
+    require_org(org_id)
+    _require_weekly_review(authorization, org_id)
+    client = sb()
+    cfg, _source = _weekly_review_config(client, org_id)
+    from datetime import datetime as _dtm, timezone as _tzc
+    try:
+        from app.modules.storeops.router import _biz_tz_for
+        today = _dtm.now(_tzc.utc).astimezone(_biz_tz_for(org_id)).date().isoformat()
+    except Exception:
+        today = _dtm.now(_tzc.utc).date().isoformat()
+    try:
+        return await _weekly_review_pack(client, org_id, authorization, (as_of or today)[:10], cfg,
+                                         markets=markets)
+    except _wrev.ConfigRefused as e:
+        raise HTTPException(400, f"Weekly review config refused: {e}")
+
+
+@router.get("/weekly-review/config")
+def get_weekly_review_config(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The resolved weekly-review config and where each value came from."""
+    require_org(org_id)
+    _require_weekly_review(authorization, org_id)
+    cfg, source = _weekly_review_config(sb(), org_id)
+    return {"config": cfg, "source": source, "house_default": dict(_wrev.HOUSE_CONFIG),
+            "items": [dict(i) for i in _wrev.ITEMS]}
+
+
+class WeeklyReviewConfigIn(LaxModel):
+    week_ends_on: int | None = None
+    weekly_run_enabled: bool | None = None
+    recipients: list[str] | None = None
+
+
+@router.put("/weekly-review/config")
+def put_weekly_review_config(body: WeeklyReviewConfigIn, authorization: str = Header(default=""),
+                             org_id: str = ORG_ID):
+    """Save this tenant's weekly-review policy. Validated BEFORE it is stored, so a closing weekday
+    the report refuses is a 400 naming it rather than a row that makes every pack cover no week."""
+    require_org(org_id)
+    _require_weekly_review(authorization, org_id)
+    sent = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not sent:
+        raise HTTPException(400, "Nothing to update.")
+    if "week_ends_on" in sent:
+        try:
+            _wrev.week_window("2026-01-01", sent["week_ends_on"])
+        except _wrev.ConfigRefused as e:
+            raise HTTPException(400, str(e))
+    try:
+        (sb().schema("commcalc").table(_WEEKLY_REVIEW_CFG_TABLE)
+         .upsert({"org_id": org_id, **sent,
+                  "updated_at": _datetime.now(_timezone.utc).isoformat()},
+                 on_conflict="org_id").execute())
+    except Exception:
+        raise HTTPException(400, "Couldn't save — is the weekly_review_config migration (1122) "
+                                 "applied?")
+    return get_weekly_review_config(authorization=authorization, org_id=org_id)
+
+
+def _weekly_review_store_run(client, org_id, pack, generated_by=""):
+    """Store the generated pack, one row per (org, week ending). Best-effort: a pack that cannot be
+    STORED is still returned, because the review is the point and the snapshot is the convenience."""
+    try:
+        (client.schema("commcalc").table(_WEEKLY_REVIEW_RUN_TABLE)
+         .upsert({"org_id": org_id, "week_ending": pack["week"]["week_ending"],
+                  "period": pack.get("period"), "generated_at": _datetime.now(_timezone.utc).isoformat(),
+                  "generated_by": generated_by or "", "pack": pack},
+                 on_conflict="org_id,week_ending").execute())
+        return True
+    except Exception as e:
+        print(f"WARN weekly-review snapshot not stored for {org_id}: {e}")
+        return False
+
+
+@router.post("/weekly-review/run-now")
+async def run_weekly_review_now(as_of: str = "", authorization: str = Header(default=""),
+                                org_id: str = ORG_ID):
+    """GENERATE THE PACK NOW and store the snapshot — the button on the report (owner: *"is there
+    any way we can make this on demand"* / *"let us make it on demand"*). Administrators only.
+    Writes nothing but the snapshot: no money, no config, no pay."""
+    require_org(org_id)
+    caller = _require_weekly_review(authorization, org_id)
+    client = sb()
+    cfg, _s = _weekly_review_config(client, org_id)
+    from datetime import datetime as _dtm, timezone as _tzc
+    pack = await _weekly_review_pack(client, org_id, authorization,
+                                     (as_of or _dtm.now(_tzc.utc).date().isoformat())[:10], cfg)
+    stored = _weekly_review_store_run(client, org_id, pack,
+                                      generated_by=str((caller or {}).get("role") or ""))
+    return {**pack, "stored": stored, "generated": True}
+
+
+@router.post("/weekly-review/run-due")
+async def run_weekly_review_due(dry_run: bool = False, org_id_filter: str = ""):
+    """THE STANDING WEEKLY RUN — generate each tenant's pack on ITS declared closing day, so the
+    Monday review with the district managers opens a pack that was already made (owner 2026-11-16).
+
+    Registered as one `cron.schedule` line that calls this daily; a tenant whose closing weekday is
+    not today is skipped, which keeps the cadence in the tenant's config rather than in the schedule.
+    NEVER raises: one tenant's failure cannot stop another's pack."""
+    from datetime import datetime as _dtm, timezone as _tzc
+    root = get_supabase()
+    try:
+        tenants = root.schema("storeops").table("tenants").select("org_id").execute().data or []
+    except Exception:
+        tenants = []
+    if org_id_filter:
+        tenants = [t for t in tenants if str(t.get("org_id")) == str(org_id_filter)]
+    results = []
+    for t in tenants:
+        oid = t.get("org_id")
+        if not oid:
+            continue
+        try:
+            cfg, _s = _weekly_review_config(root, oid)
+            if not cfg.get("weekly_run_enabled"):
+                results.append({"org_id": oid, "skipped": "the standing run is off"})
+                continue
+            try:
+                from app.modules.storeops.router import _biz_tz_for
+                today = _dtm.now(_tzc.utc).astimezone(_biz_tz_for(oid)).date()
+            except Exception:
+                today = _dtm.now(_tzc.utc).date()
+            if today.weekday() != int(cfg["week_ends_on"]):
+                results.append({"org_id": oid, "skipped": "not this tenant's closing day"})
+                continue
+            pack = await _weekly_review_pack(root, oid, "", today.isoformat(), cfg)
+            stored = False if dry_run else _weekly_review_store_run(root, oid, pack,
+                                                                    generated_by="weekly run")
+            results.append({"org_id": oid, "week_ending": pack["week"]["week_ending"],
+                            "stored": stored,
+                            "measured": pack["company"]["coverage"]["measured"],
+                            "not_measured": pack["company"]["coverage"]["not_measured"]})
+        except Exception as e:
+            results.append({"org_id": oid, "error": str(e)[:200]})
+    return {"ran": len(results), "dry_run": bool(dry_run), "results": results}

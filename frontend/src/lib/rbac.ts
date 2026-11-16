@@ -211,6 +211,7 @@ const REPORT_TREES: [string, string][] = [
   ['/commcalc/peer-comparison', 'commissions'],
   ['/commcalc/targets/report-cards', 'commissions'],
   ['/commcalc/spiff-impact', 'commissions'],
+  ['/commcalc/weekly-review', 'commissions'],
   ['/commcalc/month-focus', 'commissions'],
   ['/commcalc/accessory-target-plan', 'commissions'],
   ['/commcalc/product-mix', 'commissions'],
@@ -588,6 +589,14 @@ export const NAV: NavGroup[] = [
     // and its net profit, and which stores are not earning it on the sales they make. A management
     // review surface and a coaching surface, so it is listed in BOTH groups as ONE href.
     { href: '/commcalc/spiff-impact', label: 'Spiff Impact', icon: '🎁', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // WEEKLY PERFORMANCE REVIEW (owner ask 2026-11-16, index §COMMCALC-76) — the Monday review pack:
+    // one review per market and one consolidated, with inventory aging per carrier among its items.
+    // `module: 'admin'` is the gate being MIRRORED, not invented here: the owner asked for "access
+    // only for the admins" and `weekly_review.review_allowed` refuses everyone else on the server,
+    // so this row decides only what is OFFERED. A market manager with company-wide reporting scope
+    // is deliberately not enough — the pack carries payroll, rep pay and store profitability side by
+    // side.
+    { href: '/commcalc/weekly-review', label: 'Weekly Performance Review', icon: '📋', module: 'admin', tileOnly: true },
     // THIS MONTH'S FOCUS (owner ask 2026-10-09, index §63) — what the month is about, which pay type
     // is driving its spiffs, which stores have a target, the temporary spiffs on the table, and the
     // weekly check-in. Scoped ['all','market'] because the owner asked for "market manager or above";
@@ -1467,6 +1476,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/peer-comparison', 'sales'],
   ['/commcalc/targets/report-cards', 'sales'],
   ['/commcalc/spiff-impact', 'comm'],
+  ['/commcalc/weekly-review', 'comm'],
   ['/commcalc/month-focus', 'comm'],
   ['/commcalc/accessory-target-plan', 'targets'],
   ['/commcalc/product-mix', 'sales'],
@@ -1703,6 +1713,16 @@ export function navModuleForPath(path: string): string | null {
 // without re-seeding each role's permissions JSONB. Non-admin roles still need the flag.
 export function isSuperAdmin(perms: Permissions): boolean {
   return !!perms?.modules?.admin
+}
+
+// MAY THIS VIEWER OPEN THE WEEKLY PERFORMANCE REVIEW? Frontend MIRROR of backend
+// `commcalc/weekly_review.review_allowed` — KEEP IN SYNC. Owner 2026-11-16: "allow access only for
+// the admins". The `admin` module (which is what `isSuperAdmin` reads here) or a platform
+// super-admin, and NOTHING else: a company-wide REPORTING scope is deliberately not enough, because
+// the pack carries payroll, rep pay and store profitability on one screen. The server refuses the
+// read, the config and the on-demand run the same way, so this only decides what is OFFERED.
+export function canOpenWeeklyReview(perms: Permissions): boolean {
+  return isSuperAdmin(perms)
 }
 
 // May this user EDIT the given settings AREA (core SETTING_AREAS key, e.g. 'menu_layout')?

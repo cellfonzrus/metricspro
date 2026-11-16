@@ -245,6 +245,12 @@ FACTS: dict[str, dict] = {
             # inline, and for `GET /asset/summary`'s own On-Inventory predicate, so a tile and its
             # evidence cannot come to mean different rows.
             'app/modules/asset/device_asset_drilldown.py': ('report_drilldown',),
+            # THE WEEKLY PERFORMANCE REVIEW's declaration (§COMMCALC-76). TWO panels only — the
+            # rep payouts and the accessory target — because this report QUOTES other reports, and
+            # a panel is served only where the relation behind every row is certain. The five it
+            # refuses say, in words, which report does answer; a provenance claim nothing checked
+            # would be worse than a refusal.
+            'app/modules/commcalc/weekly_review_drilldown.py': ('rd',),
             # The five TARGETS reports (§CORE-17.3m) — Targets, Accessory Targets, the Action
             # Plan, My Targets and the Manager Report Cards. ONE module, SIX catalogues,
             # because the family has SIX measured grains (measured, not assumed: a scope-DAY,

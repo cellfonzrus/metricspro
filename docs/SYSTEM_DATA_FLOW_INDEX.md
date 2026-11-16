@@ -215,6 +215,7 @@ Primary code homes:
 | COMMCALC-73 | **A pull nobody recorded is a report that looks a month stale** | The owner pasted the Data Imports page: two of three tiles read *"Last upload: Oct 8, 2026 … via manual upload"* while the ePay owners-portal sweep had been landing their rows every night since 12 Nov (§COMMCALC-69), `raw_comp_report` 78,053 → 89,556. The rows arrived; the RECORD of their arrival did not. The sweep has THREE storage paths — the month replace, the per-day replace and the Daily-Transaction ingest hook — and each decided for itself whether to write a landing record. Exactly one did, which is why MI/ATU's tile was right and the other two were a month stale over current data. The two journals every "last upload" surface reads now have ONE writer, which `router`'s trace helper dereferences too (it could not before: the home lived in `router`, which imports the sweep), and the record plus the §6l post-landing hook are ONE call every storage path makes, locked by `harness_upload_trace_coverage` (f/j/k) so a new path cannot land silently. The third tile, the monthly sales archive, is NOT this defect: its promotion is switched off in its own registry row — reported, not patched. |
 | COMMCALC-74 | **A refusal names which refusal it is** | One operator sentence covered two states with opposite remedies, and the same source row produced both inside 25 minutes: first a saved address pointing INSIDE the portal (the sentence was right), then the FRONT DOOR being refused by a security appliance, where the address was already correct and "Check the address saved on this source" sent the owner to look at something that was fine. The page is what tells them apart — an appliance says so in the words a person reads and hands over a support id, which is the only reference the portal's own security team can look the refusal up by. So the refusal SENTENCE is now derived from the page rather than from the kind alone: the edge state never asks for the address and quotes the id, the inside-the-portal state is unchanged, and a caller with no page in hand still gets the actionable one rather than a guess. No new kind and no migration — the kind column's CHECK constraint allows three, and the markers stay per-org config. The login verdict's own second copy of the refusal sentence is gone: it reports the one that came with the evidence. |
 | COMMCALC-75 | **A feed lands the same however its file arrives** | The processor back office is fronted by a security appliance that refuses automated clients at every address tried, and the owner confirmed it offers no scheduled email of its own — so the per-store pull cannot fetch this report and no amount of code will make it. Everything downstream of the fetch was already built and was never at fault: the parse, the terminal-to-store resolution, the idempotent upsert and the bill-payment and fee reconciliations that read the rows. ONLY THE TRANSPORT was broken, so the file gets a door instead of the firewall getting a workaround: one arrival function lands a DELIVERED file — forwarded to the mailbox the email sweep already watches, picked off the Upload page, or sent by the processor if they agree to it — through the SAME ingest the pull uses, with the same dedup and the same store resolution, so a delivered file and a pulled one are indistinguishable downstream. A file that is not this report lands nothing and names the columns it looked for; an empty one is never a green tick. The registry row that lets the route be PICKED is a seeded declaration, not code. |
+| COMMCALC-76 | **A weekly review pack is one fold, read from the reports that own its figures** | The owner asked for the LuxeLink performance deck as an in-app report on the Management tile, admins only, one report per market plus a consolidated one, with inventory aging per carrier among its items, generated at the end of each week for the Monday review with the DMs — and on demand. It derives nothing: profit, commission, the accessory gap, growth, the reps behind, aging and payroll are each QUOTED from the surface that already owns them, and the fold is pure, so a second derivation cannot grow beside the report it quotes. An item nobody measured carries no figure and says why in words; a store no market claims gets its own named scope rather than vanishing between the market packs and the company one; and the market vocabulary is a required argument, so nothing declared means nothing identified. The gate is the server's on every door — a company-wide reporting scope is not an administrator. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -26494,6 +26495,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-73 | commcalc |
 | COMMCALC-74 | commcalc |
 | COMMCALC-75 | commcalc |
+| COMMCALC-76 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -49801,3 +49803,133 @@ store-month — unchanged; this changes which measurement it is handed) · §ACC
 visibility) · §64 (which store is this string) · §19.18 (one fact, one home, dereferenced) · §19.50
 (an absence is reported with its reason) · §16 (reports) · §17 (endpoints) · §18 (tables — none
 added: this change ships no migration).
+
+
+---
+
+## §COMMCALC-76. THE WEEKLY PERFORMANCE REVIEW — ONE PACK PER MARKET, ONE FOR THE COMPANY (owner 2026-11-16)
+
+Owner, verbatim: *"Add the performance deck to the management tile but allow access only for the
+admins , make this report every week at the end of the week so the same can be reviewed every monday
+with the dm, it should have invenotry aging for rteh repsective carrier also as one of the items to
+review., make a separate report for each market and one consolidated for the entire company , is
+there any way we can make this on demand"* — and, the same evening, *"let us make it on demand"*.
+
+### COMMCALC-76.1 WHAT IT IS
+
+The in-app form of the LuxeLink performance deck built for the 17 Nov 2026 Zoom
+(`/mnt/project-files/luxelink-zoom-2026-11-17/METHOD_AND_SOURCES.md`). `GET /commcalc/weekly-review`
+returns a PACK: the consolidated company review, one review per market the tenant has DECLARED, and
+a named scope for the stores no market claims. Seven items, in the order the Monday meeting works
+through them:
+
+| item | window | read from |
+|---|---|---|
+| Profit by store | month to date | `GET /commcalc/gp/{period}` store rows (§64 store identity) |
+| Sales and lines growth | this week vs the week before | the shared sales cells (`_sales_cell_agg` over `_sales_rows_union_txn_range`) |
+| Accessory gap against target | month to date | `GET /commcalc/accessory-target-plan/{period}` (§61) |
+| Commission by rep | month to date | `GET /commcalc/commissions/{period}` — the pay engine's own rows |
+| Reps behind their peers | month to date | `GET /commcalc/targets/{period}/action-plan` — judged there (§59) |
+| **Inventory aging by carrier** | as of today | `GET /asset/aging` rows against each carrier's OWN declared window (§COMMCALC-26, §CORE-17.3y) |
+| Payroll | this week | `GET /storeops/payroll-by-store` — the one labour authority (§ACCOUNT-03) |
+
+### COMMCALC-76.2 THE RULE IT IS BUILT ON — NOTHING IS DERIVED TWICE
+
+**This report computes no figure of its own.** Every number arrives from the surface that already
+owns it, and the fold — `backend/app/modules/commcalc/weekly_review.py` — is PURE: it imports
+nothing from `app.`, so it cannot grow a read beside the report it quotes. That is the duplicate
+check CLAUDE.md makes a build gate: a review pack that re-derived profit would disagree with the
+Gross Profit report within a month, and the Monday meeting would spend itself arguing about which
+screen is right.
+
+Three refusals carry the honesty:
+
+- **A fact nobody measured is never a zero.** Every item is `measured` / `not_measured`, a
+  not-measured item's `figure` is `None` and its reason is in words. A read that FAILED is handed to
+  the fold as `Unreadable(reason)` and reported as itself — the Zero Sales doctrine (§CORE-27, §15)
+  applied to a pack a district manager is judged on.
+- **A store is never dropped.** A store no market claims gets its own named scope, so the market
+  packs and the company pack can never disagree about the estate.
+- **The tenant's own words are a required argument** (§COMMCALC-49.10). `scopes(markets=…)` has no
+  default: the market vocabulary is `core.scope.market_index`'s, and nothing declared means nothing
+  identified, said on the surface.
+
+### COMMCALC-76.3 ADMINISTRATORS ONLY, ON THE SERVER
+
+`weekly_review.review_allowed` is the ONE rule: the `admin` module on the role, or a platform
+super-admin. A company-wide REPORTING scope (`scope: 'all'`) is deliberately **not** enough — the
+pack carries payroll, rep pay and store profitability on one screen. Every route calls
+`_require_weekly_review`; the nav entry carries `module: 'admin'` so the tile is not offered, and
+hiding a tile is never the gate. Frontend mirror: `canOpenWeeklyReview` in `rbac.ts`.
+
+### COMMCALC-76.4 ON DEMAND, AND THE STANDING END-OF-WEEK RUN
+
+On demand is the main way it is produced (`POST /commcalc/weekly-review/run-now`, the **Generate
+now** button), and the standing run (`POST /commcalc/weekly-review/run-due`, one daily `cron.schedule`
+line) generates each tenant's pack on ITS OWN declared closing weekday so it is waiting on Monday.
+The cadence is config, never a schedule literal: `commcalc.weekly_review_config.week_ends_on`
+(0 Monday … 6 Sunday, house default Sunday) and `weekly_run_enabled` (OFF by default). The week under
+review is always the LAST COMPLETED one — never the part-week the meeting sits in.
+
+### COMMCALC-76.5 WHERE EACH FIGURE CAME FROM (§CORE-17.3)
+
+`weekly_review_drilldown.py` declares a shared panel ONLY where the relation behind every row is
+certain: the rep payouts (`commcalc.rep_commissions`) and the accessory TARGET the gap is measured
+against (`commcalc.targets`, a store with no saved target shown without a figure). The other five are
+REFUSED in words, each naming the report that does answer — profit is the GP report's own composition
+of four feeds per store, payroll is the labour authority's per-person evidence, aging's devices open
+on the Inventory Aging report, growth is a percentage change (§CORE-17.3h) and "reps behind" is a
+count whose list is the table itself. A refusal that names the report that answers is worth more than
+a panel whose provenance is a guess (`report_drilldown.origin`'s own rule).
+
+### COMMCALC-76.6 TESTS AND THE LOCK
+
+- Unit (TDD, written first): `backend/tests/unit/test_weekly_review.py` (22),
+  `backend/tests/unit/test_weekly_review_drilldown.py` (6),
+  `frontend/src/lib/weekly-review-export.test.ts` (10).
+- Integration, through the REAL app for THREE tenants:
+  `backend/tests/integration/test_weekly_review_endpoint.py` (39) — the admin gate on every door, one
+  pack per declared market, the unplaced scope, nothing reported as zero, and no tenant's market or
+  store in another's pack.
+- Lock: `backend/harness_weekly_review.py` (51 checks), wired into `carrier-vocab-guard.yml`.
+
+### COMMCALC-76.7 WHAT THIS DOES NOT DO, said plainly
+
+- **It sends nothing by itself.** The standing run GENERATES and stores the pack; the Send bar on the
+  report is how it reaches a person (email / WhatsApp through `/notify/send-file`). Emailing the pack
+  automatically is a follow-up, not a quiet default.
+- **It exports Excel, PDF and Print, not PowerPoint.** Nothing in the platform writes `.pptx`; the
+  deck that inspired it was built outside the app.
+- **It does not fix the data gaps the deck named** (the blank `contract_type` month, the thin approved
+  salary sheet, the months with no expense rows). An item those affect reports what it measured and
+  says what it could not — it never hides a gap behind a plausible number.
+
+### §16–18 CROSS-REFERENCES
+
+Depends on: §64 (which store is this string), §61 (the accessory target plan), §59 (who is behind),
+§COMMCALC-26 / §CORE-17.3y (a carrier's own selling window), §ACCOUNT-03 (the one labour authority),
+§CORE-27 (every report carries the standard filters and the send bar), §COMMCALC-49.10 (a tenant's
+declaration is a required argument). Feeds: the Management Overview dashboard (mig 1122 tile).
+Neighbours: §59.9 (the manager report cards — a per-MANAGER check-off, a different grain and a
+different question), §63 (this month's declared focus — written by a human; this pack is generated).
+
+§16 (reports): **Weekly Performance Review** `/commcalc/weekly-review` — module `admin`, Management
+Overview tile, standard filters + send bar.
+§17 (endpoints): `GET /commcalc/weekly-review`, `GET`/`PUT /commcalc/weekly-review/config`,
+`POST /commcalc/weekly-review/run-now`, `POST /commcalc/weekly-review/run-due`.
+§18 (tables): `commcalc.weekly_review_config` (policy: closing weekday, standing-run switch,
+recipients), `commcalc.weekly_review_run` (the generated pack, one row per tenant per week) —
+migration `1122`, both granted to `service_role`.
+
+Files: `backend/app/modules/commcalc/weekly_review.py` (**new**),
+`backend/app/modules/commcalc/weekly_review_drilldown.py` (**new**),
+`backend/app/modules/commcalc/router.py`, `backend/harness_weekly_review.py` (**new**),
+`backend/harness_drilldown_pending.txt`, `backend/tests/unit/test_weekly_review.py` (**new**),
+`backend/tests/unit/test_weekly_review_drilldown.py` (**new**),
+`backend/tests/integration/test_weekly_review_endpoint.py` (**new**),
+`database/migrations/1122_weekly_performance_review.sql` (**new**),
+`frontend/src/app/(platform)/commcalc/weekly-review/page.tsx` (**new**),
+`frontend/src/lib/weekly-review-export.ts` (**new**),
+`frontend/src/lib/weekly-review-export.test.ts` (**new**), `frontend/src/lib/rbac.ts`,
+`frontend/src/lib/reports.ts`, `frontend/src/lib/route-index.ts`,
+`.github/workflows/carrier-vocab-guard.yml`.
