@@ -21865,8 +21865,15 @@ def payout_structure_document(fmt: str = "pdf", plan_id: str = "", period: str =
         exclusions, _ = _ppg.load_exclusions(client, org_id)
     except Exception:
         exclusions = []
+    # THE SCHEDULE IS PART OF THE PLAN'S PAY (§8 + payout_structure trap ④). Read through the ENGINE's
+    # own loader, never a second query, so the document can only describe schedules the engine would
+    # pay. Degrades to "no schedules" when migration 201 is not applied, exactly as that loader does.
+    try:
+        _scheds, _ilines = sale_installment_engine._load_schedules(client, org_id)
+    except Exception:
+        _scheds, _ilines = [], {}
     doc = _ps.build_doc(plans, tenant_name=tenant, gate_cfg=gate_cfg, exclusions=exclusions,
-                        plan_id=(plan_id or None))
+                        plan_id=(plan_id or None), schedules=_scheds, installment_lines=_ilines)
     if (fmt or "pdf").strip().lower() == "json":
         return doc
     return Response(content=_ps.render_pdf(doc), media_type="application/pdf",

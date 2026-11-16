@@ -12,6 +12,7 @@ document is right.
   E. Honest degradation — empty plan, unassigned plan, inactive plan, missing config.
   F. Exclusions carry their own operator vocabulary (word/prefix/suffix).
   G. The PDF actually renders, escapes markup, and survives hostile text.
+  J. Trap ④ — a plan's MULTI-MONTH schedule is part of what it pays.
   H. ARMED negative control — a deliberately wrong expectation MUST fail, or this harness proves nothing.
 
 Run: python3 harness_payout_structure.py     (no DB, no network — pure fixtures)
@@ -339,6 +340,118 @@ check("G6 a downgrade tier is worded as less",
       ps.describe_tiers({"tiers": [{"min_count": 5, "multiplier": 0.8}]})["rows"][0]["effect"],
       "20% less than the base rate")
 
+section("J. TRAP ④ — the multi-month schedule is part of what the plan pays")
+import json as _json_j   # noqa: E402  (the model is also served as JSON)
+GATE_PAID = ("Paid only if the carrier is still paying us on that line when the month falls due.")
+
+# LUXELINK'S REAL ROWS, measured live 2026-11-16: plan 1e53d090 "Total Employee Comp Chicago" carries
+# schedule "3MR Commission Payment" — 5% of MRC in month 1, nothing in month 2, 13% in month 3, on
+# every premium/BYOD activation, gated from month 2 on the carrier still paying.
+SCHED = {"id": "s1", "plan_id": "p1", "name": "3MR Commission Payment", "num_months": 3,
+         "trigger_match_field": "activation_bucket", "trigger_match_op": "in",
+         "trigger_match_value": "premium,byod", "gate_mode": "paid_residual",
+         "gate_from_month": 2, "clawback_enabled": False, "effective_from": "2026-07-01",
+         "effective_to": None, "eligible_sale_periods": [], "is_active": True}
+LINES = {"s1": [{"schedule_id": "s1", "month_index": 1, "payout_kind": "pct_mrc", "mrc_pct": "0.05",
+                 "flat_amount": "0"},
+                {"schedule_id": "s1", "month_index": 2, "payout_kind": "flat", "flat_amount": "0",
+                 "mrc_pct": "0"},
+                {"schedule_id": "s1", "month_index": 3, "payout_kind": "pct_mrc", "mrc_pct": "0.13",
+                 "flat_amount": "0"}]}
+# The $0 activation rule the schedule actually pays for, alongside the $0 UPGRADE rule it does not.
+R_CHI_ACT0 = {"label": "activation", "match_field": "activation_bucket", "match_op": "in",
+              "match_value": "premium,byod", "qualifies": True, "payout_kind": "flat_per_unit",
+              "amount": "0.0", "pct": "0.0", "sort": 2}
+
+ins = ps.describe_installments([SCHED], LINES, "p1")
+check("J1 the schedule attached to this plan is described", len(ins), 1)
+check("J2 ... with its horizon", ins[0]["horizon_text"],
+      "Paid over 3 months, starting the month of the sale")
+check("J3 ... and its trigger, in the rule vocabulary", ins[0]["trigger"],
+      "Activation type is any of: “premium”, “byod”")
+check("J4 month 1 prints mrc_pct, not flat_amount", ins[0]["months"][0]["rate"],
+      "5% of the monthly plan charge")
+check("J5 month 3 prints its own rate", ins[0]["months"][2]["rate"],
+      "13% of the monthly plan charge")
+check("J6 a zero month is SHOWN, not dropped", [m["month"] for m in ins[0]["months"]],
+      ["Month 1", "Month 2", "Month 3"])
+check("J7 ... and marked as paying nothing", ins[0]["months"][1]["pays"], False)
+# gate_from_month=2: month 1 is unconditional, months 2+ carry the gate. Printing the gate on month 1
+# would invent a condition; omitting it from months 2-3 would promise money the engine withholds.
+check("J8 month 1 is unconditional when the gate starts at month 2",
+      ins[0]["months"][0]["condition"], "Paid regardless.")
+check("J9 month 2 carries the paid gate", ins[0]["months"][1]["condition"],
+      GATE_PAID)
+check("J10 the effective window is stated", ins[0]["window"],
+      "Applies to sales made on or after 2026-07-01")
+
+# A schedule belonging to ANOTHER plan never leaks into this one (the multi-tenant/multi-plan rule).
+check("J11 another plan's schedule is not described here",
+      ps.describe_installments([dict(SCHED, plan_id="other")], LINES, "p1"), [])
+check("J12 an INACTIVE schedule is left out",
+      ps.describe_installments([dict(SCHED, is_active=False)], LINES, "p1"), [])
+check("J13 a schedule with no configured month still says so",
+      ps.describe_installments([SCHED], {}, "p1")[0]["warnings"],
+      ["No month is configured on this schedule yet, so it pays nothing today."])
+check("J14 a short schedule is disclosed, not silently truncated",
+      ps.describe_installments([SCHED], {"s1": LINES["s1"][:1]}, "p1")[0]["warnings"],
+      ["This schedule runs for 3 months but only 1 is configured."])
+check("J15 an all-zero schedule pays nothing and says so",
+      ps.describe_installments([SCHED], {"s1": [dict(LINES["s1"][1], month_index=i) for i in (1, 2, 3)]},
+                               "p1")[0]["pays"], False)
+
+# ── the sentence a $0 rule gets. THIS is the defect the section exists for.
+plan_j = dict(plan_chi, rules=[R_CHI_ACC, R_CHI_ACT0, R_CHI_UPG])
+d_before = ps.build_doc([plan_j])
+d_after = ps.build_doc([plan_j], schedules=[SCHED], installment_lines=LINES)
+why_before = {i["what"]: i["why"] for i in d_before["plans"][0]["no_pay_items"]}
+why_after = {i["what"]: i["why"] for i in d_after["plans"][0]["no_pay_items"]}
+check("J16 without the schedule, the $0 activation reads as earning nothing",
+      why_before["Activation"], "Currently set to zero — earns no incentive.")
+check("J17 WITH the schedule, it says the pay arrives later", why_after["Activation"],
+      "Earns nothing at the time of sale. This plan pays these sales over several months instead "
+      "— see “Paid over several months” below.")
+# CONSERVATIVE: the UPGRADE rule is not covered by a premium/byod trigger, so its sentence is unchanged.
+# Over-promising pay is the dangerous direction, so an unproven overlap must NOT be excused.
+check("J18 a $0 rule the schedule does NOT cover keeps its honest sentence",
+      why_after["Upgrade"], "Currently set to zero — earns no incentive.")
+check("J19 the matcher helper is conservative on a different field",
+      ps.trigger_covers(SCHED, R_CHI_UPG), False)
+check("J20 ... and True for an overlapping value set", ps.trigger_covers(SCHED, R_CHI_ACT0), True)
+check("J21 a trigger of 'any' covers every rule",
+      ps.trigger_covers(dict(SCHED, trigger_match_field="any"), R_CHI_UPG), True)
+check("J22 an all-zero schedule cannot excuse a zero rule",
+      {i["what"]: i["why"] for i in ps.build_doc(
+          [plan_j], schedules=[SCHED],
+          installment_lines={"s1": [dict(LINES["s1"][1], month_index=i) for i in (1, 2, 3)]}
+      )["plans"][0]["no_pay_items"]}["Activation"],
+      "Currently set to zero — earns no incentive.")
+
+# The model and the opening explainer.
+check("J23 the plan carries its schedules in the model", len(d_after["plans"][0]["installments"]), 1)
+check("J24 a tenant with NO schedule is byte-identical to before",
+      ps.build_doc([plan_j], generated_at="x") ==
+      ps.build_doc([plan_j], schedules=[], installment_lines={}, generated_at="x"), True)
+check_in("J25 the explainer mentions multi-month pay when a plan has it",
+         "paid over several months", " ".join(d_after["how_it_works"]).lower())
+check_not_in("J26 ... and does not when no plan has it",
+             "paid over several months", " ".join(d_before["how_it_works"]).lower())
+# A plan whose ONLY pay is the schedule must not be warned as paying nothing.
+plan_only = dict(plan_chi, rules=[R_CHI_ACT0])
+check("J27 a plan paid only through its schedule is not called empty",
+      any("no paying items" in w for w in ps.build_doc(
+          [plan_only], schedules=[SCHED], installment_lines=LINES)["plans"][0]["warnings"]), False)
+check("J28 ... but with no schedule it IS warned about",
+      any("currently pay" in w for w in ps.build_doc([plan_only])["plans"][0]["warnings"]), True)
+check("J28b ... and that warning goes away once the schedule pays",
+      any("currently pay" in w for w in ps.build_doc(
+          [plan_only], schedules=[SCHED], installment_lines=LINES)["plans"][0]["warnings"]), False)
+check("J29 the Boost document carries the key, empty (one model, one renderer)",
+      ps.build_boost_doc({}, (), tenant_name="House")["plans"][0]["installments"], [])
+check("J30 the model with schedules is still JSON-serialisable",
+      isinstance(_json_j.dumps(d_after), str), True)
+
+
 section("H. The PDF renders, and hostile text cannot break it")
 
 hostile = dict(R_DM_VHI, label="Tom & Jerry <b>bonus</b>",
@@ -352,7 +465,9 @@ if PDF_MODE == "defect":
 elif PDF_MODE == "skip":
     for _n in ("H1 output is a real PDF", "H2 ... of a plausible size", "H3 ... and is terminated",
                "H4 markup in tenant/product/label text renders instead of crashing",
-               "H5 an empty document still renders"):
+               "H5 an empty document still renders",
+               "H5b a plan with a multi-month schedule renders",
+               "H5c ... and is longer than the same plan without it"):
         skip(_n, PDF_WHY)
 else:
     pdf = ps.render_pdf(doc)
@@ -362,6 +477,11 @@ else:
     h_pdf = ps.render_pdf(h_doc)
     check("H4 markup in tenant/product/label text renders instead of crashing", h_pdf[:5], b"%PDF-")
     check("H5 an empty document still renders", ps.render_pdf(ps.build_doc([]))[:5], b"%PDF-")
+    # Trap ④: the multi-month section must reach the page, not just the model.
+    check("H5b a plan with a multi-month schedule renders",
+          ps.render_pdf(d_after)[:5], b"%PDF-")
+    check("H5c ... and is longer than the same plan without it",
+          len(ps.render_pdf(d_after)) > len(ps.render_pdf(d_before)), True)
 
 # Reportlab-INDEPENDENT half of the same guarantee, so a missing PDF backend can never take the
 # whole hostile-text proof down with it. Note what is NOT claimed here: `build_doc` is PURE by

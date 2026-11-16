@@ -30,6 +30,17 @@ THREE TRAPS THIS MODULE EXISTS TO AVOID — each one would print a WRONG RATE on
      The frequency column comes from `plan_pay_gate.resolve_unit_basis()`, the SAME resolver the engine
      calls, so this document can never drift from the arithmetic. It is not re-implemented here.
 
+  ④ A PLAN DOES NOT PAY ONLY AT THE SALE.
+     A plan can carry a `plan_installment_schedule` (mig 201, index §8) that pays the SAME sale over
+     several later months. Until 2026-11-16 this document read `commission_rule` and nothing else, so a
+     plan whose activation rule is $0.00 at the sale and pays a three-month residual was described to its
+     employees as paying **nothing** for an activation — and the rule was filed under "does not pay" with
+     the sentence "Currently set to zero — earns no incentive". Measured live that day: LuxeLink's
+     Chicago plan (`1e53d090`), schedule "3MR Commission Payment", 5% of MRC in month 1, 0% in month 2,
+     13% in month 3 on every premium/BYOD activation. `describe_installments()` states the schedule, and
+     a zero-rate rule on a plan that carries one is no longer told it earns nothing. THE SCHEDULE IS PART
+     OF THE PLAN'S PAY, so any surface describing what a plan pays must read both.
+
 PURITY: everything above `render_pdf` is pure (no DB, no reportlab) so the English is unit-testable against
 fixtures — see backend/harness_payout_structure.py. `render_pdf` imports reportlab lazily, the same way
 notify/render.py does, so importing this module never costs the PDF stack.
@@ -75,6 +86,24 @@ BASIS_FOOTNOTES = {
 }
 
 SCOPE_LABELS = {"employee": "Employee", "store": "Store", "market": "Market", "default": "Everyone"}
+
+# How a schedule's PAID GATE (`plan_installment_schedule.gate_mode`, mig 201) reads to a human. An
+# unknown mode falls back to the honest "there is a condition we cannot describe" rather than silently
+# promising the money — a document that over-promises pay is the dangerous direction.
+GATE_LABELS = {
+    "none": "Paid whether or not the line is still active.",
+    "paid_residual": "Paid only if the carrier is still paying us on that line when the month falls due.",
+    "active_status": "Paid only while the line is still active with the carrier.",
+    "nonzero_residual": "Paid only when the carrier residual on that line is above zero.",
+}
+GATE_UNKNOWN = "Paid only when the plan's qualifying condition is met in that month."
+
+
+def month_word(i):
+    """1 -> 'Month 1'. The document numbers months rather than naming calendar months, because the
+    month a sale falls in is the employee's own sale month, not a fixed calendar month. PURE."""
+    return f"Month {int(_f(i)) or 1}"
+
 
 
 def _s(v):
@@ -283,7 +312,151 @@ def describe_tiers(plan):
 
 
 # ── the document ──────────────────────────────────────────────────────────────────────────────────
-def build_doc(plans, tenant_name="", gate_cfg=None, exclusions=None, generated_at=None, plan_id=None):
+
+# ── ⑤ multi-month installments: what the plan pays AFTER the sale ─────────────────────────────────
+def describe_installment_month(line):
+    """(rate_text, pays_nothing) for ONE installment month. PURE.
+
+    Reads the field the ENGINE reads for that `payout_kind` — `mrc_pct` for `pct_mrc`, `flat_amount`
+    for `flat` — the same discipline as `describe_rate` (trap ①). A month configured at zero is
+    SHOWN, not dropped: "nothing in month 2" is a fact an employee planning a month needs, and a
+    hidden month would make a three-month schedule read as a two-month one.
+    """
+    kind = (_s(line.get("payout_kind")) or "flat").lower()
+    if kind == "pct_mrc":
+        p = _f(line.get("mrc_pct"))
+        return f"{pct(p)} of the monthly plan charge", p == 0
+    amt = _f(line.get("flat_amount"))
+    return money(amt), amt == 0
+
+
+def _plan_scheds(schedules, plan_id, paying):
+    """The raw schedule rows behind the PAYING described schedules of one plan. PURE. A schedule every
+    month of which is zero cannot excuse a zero rule — it pays nothing either."""
+    ids = {_s(i.get("id")) for i in (paying or [])}
+    return [x for x in (schedules or []) if _s(x.get("id")) in ids
+            and _s(x.get("plan_id")) == _s(plan_id)]
+
+
+def describe_installments(schedules, lines_by_schedule, plan_id):
+    """Every ACTIVE multi-month schedule attached to ONE plan, as document rows. PURE.
+
+    `schedules`         : commcalc.plan_installment_schedule rows (any org-scoped subset)
+    `lines_by_schedule` : {schedule_id: [plan_installment_line rows]}
+    `plan_id`           : the plan being described
+
+    An inactive schedule is left out entirely — unlike an inactive PLAN, which is shown and labelled,
+    because an employee can be assigned to a paused plan but cannot be "assigned" to a paused
+    schedule. A schedule with no line rows is still listed, with its horizon and the warning that no
+    month is configured, because the silent alternative is a plan that pays less than the document
+    implies with nothing on the page to explain it.
+    """
+    out = []
+    want = _s(plan_id)
+    for sch in sorted(schedules or [], key=lambda x: _s(x.get("name")).lower()):
+        if not bool(sch.get("is_active", True)):
+            continue
+        if want and _s(sch.get("plan_id")) != want:
+            continue
+        n = int(_f(sch.get("num_months")) or 1)
+        lines = sorted((lines_by_schedule or {}).get(sch.get("id")) or [],
+                       key=lambda x: _f(x.get("month_index")))
+        gate_from = int(_f(sch.get("gate_from_month")) or 1)
+        gate_mode = (_s(sch.get("gate_mode")) or "none").lower()
+        gate_text = GATE_LABELS.get(gate_mode, GATE_UNKNOWN)
+
+        months, every_zero = [], True
+        for ln in lines:
+            idx = int(_f(ln.get("month_index")) or 1)
+            rate, zero = describe_installment_month(ln)
+            every_zero = every_zero and zero
+            gated = (gate_mode != "none") and (idx >= gate_from)
+            months.append({"month": month_word(idx), "month_index": idx, "rate": rate,
+                           "pays": not zero,
+                           "condition": gate_text if gated else "Paid regardless."})
+
+        # The trigger is described by the SAME matcher vocabulary a rule uses (one home), by handing
+        # describe_condition the rule-shaped view of the schedule's trigger_* columns.
+        trigger = describe_condition({"match_field": sch.get("trigger_match_field"),
+                                      "match_op": sch.get("trigger_match_op"),
+                                      "match_value": sch.get("trigger_match_value")})
+
+        warnings = []
+        if not months:
+            warnings.append("No month is configured on this schedule yet, so it pays nothing today.")
+        elif len(months) < n:
+            warnings.append(f"This schedule runs for {n} months but only {len(months)} "
+                            f"{'is' if len(months) == 1 else 'are'} configured.")
+        if months and every_zero:
+            warnings.append("Every month on this schedule is currently set to zero.")
+
+        out.append({
+            "id": _s(sch.get("id")),
+            "name": _s(sch.get("name")) or "Multi-month payment",
+            "trigger": trigger,
+            "horizon": n,
+            "horizon_text": (f"Paid over {n} months, starting the month of the sale"
+                             if n != 1 else "Paid in the month of the sale"),
+            "months": months,
+            "clawback": bool(sch.get("clawback_enabled")),
+            "window": _window_text(sch),
+            "warnings": warnings,
+            "pays": any(m["pays"] for m in months),
+        })
+    return out
+
+
+def _match_values(op, val):
+    """The set of values a matcher accepts, lowercased. `in` is a comma-separated LIST; `equals` and
+    `contains` are ONE value, semicolons and all (trap ②). PURE."""
+    v = _s(val).lower()
+    if not v:
+        return set()
+    if (_s(op) or "equals").lower() == "in":
+        return {x.strip() for x in v.split(",") if x.strip()}
+    return {v}
+
+
+def trigger_covers(sch, rule):
+    """Does this schedule's trigger cover the sale lines THIS rule matches? PURE.
+
+    Used for one thing only: deciding whether a rule that pays $0.00 at the sale is a rule that earns
+    nothing, or a rule whose pay arrives over later months. It is deliberately CONSERVATIVE — it
+    answers True only for a trigger of `any`, or the same field with an overlapping value set. An
+    unproven overlap answers False, so the document says "earns no incentive" rather than promising
+    money a schedule may not pay. Over-promising pay is the dangerous direction.
+    """
+    field = (_s(sch.get("trigger_match_field")) or "any").lower()
+    if field == "any":
+        return True
+    if field != (_s(rule.get("match_field")) or "any").lower():
+        return False
+    svals = _match_values(sch.get("trigger_match_op"), sch.get("trigger_match_value"))
+    rvals = _match_values(rule.get("match_op"), rule.get("match_value"))
+    return bool(svals and rvals and (svals & rvals))
+
+
+def _window_text(sch):
+    """The schedule's own effective window, or None when it has no floor and no ceiling. PURE.
+
+    `eligible_sale_periods` OVERRIDES the date window in the engine (mig 201), so it is described
+    first and the dates are not also printed — a document that showed both would describe a window
+    the engine does not apply."""
+    periods = [p for p in (sch.get("eligible_sale_periods") or []) if _s(p)]
+    if periods:
+        return "Applies to sales in: " + ", ".join(_s(p) for p in periods)
+    lo, hi = _s(sch.get("effective_from")), _s(sch.get("effective_to"))
+    if lo and hi:
+        return f"Applies to sales made between {lo} and {hi}"
+    if lo:
+        return f"Applies to sales made on or after {lo}"
+    if hi:
+        return f"Applies to sales made on or before {hi}"
+    return None
+
+
+def build_doc(plans, tenant_name="", gate_cfg=None, exclusions=None, generated_at=None, plan_id=None,
+              schedules=None, installment_lines=None):
     """Turn a tenant's plan configuration into the payout-structure DOCUMENT MODEL. PURE — no I/O.
 
     `plans`      : commission_engine._load_plans() output (plan dicts with nested rules/tiers/assignments)
@@ -291,6 +464,10 @@ def build_doc(plans, tenant_name="", gate_cfg=None, exclusions=None, generated_a
                    owner's rule — see mig 260's header), so an unconfigured tenant is described correctly.
     `exclusions` : plan_pay_gate.load_exclusions() output — what NEVER pays, for any plan.
     `plan_id`    : render one plan only (a per-plan handout) instead of the whole book.
+    `schedules`  : commcalc.plan_installment_schedule rows for the org (trap ④). Omitted/empty => the
+                   document is byte-identical to before for a tenant that configures no schedule.
+    `installment_lines` : {schedule_id: [plan_installment_line rows]}, as sale_installment_engine
+                   ._load_schedules returns them — this module never reads them itself.
 
     The model is deliberately literal: every string an employee will read is decided HERE, where it can be
     tested, not in the renderer.
@@ -322,11 +499,27 @@ def build_doc(plans, tenant_name="", gate_cfg=None, exclusions=None, generated_a
                 no_pay_items.append({"what": what, "condition": cond,
                                      "why": "Tracked for reporting only — does not pay."})
             elif zero:
-                no_pay_items.append({"what": what, "condition": cond,
+                # `_rule` rides along only until the installment pass below, which needs the matcher
+                # to decide whether this rule's pay arrives later. It is removed before the model is
+                # returned, so the document contract is unchanged.
+                no_pay_items.append({"what": what, "condition": cond, "_rule": r,
                                      "why": "Currently set to zero — earns no incentive."})
             else:
                 pay_items.append({"what": what, "condition": cond, "rate": rate, "frequency": freq,
                                   "scope": scope, "tiered": bool(r.get("tiered"))})
+
+        installments = describe_installments(schedules, installment_lines, p.get("id"))
+        paying_scheds = [i for i in installments if i["pays"]]
+        for it in no_pay_items:
+            _r = it.pop("_rule", None)
+            # Trap ④: a rule that pays nothing AT THE SALE is not a rule that pays nothing, when the
+            # same plan pays the SAME sale lines over later months. The sentence changes only where a
+            # schedule actually covers that rule's lines; the rule still sits in the "not paid"
+            # section, because it genuinely earns nothing on the day.
+            if _r is not None and any(trigger_covers(_sch, _r) for _sch in _plan_scheds(
+                    schedules, p.get("id"), paying_scheds)):
+                it["why"] = ("Earns nothing at the time of sale. This plan pays these sales over "
+                             "several months instead — see “Paid over several months” below.")
 
         applies = describe_assignments(p.get("assignments"))
         tiers = describe_tiers(p)
@@ -335,7 +528,7 @@ def build_doc(plans, tenant_name="", gate_cfg=None, exclusions=None, generated_a
             # multiplier the plan cannot apply.
             warnings.append("Some items are marked as tier-scaled, but this plan has no tiers configured, "
                             "so they pay at the base rate shown.")
-        if not pay_items:
+        if not pay_items and not any(i["pays"] for i in installments):
             warnings.append("This plan has no paying items configured. Anyone assigned to it earns "
                             "$0.00 in plan incentive." if not no_pay_items else
                             "None of this plan's items currently pay.")
@@ -350,6 +543,7 @@ def build_doc(plans, tenant_name="", gate_cfg=None, exclusions=None, generated_a
             "pay_items": pay_items,
             "no_pay_items": no_pay_items,
             "tiers": tiers,
+            "installments": installments,
             "notes": _s(p.get("notes")) or None,
             "warnings": warnings,
         })
@@ -385,6 +579,10 @@ def _how_it_works(out_plans):
     if len(out_plans) > 1:
         bullets.append("More than one plan exists. The plan assigned to you personally takes precedence "
                        "over a plan assigned to your store, then your market, then the company default.")
+    if any(p.get("installments") for p in out_plans):
+        bullets.append("Some sales are paid over several months rather than all at once. The schedule "
+                       "below says how much falls in each month and what has to stay true for it to be "
+                       "paid.")
     if any(p["tiers"] for p in out_plans):
         bullets.append("Some plans pay more once you pass a volume tier. The tier you reach applies to the "
                        "items marked as tier-scaled.")
@@ -569,6 +767,9 @@ def build_boost_doc(cfg, kpi_defs, tenant_name="", period="", generated_at=None,
         "pay_items": pay_items,
         "no_pay_items": no_pay_items,
         "tiers": tiers,
+        # The Boost engine has no plan_installment_schedule (it has no commission_plan rows at all),
+        # so the key is present and EMPTY rather than absent: one document model, one renderer.
+        "installments": [],
         "kpis": ({"heading": "What you are measured on",
                   "note": "Each measure is compared with its target for the period. "
                           "How many you meet sets your tier below.",
@@ -799,6 +1000,29 @@ def render_pdf(doc):
                          if plan["tiers"].get("applies_to_all") else "tier-scaled items pay")
                 story.append(Paragraph(f"Below the first tier, {_what} "
                                        f"{esc(plan['tiers']['below'])} of the base rate.", st_cap))
+
+        # Multi-month schedules (trap ④). A plan document with no schedule carries an empty list, so
+        # this renders for it exactly as before: not at all.
+        for ins in plan.get("installments") or []:
+            story.append(Paragraph("Paid over several months — " + esc(ins["name"]), st_h3))
+            _lead = esc(ins["trigger"]) + ". " + esc(ins["horizon_text"]) + "."
+            if ins.get("window"):
+                _lead += " " + esc(ins["window"]) + "."
+            story.append(Paragraph(_lead, st_cap))
+            if ins["months"]:
+                rows = [[Paragraph("When", st_head), Paragraph("Amount", st_head_r),
+                         Paragraph("What has to be true", st_head)]]
+                for m in ins["months"]:
+                    rows.append([Paragraph(esc(m["month"]), st_cell_b),
+                                 Paragraph(esc(m["rate"]), st_cell_r),
+                                 Paragraph(esc(m["condition"]), st_cell)])
+                story.append(table(rows, [avail * 0.18, avail * 0.22, avail * 0.60],
+                                   [("ALIGN", (1, 0), (1, -1), "RIGHT")]))
+            if ins["clawback"]:
+                story.append(Paragraph("If the line is cancelled, an amount already paid on it can be "
+                                       "taken back.", st_cap))
+            for w in ins["warnings"]:
+                story.append(Paragraph(esc(w), st_warn))
 
         if plan["no_pay_items"]:
             story.append(Paragraph("Included in this plan but not paid", st_h3))
