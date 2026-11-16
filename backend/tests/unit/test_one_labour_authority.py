@@ -40,6 +40,15 @@ from app.modules.commcalc import labour_coverage as lc
 
 NAMES = ["Employee Salaries", "DM Salaries"]
 
+#: THESE TESTS PROVE RULING K2 (2026-08-10 / 2026-11-14) — the entered, DM-approved row OUTRANKING
+#: the platform's measurement. On 2026-11-16 the owner made that the OPT-IN authority (*"the typer
+#: paytol was only for reference take it out, only use that if the store is not running payroll"*,
+#: index §ACCOUNT-06) and the Payroll Report the house default, so every call below is pinned to it
+#: EXPLICITLY. Pinning rather than deleting is the point: a tenant can still ask for this, and the
+#: day one does, these are the claims that have to hold. The new default is proved in
+#: `test_payroll_authority.py` and `harness_labour_coverage.py` §L.
+K2 = lc.PAYROLL_AUTHORITY_ENTERED
+
 
 def _exp(code, name, amount, source_key=None):
     return {"store_code": code, "expense_name": name, "amount": amount, "source_key": source_key}
@@ -59,47 +68,47 @@ MEASURED = {"Diversey": 12555.70, "Belmont": 7097.48,
 class TestMeasuredFill:
     def test_a_store_with_an_approved_figure_does_not_also_book_its_hours(self):
         """The defect, stated as a test: Diversey and Belmont must contribute NOTHING here."""
-        plan = lc.measured_fill(SHEET, MEASURED, NAMES, grain="store")
+        plan = lc.measured_fill(SHEET, MEASURED, NAMES, grain="store", authority=K2)
         assert plan["fill"] == {"Irving Park": 1077.04, "Narragansett": 1128.22}
         assert sorted(plan["suppressed"]) == ["Belmont", "Diversey"]
 
     def test_the_dollars_it_refuses_to_double_book_are_reported_not_hidden(self):
-        plan = lc.measured_fill(SHEET, MEASURED, NAMES, grain="store")
+        plan = lc.measured_fill(SHEET, MEASURED, NAMES, grain="store", authority=K2)
         assert plan["suppressed_amount"] == 19653.18        # 12555.70 + 7097.48
         assert plan["fill_amount"] == 2205.26               # 1077.04 + 1128.22
         assert plan["note"] and "$19,653.18" in plan["note"]
 
     def test_a_store_with_no_approved_figure_keeps_its_labour_cost(self):
         """The opposite failure. Suppressing everything would read as "these stores paid nobody"."""
-        plan = lc.measured_fill(SHEET, MEASURED, NAMES, grain="store")
+        plan = lc.measured_fill(SHEET, MEASURED, NAMES, grain="store", authority=K2)
         assert plan["fill"]["Irving Park"] == 1077.04
 
     def test_a_zero_placeholder_is_not_an_approved_figure(self):
         rows = SHEET + [_exp("Irving Park", "Employee Salaries", 0.0)]
-        plan = lc.measured_fill(rows, MEASURED, NAMES, grain="store")
+        plan = lc.measured_fill(rows, MEASURED, NAMES, grain="store", authority=K2)
         assert "Irving Park" in plan["fill"]
 
     def test_a_producer_row_is_an_approved_figure_without_any_vocabulary(self):
         rows = [_exp("Irving Park", "anything", 9000.0, source_key="payroll_gross")]
-        plan = lc.measured_fill(rows, MEASURED, [], grain="store")
+        plan = lc.measured_fill(rows, MEASURED, [], grain="store", authority=K2)
         assert "Irving Park" not in plan["fill"]
 
 
 class TestGrain:
     def test_org_grain_means_one_approved_row_anywhere_suppresses_every_store(self):
-        plan = lc.measured_fill(SHEET, MEASURED, NAMES, grain="org")
+        plan = lc.measured_fill(SHEET, MEASURED, NAMES, grain="org", authority=K2)
         assert plan["fill"] == {}
         assert plan["grain"] == "org"
         assert sorted(plan["suppressed"]) == sorted(MEASURED)
 
     def test_org_grain_with_no_approved_row_anywhere_fills_every_store(self):
         plan = lc.measured_fill([_exp("Diversey", "Rent / Lease", 10.0)], MEASURED, NAMES,
-                                 grain="org")
+                                 grain="org", authority=K2)
         assert plan["fill"] == MEASURED
 
     def test_the_house_grain_is_dereferenced_never_respelled(self):
         from app.modules.commcalc import labour_vocabulary as lv
-        assert lc.measured_fill(SHEET, MEASURED, NAMES)["grain"] == lv.HOUSE_AUTHORITY_GRAIN
+        assert lc.measured_fill(SHEET, MEASURED, NAMES, authority=K2)["grain"] == lv.HOUSE_AUTHORITY_GRAIN
 
 
 class TestKeySpace:
@@ -109,7 +118,7 @@ class TestKeySpace:
         sheet = [_exp("Utica", "Employee Salaries", 1365.00)]
         measured = {"LUX-NY-UTICA": 3888.74}
         fold = {"Utica": "utica", "LUX-NY-UTICA": "utica"}.get
-        plan = lc.measured_fill(sheet, measured, NAMES, grain="store", key_of=fold)
+        plan = lc.measured_fill(sheet, measured, NAMES, grain="store", key_of=fold, authority=K2)
         assert plan["fill"] == {}
         assert plan["suppressed"] == ["utica"]
 
@@ -119,31 +128,31 @@ class TestKeySpace:
         holding back $19,653.18. Counting it anywhere but in the one pass mixes key spaces again."""
         sheet = [_exp("Utica", "Employee Salaries", 1365.00)]
         fold = {"Utica": "utica", "LUX-NY-UTICA": "utica"}.get
-        plan = lc.measured_fill(sheet, {"LUX-NY-UTICA": 3888.74}, NAMES, grain="store", key_of=fold)
+        plan = lc.measured_fill(sheet, {"LUX-NY-UTICA": 3888.74}, NAMES, grain="store", key_of=fold, authority=K2)
         assert plan["suppressed_amount"] == 3888.74
         assert plan["suppressed_by_key"] == {"utica": 3888.74}
         assert "$3,888.74" in plan["note"]
 
     def test_two_measured_codes_folding_to_one_store_are_summed_not_lost(self):
         fold = {"A": "s", "B": "s"}.get
-        plan = lc.measured_fill([], {"A": 100.0, "B": 25.5}, NAMES, grain="store", key_of=fold)
+        plan = lc.measured_fill([], {"A": 100.0, "B": 25.5}, NAMES, grain="store", key_of=fold, authority=K2)
         assert plan["fill"] == {"s": 125.5}
 
     def test_without_the_fold_the_same_rows_double_book_and_that_is_the_bug(self):
         """Pins the mechanism itself, so a future change cannot quietly drop the fold."""
         sheet = [_exp("Utica", "Employee Salaries", 1365.00)]
-        plan = lc.measured_fill(sheet, {"LUX-NY-UTICA": 3888.74}, NAMES, grain="store")
+        plan = lc.measured_fill(sheet, {"LUX-NY-UTICA": 3888.74}, NAMES, grain="store", authority=K2)
         assert plan["fill"] == {"LUX-NY-UTICA": 3888.74}
 
 
 class TestTenantVocabulary:
     def test_one_tenants_payroll_words_never_decide_anothers_fill(self):
         sheet = [_exp("Diversey", "Employee Salaries", 6033.26)]
-        plan = lc.measured_fill(sheet, MEASURED, ["Staff Wages"], grain="store")
+        plan = lc.measured_fill(sheet, MEASURED, ["Staff Wages"], grain="store", authority=K2)
         assert "Diversey" in plan["fill"]            # not this tenant's word -> not approved here
 
     def test_nothing_declared_means_nothing_approved(self):
-        plan = lc.measured_fill(SHEET, MEASURED, [], grain="store")
+        plan = lc.measured_fill(SHEET, MEASURED, [], grain="store", authority=K2)
         assert plan["fill"] == MEASURED
 
     def test_a_flat_allocation_alone_is_not_an_approved_measurement_of_a_stores_staff(self):
@@ -152,7 +161,7 @@ class TestTenantVocabulary:
         rows = [_exp(c, "DM Salaries", 1275.00) for c in ("a", "b", "c", "d")]
         rows.append(_exp("a", "Employee Salaries", 5000.00))
         measured = {c: 7000.0 for c in ("a", "b", "c", "d")}
-        plan = lc.measured_fill(rows, measured, NAMES, grain="store")
+        plan = lc.measured_fill(rows, measured, NAMES, grain="store", authority=K2)
         assert plan["fill"] == {"b": 7000.0, "c": 7000.0, "d": 7000.0}
         assert plan["allocated_excluded"] == ["dm salaries"]
 
@@ -163,11 +172,11 @@ class TestItIsTheSameDecisionTheStatementMakes:
         reports are back to disagreeing."""
         auth = lc.authoritative_codes(SHEET, [n for n in NAMES
                                               if n.lower() not in lc.allocated_names(SHEET, NAMES)])
-        plan = lc.measured_fill(SHEET, MEASURED, NAMES, grain="store")
+        plan = lc.measured_fill(SHEET, MEASURED, NAMES, grain="store", authority=K2)
         assert set(plan["suppressed"]) == {c for c in MEASURED if c in auth}
 
     def test_no_measurement_at_all_is_not_a_fill_of_zero(self):
-        plan = lc.measured_fill(SHEET, None, NAMES, grain="store")
+        plan = lc.measured_fill(SHEET, None, NAMES, grain="store", authority=K2)
         assert plan["fill"] == {}
         assert plan["measured"] is False
         assert plan["fill_amount"] is None

@@ -3402,6 +3402,15 @@ FACTS: dict[str, dict] = {
             # four code-keyed expense surfaces reach it through.
             'app/modules/commcalc/labour_actuals.py': ('_lcov',),
             'app/modules/commcalc/router.py': ('_labour', '_lcov'),
+            # WHICH SOURCE IS A TENANT'S SALARY AUTHORITY (§ACCOUNT-06, 2026-11-16) is a gated
+            # verdict of the same shape, and these two are how it is resolved and set. The
+            # vocabulary RESOLVES the stored value through the one home rather than comparing the
+            # string, so a tenant that declared nothing, blank or a typo lands on the house default
+            # in one place instead of four.
+            'app/modules/commcalc/labour_vocabulary.py': ('_lcov',),
+            # …and the config endpoint VALIDATES against the same home's value list, so a value no
+            # reader understands can never be stored in the first place.
+            'app/modules/account/router.py': ('_lcov',),
         },
     },
     'target_axis': {

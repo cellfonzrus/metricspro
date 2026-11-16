@@ -843,6 +843,11 @@ def _account_config(client, org_id):
            # mig 994 (owner directive 2026-09-08). 'org' = the pre-992 ORG-WIDE suppression flag,
            # byte-identical for every tenant; 'store' = per-store authority (see build_inputs).
            "payroll_authority_grain": "org",
+           # WHICH SOURCE IS THE SALARY AUTHORITY (owner decision 2026-11-16, §ACCOUNT-06). The
+           # value is RESOLVED by the one home, never compared here, and the house default is the
+           # Payroll Report — so a tenant with no row, and a database without the column, behave
+           # identically. 'entered' restores ruling K2 for a tenant that asks for it.
+           "payroll_authority_source": _lcov_mod().HOUSE_PAYROLL_AUTHORITY,
            # mig 994. Expense names that carry commission ALREADY booked from rep_commissions.
            # EMPTY default ⇒ nothing is claimed and no org changes.
            "labour_commission_expense_names": set(),
@@ -941,6 +946,22 @@ def _account_config(client, org_id):
                 cfg["labour_commission_expense_names"] = {n.lower() for n in cpicked}
     except Exception:
         pass
+    # WHICH SOURCE IS THIS TENANT'S SALARY AUTHORITY (mig 1122, owner ruling 2026-11-16) — its OWN
+    # defensive query, and that is not tidiness: a column added to the block above would take that
+    # block's OTHER columns down with it on a pre-1122 schema (PostgREST fails the whole select),
+    # silently returning every tenant to the house grain and an empty commission vocabulary. One
+    # new column, one new query, nothing else disturbed.
+    try:
+        arows = (client.schema("commcalc").table("account_config")
+                 .select("payroll_authority_source")
+                 .eq("org_id", org_id).limit(1).execute().data) or []
+        if arows:
+            # RESOLVED by the one home. An unrecognised value is the house default, so a typo in
+            # the column can never put a tenant in a third state.
+            cfg["payroll_authority_source"] = _lcov_mod().resolve_payroll_authority(
+                arows[0].get("payroll_authority_source"))
+    except Exception:
+        pass
     # OVERHEAD ALLOCATION (mig 997, owner directive 2026-09-09) — its OWN defensive query, same
     # shape as every block above, so a pre-997 column set can never disturb them. A missing column,
     # a missing row or a malformed JSON value all land on None, which `overhead_allocation
@@ -993,11 +1014,15 @@ def _account_config(client, org_id):
         # owner's October defect: `resolve` returned routes only for a HOUSE vocabulary, so
         # LuxeLink's declared salary booked under "rent / utilities / supplies" while its salary line
         # read $1,928.85. A tenant's own map still wins wholesale; the home now says so.
+        # THE SALARY AUTHORITY GOES IN TOO (§ACCOUNT-06), so it travels with the vocabulary to
+        # every reader that resolves one — the Gross Profit report reads this very dict.
         _vocab = _lv.resolve(cfg["payroll_expense_names_list"],
                              cfg["labour_commission_expense_names_list"],
                              cfg["payroll_authority_grain"], _lv_mode,
-                             cfg["payroll_expense_routes"])
+                             cfg["payroll_expense_routes"],
+                             cfg["payroll_authority_source"])
         cfg["labour_vocabulary"] = _vocab
+        cfg["payroll_authority_source"] = _vocab["payroll_authority_source"]
         cfg["payroll_expense_names_list"] = list(_vocab["payroll_names"])
         cfg["payroll_expense_names"] = {n.lower() for n in _vocab["payroll_names"]}
         cfg["labour_commission_expense_names_list"] = list(_vocab["commission_names"])
@@ -2083,6 +2108,11 @@ def build_inputs(client, org_id, period):
     # initialised here so an unreadable expense feed leaves it None — no plan, no suppression, and
     # the statement is exactly what it is today.
     _comm_plan = None
+    #: DECLARED AT FUNCTION LEVEL, because the block that fills them lives inside the expense `try`
+    #: below and a reader two hundred lines down must not depend on that try having got that far.
+    #: `None` means the plan was never reached — NOT that it measured nothing (§19.50).
+    _grain = acct_cfg.get("payroll_authority_grain", "org")
+    _wage_verdict, _wage_cells, _fill_plan = {}, None, None
     try:
         # STICKY expenses (owner 2026-09-02, systematic fix): read through the ONE shared
         # carry-forward rule the Expenses sheet displays with (commcalc.expenses_effective) — a month
@@ -2105,6 +2135,42 @@ def build_inputs(client, org_id, period):
             client, org_id, period, list(period_keys),
             "store_code,expense_name,expense_type,amount,period,source_key",
             _lvoc.derived_row_names(acct_cfg.get("labour_vocabulary")))
+        # ── WHOSE SALARY FIGURE BOOKS THIS STORE-MONTH (owner ruling 2026-11-16: *"the typer
+        # paytol was only for reference take it out, only use that if the store is not running
+        # payroll"*) ──────────────────────────────────────────────────────────────────────────────
+        # The plan is resolved HERE, before a single expense row is booked, because under the
+        # Payroll Report's authority it decides which TYPED rows stop booking — and that has to be
+        # known while the loop below is still running. It used to be computed afterwards, when the
+        # only thing it could withhold was the measurement.
+        #: WHAT THIS PERIOD'S WAGE FIGURE RESTS ON, carried to the line's note below (owner ruling
+        #: 2026-11-16 *"Book it — report the coverage"*, index §ACCOUNT-05). The figure BOOKS and the
+        #: coverage is STATED. Withholding the line did not protect anyone: it published $0.00 of
+        #: payroll, which reads like a counted figure and makes every store look profitable, while the
+        #: Payroll Report beside it showed the money. `wages_by_store` fills this dict; the sentence is
+        #: `payroll_evidence.coverage_sentence`'s, not one written here.
+        #: THE MEASUREMENT, kept so the note below can be CHECKED against the entered figures that
+        #: suppressed it (owner report 2026-11-12, §ACCOUNT-02) — the same dict the branches below book
+        #: from, never a second read of it. `None` means it was never read (the org-grain authoritative
+        #: path does not need it to book) and is NOT the same fact as "read, and it measured nothing".
+        #: THE PLAN — the ONE answer to "whose labour figure books this store-month", DEREFERENCED from
+        #: `commcalc/labour_coverage.measured_fill` and never re-derived here (owner report 2026-11-14,
+        #: index §ACCOUNT-03). This statement used to decide it inline (`if st in payroll_auth_stores`)
+        #: and was right; the Gross Profit report never decided it at all and summed the Expenses sheet
+        #: — which HOLDS the approved salary rows — then added the measured payroll ON TOP. Live LuxeLink
+        #: October 2026: $86,369.22 of one month's labour booked twice at 15 of 19 measured stores, `Diversey`
+        #: reading $27,789.02 against this statement's $15,403.41. One question, one home, both readers.
+        try:
+            _wage_cells = wages_by_store(client, org_id, period, verdict=_wage_verdict)
+        except Exception as e:
+            _warn("payroll figure unavailable for this period", e)
+        if _wage_cells is not None:
+            try:
+                _fill_plan = _lcov_mod().measured_fill(
+                    exp_rows, _wage_cells, payroll_names, grain=_grain,
+                    authority=acct_cfg.get("payroll_authority_source"),
+                    key_of=lambda c: code2addr.get(_norm_store(c), _norm_store(c)))
+            except Exception as e:
+                _warn("labour fill plan skipped", e)
         # ── COMMISSION DOUBLE-BOOK SUPPRESSION (owner decision 2026-09-08: "Rep commision should
         # go in p&l") ─────────────────────────────────────────────────────────────────────────────
         # Rep commission reaches these books by TWO routes: `rep_comm` (fed from
@@ -2171,6 +2237,23 @@ def build_inputs(client, org_id, period):
             is_manual_payroll = bool(
                 payroll_names and not sk and ename and ename.lower() in payroll_names
                 and safe_float(r.get("amount")))
+            # ── THE TYPED ROW IS REFERENCE, NOT THE BOOK (owner ruling 2026-11-16) ───────────────
+            # *"the typer paytol was only for reference take it out, only use that if the store is
+            # not running payroll"*. Under this tenant's authority the Payroll Report's own figure
+            # books, so the typed row for a MEASURED store stops booking — skipped entirely rather
+            # than booked at $0.00, which would read as a measurement. A store the Payroll Report
+            # did NOT measure is exactly the case the owner kept the typed figure for, and
+            # `measured_fill` never supersedes one: its row books on, unchanged.
+            # The DECISION is the plan's, never re-derived here, and the same plan the Gross Profit
+            # report reads — so the two surfaces cannot drop different dollars.
+            # THE PLAN'S OWN KEY SPACE — `measured_fill` was handed `code -> code2addr.get(...)`,
+            # which is exactly what `sa` is, so the test is made in the space the decision was made
+            # in. Resolving it further here would be the second key space §ACCOUNT-03 exists to
+            # stop. WHICH rows count is `labour_coverage.superseded_row`, not a rule restated here.
+            if _fill_plan and _lcov_mod().superseded_row(
+                    _fill_plan, expense_name=ename, source_key=sk,
+                    key=((str(sa).strip() or None) if sa else None)):
+                continue
             if is_manual_payroll:
                 # AUTHORITATIVE regardless of which line it books to — the point is that a real,
                 # tenant-entered payroll figure exists for this period, so the estimate must not be
@@ -2241,39 +2324,7 @@ def build_inputs(client, org_id, period):
     # all always has. The COMPANY-WIDE estimate cell (an employee attributable to no store) is
     # deliberately NOT booked in the mixed case: it cannot be proven absent from the entered store
     # figures, and booking a dollar we cannot prove is un-duplicated is worse than reporting it.
-    _grain = acct_cfg.get("payroll_authority_grain", "org")
     _est_added, _est_skipped_cw = {}, 0.0
-    #: WHAT THIS PERIOD'S WAGE FIGURE RESTS ON, carried to the line's note below (owner ruling
-    #: 2026-11-16 *"Book it — report the coverage"*, index §ACCOUNT-05). The figure BOOKS and the
-    #: coverage is STATED. Withholding the line did not protect anyone: it published $0.00 of
-    #: payroll, which reads like a counted figure and makes every store look profitable, while the
-    #: Payroll Report beside it showed the money. `wages_by_store` fills this dict; the sentence is
-    #: `payroll_evidence.coverage_sentence`'s, not one written here.
-    _wage_verdict = {}
-    #: THE MEASUREMENT, kept so the note below can be CHECKED against the entered figures that
-    #: suppressed it (owner report 2026-11-12, §ACCOUNT-02) — the same dict the branches below book
-    #: from, never a second read of it. `None` means it was never read (the org-grain authoritative
-    #: path does not need it to book) and is NOT the same fact as "read, and it measured nothing".
-    _wage_cells = None
-    #: THE PLAN — the ONE answer to "whose labour figure books this store-month", DEREFERENCED from
-    #: `commcalc/labour_coverage.measured_fill` and never re-derived here (owner report 2026-11-14,
-    #: index §ACCOUNT-03). This statement used to decide it inline (`if st in payroll_auth_stores`)
-    #: and was right; the Gross Profit report never decided it at all and summed the Expenses sheet
-    #: — which HOLDS the approved salary rows — then added the measured payroll ON TOP. Live LuxeLink
-    #: October 2026: $86,369.22 of one month's labour booked twice at 15 of 19 measured stores, `Diversey`
-    #: reading $27,789.02 against this statement's $15,403.41. One question, one home, both readers.
-    _fill_plan = None
-    try:
-        _wage_cells = wages_by_store(client, org_id, period, verdict=_wage_verdict)
-    except Exception as e:
-        _warn("payroll figure unavailable for this period", e)
-    if _wage_cells is not None:
-        try:
-            _fill_plan = _lcov_mod().measured_fill(
-                exp_rows, _wage_cells, payroll_names, grain=_grain,
-                key_of=lambda c: code2addr.get(_norm_store(c), _norm_store(c)))
-        except Exception as e:
-            _warn("labour fill plan skipped", e)
     if _fill_plan is not None:
         # The COMPANY-WIDE cell (an employee attributable to no store) carries no key, so the plan
         # never holds it, and the rule it books under is unchanged: booked only where NO entered
@@ -2344,7 +2395,10 @@ def build_inputs(client, org_id, period):
             # The P&L books its store lines by canonical ADDRESS, so the entered rows are folded
             # into that space with the SAME key_of this function books with (§ACCOUNT-01's one fold)
             # rather than a second spelling of it.
-            measured_key_of=lambda c: resolve_store(code2addr.get(_norm_store(c), _norm_store(c))))
+            measured_key_of=lambda c: resolve_store(code2addr.get(_norm_store(c), _norm_store(c))),
+            # WHICH SOURCE WON, so the banner's sentence runs the same way as the booking it
+            # describes (§ACCOUNT-06). The report still moves no figure.
+            authority=acct_cfg.get("payroll_authority_source"))
         # Only the NOTE is attached to the line. The full per-store coverage report is served by the
         # GP payload (`labour_coverage`), which is where a reader drills; putting a nested dict on an
         # inputs line would ride into every snapshot for no gain.
