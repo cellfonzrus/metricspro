@@ -294,6 +294,42 @@ check("I10", _mg.home_under_app(FACT).endswith("month_trend.py"),
       "module_graph no longer names month_trend.py as this fact's home, so every path above is "
       "being read from a graph that has moved on")
 
+# ── §J  A DAY A SCOPE WAS NOT OPEN IS NOT A DAY IT COMPLETED ──────────────────────────────────────
+# Owner 2026-11-16: LuxeLink's four November openings projected at about half their real rate,
+# because the projection divided three trading days of sales by fifteen calendar days. The second
+# window lives in the SAME home as the first, and every surface that projects a STORE reads it.
+check("J1", re.search(r"^def open_days_window\(", HOME_CODE, re.M) is not None,
+      "month_trend.open_days_window is gone — the per-scope window has no home")
+check("J2", "'basis': 'open_days'" in HOME_CODE,
+      "the open-days window does not name its own basis, so a surface cannot say which window it used")
+check("J3", "open_days=None" in HOME_CODE,
+      "trend_of no longer takes open_days — a caller that knows a scope's open days cannot pass them")
+check("J4", "open_days_window(*open_days" in HOME_CODE,
+      "trend_of does not dereference open_days_window; it must not re-derive the window")
+_ENG = text(ENGINE)
+check("J5", re.search(r"^def open_days_by_store\(", _ENG, re.M) is not None,
+      "targets_engine.open_days_by_store is gone — 'which days was this store open' has no home")
+check("J6", "scope_hours_by_day(shifts, code, None)" in strip_py_comments(_ENG),
+      "open_days_by_store does not build on scope_hours_by_day, so the whole-store window and the "
+      "per-category window could answer the same question differently")
+check("J7", "open_days=(_open_done, _open_total)" in strip_py_comments(_ENG),
+      "compute_scope stopped passing its open days to the trend — the per-category projection is "
+      "back on calendar days")
+_RTR = strip_py_comments(text(ROUTER))
+check("J8", "open_days_by_code=" in _RTR,
+      "the router no longer hands _targets_trending_by_code a per-store open-days window")
+check("J9", _RTR.count("targets_engine.open_days_by_store(") >= 2,
+      "only one of the two trending surfaces (Daily Targets, Accessory plan) reads the open-days "
+      "window — two figures on one page would disagree")
+check("J10", "_month_trend.open_days_window(" in _RTR,
+      "the router computes its own per-store factor instead of dereferencing month_trend")
+check("J11", (ROOT / "tests" / "unit" / "test_open_days_window.py").exists(),
+      "the open-days window has no unit tests")
+# Negative control — the scan that proves J1 is capable of failing.
+check("J12", not re.search(r"^def open_days_window\(", strip_py_comments("# def open_days_window(a)\n"), re.M),
+      "a commented-out definition would satisfy J1")
+
+
 print(f"\nharness_month_trend_one_home: {PASSES} checks passed, {len(FAILS)} failed")
 if FAILS:
     print("\nFAILURES")

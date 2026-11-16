@@ -254,6 +254,34 @@ def scope_hours_by_day(shifts: list[dict], store_code: str, rep_name: str | None
     return out
 
 
+def open_days_by_store(shifts: list[dict], today: date, month_end: date | None = None) -> dict:
+    """{STORE_CODE: (open days COMPLETED, open days the month holds)} from the schedule. PURE.
+
+    The ONE answer to "which days was this store open", for every surface that projects a store to
+    month end (§COMMCALC-72). A store that opened on the 12th has no entered day before it, so its
+    run rate is measured over the days it actually traded instead of the whole calendar month —
+    which is what made LuxeLink's four November openings read at half their real rate.
+
+    Built from the SAME `scope_hours_by_day` + `project_future_hours` pair `compute_scope` uses, so
+    the per-category trend on the Daily Targets page and the whole-store trending column beside it
+    cannot answer this question two different ways. A store with no schedule at all is ABSENT from
+    the mapping rather than present with zeros: absent means "nothing declared", and the caller then
+    keeps the calendar window instead of inventing a denominator.
+    """
+    out: dict[str, tuple] = {}
+    codes = {(s.get('store_code') or '').strip().upper() for s in (shifts or [])
+             if not s.get('is_deleted') and (s.get('store_code') or '').strip()}
+    for code in codes:
+        hours = scope_hours_by_day(shifts, code, None)
+        if not hours:
+            continue
+        projected = project_future_hours(hours, today, month_end) if month_end else {}
+        total = len(set(hours) | set(projected))
+        done = sum(1 for d in hours if d < today)
+        out[code] = (done, total)
+    return out
+
+
 def scope_actuals_by_day(actuals: list[dict], store_code: str, rep_name: str | None) -> dict:
     """Aggregate RPC actual rows per day for a scope → {date: {prem,byod,upg,acc}}."""
     out: dict[date, dict] = {}
@@ -453,6 +481,13 @@ def compute_scope(
     # than being projected across a month nobody identified.
     _trend_period = period or (f"{month_end.year:04d}-{month_end.month:02d}" if month_end else None)
 
+    # WHICH DAYS THIS SCOPE WAS OPEN — the window its own run rate is measured over, in place of the
+    # calendar month (§COMMCALC-72). `hours_by_day` is the CONCRETE schedule, so a store that opened
+    # mid-month has no entered day before it opened and is projected off the days it actually traded;
+    # `open_days` adds the projected rest of the month, which is the horizon it is heading across.
+    # A scope open every day is unchanged: 15 of 30 and 13 of 26 are the same factor.
+    _open_done = sum(1 for d in hours_by_day if d < today)
+    _open_total = len(open_days)
     categories = {}
     for cat in _axis:
         monthly = float(monthly_by_cat.get(cat, 0) or 0)
@@ -494,7 +529,8 @@ def compute_scope(
             # on the Daily Targets screen, so the two figures cannot disagree. `None` when the month
             # cannot be identified or no day has completed: a run rate off a part-day is not a trend.
             'trend': (_month_trend.trend_of(achieved_mtd, monthly, _trend_period, today=today,
-                                            unit=_units[cat])
+                                            unit=_units[cat],
+                                            open_days=(_open_done, _open_total))
                       if _trend_period else None),
         }
 

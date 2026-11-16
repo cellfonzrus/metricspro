@@ -32417,14 +32417,23 @@ def _fetch_actuals(client, org_id, period, rows_out=None):
     return rows
 
 
-def _targets_trending_by_code(client, org_id, period, today=None):
+def _targets_trending_by_code(client, org_id, period, today=None, open_days_by_code=None):
     """Per-store-code TRENDING (projected month-end) accessory$ + activation/box count, taken DIRECTLY
     from the Executive-MTD computation (`_exec_mtd`) so the Daily-Targets / Accessory-Targets pages show
     the SAME trending numbers as Executive MTD — ONE source, both move together when the shared
     aggregation or the trend formula changes. Exec MTD keys `by_location` on the raw store string; this
     folds each row into the canonical store_code via the SAME resolver the actuals use, so a store's
     trending attaches to its Daily-Targets row (raw spellings that resolve to one code sum together).
-    Display-only; never raises (a trending failure must not break the targets summary)."""
+    Display-only; never raises (a trending failure must not break the targets summary).
+
+    `open_days_by_code` — {STORE_CODE: (open days completed, open days the month holds)} from
+    `targets_engine.open_days_by_store` — RESTATES a store that was not open all month off the days
+    it actually traded (§COMMCALC-72). Exec MTD trends the whole org on ONE calendar factor, which is
+    right for the org and wrong for a store that opened on the 12th: LuxeLink's four November
+    openings projected at about half their real rate. The raw month-to-date columns are on the row
+    already, so this is a re-multiplication of the SAME aggregation by a per-store factor from the
+    SAME `month_trend` module — no second read, no second aggregation, and a store with no entry in
+    the mapping keeps Exec MTD's figure byte-for-byte."""
     try:
         ex = _exec_mtd(client, org_id, period, today=today)
     except Exception as e:
@@ -32463,7 +32472,30 @@ def _targets_trending_by_code(client, org_id, period, today=None):
         for _k in ('trending_acc_sales', 'acc_sales', 'setup_fee', 'acc_plus_setup',
                    'trending_acc_plus_setup'):
             d[_k] = round(d[_k], 2)
-    return by_code, dict(ex.get('trending', {}) or {})
+    _meta = dict(ex.get('trending', {}) or {})
+    # ── PER-STORE WINDOW. A store open part of the month is projected off ITS open days, never the
+    #    org's calendar days. `open_days_window` returns None when there is nothing to measure, and
+    #    the row is then left exactly as Exec MTD computed it.
+    _restated = []
+    for _code, _dsrc in (open_days_by_code or {}).items():
+        d = by_code.get(str(_code).strip().upper())
+        if not d or not _dsrc:
+            continue
+        _w = _month_trend.open_days_window(_dsrc[0], _dsrc[1],
+                                           open_month=_month_trend.is_open_month(period, today))
+        if not _w:
+            continue
+        _f = _month_trend.factor(_w)
+        d['trending_box'] = round(d['total_activation'] * _f)
+        d['trending_acc_sales'] = round(d['acc_sales'] * _f, 2)
+        d['trending_acc_plus_setup'] = round(d['acc_plus_setup'] * _f, 2)
+        d['trend_basis'] = _w['basis']
+        d['open_days_elapsed'] = _w['elapsed']
+        d['open_days_total'] = _w['days_in_month']
+        _restated.append(str(_code).strip().upper())
+    if _restated:
+        _meta['open_days_restated'] = sorted(_restated)
+    return by_code, _meta
 
 
 def _byod_pct_default(client, period, org_id=ORG_ID):
@@ -33463,8 +33495,12 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
         actuals = _fetch_actuals(client, org_id, cperiod)
     except Exception as e:
         print(f"WARN targets summary actuals failed: {e}"); actuals = []
-    # Whole-store projected-month-end trending, straight from Executive MTD (one source, moves together).
-    trend_by_code, trend_meta = _targets_trending_by_code(client, org_id, cperiod, today=today)
+    # Whole-store projected-month-end trending, straight from Executive MTD (one source, moves together),
+    # restated per store off the days that store was OPEN — the same window the per-category trend below
+    # uses, from the shifts already read above, so the two figures on this page cannot disagree.
+    _open_by_code = targets_engine.open_days_by_store(shifts, today, end)
+    trend_by_code, trend_meta = _targets_trending_by_code(client, org_id, cperiod, today=today,
+                                                          open_days_by_code=_open_by_code)
 
     # ── ACTIVE roster (owner 2026-08-06). Read AFTER the trending pass purely so `keep_codes` can name
     #    the stores that have real activity in THIS period: a disabled store still renders any month it
@@ -33831,7 +33867,15 @@ def get_accessory_target_plan(period: str, today: str = "",
     mtd = _acc_plan_month_by_code(client, org_id, cperiod)
     m1 = _acc_plan_month_by_code(client, org_id, m1_period)
     m2 = _acc_plan_month_by_code(client, org_id, m2_period)
-    trend_by_code, _trend_meta = _targets_trending_by_code(client, org_id, cperiod, today=today_d)
+    # Same per-store open-days window as the Daily Targets summary (§COMMCALC-72): the Accessory plan
+    # projects a store that opened mid-month off its trading days, not off the calendar.
+    try:
+        _acc_shifts = _fetch_shifts(client, _start, _end, org_id)
+    except Exception as e:
+        print(f"WARN accessory plan shifts failed: {e}"); _acc_shifts = []
+    trend_by_code, _trend_meta = _targets_trending_by_code(
+        client, org_id, cperiod, today=today_d,
+        open_days_by_code=targets_engine.open_days_by_store(_acc_shifts, today_d, _end))
 
     # ── Market filter FIRST: it decides which stores the report (and therefore the company goal) is
     #    about. The store multi-select is applied downstream, as the SELECTION the goal is split over.
