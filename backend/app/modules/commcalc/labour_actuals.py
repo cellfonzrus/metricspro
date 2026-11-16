@@ -69,7 +69,8 @@ def fold(wage_cells=None, commission_rows=None, store_key_of=None, *, halves=Non
     subtracts `rep_pay`) needs the SALARY of each store, and a blended figure split by a ratio would
     be an invented per-store number — the kind of plausible arithmetic this house treats as a defect.
 
-    `wage_cells` is `coa.derive_wage_cells`'s output ({store address or None: $}); its None key is
+    `wage_cells` is `coa.wages_by_store`'s output ({store address or None: $}) — the Payroll
+    Report's own per-store figure, read through `storeops/labour_cost` (§STOREOPS-10); its None key is
     labour with no attributable store and is kept under `''`, visible on a row of its own rather than
     dropped — the same rule `expenses_effective.totals_by_store` applies.
     `commission_rows` are `rep_commissions` rows ({'store', 'total_payout'}).

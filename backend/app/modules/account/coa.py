@@ -31,6 +31,7 @@ still books company-wide, so the company total stays complete; only a genuinely 
 dollar is company-wide now.
 """
 import logging
+from datetime import date, timedelta
 
 from app.modules.commcalc.calculator import safe_float
 from app.modules.commcalc import carrier_map
@@ -44,6 +45,9 @@ from app.modules.account import store_identity as _sid
 from app.modules.storeops import payroll_hours_basis as _hours_basis
 # THE ONE punch/correction read on the pay path, and the interlock that gates paying from it (§14y).
 from app.modules.storeops import payroll_evidence as _payevid
+# THE ONE HOME for "what did this period's labour cost, per store" (§STOREOPS-10) — the door onto
+# the producer the Payroll Report publishes. This module derives no wage of its own (§ACCOUNT-05).
+from app.modules.storeops import labour_cost as _labour_cost
 # Canonical finance period parser lives in _period; re-exported here so existing
 # `coa.parse_period` callers (recon, engine, router) keep resolving unchanged.
 from app.modules.account._period import parse_period  # noqa: F401
@@ -711,134 +715,42 @@ def monthly_salary_equivalent(pay_basis, pay_amount):
     return round(m, 2)
 
 
-def derive_wage_cells_with_basis(emps, shifts, code2addr, hours_basis_cfg=None, evidence=None):
-    """PURE core of wages_by_store (harness: harness_wages_salary_basis.py) → {store_address: wages}
-    (key None = company-wide, no attributable store).
-
-    OWNER BUG 2026-09-02 ("the employee salaries … are not getting autoloaded from the payroll"):
-    the estimate used `hours × employees.pay_rate` for EVERY employee, but a SALARIED employee's
-    pay_rate holds a per-PERIOD figure, not an hourly rate (live LuxeLink: E173 is monthly $8,000
-    with pay_rate 3,692.30 — a month of shifts × 3,692.30 booked hundreds of thousands of phantom
-    wages; Aug 2026 consolidated 'Wages' read $234,523.57 against $103,344.97 revenue).
-
-      • HOURLY employees (pay_basis 'hourly'/absent — every pre-mig-416 tenant): hours (actual,
-        fallback scheduled) × pay_rate per shift, byte-identical to before.
-      • SALARIED employees (pay_basis weekly/monthly/annual with a usable pay_amount — the SAME
-        columns the storeops payroll report pays them from): ONE monthly-equivalent salary
-        (monthly_salary_equivalent), allocated across the stores they actually worked in the month
-        proportional to worked hours (the payroll module's documented allocation rule); an active
-        salaried employee with NO recorded hours attributes 100% to home_store (company-wide when
-        even that is blank) — mirroring payroll_salary.allocate_across_stores; an INACTIVE salaried
-        employee with no hours this month is skipped (no longer earning).
-    Per-employee allocation shares are cents-rounded with the LAST store absorbing the residue, so
-    each salaried employee's stores sum EXACTLY to their monthly equivalent."""
-    # The hours basis config (per org, house defaults = today). Passed in by `wages_by_store`;
-    # `None` resolves to the house defaults, so a direct caller is byte-identical to before.
-    hours_cfg = _hours_basis.resolve_config(hours_basis_cfg if isinstance(hours_basis_cfg, dict) else None)
-    # THE DAY'S PUNCHES AND CORRECTIONS (owner directive 2026-10-12, index §14y).
-    # Before this, every shift row reached the one home with NO evidence, so the only measurement it
-    # could see was `shifts.actual_hours` — the dead column (7 of 7,740 live rows) — and a
-    # clocked-only org therefore booked `not_measured_unpaid` = $0.00 for a month whose punches were
-    # sitting in `storeops.timelog`: $374,733.02 -> $0.00 over Jun–Oct 2026, measured 2026-10-12.
-    # `evidence` is `storeops/payroll_evidence.period_evidence`'s index, passed in by
-    # `wages_by_store` — the ONE punch read on the pay path, never a second query here.
-    # ONE ROW PER SHIFT ROW, each carrying its share of its DAY's paid hours — see
-    # `payroll_evidence.paid_hours_rows` on why passing a bare cell to `resolve_shift_row` is not
-    # enough on a shift-row loop (it returns 0.0 for a day a punch measured, because the Payroll
-    # screen counts those hours off the punch row and this loop never sees a punch row).
-    emp_row_by_id = {e.get("employee_id"): e for e in (emps or []) if e.get("employee_id")}
-    # ZIPPED BY POSITION: `paid_hours_rows` guarantees one row per shift row in order, and two
-    # shift rows can be the same dict object, so an identity map would pay one share twice.
-    _ph = (_payevid.paid_hours_rows({"evidence": evidence, "cfg": hours_cfg}, shifts or [],
-                                    emp_by_id=emp_row_by_id, cfg=hours_cfg)
-           if isinstance(evidence, dict) and evidence else [])
-    basis_counts = {}
-    rate, home, active, salary = {}, {}, {}, {}
-    for e in (emps or []):
-        eid = e.get("employee_id")
-        rate[eid] = safe_float(e.get("pay_rate"))
-        home[eid] = e.get("home_store")
-        active[eid] = (e.get("is_active") is not False)
-        meq = monthly_salary_equivalent(e.get("pay_basis"), e.get("pay_amount"))
-        if meq is not None:
-            salary[eid] = meq
-
-    def addr_for(eid, shift_code=None):
-        code = _norm_store(shift_code) or _norm_store(home.get(eid))
-        return code2addr.get(code, code)
-
-    out = {}
-
-    def _add(addr, amt):
-        if amt:
-            out[addr] = round(out.get(addr, 0.0) + amt, 2)
-
-    sal_hours = {}   # eid -> {addr: hours} for salaried allocation
-    for _si, s in enumerate(shifts or []):
-        eid = s.get("employee_id")
-        # ONE HOME for paid hours (index §14y, storeops/payroll_hours_basis). This read used to be
-        # `actual_hours or scheduled_hours` — the silent `or` that made the P&L's wage line a copy
-        # of the schedule on 7,733 of 7,740 live shift rows. The basis now travels with the number
-        # and is rolled up into `hours_basis` for the labour-coverage banner to show.
-        _row = _ph[_si] if _si < len(_ph) else None
-        if _row is not None:
-            hrs, _basis_kind = _row["hours"], _row["basis"]
-        else:
-            hrs, _basis_kind, _ = _hours_basis.resolve_shift_row(s, hours_cfg,
-                                                                 emp_row_by_id.get(eid))
-        basis_counts[_basis_kind] = basis_counts.get(_basis_kind, 0) + 1
-        if eid in salary:
-            if hrs:
-                a = addr_for(eid, s.get("store_code"))
-                if a:
-                    sal_hours.setdefault(eid, {})[a] = sal_hours.get(eid, {}).get(a, 0.0) + hrs
-            continue
-        pay = round(hrs * rate.get(eid, 0.0), 2)
-        if not pay:
-            continue
-        addr = addr_for(eid, s.get("store_code"))
-        if addr:
-            _add(addr, pay)
-    for eid, meq in salary.items():
-        worked = sal_hours.get(eid) or {}
-        total = sum(worked.values())
-        if total > 0:
-            addrs = sorted(worked)          # deterministic; last absorbs the rounding residue
-            allocated = 0.0
-            for i, a in enumerate(addrs):
-                share = (round(meq - allocated, 2) if i == len(addrs) - 1
-                         else round(meq * worked[a] / total, 2))
-                allocated = round(allocated + share, 2)
-                _add(a, share)
-        else:
-            if not active.get(eid, True):
-                continue                    # inactive, never worked this month → no salary booked
-            _add(addr_for(eid) or None, meq)
-    return out, basis_counts
-
-
-def derive_wage_cells(emps, shifts, code2addr, hours_basis_cfg=None, evidence=None):
-    """The wage cells alone — the shape every existing caller reads. See
-    `derive_wage_cells_with_basis` for the same computation plus the hours-basis rollup."""
-    cells, _basis = derive_wage_cells_with_basis(emps, shifts, code2addr, hours_basis_cfg, evidence)
-    return cells
+# ── THE SECOND DERIVATION IS GONE (owner report 2026-11-16, index §ACCOUNT-05) ──────────────────
+# `derive_wage_cells` / `derive_wage_cells_with_basis` USED TO LIVE HERE: a shifts x rate wage
+# derivation of this module's own, which is what the P&L, the Gross Profit report and the dashboard
+# booked. The Payroll Report derives the same fact its own way, and the two had drifted at EVERY
+# store of EVERY tenant (measured live, October 2026: Cellfonz R Us $72,905.30 vs $0.00, LuxeLink
+# $121,632.66 vs $116,826.26, Vzone $20,449.79 vs $20,010.00, NY LOGISTICS $20,160.28 vs
+# $18,328.79) — because each copy knew something the other did not. The Payroll Report applies the
+# salaried pay-basis override, the lunch auto-deduction and an inactive employee's real activity;
+# this copy read the per-employee `pay_from_schedule` tick and the clock-evidence verdict.
+#
+# THE CLASS: "what did this store's labour cost this month" is ONE fact, and a fact every caller
+# needs lives in ONE home and is DEREFERENCED. That home is `storeops/labour_cost` (§STOREOPS-10),
+# the door onto the producer the Payroll Report itself publishes. `_wage_measurement` below reads it.
+# `harness_labour_cost_one_home.py` fails the build if a shifts x rate derivation reappears here.
+#
+# `monthly_salary_equivalent` above STAYS: it is the platform's one weekly/monthly/annual conversion
+# and `storeops/overhead_allocation` dereferences it. It is a conversion, not a second measurement.
 
 
 def wages_by_store(client, org_id, period):
-    """StoreOps payroll for the period → {store_address: wages} (None key = company-wide).
-    Hourly: the paid hours `storeops/payroll_hours_basis.resolve_shift_row` resolves for this org
-    (index §14y — NOT a local `actual_hours or scheduled_hours`) × employees.pay_rate; salaried (pay_basis
-    weekly/monthly/annual, migs 416/417): the monthly salary equivalent allocated by worked hours —
-    see derive_wage_cells. Store = shift.store_code (fallback employee home_store), mapped
-    store_code → store_address. Returns {} if StoreOps has no employees/shifts for the month.
-    Pre-mig-416 schema (no pay_basis columns) degrades to the pure-hourly select → byte-identical."""
+    """THE PAYROLL REPORT'S OWN per-store figure for the period → {store_address: wages}
+    (None key = labour attributable to no store, booked company-wide).
+
+    It is not computed here and no rule about hours, rates or salary is stated here: the figure is
+    the one `GET /storeops/payroll-by-store` publishes, read through `storeops/labour_cost`
+    (§STOREOPS-10). Store codes are mapped to canonical addresses through this module's own
+    `store_code_to_address`, which is `store_identity`'s fold (§64) — the key space is finance's,
+    the money is payroll's. A period whose clock evidence may not be paid from RAISES
+    `payroll_evidence.EvidenceRefused` rather than returning zeros (§14y)."""
     return _wage_measurement(client, org_id, period, None)
 
 
 def wages_by_code(client, org_id, period):
     """THE SAME measurement as `wages_by_store`, keyed by the shift's own `store_code` instead of the
     canonical store ADDRESS — for a reader that books in code space (the GP report, index
-    §ACCOUNT-02). ONE derivation, two key spaces: `derive_wage_cells` already takes the
+    §ACCOUNT-02). ONE figure, two key spaces: the shaping in `storeops/labour_cost` takes the
     code→address map as an argument, so handing it an EMPTY map keys each cell by its own code. A
     reverse address→code lookup is what this exists to avoid: it is many-to-one (§ACCOUNT-01's
     fold), so inverting it would pay one measurement to two codes."""
@@ -846,9 +758,14 @@ def wages_by_code(client, org_id, period):
 
 
 def _wage_measurement(client, org_id, period, code2addr):
-    """I/O core of `wages_by_store` / `wages_by_code` — one read, one derivation, one refusal.
+    """I/O core of `wages_by_store` / `wages_by_code` — one evidence verdict, one DEREFERENCE.
     `code2addr=None` means "read the org's canonical map" (the address space the P&L books in);
-    an explicit map (including `{}`) is used as handed over."""
+    an explicit map (including `{}`, the GP report's own code space) is used as handed over.
+
+    THE FIGURE IS NOT DERIVED HERE (§ACCOUNT-05). It is the one the Payroll Report publishes, read
+    through `storeops/labour_cost` — so the dashboard, the Gross Profit report and the P&L show the
+    per-store payroll cost that screen shows, by construction rather than by agreement.
+    """
     pm, py = parse_period(period)
     if not pm or not py:
         return {}
@@ -857,29 +774,33 @@ def _wage_measurement(client, org_id, period, code2addr):
     so = client.schema("storeops")
     if code2addr is None:
         code2addr = store_code_to_address(client, org_id)
-    # ANY SUBSET OF COLUMNS (§4b.1, 2026-09-22): the roster is read whole and derive_wage_cells takes
-    # the salary columns (migs 416/417) when they are present — a pre-416 schema is still hourly-only,
-    # exactly as before, and no other column's absence can hide them. Same rows, same money.
+    # ── THE EVIDENCE, AND THE VERDICT ON IT (owner directive 2026-10-12, index §14y) ───────────
+    # UNCHANGED, and deliberately still asked HERE rather than inside the producer. A refusal is a
+    # statement about whether this period's clock evidence may be PAID FROM, and the answer is the
+    # books' to act on: this function's whole output is money, and a tenant with no shifts and a
+    # tenant whose clock data never arrived must never produce the same cells. The Payroll Report
+    # shows the figure either way — that is a REPORT, not a booking — so the two surfaces can
+    # legitimately differ here and only here, and the statement's note says which it is.
     emps = (so.table("employees").select("*").eq("org_id", org_id).execute().data) or []
     shifts = (so.table("shifts")
               .select("employee_id,store_code,scheduled_hours,actual_hours,shift_date,is_deleted")
               .eq("org_id", org_id).eq("is_deleted", False).gte("shift_date", f"{month}-01").lt("shift_date", nxt)
               .range(0, 9999).execute().data) or []
-    # ── THE EVIDENCE, AND THE VERDICT ON IT (owner directive 2026-10-12, index §14y) ───────────
-    # THE ONE punch read on the pay path (`storeops/payroll_evidence`): the day's `timelog` punches
-    # and `manual_hours` corrections for exactly this period, org-scoped, half-open [lo, hi) —
-    # the SAME convention the shifts read above uses, so the two cannot disagree by a day.
-    # Without this the figures below were `shifts.actual_hours`-only, i.e. the dead column, and a
-    # clocked-only org booked $0.00 over months whose punches were present (measured 2026-10-12:
-    # $374,733.02 -> $0.00, Jun–Oct 2026). The INTERLOCK is consulted, and a refusal RAISES rather
-    # than returning a dict of zeros: this function's whole output is money, and a tenant with no
-    # shifts and a tenant whose clock data never arrived must never produce the same cells.
     _res = _payevid.period_evidence(so, org_id, f"{month}-01", nxt, shifts, employee_rows=emps,
                                     cfg=_hours_basis.load_config(so, org_id))
     _ref = _payevid.refusal(_res)
     if _ref:
         raise _payevid.EvidenceRefused(_ref)
-    return derive_wage_cells(emps, shifts, code2addr, _res["cfg"], _res["evidence"])
+    # THE DEREFERENCE. `so` is handed over so the producer reads the SAME database this statement
+    # is being built from — never a second client, and never a second derivation.
+    cells = _labour_cost.per_store(org_id, start=f"{month}-01",
+                                   end=(date.fromisoformat(nxt) - timedelta(days=1)).isoformat(),
+                                   so=so)
+    if code2addr:
+        return _labour_cost.cells_by_address(cells, code2addr, norm=_norm_store)
+    # The GP report's space: the shift's own `store_code`, un-remapped. An employee attributable to
+    # no store still carries `None` so the caller can book it company-wide rather than lose it.
+    return _labour_cost.cells_by_address(cells, {}, norm=_norm_store)
 
 
 def store_code_to_address(client, org_id):
@@ -2446,7 +2367,7 @@ def build_inputs(client, org_id, period):
     # shoudl have thier won seaprat line and thier salary will be divided amongs he store they
     # handle … simialry thier commission will also be a seaprate line item."
     #
-    # Such a person is exactly the one `derive_wage_cells` can only key as company-wide, and the
+    # Such a person is exactly the one the payroll producer can only key as company-wide, and the
     # store-grain block above deliberately does NOT book a company-wide cell (`_est_skipped_cw`) —
     # so today their pay lands nowhere at all. This block gives it a home, at STORE grain, on its
     # own two lines. It derives NO dollar of pay: the salary conversion is the same

@@ -9,7 +9,7 @@ This module owns the READ side of that sentence: whether the salary a store show
 and the P&L was MEASURED for the month on screen, and if so from what. It computes NO dollars — the
 dollar derivations already exist and are deliberately NOT duplicated here:
 
-  • `account/coa.derive_wage_cells` turns the paid hours into money, hourly × pay_rate and salaried
+  • `account/coa.wages_by_store` carries the Payroll Report's own per-store money — hourly and salaried
     × monthly equivalent. Since 2026-10-10 it asks `storeops/payroll_hours_basis.resolve_shift_row`
     (index §14y) what those hours are, and so does this module — ONE home, one answer. Before that
     both spelled `actual_hours or scheduled_hours` for themselves, so this report could label a
@@ -224,7 +224,7 @@ def hours_basis_by_code(shifts, hours_basis_cfg=None, emp_by_id=None, evidence=N
 
     `bases` is the full per-shift tally, so a banner can say "812 of 853 scheduled days were never
     clocked" instead of one word. The per-shift decision is `payroll_hours_basis.resolve_shift_row`,
-    the SAME call `coa.derive_wage_cells` makes to turn those hours into money — which is the whole
+    the SAME figure `coa.wages_by_store` carries for those hours — which is the whole
     point: before this, the coverage report and the money it reported on each decided for themselves
     what "actual hours" meant, and `basis` could say `actual` while the dollars came off the
     schedule. Deleted shifts must be filtered by the caller's query (`is_deleted = false`), as the
@@ -371,7 +371,7 @@ def labour_coverage(store_codes, exp_rows, shifts, payroll_names, period,
     # narrowed vocabulary this report already decided on (`measuring` — a flat allocation is not a
     # measurement of a store's own staff, `allocated_names`), so the comparison cannot disagree with
     # the states above about what counts as an entered figure. The MEASURED side is handed over by
-    # the I/O caller from `coa.derive_wage_cells` — this module derives no dollar of its own.
+    # the I/O caller from `coa.wages_by_store` — this module derives no dollar of its own.
     # `measured_key_of` is for a reader that does NOT book in store-code space: the P&L keys its
     # store lines by canonical store ADDRESS, so it hands over address-keyed measurements and the
     # SAME `code -> resolve_store(code2addr[code])` it books with. Both sides then land in one key

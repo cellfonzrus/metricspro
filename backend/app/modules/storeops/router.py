@@ -850,9 +850,9 @@ def reconcile_timeoff_duplicates(authorization: str = Header(default=""), org_id
 # and widening a base employees SELECT to also carry pay_basis/pay_amount/hire_date/termination_date,
 # degrading to the caller's original field list on a pre-migration database so every salary code path
 # is a silent no-op until both 416 and 417 have run (see payroll_salary.py PAY_FIELDS).
-def _tenant_pp_settings(org_id):
+def _tenant_pp_settings(org_id, so=None):
     try:
-        rows = (sb().table("tenants").select(
+        rows = ((so or sb()).table("tenants").select(
             "work_week_start_dow,pay_period_type,payday_dow,payday_weeks_after,biweekly_anchor,timezone"
         ).eq("org_id", org_id).limit(1).execute().data) or []
     except Exception:
@@ -860,19 +860,28 @@ def _tenant_pp_settings(org_id):
     return payroll_salary.tenant_pay_period_settings(rows[0] if rows else {})
 
 
-def _employees_with_pay_fields(org_id, base_fields, eq: dict = None):
+def _employees_with_pay_fields(org_id, base_fields, eq: dict = None, so=None):
     """`eq` applies additional `.eq(k, v)` filters SERVER-SIDE (Gate-1 N3 — house perf doctrine:
     filter in the query, not fetch-all-then-filter in Python) — e.g. `{"employee_id": employee_id}`
     for a single-employee lookup, same as any other org-scoped query in this file."""
     def _q(fields):
-        q = sb().table("employees").select(fields).eq("org_id", org_id)
+        q = (so or sb()).table("employees").select(fields).eq("org_id", org_id)
         for k, v in (eq or {}).items():
             q = q.eq(k, v)
         return q
-    try:
-        return _q(f"{base_fields},{payroll_salary.PAY_FIELDS}").execute().data or []
-    except Exception:
-        return _q(base_fields).execute().data or []
+    # `pay_from_schedule` (mig 1073) is the per-EMPLOYEE half of the hours basis — owner ruling
+    # 2026-11-16: paying from the schedule is a per-REP option, not a store or market one. The pay
+    # path could not honour it while this read did not project it, so it is asked for FIRST and the
+    # ladder falls back column by column (§4b.1 ANY-SUBSET): a pre-1073 database keeps exactly the
+    # rows, and exactly the money, it has today.
+    for fields in (f"{base_fields},{payroll_salary.PAY_FIELDS},{_hours_basis.CHANGE_FIELD}",
+                   f"{base_fields},{payroll_salary.PAY_FIELDS}",
+                   base_fields):
+        try:
+            return _q(fields).execute().data or []
+        except Exception:
+            continue
+    return []
 
 
 def _warn_salary_override_failed(response, org_id, endpoint, exc):
@@ -978,9 +987,9 @@ def _shift_contributes_hours(s) -> bool:
 # Keys are the RAW employee_id (shifts may carry a numeric id, kiosk punches the business id) — the
 # SAME raw-id grain the mig-407 anti-join and the legacy shift_days set already used, so the existing
 # identity-merge / double-count behavior is preserved unchanged; only the hours DECISION changes.
-def _hours_basis_cfg(org_id):
+def _hours_basis_cfg(org_id, so=None):
     """This org's declared hours basis (index §14y). ONE read, cached in the one home."""
-    return _hours_basis.load_config(sb(), org_id)
+    return _hours_basis.load_config(so or sb(), org_id)
 
 
 def _punch_driven_day_maps(shifts, timelog, hours_cfg=None):
@@ -1013,7 +1022,7 @@ def _punch_driven_day_maps(shifts, timelog, hours_cfg=None):
     return manual_days, punch_days
 
 
-def _shift_actual_contribution(s, manual_days, punch_days, hours_cfg=None):
+def _shift_actual_contribution(s, manual_days, punch_days, hours_cfg=None, employee_row=None):
     """Effective ACTUAL hours a shift row contributes to PAY, per THE one home (index §14y).
 
     THE ARITHMETIC IS NO LONGER HERE. It is `payroll_hours_basis.resolve_shift_row`, which answers
@@ -1044,11 +1053,11 @@ def _shift_actual_contribution(s, manual_days, punch_days, hours_cfg=None):
         cell["_raw_punches"] = [{"clock_out": d, "hours": 0.0}]
     # `d` is this row's own business date — it decides which side of this org's
     # `clocked_basis_effective_from` floor the day falls on (owner ruling 2026-10-12, mig 1076).
-    hrs, _basis, _detail = _hours_basis.resolve_shift_row(s, cfg, None, cell, d)
+    hrs, _basis, _detail = _hours_basis.resolve_shift_row(s, cfg, employee_row, cell, d)
     return hrs
 
 
-def _shift_actual_contribution_with_basis(s, manual_days, punch_days, hours_cfg=None):
+def _shift_actual_contribution_with_basis(s, manual_days, punch_days, hours_cfg=None, employee_row=None):
     """`(hours, basis)` — the SAME answer as `_shift_actual_contribution`, with the basis kept.
 
     Owner, 2026-10-10: *"mention on the report why you are doing so"*. The hours and the reason they
@@ -1065,7 +1074,7 @@ def _shift_actual_contribution_with_basis(s, manual_days, punch_days, hours_cfg=
             "shift_actual_rows": 1 if float(s.get("actual_hours") or 0) > 0 else 0}
     if d in punch_days.get(eid, ()) and d not in manual_days.get(eid, ()):
         cell["_raw_punches"] = [{"clock_out": d, "hours": 0.0}]
-    hrs, basis, _detail = _hours_basis.resolve_shift_row(s, cfg, None, cell, d)
+    hrs, basis, _detail = _hours_basis.resolve_shift_row(s, cfg, employee_row, cell, d)
     return hrs, basis
 
 
@@ -1085,7 +1094,7 @@ def _punch_counts_for_pay(t, manual_days, hours_cfg=None):
     return _hours_basis.punch_counts_for_pay(t, cell, cfg, d)
 
 
-def _inactive_activity_rows(org_id, lo, hi, inactive_ids):
+def _inactive_activity_rows(org_id, lo, hi, inactive_ids, so=None):
     """(real_shifts, timelog_rows) for INACTIVE employees only. real_shifts = storeops.shifts rows
     (is_deleted=false, in [lo,hi) when given) with actual_hours GENUINELY > 0 — a schedule-only row
     (actual_hours 0/blank) is dropped right here, at the source, for every caller. timelog_rows =
@@ -1101,7 +1110,7 @@ def _inactive_activity_rows(org_id, lo, hi, inactive_ids):
     if not inactive_ids:
         return [], []
     try:
-        q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
+        q = (so or sb()).table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
         if lo and hi:
             q = q.gte("shift_date", lo).lt("shift_date", hi)
         shifts = q.in_("employee_id", list(inactive_ids)).execute().data or []
@@ -1113,7 +1122,7 @@ def _inactive_activity_rows(org_id, lo, hi, inactive_ids):
     # stays open for its punch to count (see harness checks for both cases explicitly).
     real_shift_days = {(s.get("employee_id"), str(s.get("shift_date") or "")[:10]) for s in real_shifts}
     try:
-        q2 = (sb().table("timelog").select("employee_id,employee_name,hours,clock_out,work_date,store_code")
+        q2 = ((so or sb()).table("timelog").select("employee_id,employee_name,hours,clock_out,work_date,store_code")
               .eq("org_id", org_id))
         if lo and hi:
             q2 = q2.gte("work_date", lo).lt("work_date", hi)
@@ -1387,7 +1396,11 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
         # PUNCH-DRIVEN PAY: actual_hours>0 (manual) wins; else the punch drives (shift -> 0) on a
         # day with a closed punch and no manual correction; else the scheduled fallback. The punch
         # itself is added by the timelog loop below, so a punch-driven day counts its hours ONCE.
-        act, _act_basis = _shift_actual_contribution_with_basis(s, manual_days, punch_days, _hb_cfg)
+        # The EMPLOYEE ROW is carried to the one home so this report honours the per-rep
+        # `pay_from_schedule` tick (mig 1073) — owner ruling 2026-11-16. It was resolved with `None`
+        # here, i.e. the org default for everyone, while the finance copy of the same computation
+        # read the tick: the two surfaces could not agree about a rep whose tick differs from it.
+        act, _act_basis = _shift_actual_contribution_with_basis(s, manual_days, punch_days, _hb_cfg, emp)
         summary[eid]["scheduled_hours"] += sched
         summary[eid]["actual_hours"]    += act
         summary[eid]["shifts"] += 1
@@ -1810,7 +1823,8 @@ def _apply_approved_hours(org_id, lo, hi, rows):
 
 
 def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
-                          authorization: str = Header(default=""), org_id: str = ORG_ID, response: Response = None):
+                          authorization: str = Header(default=""), org_id: str = ORG_ID, response: Response = None,
+                          so=None):
     """Per-STORE payroll for a month OR an arbitrary start/end range (same precedence as /payroll —
     see _resolve_range), for the Store Expenses 'Employee Salaries' auto-fill.
 
@@ -1823,9 +1837,20 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
     shift's own store_code (a floater's hours land at the store they worked). Returns one row per store:
     {store_code, hours, amount}."""
     lo, hi = _resolve_range(month, start, end)
+    # THE ONE STOREOPS HANDLE for this computation. A caller that already holds one (the finance
+    # books, through `storeops/labour_cost` — index §STOREOPS-10) hands it over, so the figure the
+    # P&L books is produced by THIS function against THAT database rather than by a second
+    # derivation of its own. Omitted, it is the module's own, exactly as before.
+    so = so or sb()
     # All employees (active OR not) — a terminated rep who worked this month still earns; rate=0 if unknown.
-    employees = _employees_with_pay_fields(org_id, "employee_id,pay_rate,is_active,home_store")
+    employees = _employees_with_pay_fields(org_id, "employee_id,pay_rate,is_active,home_store", so=so)
     rate_map = {e.get("employee_id"): float(e.get("pay_rate") or 0) for e in employees}
+    #: THE PER-EMPLOYEE HALF OF THE HOURS BASIS (mig 1073, owner ruling 2026-11-16 "pay from the
+    #: schedule is a per-rep option"). This report resolved every row with `employee_row=None`, so
+    #: only the ORG default could ever apply and a rep's own tick changed nothing here — while the
+    #: finance copy of this computation did read it. Two answers to one question; the row is passed
+    #: now, so there is one.
+    emp_by_id = {e.get("employee_id"): e for e in employees if e.get("employee_id")}
     inactive_ids = _inactive_ids_from(employees)
     # Salary pay-basis (Deliverable 4) — per-(employee, store) hours/$ bookkeeping, gathered ONLY for
     # employees who are actually salaried (empty set -> zero extra cost for an all-hourly tenant). See
@@ -1858,17 +1883,28 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
     # passed / 8 failed on `main` — the fast path had stopped emitting the basis keys entirely. A
     # lock nobody runs is not a lock.
     # THE ONE PATH: full row fetch + Python aggregation, dereferencing the one home per row.
-    q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
+    q = so.table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
     if lo and hi:
         q = q.gte("shift_date", lo).lt("shift_date", hi)
-    shifts = q.execute().data or []
+    # A STABLE ORDER, because the money is accumulated in floats (2026-11-16). `amount += hrs *
+    # rate` over rows the database returns in no guaranteed order sums to a value that differs in
+    # the last bits, and the cents rounding at the end can then land on either side: measured live,
+    # LuxeLink October 2026 answered $6,083.83 and $6,083.84 at `Cicero` on alternate runs of the
+    # SAME question. The books now read this figure, and a figure that is not reproducible cannot be
+    # reconciled against — so the rows are ordered here rather than left to the query planner.
+    shifts = sorted(q.execute().data or [],
+                    key=lambda r: (str(r.get("employee_id") or ""), str(r.get("shift_date") or ""),
+                                   str(r.get("store_code") or ""), str(r.get("id") or "")))
     # PUNCH-DRIVEN PAY (2026-08-24): fetch the period's punches up-front so the shift loop already
     # knows which (emp, day) is punch-driven, EXACTLY as /payroll does above — the two reconcile.
     tl = []
     if lo and hi:
-        tl = (sb().table("timelog").select("employee_id,hours,clock_out,work_date,store_code")
-              .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
-    _hb_cfg = _hours_basis_cfg(org_id)
+        tl = sorted((so.table("timelog").select("employee_id,hours,clock_out,work_date,store_code")
+                     .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi)
+                     .limit(20000).execute().data) or [],
+                    key=lambda r: (str(r.get("employee_id") or ""), str(r.get("work_date") or ""),
+                                   str(r.get("store_code") or ""), str(r.get("clock_out") or "")))
+    _hb_cfg = _hours_basis_cfg(org_id, so=so)
     manual_days, punch_days = _punch_driven_day_maps(shifts, tl, _hb_cfg)
     for s in shifts:
         eid = s.get("employee_id")
@@ -1880,7 +1916,7 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
         sched = float(s.get("scheduled_hours") or 0)
         # actual_hours>0 (manual) wins; else 0 on a punch-driven day (punch replaces the schedule,
         # attributed to the punch's own store below); else scheduled fallback.
-        hrs = _shift_actual_contribution(s, manual_days, punch_days, _hb_cfg)
+        hrs = _shift_actual_contribution(s, manual_days, punch_days, _hb_cfg, emp_by_id.get(eid))
         rate = rate_map.get(eid, 0.0)
         d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
         d["hours"] += hrs
@@ -1965,7 +2001,7 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
     # Inactive employees: ALWAYS computed via this ONE shared, phantom-aware path (2026-07-25) — same
     # function /payroll uses, so both endpoints agree byte-for-byte on which of an inactive employee's
     # hours are "real" vs a leftover schedule-only phantom.
-    real_shifts, tl_rows = _inactive_activity_rows(org_id, lo, hi, inactive_ids)
+    real_shifts, tl_rows = _inactive_activity_rows(org_id, lo, hi, inactive_ids, so=so)
     _merge_inactive_into_by_store(by_store, rate_map, real_shifts, tl_rows)
 
     # Gate-1 D1 fix (2026-07-28, MODERATE money): _merge_inactive_into_by_store above writes an
@@ -2014,7 +2050,7 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
     if lo and hi and salaried_ids:
         try:
             by_store = payroll_salary.apply_to_by_store(
-                by_store, employees, emp_store_hours, emp_store_dollars, _tenant_pp_settings(org_id),
+                by_store, employees, emp_store_hours, emp_store_dollars, _tenant_pp_settings(org_id, so=so),
                 _date.fromisoformat(lo), _date.fromisoformat(hi) - timedelta(days=1))
         except Exception as e:
             _warn_salary_override_failed(response, org_id, "GET /payroll-by-store", e)
@@ -2036,7 +2072,7 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
     # which computes lunch BEFORE the salary override does a full overwrite of actual_pay — see that
     # endpoint's own lunch-deduction comment).
     try:
-        _lunch = _lunch_period_deduction(org_id, lo, hi, sb())
+        _lunch = _lunch_period_deduction(org_id, lo, hi, so)
         if _lunch.get("available"):
             for (_eid, _store), _ded in _lunch["by_employee_store"].items():
                 if _eid in salaried_ids:

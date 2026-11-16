@@ -116,7 +116,7 @@ class CodeAddressMap(dict):
     """THE code→address map: a `dict` whose `get` / `in` / `[]` fold the key through `code_key`.
 
     A DICT SUBCLASS DELIBERATELY, and this is the whole reason the fix is one edit rather than
-    twelve. The map is passed by value into `coa.derive_wage_cells`, `labour_coverage`,
+    twelve. The map is passed by value into `coa.wages_by_store`, `labour_coverage`,
     `overhead_allocation` and read in `coa.build_inputs` as `code2addr.get(code, code)` at many
     sites. Returning a mapping that answers the folded question means EVERY one of those callers
     gains the fix without an edit of its own — and a caller added tomorrow cannot reintroduce the

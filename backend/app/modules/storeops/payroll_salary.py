@@ -225,6 +225,14 @@ def derive_salary_pay(pay_basis, pay_amount, settings, lo: date, hi: date,
             "periods": detail, "prorated": any_prorated, "truncated": truncated}
 
 
+#: THE SENTINEL for "this pay belongs to no store" — the key `allocate_across_stores` uses when a
+#: salaried employee has no worked hours and no `home_store`. Named once so a READER of this
+#: producer (the finance books, through `storeops/labour_cost` — §STOREOPS-10) can recognise it as
+#: an absence rather than booking a store called "Unassigned" onto the P&L. A second spelling of
+#: this string anywhere is a future divergence; `harness_labour_cost_one_home.py` §D forbids one.
+UNASSIGNED_STORE = "Unassigned"
+
+
 def allocate_across_stores(store_hours: dict, total_amount: float, home_store):
     """Proportional-to-worked-hours store allocation (see module docstring). Cents-HALF_UP per store
     with the remainder fixed up on the LAST (smallest-share) store so the allocation sums EXACTLY to
@@ -235,9 +243,15 @@ def allocate_across_stores(store_hours: dict, total_amount: float, home_store):
     total = _money(total_amount)
     hours_total = sum(v for v in (store_hours or {}).values() if v)
     if hours_total <= 0:
-        store = (home_store or "").strip() or "Unassigned"
+        store = (home_store or "").strip() or UNASSIGNED_STORE
         return {store: float(total)}
-    items = sorted(((s, h) for s, h in (store_hours or {}).items() if h and s), key=lambda kv: -kv[1])
+    # DETERMINISTIC ORDER (2026-11-16). The remainder is fixed up on the LAST store, so WHICH store
+    # is last decides where a penny lands — and the sort was by hours alone, leaving two stores with
+    # equal hours in the order the database happened to return their rows. Measured live: LuxeLink
+    # October 2026 answered $6,083.83 and $6,083.84 at `Cicero` on alternate runs of the SAME
+    # question. The store key is the tie-break, so the same month always allocates the same way.
+    items = sorted(((s, h) for s, h in (store_hours or {}).items() if h and s),
+                   key=lambda kv: (-kv[1], str(kv[0])))
     out = {}
     running = Decimal("0.00")
     for i, (store, hrs) in enumerate(items):
@@ -360,7 +374,7 @@ def synthesize_zero_activity_rows(rows, employees, settings, lo: date, hi: date)
             continue
         row = {
             "employee_id": eid, "name": e.get("name") or eid,
-            "store": (e.get("home_store") or "").strip() or "Unassigned",
+            "store": (e.get("home_store") or "").strip() or UNASSIGNED_STORE,
             "pay_rate": float(e.get("pay_rate") or 0),
             "scheduled_hours": 0.0, "actual_hours": 0.0, "shifts": 0,
             "scheduled_pay": 0.0, "actual_pay": 0.0,
@@ -396,7 +410,12 @@ def apply_to_by_store(by_store, employees, emp_store_hours, emp_store_dollars, s
     if not salaried or lo is None or hi is None:
         return by_store
     out = {k: dict(v) for k, v in by_store.items()}
-    for eid, emp in salaried.items():
+    # DETERMINISTIC ORDER (2026-11-16), same reason as `allocate_across_stores`' tie-break: each
+    # employee's cents are added to a store bucket that is then rounded, so the ORDER the roster
+    # happens to arrive in from the database could move a penny between stores. Measured live:
+    # LuxeLink October 2026 answered $6,083.83 and $6,083.84 at `Cicero` on alternate runs of the
+    # same question, and a figure that is not reproducible cannot be reconciled against.
+    for eid, emp in sorted(salaried.items(), key=lambda kv: str(kv[0])):
         basis, amount = resolve_pay_basis(emp)
         if amount is None or amount <= 0:
             continue   # misconfigured — leave this employee's hourly-computed $ untouched

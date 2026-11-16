@@ -324,3 +324,100 @@ def py_string_expressions(src, placeholder="000"):
         text = "".join(t for _ln, t in run)
         out.append((run[0][0], _BRACE_OR_PERCENT.sub(placeholder, text)))
     return out
+
+
+# ── A DATABASE DOUBLE FOR THE PAY PATH (2026-11-16, index §STOREOPS-09) ─────────────────────────
+# Three harnesses now prove something that runs END TO END through `GET /storeops/payroll-by-store`
+# — because that is where "what did this store's labour cost this month" lives since the finance
+# module's own second derivation was deleted (§ACCOUNT-05). Each needed a client double, and three
+# copies of one idea is the duplicate this house calls a defect, so it lives here once.
+#
+# Deliberately small: a flat table store and exactly the filters these paths use. An unimplemented
+# verb RAISES rather than matching everything, which is the failure mode a proof must never pass
+# under.
+class _FakeQuery:
+    def __init__(self, store, table):
+        self._s, self._t, self._f, self._lim = store, table, [], None
+
+    def select(self, *_a, **_k):
+        return self
+
+    def eq(self, k, v):
+        self._f.append(("eq", k, v)); return self
+
+    def neq(self, k, v):
+        self._f.append(("neq", k, v)); return self
+
+    def gte(self, k, v):
+        self._f.append(("gte", k, v)); return self
+
+    def gt(self, k, v):
+        self._f.append(("gt", k, v)); return self
+
+    def lte(self, k, v):
+        self._f.append(("lte", k, v)); return self
+
+    def lt(self, k, v):
+        self._f.append(("lt", k, v)); return self
+
+    def in_(self, k, vals):
+        self._f.append(("in", k, set(vals))); return self
+
+    def is_(self, k, v):
+        self._f.append(("is", k, v)); return self
+
+    def order(self, *_a, **_k):
+        return self
+
+    def limit(self, n):
+        self._lim = n; return self
+
+    def range(self, a, b):
+        self._lim = b - a + 1; return self
+
+    def __getattr__(self, name):
+        raise NotImplementedError(f"the pay-path double does not implement {name!r}")
+
+    def _ok(self, r):
+        for op, k, v in self._f:
+            rv = r.get(k)
+            if op == "eq" and rv != v:
+                return False
+            if op == "neq" and rv == v:
+                return False
+            if op == "in" and rv not in v:
+                return False
+            if op == "is" and v == "null" and rv is not None:
+                return False
+            if op in ("gte", "gt", "lte", "lt"):
+                if rv is None:
+                    return False
+                a, b = str(rv), str(v)
+                if (op == "gte" and not a >= b) or (op == "gt" and not a > b) \
+                        or (op == "lte" and not a <= b) or (op == "lt" and not a < b):
+                    return False
+        return True
+
+    def execute(self):
+        rows = [dict(r) for r in self._s.get(self._t, []) if self._ok(r)]
+        return type("R", (), {"data": rows[:self._lim] if self._lim else rows})()
+
+
+class FakeDB:
+    """A schema-flat client double: `FakeDB({"employees": [...], "shifts": [...]})`."""
+
+    def __init__(self, store=None):
+        self.store = store if store is not None else {}
+
+    def seed(self, table, rows):
+        self.store[table] = list(rows)
+        return self
+
+    def schema(self, _name):
+        return self
+
+    def table(self, name):
+        return _FakeQuery(self.store, name)
+
+    def from_(self, name):
+        return _FakeQuery(self.store, name)

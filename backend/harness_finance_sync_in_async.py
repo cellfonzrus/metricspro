@@ -219,7 +219,7 @@ print("\n[5] MONEY PROOF — every non-transport function is AST-identical to or
 #   `note` — emitted only when coa set it, so every other line's payload is byte-identical. No
 #   arithmetic in _assemble changed. Proven by backend/harness_pl_commission_source.py.
 EXPECTED_DELTA = {
-    # +`compute_and_store` 2026-11-13 (§STOREOPS-09): a ONE-LINE change, the chart argument of its
+    # +`compute_and_store` 2026-11-13 (§STOREOPS-10): a ONE-LINE change, the chart argument of its
     # `_assemble` call — `coa.PL_SPEC` -> `coa.pl_spec_for(inputs)`, so a P&L line the TENANT
     # declared (a wages line per org level) can exist at all. It books nothing new and the house
     # default declares nothing, so `pl_spec_for` hands back the SHARED `PL_SPEC` object itself and
@@ -341,8 +341,23 @@ for rel, allowed in EXPECTED_DELTA.items():
 #   0 of 49; the feeds carry more spellings now). Proven by backend/harness_gp_store_identity.py;
 #   the "no second copy / every caller
 #   dereferences it" property is locked by backend/harness_store_identity_lock.py.
+# SANCTIONED 2026-11-16 (index §ACCOUNT-05 / §STOREOPS-10, owner report "the payroll for luxelink is
+# being calculated properly but it is not reflecting per store expenses in dashboard, gross profit or
+# p&l ... fix the platform wide issue not for just this tenant"). `derive_wage_cells` and
+# `derive_wage_cells_with_basis` are DELETED, not moved: they were a SECOND derivation of "what did
+# this store's labour cost this month", and the Payroll Report's producer is the first. Measured
+# live against production, all four tenants x October 2026, both sides: before, EVERY store of EVERY
+# tenant disagreed (Cellfonz R Us $72,905.30 vs $0.00, LuxeLink $121,632.66 vs $116,826.26, Vzone
+# $20,449.79 vs $20,010.00, NY LOGISTICS $20,160.28 vs $18,328.79); after, LuxeLink, Vzone and NY
+# LOGISTICS agree store for store and cent for cent, and the house org still REFUSES on the books
+# (the evidence verdict stayed in `_wage_measurement`, deliberately — a report may show a figure the
+# books may not carry). `monthly_salary_equivalent` is untouched: it is the platform's one salary
+# conversion, not a measurement. Locked by harness_labour_cost_one_home.py.
 ALLOWED_REMOVED = {
-    f"{MOD}/account/coa.py": {"store_resolver._num_key", "store_resolver.resolve"},
+    f"{MOD}/account/coa.py": {"store_resolver._num_key", "store_resolver.resolve",
+                              "derive_wage_cells", "derive_wage_cells_with_basis",
+                              "derive_wage_cells_with_basis._add",
+                              "derive_wage_cells_with_basis.addr_for"},
 }
 MONEY_MODULE_DELTA = {
     # coa.py {wages_by_store, derive_wage_cells, derive_wage_cells_with_basis} (2026-10-12,
@@ -385,7 +400,10 @@ MONEY_MODULE_DELTA = {
     #   identical to the cent and `by_code` equal to `by_store` in every month (LuxeLink October
     #   $105,109.69 both ways, the house org's Oct/Nov a refusal on both paths).
     f"{MOD}/account/coa.py": ({"_account_config", "build_inputs", "wages_by_store",
-                               "derive_wage_cells", "derive_wage_cells_with_basis",
+                               # `_wage_measurement` 2026-11-16 (§ACCOUNT-05): it no longer DERIVES.
+                               # Its evidence read and refusal are unchanged, line for line; what
+                               # followed them is now one dereference of `storeops/labour_cost`.
+                               "_wage_measurement",
                                "store_resolver", "store_code_to_address",
                                "_squash_key", "_lead_num_key"},
                               {"_lcov_mod", "build_inputs.add_comm",
