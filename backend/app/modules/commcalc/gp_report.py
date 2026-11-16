@@ -291,6 +291,7 @@ def calc_gp_report(
     carrier_rules: list = None,
     carrier_class_config: dict = None,
     box_departments=None,
+    store_active_by_code: dict = None,
 ) -> dict:
     """
     Returns store_rows (by store) and rep_rows (by rep).
@@ -629,9 +630,11 @@ def calc_gp_report(
 
     # ── Include ALL mapped stores even with no sales ─────────────
     # Keyed by the SAME identity as every money bucket, so a store with no POS rows still gets its
-    # row and a store the POS spells differently does not get a SECOND one. The NULL-safe
-    # `is_active` predicate (owner-approved 2026-08-06: only an EXPLICIT false is inactive, the same
-    # rule as commcalc's `_store_active`) lives in `_sid.store_identity_index`.
+    # row and a store the POS spells differently does not get a SECOND one. EVERY mapped store is
+    # seeded, closed ones included, because the seed is what makes a store's expenses and labour
+    # keyable at all when it has no sales rows — a closed store with nothing on it is dropped later,
+    # on its own money, rather than being made unkeyable here. Whether a store is live is read from
+    # the one home (§CORE-45) through `_sid.store_identity_index`'s `is_active`, never re-derived.
     for _addr in store_identity:
         by_store.setdefault(_addr, [])
 
@@ -812,6 +815,33 @@ def calc_gp_report(
 
         net_profit     = total_rev - rep_pay - exp_total - net_phone_cost
         net_excl_mdf   = net_profit - mdf
+
+        # ── A CLOSED STORE IS A ROW RULE, NEVER A MONEY RULE (§CORE-45, applied 2026-11-16) ───────
+        # Owner: *"once the store or employee is made inactive their data should [not] be shwoing on
+        # any module"* — and, in the same breath, *"902 is closed for good"* about a store holding
+        # $6,352.09 of October labour. Both hold: the store's IDENTITY is kept (that is why
+        # `store_identity_index` indexes closed rows at all, §ACCOUNT-03.6 — without it the money is
+        # not hidden, it is unkeyable and silently gone), and the closed store is listed for every
+        # period it HAS data in and dropped only when it has none. A test on the row's own money,
+        # so nothing this skips is counted in any total below.
+        # IS THIS STORE CLOSED IS THE ROSTER'S ANSWER, NOT THE CARRIER MAPPING'S (owner report
+        # 2026-11-16: *"All these 4 stores are closed"*). `storeops.stores` is the home for the
+        # store roster and §CORE-45 is the home for the predicate; `commcalc.store_mapping` carries
+        # a flag of its own about a MAPPING ROW, and live the two disagree — all four closed
+        # LuxeLink stores are `is_active=false` in the roster while a second, stale mapping row
+        # spelled `LUX-*` still says active. Reading the mapping flag would have called three closed
+        # stores open. So `store_active_by_code` (the roster, keyed by store_code) DECIDES wherever
+        # it knows the store, and the mapping flag is only the fallback for a tenant whose roster
+        # could not be read. A store is live if ANY of its claiming codes is live in the roster.
+        _live = bool(store_identity.get(store, {}).get('is_active', True))
+        if store_active_by_code:
+            _flags = [store_active_by_code[_c] for _c in (exp_codes or ())
+                      if _c in store_active_by_code]
+            if _flags:
+                _live = any(_flags)
+        if not _live:
+            if not any((total_rev, rep_pay, exp_total, net_phone_cost)):
+                continue
 
         store_rows.append({
             'store': store, 'store_code': store_code, 'market': market,

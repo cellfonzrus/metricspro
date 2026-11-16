@@ -22,6 +22,12 @@ Enforced by `backend/harness_store_identity_lock.py`: a caller that stops derefe
 or a second leading-token join appearing anywhere in the backend, FAILS THE BUILD.
 """
 
+#: "IS THIS STILL ACTIVE" HAS ONE HOME (§CORE-45) and this module READS it rather than carrying its
+#: own `is_active is False` test — a second copy of that predicate is how the two halves of the same
+#: question disagreed before. NULL means ACTIVE and the string `'false'` is not active; both traps
+#: are stated once, there.
+from app.modules.core import roster_visibility as _rv
+
 __all__ = [
     "fold_accents", "squash_key", "lead_num_key", "code_key", "build_code_index",
     "CodeAddressMap", "build_store_resolver", "store_key",
@@ -284,7 +290,7 @@ def store_key(resolve, raw) -> str:
         return raw_s
 
 
-def store_identity_index(mapping_rows, resolve=None) -> dict:
+def store_identity_index(mapping_rows, resolve=None, include_inactive=True) -> dict:
     """PURE: `store_mapping` rows -> {CANONICAL store_address: identity}, where identity is
     `{'store': …, 'store_code', 'market', 'salesforce_id', 'codes': [...], 'ambiguous': bool}`.
 
@@ -302,17 +308,33 @@ def store_identity_index(mapping_rows, resolve=None) -> dict:
       • every claiming code is kept in `codes` and `ambiguous` is True, so the collision is
         REPORTED rather than silently resolved.
 
-    An explicitly inactive row (`is_active is False`) is skipped, matching the report's own
-    NULL-safe `is_active` predicate. `resolve` None keeps the raw mapping spelling as the key."""
+    IDENTITY IS NOT VISIBILITY (owner ruling 2026-11-14 / §CORE-45, applied here 2026-11-16).
+    This index used to SKIP an explicitly inactive row, and that is the one thing it must not do: a
+    CLOSED store then has no identity at all, so a reader keying money by store code cannot place
+    the labour, sales or expenses it had while it was open — the dollars do not move to another
+    store, they simply vanish from the report. Live: LuxeLink closed `902 Ave U` ("902 is closed for
+    good, it set to inactive", owner 2026-11-16) and its 9 October shifts, $6,352.09 of measured
+    labour, became unkeyable on the Gross Profit report (§ACCOUNT-03.6).
+    `core/roster_visibility` already states the rule this index was quietly contradicting: *"A
+    report that quietly drops a closed store's September money is a report that lies about
+    September"*. So every row is indexed, each identity carries `is_active`, and a caller that
+    wants a LIST rather than a lookup narrows it with `include_inactive=False` — which dereferences
+    `roster_visibility.is_active` instead of spelling the predicate a second time here.
+
+    `resolve` None keeps the raw mapping spelling as the key."""
     rows = []
     for r in (mapping_rows or []):
-        if (r or {}).get("is_active") is False:
+        if not include_inactive and not _rv.is_active(r or {}):
             continue
         addr = _norm((r or {}).get("store_address"))
         if not addr:
             continue
         rows.append(r)
-    rows.sort(key=lambda r: (0 if _norm(r.get("salesforce_id")) else 1,
+    #: A LIVE row is considered before a closed one, so where a closed and a live mapping row claim
+    #: one store the identity a reader gets is the live store's — then the carrier's own door
+    #: (`salesforce_id`), then the code, so the order stays total and reproducible.
+    rows.sort(key=lambda r: (0 if _rv.is_active(r) else 1,
+                             0 if _norm(r.get("salesforce_id")) else 1,
                              str(r.get("store_code") or "")))
     out: dict = {}
     for r in rows:
@@ -320,7 +342,14 @@ def store_identity_index(mapping_rows, resolve=None) -> dict:
         if not key:
             continue
         ent = out.setdefault(key, {"store": key, "store_code": "", "market": "",
-                                   "salesforce_id": "", "codes": [], "ambiguous": False})
+                                   "salesforce_id": "", "codes": [], "ambiguous": False,
+                                   #: False only when EVERY row claiming this store says so, so a
+                                   #: store with one live row anywhere is live. The flag is here to
+                                   #: be READ (a list may hide the store, and say it did) — never to
+                                   #: decide whether its money counts.
+                                   "is_active": False})
+        if _rv.is_active(r or {}):
+            ent["is_active"] = True
         for field in ("store_code", "market", "salesforce_id"):
             if not ent[field]:
                 ent[field] = str(r.get(field) or "").strip()
@@ -366,10 +395,18 @@ def shared_identity_pairs(mapping_rows, resolve=None) -> set:
     Empty when every name belongs to exactly one address — the normal, healthy state, in which no
     caller has any reason to withhold a cross-address finding.
 
-    An explicitly inactive row is skipped, matching `store_identity_index`."""
+    THIS ONE STILL NARROWS TO LIVE ROWS, and `store_identity_index` deliberately no longer does
+    (2026-11-16). The two answer different questions. The index is a LOOKUP — money spelled with a
+    closed store's code must still land on that store — while this is a WITHHOLDING rule: a caller
+    reading it suppresses a real cross-address finding about real dollars. A closed row at an old
+    address is exactly the relocation shape this looks for, so indexing closed rows here would start
+    suppressing findings that are today reported, which is a money-visible change and is measured on
+    its own rather than carried in on the back of an identity fix. The predicate itself is READ from
+    the one home (§CORE-45) rather than spelled a second time, so `'false'` and NULL cannot be read
+    one way here and another way there."""
     by_name: dict = {}
     for r in (mapping_rows or []):
-        if (r or {}).get("is_active") is False:
+        if not _rv.is_active(r or {}):
             continue
         key = store_key(resolve, (r or {}).get("store_address"))
         if not key:

@@ -105,7 +105,8 @@ check("A11 no resolver → the raw string, so a caller without one still groups 
 head("B. THE IDENTITY INDEX — one physical store, one key, and the door survives")
 IDX = sid.store_identity_index(MAPPING, RESOLVE)
 check("B1 one key per physical store (two codes on one address do NOT make two rows)",
-      sorted(IDX) == ["11636 Springfield Blvd", "1598 Mount Ephraim Ave", "9 Elm St"], sorted(IDX))
+      sorted(IDX) == ["11636 Springfield Blvd", "1598 Mount Ephraim Ave", "77 Closed Rd",
+                      "9 Elm St"], sorted(IDX))
 check("B2 the carrier's door is KEPT — the row with the salesforce_id is folded first, so the "
       "residual join still finds the store (last-wins used to keep the NULL)",
       IDX["1598 Mount Ephraim Ave"]["salesforce_id"] == "SF-1598")
@@ -117,13 +118,46 @@ check("B4 the collision is REPORTED, not silently resolved",
       and sorted(IDX["1598 Mount Ephraim Ave"]["codes"]) == ["S-1598", "S-2778"])
 check("B5 ambiguous_identities names it for the page",
       [r["store"] for r in sid.ambiguous_identities(IDX)] == ["1598 Mount Ephraim Ave"])
-check("B6 an EXPLICITLY inactive row is skipped; a NULL is_active would not be (the 2026-08-06 "
-      "null-safe rule)", "77 Closed Rd" not in IDX)
+# ── THE REGRESSION (owner 2026-11-16: *"902 is closed for good, it set to inactive"*) ────────────
+# This index USED TO SKIP a closed row, and that is how a closed store's money left the report: with
+# no identity, LuxeLink's `902 Ave U` could not be keyed at all and $6,352.09 of its October labour
+# was neither booked nor reported — not hidden, GONE. Identity is not visibility (§ACCOUNT-03.6).
+check("B6 a CLOSED store still HAS an identity — the money spelled with its code can be keyed",
+      "77 Closed Rd" in IDX and IDX["77 Closed Rd"]["store_code"] == "S-CLOSED")
+check("B7 …and the index SAYS it is closed, so a caller can make it a ROW rule without re-deriving "
+      "the predicate", IDX["77 Closed Rd"]["is_active"] is False
+      and IDX["9 Elm St"]["is_active"] is True)
+_closed_only = sid.store_identity_index(MAPPING, RESOLVE, include_inactive=False)
+check("B8 a caller that wants a LIST, not a lookup, narrows it — and only then",
+      "77 Closed Rd" not in _closed_only and "9 Elm St" in _closed_only)
 _null_active = sid.store_identity_index(
-    [{"store_code": "S-N", "store_address": "5 Null Way", "is_active": None}], RESOLVE)
-check("B7 …proved: is_active NULL keeps the store", "5 Null Way" in _null_active)
-check("B8 the fold is deterministic, not insertion order",
+    [{"store_code": "S-N", "store_address": "5 Null Way", "is_active": None}], RESOLVE,
+    include_inactive=False)
+check("B9 NULL means ACTIVE, so a narrowed list still keeps the store (the 2026-08-06 null-safe "
+      "rule, now read from the §CORE-45 home)",
+      "5 Null Way" in _null_active and _null_active["5 Null Way"]["is_active"] is True)
+_str_false = sid.store_identity_index(
+    [{"store_code": "S-F", "store_address": "6 Str Way", "is_active": "false"}], RESOLVE,
+    include_inactive=False)
+check("B10 …and the STRING 'false' is not active either, though it is truthy in Python",
+      "6 Str Way" not in _str_false)
+_one_live = sid.store_identity_index(
+    [{"store_code": "S-D", "store_address": "9 Elm St", "is_active": False},
+     {"store_code": "S-9", "store_address": "9 Elm St", "is_active": True}], RESOLVE)
+check("B11 a store with ONE live row anywhere is live, whichever order the rows arrive in",
+      _one_live["9 Elm St"]["is_active"] is True
+      and sid.store_identity_index(list(reversed([
+          {"store_code": "S-D", "store_address": "9 Elm St", "is_active": False},
+          {"store_code": "S-9", "store_address": "9 Elm St", "is_active": True}]), ),
+          RESOLVE)["9 Elm St"]["is_active"] is True)
+check("B12 …and the LIVE row is folded first, so the identity a reader gets is the live store's",
+      _one_live["9 Elm St"]["store_code"] == "S-9")
+check("B13 the fold is deterministic, not insertion order",
       sid.store_identity_index(list(reversed(MAPPING)), RESOLVE) == IDX)
+check("B14 the WITHHOLDING relation still narrows to live rows — a closed old address is the "
+      "relocation shape it looks for, so broadening it is a money-visible change measured on its "
+      "own, not carried in here",
+      not any("77 Closed Rd" in p for p in sid.shared_identity_pairs(MAPPING, RESOLVE)))
 
 head("C. THE GP REPORT — the money lands on the store it was paid for")
 PERIOD = "July 2026"
@@ -285,6 +319,62 @@ check("G4 a bare token is never resolved by the ALIAS number ahead of a declared
       "(step 6 keeps precedence over step 7)",
       sid.store_key(_resolve, "2778") == "1598 Mount Ephraim Ave",
       sid.store_key(_resolve, "2778"))
+
+head("I. A CLOSED STORE: ITS MONEY IS NEVER LOST, ITS EMPTY ROW IS NEVER SHOWN")
+# THE DEFECT, live (owner 2026-11-16: *"902 is closed for good, it set to inactive"*). LuxeLink
+# closed `902 Ave U`. Because the identity index skipped closed rows, the store had NO identity, so
+# the Gross Profit report could not key the $6,352.09 of October labour filed under its code: the
+# payload reported it as `labour_measured_fill.unkeyed` and the column showed nothing. The owner's
+# own two rules both hold — a closed store does not clutter the report, AND a report never lies
+# about a month that happened — so the rule is a ROW rule on the row's own money.
+_CLOSED_EXP = [{"store_code": "S-CLOSED", "amount": 6352.09, "category": "Employee Salaries"}]
+R_CL = calc_gp_report([], [], [], [], _CLOSED_EXP, [], MAPPING, PERIOD,
+                      resolve_store_canonical=RESOLVE)
+_cl = {r["store"]: r for r in R_CL["store_rows"]}
+check("I1 THE REGRESSION: the closed store's expenses are keyed and BOOKED, not dropped",
+      round(_cl.get("77 Closed Rd", {}).get("exp_total", 0.0), 2) == 6352.09,
+      str(_cl.get("77 Closed Rd", {}))[:160])
+check("I2 …and it is listed, because it HAS data this period",
+      "77 Closed Rd" in _cl)
+check("I3 …and its loss is in the report's own total, not stranded off it",
+      round(_cl.get("77 Closed Rd", {}).get("net_profit", 0.0), 2) == -6352.09)
+check("I4 with NOTHING this period the closed store is NOT a line of the report (the owner's "
+      "hide-inactive directive, §CORE-45)",
+      "77 Closed Rd" not in {r["store"] for r in R["store_rows"]})
+check("I5 …while a LIVE store with nothing is still listed, so the drop is about closure and not "
+      "about emptiness", "9 Elm St" in {r["store"] for r in R["store_rows"]})
+
+# ── THE ROSTER ANSWERS "IS THIS STORE CLOSED", NOT THE CARRIER MAPPING (owner 2026-11-16) ─────────
+# *"All these 4 stores are closed"*. He was right and the mapping flag was not: live, all four are
+# `is_active=false` in `storeops.stores` while a SECOND, stale `LUX-*` mapping row still says
+# active, so reading the mapping flag called three closed stores open. `store_active_by_code` is the
+# roster, keyed by store_code, and it DECIDES wherever it knows the store.
+_R_ROSTER = calc_gp_report([], [], [], [], [], [], MAPPING, PERIOD,
+                           resolve_store_canonical=RESOLVE,
+                           store_active_by_code={"S-9": False})
+check("I6 THE REGRESSION: a store the MAPPING calls active and the ROSTER calls closed is treated "
+      "as closed", "9 Elm St" not in {r["store"] for r in _R_ROSTER["store_rows"]})
+_R_ROSTER2 = calc_gp_report([], [], [], [], [{"store_code": "S-9", "amount": 100.0}], [],
+                            MAPPING, PERIOD, resolve_store_canonical=RESOLVE,
+                            store_active_by_code={"S-9": False})
+check("I7 …and still listed for a period it HAS data in, with the money on it",
+      round({r["store"]: r for r in _R_ROSTER2["store_rows"]}["9 Elm St"]["exp_total"], 2) == 100.0)
+_R_ROSTER3 = calc_gp_report([], [], [], [], [], [], MAPPING, PERIOD,
+                            resolve_store_canonical=RESOLVE,
+                            store_active_by_code={"S-CLOSED": True})
+check("I8 the roster wins BOTH ways — a store the mapping calls closed and the roster calls open "
+      "is listed, so the override is not a one-directional hide",
+      "77 Closed Rd" in {r["store"] for r in _R_ROSTER3["store_rows"]})
+check("I9 a store the ROSTER has never heard of falls back to the mapping flag, so an unreadable "
+      "or partial roster can never take a store off the report",
+      "9 Elm St" in {r["store"] for r in calc_gp_report(
+          [], [], [], [], [], [], MAPPING, PERIOD, resolve_store_canonical=RESOLVE,
+          store_active_by_code={"SOMETHING-ELSE": False})["store_rows"]})
+check("I10 ONE physical store, ANY live code: a store whose second code is closed in the roster is "
+      "still open on the strength of the live one (`1598 Mount Ephraim Ave` is claimed by two)",
+      "1598 Mount Ephraim Ave" in {r["store"] for r in calc_gp_report(
+          [], [], [], [], [], [], MAPPING, PERIOD, resolve_store_canonical=RESOLVE,
+          store_active_by_code={"S-1598": True, "S-2778": False})["store_rows"]})
 
 print()
 print("=" * 78)
