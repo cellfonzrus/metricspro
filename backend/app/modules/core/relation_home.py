@@ -200,6 +200,7 @@ SCHEMA_OF = {
     "payout_exclusion_map": "commcalc",
     "payout_schedule": "commcalc",
     "payout_schedule_line": "commcalc",
+    "period_goal": "commcalc",
     "pl_line_cost_center": "commcalc",
     "pl_sales_line_map": "commcalc",
     "plan_installment_line": "commcalc",

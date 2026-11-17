@@ -80,8 +80,17 @@ def texts(source):
 # ── the blindness, measured on whatever interpreter this is ──────────────────────────────────────
 def walks_string_tokens(source):
     """Does this source walk Python STRING tokens itself? (As opposed to reading them through the
-    one home.) DERIVED from the source, never a hand list."""
-    return "tokenize.STRING" in source
+    one home.) DERIVED from the source, never a hand list.
+
+    READ FROM CODE, NOT FROM PROSE (2026-11-17). This read the RAW source, so a harness that had
+    been FIXED and said so — "the first version tokenised the source itself and inspected
+    tokenize.STRING, which §C3 fails the build on" — was reported as still blind, by its own
+    truthful explanation of the fix. That is precisely the trap `harnesslib.py_code_only`'s docstring
+    was written about: *"A guard a truthful comment can break is a guard that gets deleted — so locks
+    read CODE."* This one had been reading prose since it shipped, so it dereferences that home now,
+    like every other lock here. §D7/§D8 below assert both halves.
+    """
+    return "tokenize.STRING" in hl.py_code_only(source)
 
 
 def knows_pep701(source):
@@ -163,6 +172,12 @@ check("D3 a blind file that is not on the list fails C3",
       bool([f for f in (blind + ["harness_planted_blind.py"]) if f not in listed]))
 check("D4 a stale entry fails C4",
       bool([f for f in (listed + [FIXED_GUARD]) if f not in blind]))
+check("D7 a tokenize.STRING loop in real CODE is still caught (the fix did not blind the guard)",
+      walks_string_tokens("import tokenize\nfor t in toks:\n    if t.type == tokenize.STRING:\n        pass\n"))
+check("D8 the SAME words in a docstring or a comment are NOT a finding",
+      not walks_string_tokens('"""We used to inspect tokenize.STRING here; we no longer do."""\n'
+                              "x = 1\n")
+      and not walks_string_tokens("# inspected tokenize.STRING before the fix\nx = 1\n"))
 check("D5 the home is not trivially passing — a wrong placeholder would be seen",
       texts('x = f"migration {MIG}"') != ["migration {MIG}"])
 

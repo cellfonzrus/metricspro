@@ -18,6 +18,7 @@ fails the build if one appears.
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
 
+import harnesslib as _hl
 from app.modules.commcalc import annual_goal as ag
 from app.modules.commcalc import targets_engine as te
 
@@ -42,20 +43,15 @@ def _code_only(path):
     """The file's CODE, with comments and docstrings thrown away — so a tenant's word may be QUOTED
     in prose (the owner's own ask is quoted at the top of the engine, and should be) while remaining
     forbidden in anything that executes, and so a DEREFERENCE check cannot be satisfied by a mention
-    in a docstring. Same technique as `harness_daily_incentive._code_only`; importing that module is
-    not possible because a harness exits on import."""
-    import io, tokenize
-    out, prev = [], tokenize.INDENT
-    for tok in tokenize.generate_tokens(io.StringIO(open(path).read()).readline):
-        if tok.type == tokenize.COMMENT:
-            continue
-        if tok.type == tokenize.STRING and prev in (tokenize.INDENT, tokenize.NEWLINE,
-                                                    tokenize.NL, tokenize.DEDENT):
-            continue
-        out.append(tok.string)
-        if tok.type not in (tokenize.NL, tokenize.NEWLINE):
-            prev = tok.type
-    return " ".join(out).lower()
+    in a docstring.
+
+    DEREFERENCED, never hand-rolled: `harnesslib.py_code_only` is the ONE home for "this file with
+    its prose removed". The first version of this helper tokenised the source itself and inspected
+    `tokenize.STRING` to find docstrings — which `harness_py_string_reader_lock` §C3 fails the build
+    on, and rightly: PEP 701 stopped an f-string being one STRING token on 3.12+, so a hand-rolled
+    reader behaves differently on CI's pinned 3.11 than in a container running 3.13. That is exactly
+    how this check passed locally and went red in CI (index §CORE-32)."""
+    return _hl.py_code_only(open(path).read()).lower()
 
 
 
