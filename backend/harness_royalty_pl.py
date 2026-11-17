@@ -474,9 +474,24 @@ jr = [{"statement": "balance_sheet", "account_type": "equity", "account_line": "
 check("a profit center's journal = its stores' entries only (a tenant-level entry and another store's never reach it)",
       BS.journal_scope_entries(jr, "profit_center:PC-9001", {A}) == [jr[1]])
 src_se = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "app", "modules", "account", "statement_engine.py")).read()
-check("statement() and compute_and_store() both hand the engine the profit scopes and put the side meta on `meta`",
-      src_se.count("meta.update(side_meta(inputs))") == 2
-      and len(__import__("re").findall(r"(?<!def )_profit_scopes\(client, org_id\)", src_se)) == 2)
+# Asserted PER FUNCTION, not as a count over the file: the two engine entry points must each
+# dereference the profit scopes and stamp the side meta. A count would also forbid a THIRD honest
+# caller doing the same (profit_by_store, §COMMCALC-76.8 — it stamps `side_meta` too), and a lock
+# that breaks when a new caller obeys it is teaching the wrong lesson.
+def _body_of(src, name):
+    m = __import__("re").search(r"^def " + name + r"\(", src, __import__("re").M)
+    if not m:
+        return ""
+    rest = src[m.start():]
+    nxt = __import__("re").search(r"\n(?=def |#\s*═)", rest[1:])
+    return rest[:nxt.start() + 1] if nxt else rest
+
+
+for _fn in ("statement", "compute_and_store"):
+    _b = _body_of(src_se, _fn)
+    check(_fn + "() hands the engine the profit scopes and puts the side meta on `meta`",
+          "meta.update(side_meta(inputs))" in _b
+          and __import__("re").search(r"(?<!def )_profit_scopes\(client, org_id\)", _b) is not None, _fn)
 st = SE.statement(fr, FR, PER, scope="profit_center:PC-9001", kinds=("pl",))
 check("the on-demand statement serves the profit-center scope, and its meta carries the royalty coverage",
       st.get("computed") and st["pl"]["net_income"] == st_pl["net_income"] and "royalty" in st["meta"], st.get("note"))
