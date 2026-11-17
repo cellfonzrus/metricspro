@@ -127,3 +127,31 @@ describe('money is the platform\'s one home, not a second copy', () => {
     expect(screenFigure(item({ unit: 'money', figure: 1234.5 }))).toContain('1,234.50')
   })
 })
+
+// Owner, 2026-11-17: *"The descriptive ppt is missing like one made before"*. A spreadsheet opened
+// on a Monday morning is read by someone who was not in the room when the figure was explained, so
+// the server's own sentences travel with it — and they are the SERVER'S, written nowhere else.
+describe('the sentences travel with the figures', () => {
+  it('carries what each item says into the Review sheet', () => {
+    const sheets = weeklyReviewSheets(pack({
+      company: review('Company (consolidated)', 'company', [
+        item({ narrative: ['$1,234.50 earned across 3 stores.', '1 store lost money.'] }),
+      ]), markets: [],
+    }))
+    const row = sheets[0].rows[0] as Record<string, string>
+    expect(row['What it says']).toContain('earned across 3 stores')
+    expect(row['What it says']).toContain('1 store lost money')
+  })
+
+  it('carries an unmeasured item\'s REASON rather than leaving the cell blank', () => {
+    const sheets = weeklyReviewSheets(pack({
+      company: review('Company (consolidated)', 'company', [
+        item({ state: 'not_measured', figure: null, reason: 'the statement could not be read',
+               narrative: ['Not measured month to date: the statement could not be read.'] }),
+      ]), markets: [],
+    }))
+    const row = sheets[0].rows[0] as Record<string, string>
+    expect(row['Figure']).toBe('')
+    expect(row['What it says']).toContain('could not be read')
+  })
+})

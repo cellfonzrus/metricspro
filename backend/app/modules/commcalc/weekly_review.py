@@ -217,36 +217,122 @@ def _nothing(key, reason):
     return _item(key, state=NOT_MEASURED, figure=None, reason=reason)
 
 
+#: The aging item's own reach, said in words once. Every pack carries the company's shelf, because
+#: a device is held against a carrier's window and a market does not have one.
+_AGING_COVERS = "the whole company — inventory ages against a carrier's window, not a market's"
+
+
+#: THE FIELD THE ROUTER STAMPS A ROW'S RESOLVED STORE KEY INTO, named once so neither side carries
+#: a second copy of it. Every fact row and every scope's store list are put through the SAME
+#: resolver before they reach this file (`commcalc.router._canonical_store_key_fn`, the one home for
+#: "which store is this string"), because matching a row to a scope in two different key spaces is
+#: how a row disappears.
+STORE_KEY_FIELD = "_store_key"
+
+
+def row_store_key(row):
+    """The key a row is matched on: the stamped resolved key, or the row's own spelling folded.
+
+    Falling back to the raw spelling is deliberate — a caller that forgot to stamp gets a weaker
+    match, never a silently empty pack.
+    """
+    r = row or {}
+    return _code(r.get(STORE_KEY_FIELD) or r.get("store_code") or r.get("store")
+                 or r.get("address"))
+
+
+def fact_rows(fact):
+    """The ROWS inside a fact, whichever shape it arrives in.
+
+    Most facts are a plain list of rows. One — profit — also carries the statement's own
+    consolidated figure and its coverage beside them, because the company's net income is the P&L's
+    answer and not the sum of the store rows (the books hold lines that sit at no store). A caller
+    that only wants the rows asks here rather than knowing which is which.
+    """
+    if isinstance(fact, dict) and isinstance(fact.get("rows"), list):
+        return fact["rows"]
+    return fact if isinstance(fact, list) else []
+
+
 def _in_scope(rows, scope):
-    """The handed-in rows that belong to this scope's stores. A row with no store code is kept on the
-    company pack only — it is money nobody attributed, and attributing it to a market would be a
-    guess (the company pack reports it in `detail`)."""
+    """Split the handed-in rows into (this scope's rows, the rows that name no store).
+
+    NOTHING IS DROPPED HERE, and that is the whole point (owner report 2026-11-17: *"it shows no
+    commission paid for the month of October"*). The rows existed — 45 reps and $9,829.72 on the
+    house org alone — but the pay engine keys a rep by their store's ADDRESS while the scopes were
+    built from declared store CODES, so every row failed the match and was thrown away without a
+    word. A review item that prints nothing because a join missed is worse than one that prints the
+    wrong number, because nothing looks like good news.
+
+    So: the CONSOLIDATED pack holds every row that names a store at all — it is the whole company,
+    and a store the market roster has not heard of is still the company's. A market pack holds the
+    stores that market declared. The company pack additionally reports, in its own detail, both the
+    rows that name no store and the rows whose store no market claims, so a dollar that lands on no
+    market pack is still visible somewhere.
+    """
     codes = set(scope.get("store_codes") or ())
-    kept, unattached = [], []
+    whole_company = str(scope.get("kind") or "") == "company"
+    kept, unattached, outside = [], [], 0
     for r in rows or []:
-        c = _code(r.get("store_code") or r.get("store"))
+        c = row_store_key(r)
         if not c:
             unattached.append(r)
-        elif c in codes:
-            kept.append(r)
-    return kept, unattached
+            continue
+        if c not in codes:
+            outside += 1
+            if not whole_company:
+                continue
+        kept.append(r)
+    return kept, unattached, outside
 
 
 def _profit(fact, scope):
-    rows, unattached = _in_scope(fact, scope)
+    """PROFIT AS THE BOOKS ANSWER IT — net income, quoted from the P&L.
+
+    Owner, 2026-11-17: *"The profit is not correct it should be same as in the finance dashboard"*.
+    It is the finance module's `statement_engine.profit_by_store` that is quoted here, one row per
+    store scope plus the consolidated figure, so this report and the finance dashboard cannot
+    disagree: every row IS that scope's statement.
+
+    THE COMPANY'S FIGURE IS THE CONSOLIDATED STATEMENT, NOT THE SUM OF THE STORES. The books place
+    some lines at no store at all, so the sum of store rows is a near miss and a review that
+    headlines a near miss invites the meeting to argue with the P&L. A market's figure IS the sum of
+    its stores, which is all a market can be, and the item says so.
+    """
+    meta = fact.get("meta") or {} if isinstance(fact, dict) else {}
+    rows, unattached, outside = _in_scope(fact_rows(fact), scope)
     if not rows:
-        return _nothing("profit", "no store carried a gross-profit row for this week")
-    total = sum(_f(r.get("net_profit")) or 0.0 for r in rows)
-    revenue = sum(_f(r.get("total_rev")) or 0.0 for r in rows)
-    out = [{"store_code": _code(r.get("store_code") or r.get("store")),
+        return _nothing("profit", "the statement placed no money at a store in this scope")
+    out = [{"store_code": _code(r.get("store_code")) or row_store_key(r),
             "address": r.get("address") or r.get("store") or "",
-            "revenue": _money(_f(r.get("total_rev")) or 0.0),
-            "net_profit": _money(_f(r.get("net_profit")) or 0.0)} for r in rows]
+            "revenue": _money(_f(r.get("total_rev"))),
+            "net_profit": _money(_f(r.get("net_profit"))),
+            "identity_ambiguous": bool(r.get("identity_ambiguous"))} for r in rows]
+    store_total = sum(r["net_profit"] or 0.0 for r in out)
+    revenue = sum(r["revenue"] or 0.0 for r in out)
+    whole_company = str(scope.get("kind") or "") == "company"
+    consolidated = (meta.get("consolidated") or {}) if whole_company else {}
+    figure = _f(consolidated.get("net_income"))
+    if figure is None:
+        figure = store_total
     losing = [r for r in out if (r["net_profit"] or 0) < 0]
-    return _item("profit", state=MEASURED, figure=_money(total), rows=out,
-                 detail={"revenue": _money(revenue), "stores": len(out),
-                         "losing": losing, "stores_losing_money": len(losing),
-                         "unattached_rows": len(unattached)})
+    recon = meta.get("reconciliation") or {}
+    coverage = meta.get("coverage") or {}
+    detail = {"revenue": _money(_f(consolidated.get("revenue")) if whole_company and
+                                consolidated.get("revenue") is not None else revenue),
+              "stores": len(out), "losing": losing, "stores_losing_money": len(losing),
+              "unattached_rows": len(unattached), "stores_outside_the_roster": outside,
+              "stores_net_income_total": _money(store_total),
+              "basis": meta.get("basis") if whole_company else
+                       "the sum of this market's stores on the same statement",
+              "stores_with_ambiguous_identity": coverage.get("stores_with_ambiguous_identity")
+                                                if whole_company else None}
+    if whole_company and recon:
+        # WHY THE STORES DO NOT ADD UP, in the statement's own words — never absorbed into a store.
+        detail["money_at_no_store"] = _money(_f(recon.get("explained")))
+        detail["unexplained"] = _money(_f(recon.get("unexplained")))
+        detail["reconciles"] = recon.get("reconciles")
+    return _item("profit", state=MEASURED, figure=_money(figure), rows=out, detail=detail)
 
 
 def _growth(fact, scope):
@@ -275,7 +361,7 @@ def _growth(fact, scope):
 
 
 def _accessory(fact, scope):
-    rows, _un = _in_scope(fact, scope)
+    rows, _un, outside = _in_scope(fact, scope)
     if not rows:
         return _nothing("accessory", "no store carried an accessory target plan row this week")
     out, gap_total, no_target = [], 0.0, 0
@@ -300,30 +386,35 @@ def _accessory(fact, scope):
                      detail={"stores_without_a_target": no_target, "stores_scored": 0})
     return _item("accessory", state=MEASURED, figure=_money(gap_total), rows=out,
                  detail={"stores_without_a_target": no_target, "stores_scored": scored,
+                         "stores_outside_the_roster": outside,
                          "target_total": _money(sum(r["target"] or 0.0 for r in out)),
                          "achieved_total": _money(sum(r["achieved"] or 0.0 for r in out)),
                          "stores_behind": sum(1 for r in out if (r["gap"] or 0) < 0)})
 
 
 def _commission(fact, scope):
-    rows, unattached = _in_scope(fact, scope)
+    rows, unattached, outside = _in_scope(fact, scope)
     if not rows:
         return _nothing("commission", "no rep carried a commission row for this period")
     out = []
     for r in rows:
         out.append({"rep": r.get("rep") or r.get("storeops_name") or r.get("epay_salesperson") or "",
-                    "store_code": _code(r.get("store_code") or r.get("store")),
+                    # THE RESOLVED store, not the row's own spelling: the pay engine names a rep's
+                    # store by address, and a review that prints that address beside a GP row's
+                    # declared code shows one store as two.
+                    "store_code": row_store_key(r),
                     "payout": _money(_f(r.get("total_payout")) or 0.0),
                     "units": _f(r.get("units")) if r.get("units") is not None else None})
     out.sort(key=lambda r: r["payout"] or 0.0, reverse=True)
     total = sum(r["payout"] or 0.0 for r in out)
     return _item("commission", state=MEASURED, figure=_money(total), rows=out,
                  detail={"reps": len(out), "top": out[:5], "bottom": out[-5:],
-                         "unattached_rows": len(unattached)})
+                         "unattached_rows": len(unattached),
+                         "stores_outside_the_roster": outside})
 
 
 def _rep_watch(fact, scope):
-    rows, _un = _in_scope(fact, scope)
+    rows, _un, outside = _in_scope(fact, scope)
     if rows is None or (not rows and not isinstance(fact, list)):
         return _nothing("rep_watch", "the rep rankings were not measured for this period")
     if not rows:
@@ -333,61 +424,51 @@ def _rep_watch(fact, scope):
                "verdict": r.get("verdict") or r.get("reason") or "",
                "rank": r.get("rank")} for r in rows if r.get("behind")]
     return _item("rep_watch", state=MEASURED, figure=len(behind), rows=behind,
-                 detail={"reps_ranked": len(rows), "reps_behind": len(behind)})
+                 detail={"reps_ranked": len(rows), "reps_behind": len(behind),
+                         "stores_outside_the_roster": outside})
 
 
 def _aging(fact, scope):
-    """Inventory aging folded PER CARRIER, each against ITS OWN declared selling window.
+    """Inventory aging, QUOTED from the aging report's own per-carrier fold.
 
-    The buckets arrive already stamped by `commcalc/device_aging_policy` through `/asset/aging` —
-    this file never re-bucketes a device, because the edges are the carrier's contract and that fact
-    has one home. A carrier that declared no window is REPORTED with `declared: False` rather than
-    quietly inheriting another carrier's 60 days, and devices whose carrier is unknown get a row of
-    their own instead of being added to somebody.
+    The cells arrive already folded by `payables/unsold_inventory.aging_by_carrier` through
+    `/asset/aging` — every unsold device, each held to ITS OWN carrier's declared window. This file
+    counts nothing and buckets nothing, because the window's edges are the carrier's contract and
+    that comparison has one home.
+
+    WHAT THIS ITEM IS NOT (owner report 2026-11-17: *"the inventory aging is not correct it shows
+    all devices out of the [carrier]'s day window"*). It used to compose the aging report's
+    `buckets` — the owed > 0 BILLING-exposure subset — which is almost entirely old stock, so every
+    device read as past its window. The shelf and the unpaid-for part of the shelf are two
+    questions; this item asks the first.
+
+    It covers the WHOLE COMPANY on every pack, and says so: a device is held by a carrier, not by a
+    market, and `/asset/aging` is the surface that narrows by market.
     """
     if not isinstance(fact, dict):
         return _nothing("aging", "the inventory aging report was not read")
-    rows = fact.get("rows") or []
-    policies = fact.get("by_carrier") or []
-    if not rows and not policies:
-        return _nothing("aging", "no unsold device is on inventory for this tenant")
-    by_id = {}
-    for p in policies:
-        by_id[p.get("carrier_id")] = {
-            "carrier_id": p.get("carrier_id"), "label": p.get("label") or "(unnamed carrier)",
-            "sell_within_days": p.get("sell_within_days"),
-            "declared": bool(p.get("declared")),
-            "under45": 0, "warn": 0, "missed": 0, "unknown_age": 0, "devices": 0, "owed": 0.0}
-    no_carrier = 0
-    for r in rows:
-        cid = r.get("carrier_id")
-        if cid not in by_id:
-            if cid is None:
-                no_carrier += 1
-            by_id[cid] = {"carrier_id": cid,
-                          "label": ("Devices with no carrier recorded" if cid is None
-                                    else "(carrier not declared)"),
-                          "sell_within_days": None, "declared": False,
-                          "under45": 0, "warn": 0, "missed": 0, "unknown_age": 0,
-                          "devices": 0, "owed": 0.0}
-        cell = by_id[cid]
-        bucket = str(r.get("aging_bucket") or "unknown_age")
-        cell[bucket] = cell.get(bucket, 0) + 1
-        cell["devices"] += 1
-        cell["owed"] = round(cell["owed"] + (_f(r.get("owed_to_vip")) or 0.0), 2)
-    out = sorted(by_id.values(), key=lambda c: (-(c["missed"]), str(c["label"]).lower()))
-    missed = sum(c["missed"] for c in out)
-    return _item("aging", state=MEASURED, figure=missed, rows=out,
-                 detail={"devices": sum(c["devices"] for c in out),
-                         "owed": round(sum(c["owed"] for c in out), 2),
-                         "carriers": len([c for c in out if c["carrier_id"] is not None]),
+    cells = fact.get("by_carrier")
+    if cells is None:
+        return _nothing("aging", "the inventory aging report answered without its per-carrier fold")
+    if not cells:
+        return _nothing("aging", "no carrier declared an inventory source, so nothing could be aged")
+    if not fact.get("devices"):
+        return _item("aging", state=NOT_MEASURED, figure=None, rows=list(cells),
+                     reason="no unsold device is on inventory for this tenant",
+                     detail={"devices": 0, "covers": _AGING_COVERS})
+    return _item("aging", state=MEASURED, figure=fact.get("missed"), rows=list(cells),
+                 detail={"devices": fact.get("devices"), "owed": fact.get("owed"),
+                         "carriers": fact.get("carriers"),
                          "carriers_with_no_declared_window":
-                             len([c for c in out if not c["declared"]]),
-                         "devices_with_no_carrier": no_carrier})
+                             fact.get("carriers_with_no_declared_window"),
+                         "devices_with_no_carrier": fact.get("devices_with_no_carrier"),
+                         "within_window": sum((c.get("under45") or 0) + (c.get("warn") or 0)
+                                              for c in cells),
+                         "basis": fact.get("basis"), "covers": _AGING_COVERS})
 
 
 def _payroll(fact, scope):
-    rows, unattached = _in_scope(fact, scope)
+    rows, unattached, outside = _in_scope(fact, scope)
     if not rows and not unattached:
         return _nothing("payroll", "payroll was not measured for this period")
     out = [{"store_code": _code(r.get("store_code") or r.get("store")),
@@ -401,7 +482,8 @@ def _payroll(fact, scope):
                      reason="payroll was measured but none of it attaches to a store in this scope",
                      detail={"unattached": _money(unattached_total)})
     return _item("payroll", state=MEASURED, figure=_money(total), rows=out,
-                 detail={"stores": len(out), "unattached": _money(unattached_total)})
+                 detail={"stores": len(out), "unattached": _money(unattached_total),
+                         "stores_outside_the_roster": outside})
 
 
 #: key -> the fold. ONE dispatch table, so an item cannot exist in `ITEMS` with no fold behind it
@@ -413,7 +495,7 @@ FOLDS = {"profit": _profit, "growth": _growth, "accessory": _accessory, "commiss
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # 4. ONE REVIEW, AND THE PACK
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-def review(scope, *, facts, week):
+def review(scope, *, facts, week, period=""):
     """One review pack for ONE scope. Every item in `ITEMS`, in order, always — a missing fact is an
     item that SAYS it was not measured, never an item that is absent from the page."""
     items = []
@@ -430,12 +512,18 @@ def review(scope, *, facts, week):
         except Exception as e:                                 # a bad row cannot blank the pack
             items.append(_nothing(key, f"this item could not be folded ({e})"))
     measured = [i for i in items if i["state"] == MEASURED]
-    return {"scope": dict(scope), "week": dict(week), "items": items,
-            "coverage": {"items": len(items), "measured": len(measured),
-                         "not_measured": len(items) - len(measured)}}
+    # WHAT EACH NUMBER SAYS, attached to the item itself, so the page, the exported file and the
+    # generated deck read ONE set of sentences (§6 below).
+    for i in items:
+        i["narrative"] = narrative(i, scope)
+    out = {"scope": dict(scope), "week": dict(week), "items": items,
+           "coverage": {"items": len(items), "measured": len(measured),
+                        "not_measured": len(items) - len(measured)}}
+    out["headline"] = headline(out, period)
+    return out
 
 
-def build(scope_list, *, facts, week, as_of, facts_by_scope=None):
+def build(scope_list, *, facts, week, as_of, facts_by_scope=None, period=""):
     """The whole pack: the company review, then one per market, then the unplaced stores.
 
     `facts` are the tenant-wide facts (every row, unscoped) and each scope filters them by its own
@@ -447,7 +535,7 @@ def build(scope_list, *, facts, week, as_of, facts_by_scope=None):
     for scope in scope_list or []:
         f = dict(facts or {})
         f.update(((facts_by_scope or {}).get(scope.get("key")) or {}))
-        r = review(scope, facts=f, week=week)
+        r = review(scope, facts=f, week=week, period=period)
         if scope.get("kind") == "company":
             company = r
         elif scope.get("kind") == "unplaced":
@@ -483,3 +571,188 @@ def review_allowed(caller):
         return any(str(m).strip().lower() == "admin" for m in mods)
     except Exception:
         return False
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# 6. WHAT EACH NUMBER SAYS — the words, folded once (owner 2026-11-17)
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+#
+# OWNER ASK, verbatim: *"The descriptive ppt is missing like one made before"*. The deck built for the
+# 17 Nov Zoom explained every figure in a sentence; the in-app report showed the figure alone. A
+# number on its own is not a review — the Monday meeting reads the sentence and the table is there
+# for whoever wants to check it.
+#
+# ONE HOME FOR THE WORDS, and it is here, in the fold, because three surfaces say them: the page, the
+# exported file and the generated deck. A pack that described one figure three ways would be the
+# duplicate defect in prose.
+#
+# AN UNMEASURED ITEM GETS A SENTENCE TOO, and it is the REASON — never a blank and never a 0, which
+# on a review pack reads as "we checked and there is nothing wrong".
+
+_WINDOW_WORD = {"week": "this week", "period": "month to date", "today": "as of today"}
+
+
+def _dollars(v):
+    """A figure as money, in prose. The ONE place this report spells a dollar amount in a sentence;
+    a column of money on a screen is rendered by the platform's money home
+    (`frontend/src/lib/report-totals.ts`), which this never duplicates because a sentence is not a
+    column. An absent figure is a dash — it is not $0.00."""
+    f = _f(v)
+    if f is None:
+        return "—"
+    return f"-${abs(f):,.2f}" if f < 0 else f"${f:,.2f}"
+
+
+def _count(n, one, many=None):
+    """`1 store` / `2 stores`, so no sentence reads '1 stores'."""
+    try:
+        n = int(n or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return f"{n:,} {one if n == 1 else (many or one + 's')}"
+
+
+def _row_name(r):
+    for k in ("address", "store", "store_code", "rep", "label"):
+        v = str((r or {}).get(k) or "").strip()
+        if v:
+            return v
+    return "(unnamed)"
+
+
+def _pct_words(label, pct, before, after, fmt=str):
+    return (f"{label} {'up' if pct >= 0 else 'down'} {abs(pct):.1f}% on the week before "
+            f"({fmt(before)} → {fmt(after)}).")
+
+
+def figure_words(item):
+    """THE HEADLINE FIGURE as words — money through `_dollars`, a percentage with its sign, a count
+    with its separators. One home, because the deck's title and the sentence beneath it must agree
+    about the same number."""
+    fig, unit = (item or {}).get("figure"), (item or {}).get("unit")
+    if unit == "money":
+        return _dollars(fig)
+    f = _f(fig)
+    if f is None:
+        return "—"
+    if unit == "pct":
+        return f"{'+' if f > 0 else ''}{f:.1f}%"
+    return f"{int(f):,}"
+
+
+def narrative(item, scope=None):
+    """The sentences for ONE folded item. PURE: reads only the item it is handed."""
+    if not item:
+        return []
+    when = _WINDOW_WORD.get(item.get("window"), item.get("window") or "")
+    if item.get("state") != MEASURED or item.get("figure") is None:
+        return [f"Not measured {when}: {item.get('reason') or 'no reason was given'}."]
+    d = item.get("detail") or {}
+    fig = _f(item.get("figure")) or 0.0
+    out = []
+    key = item.get("key")
+    if key == "profit":
+        out.append(f"{_dollars(fig)} {'lost' if fig < 0 else 'earned'} across "
+                   f"{_count(d.get('stores'), 'store')}, {when}, on revenue of "
+                   f"{_dollars(d.get('revenue'))}.")
+        losing = [r for r in (d.get("losing") or [])]
+        if losing:
+            worst = sorted(losing, key=lambda r: _f(r.get("net_profit")) or 0.0)[0]
+            out.append(f"{_count(len(losing), 'store')} lost money, worst {_row_name(worst)} at "
+                       f"{_dollars(worst.get('net_profit'))}. Those are the stores the meeting "
+                       f"should spend its time on.")
+        else:
+            out.append("No store lost money this period.")
+        if _f(d.get("money_at_no_store")):
+            out.append(f"{_dollars(d.get('money_at_no_store'))} of it sits on lines the books place "
+                       f"at no store, which is why the stores add to "
+                       f"{_dollars(d.get('stores_net_income_total'))} rather than to the company "
+                       f"figure.")
+        if d.get("reconciles") is False:
+            out.append(f"{_dollars(d.get('unexplained'))} of the company figure is not accounted "
+                       f"for by the store rows — treat the store list as incomplete this period.")
+        amb = d.get("stores_with_ambiguous_identity")
+        if amb:
+            out.append(f"{_count(len(amb), 'store is', 'stores are')} claimed by more than one "
+                       f"declared store code, so their rows name one of them: "
+                       f"{', '.join(str(x) for x in list(amb)[:3])}"
+                       + ("…" if len(amb) > 3 else "") + ".")
+    elif key == "growth":
+        bc, rc = _f(d.get("boxes_change_pct")), _f(d.get("revenue_change_pct"))
+        if bc is not None:
+            out.append(_pct_words("Boxes", bc, f"{int(_f(d.get('boxes_prior')) or 0):,}",
+                                  f"{int(_f(d.get('boxes')) or 0):,}"))
+        if rc is not None:
+            out.append(_pct_words("Revenue", rc, _dollars(d.get("revenue_prior")),
+                                  _dollars(d.get("revenue"))))
+        if not out:
+            out.append("Both weeks were measured, but not on a figure they share.")
+    elif key == "accessory":
+        out.append(f"{_dollars(fig)} {'short of' if fig < 0 else 'ahead of'} target {when}: "
+                   f"{_dollars(d.get('achieved_total'))} sold against "
+                   f"{_dollars(d.get('target_total'))} targeted over "
+                   f"{_count(d.get('stores_scored'), 'store')}.")
+        if d.get("stores_behind"):
+            out.append(f"{_count(d.get('stores_behind'), 'store is', 'stores are')} behind their "
+                       f"own target.")
+        if d.get("stores_without_a_target"):
+            out.append(f"{_count(d.get('stores_without_a_target'), 'store has', 'stores have')} no "
+                       f"accessory target saved, so nothing can be scored there — that is a setup "
+                       f"gap, not a result.")
+    elif key == "commission":
+        top = (d.get("top") or [None])[0]
+        out.append(f"{_dollars(fig)} earned by {_count(d.get('reps'), 'rep')} {when}"
+                   + (f", top {_row_name(top)} at {_dollars(top.get('payout'))}" if top else "")
+                   + ".")
+        if d.get("unattached_rows"):
+            out.append(f"{_count(d.get('unattached_rows'), 'row')} name no store, so they are "
+                       f"counted in the consolidated pack and on no market pack.")
+    elif key == "rep_watch":
+        out.append(f"{_count(fig, 'rep is', 'reps are')} behind, of "
+                   f"{_count(d.get('reps_ranked'), 'rep')} ranked {when}.")
+        out.append("Each verdict is the Daily Action Plan's own — a rep behind their own store's "
+                   "conversion, or short on a KPI this tenant declared.")
+    elif key == "aging":
+        within = d.get("within_window")
+        out.append(f"{_count(fig, 'unsold device is', 'unsold devices are')} past the selling "
+                   f"window their carrier declared, of "
+                   f"{_count(d.get('devices'), 'device')} on the shelf"
+                   + (f", with {int(within):,} still inside it" if within is not None else "")
+                   + f". {_dollars(d.get('owed'))} is owed on that stock.")
+        if d.get("carriers_with_no_declared_window"):
+            out.append(f"{_count(d.get('carriers_with_no_declared_window'), 'carrier has', 'carriers have')}"
+                       f" declared no selling window, so the house default answered for them.")
+        if d.get("devices_with_no_carrier"):
+            out.append(f"{_count(d.get('devices_with_no_carrier'), 'device')} could not be "
+                       f"attributed to a carrier and is counted on a row of its own rather than "
+                       f"added to one.")
+        if d.get("covers"):
+            out.append(f"Covers {d['covers']}.")
+    elif key == "payroll":
+        out.append(f"{_dollars(fig)} of payroll {when}, across {_count(d.get('stores'), 'store')}.")
+        if _f(d.get("unattached")):
+            out.append(f"{_dollars(d.get('unattached'))} attaches to no store and is held "
+                       f"company-wide.")
+    if d.get("stores_outside_the_roster") and str((scope or {}).get("kind")) == "company":
+        out.append(f"{_count(d.get('stores_outside_the_roster'), 'row')} name a store the market "
+                   f"roster does not list; the consolidated pack still counts them.")
+    return out
+
+
+def headline(review, period=""):
+    """The pack's own opening: what this review is, and how complete it is."""
+    if not review:
+        return []
+    cov = review.get("coverage") or {}
+    scope = review.get("scope") or {}
+    week = review.get("week") or {}
+    out = [f"{scope.get('label') or ''} · week {week.get('label') or ''}"
+           + (f" · month-to-date figures for {period}" if period else "") + ".",
+           f"{cov.get('measured', 0)} of {cov.get('items', 0)} items measured."]
+    missing = [i.get("label") for i in (review.get("items") or []) if i.get("state") != MEASURED]
+    if missing:
+        out.append("Not measured: " + "; ".join(str(m) for m in missing)
+                   + ". Each one says why on its own slide.")
+    if scope.get("note"):
+        out.append(str(scope["note"]))
+    return out

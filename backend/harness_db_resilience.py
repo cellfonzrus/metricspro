@@ -1625,7 +1625,17 @@ _all_routes = _flatten_routes(real_app.routes)
 # daily incentive, which computes only and persists nothing (§76.4). Cross-tenant and authority
 # negatives: backend/tests/integration/test_feed_declared_metrics_endpoint.py (31 cases, three
 # orgs, two of which share a store code so only the org scope separates them).
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1850"))
+# 2026-11-17 (§COMMCALC-76, the owner's four defect reports on the Weekly Performance Review)
+#   1850 -> 1851. ONE route added and NONE removed, verified the house way:
+#     git diff origin/main..HEAD -- backend/ | grep -E '^[+-].*@router\.'
+#   shows exactly one addition on this branch and nothing deleted.
+#     + /commcalc/weekly-review/deck  GET  (the review pack as a downloadable .pptx)
+# GATE: `_require_weekly_review` — the review's own administrators-only gate, asserted by
+# backend/tests/integration/test_weekly_review_endpoint.py::test_H4 for an admin, a market manager,
+# a rep and an unauthenticated caller. NO stored figure can move: the route reads the same pack
+# `GET /weekly-review` serves, folds it to slide content (`weekly_review_deck`, pure) and renders it
+# through `notify/render` — read-only end to end, no write, no recompute, no persistence.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1851"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

@@ -217,3 +217,138 @@ def stamp_aging(rows, policies, today=None):
             # believes, and two of its proofs caught that when I tried.
             "amount_not_netted": bool(n_unmeasured),
             "amount_incomplete": bool(n_unpriced)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# AGING, PER CARRIER, OVER THE WHOLE SHELF (owner report 2026-11-17)
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+#
+# OWNER REPORT, verbatim: *"the inventory aging is not correct it shows all devices out of the
+# [carrier]'s day window"*. He was reading the Weekly Performance Review, and he was right.
+#
+# THE CLASS, not the instance. `/asset/aging` publishes TWO populations and they answer two
+# different questions: `age_buckets` is EVERY unsold device aged, and `buckets` is the owed > 0
+# subset — a BILLING-exposure read, which on the house org is almost entirely old stock because a
+# device that has been paid for carries no `owed_to_vip`. A caller that composes the exposure subset
+# and presents it as the shelf reports every device as past the window. Measured live 2026-11-17,
+# house org: the shelf is 708 inside the window, 245 nearing it, 811 past it — and the subset the
+# review quoted was 811 past it and nothing else.
+#
+# So the per-carrier fold lives HERE, once, over the population the caller hands in, and both the
+# aging report and anything that quotes it read the same cells. A second fold beside this one is the
+# duplicate defect the house rules forbid, and it would drift within the month.
+#
+# WHICH CARRIER A DEVICE BELONGS TO IS DECLARED, NEVER GUESSED. A ledger-sourced row carries
+# `carrier_id`. A row out of a carrier's own snapshot does not carry one at all — its carrier is the
+# map that DECLARED that snapshot as its unsold source, and that is an answer only while exactly one
+# map declares it. Where it is not certain the devices get a row of their own, named, instead of
+# being handed to whichever carrier happens to be first.
+
+
+ATTRIBUTION_DECLARED = "declared"      # the row named its carrier
+ATTRIBUTION_SOURCE = "source"          # the only carrier declaring this feed as its unsold source
+ATTRIBUTION_UNCERTAIN = "uncertain"    # more than one carrier, or none, declares that feed
+ATTRIBUTION_NONE = "unattributed"      # nothing in the row or the config answers
+
+#: What a cell's label says when no carrier could be named. Words, in one place, so the report and
+#: anything quoting it cannot describe the same devices two ways.
+LABEL_UNCERTAIN = "Devices whose carrier is not declared"
+
+
+def source_table_maps(maps):
+    """The maps that keep their own consignment snapshot as their unsold-device source — the twin of
+    `ledger_sourced_maps`, so neither direction is a literal at a call site."""
+    return [m for m in maps or []
+            if str(m.get("unsold_source") or SOURCE_TABLE).strip().lower() == SOURCE_TABLE]
+
+
+def carrier_of_row(row, maps):
+    """(carrier_id, attribution) for ONE unsold-device row. PURE.
+
+    `attribution` says HOW the answer was reached, so a surface can state it rather than implying
+    the carrier was recorded on the device. A snapshot row is attributed only when exactly one
+    carrier declares that snapshot; two carriers on one feed is a real ambiguity and is reported as
+    one, never resolved by picking.
+    """
+    cid = (row or {}).get("carrier_id")
+    if cid:
+        return cid, ATTRIBUTION_DECLARED
+    src = str((row or {}).get(SOURCE_FIELD) or SOURCE_TABLE).strip().lower()
+    owners = (ledger_sourced_maps(maps) if src == SOURCE_LEDGER else source_table_maps(maps))
+    owners = [m for m in owners if m.get("carrier_id")]
+    if len(owners) == 1:
+        return owners[0].get("carrier_id"), ATTRIBUTION_SOURCE
+    return None, (ATTRIBUTION_UNCERTAIN if owners else ATTRIBUTION_NONE)
+
+
+def aging_by_carrier(rows, policies, maps, *, today=None):
+    """Every handed-in unsold device, folded PER CARRIER against THAT carrier's own declared window.
+
+    PURE. The rows must already be stamped by `stamp_aging` — this never re-buckets a device,
+    because the window's edges are the carrier's contract and that comparison has one home
+    (`device_aging_policy.bucket`). Pass the WHOLE shelf, not the owed > 0 subset: see the note at
+    the top of this section for what happens when a caller passes the subset.
+
+    Returns one cell per carrier that either declared a map or owns a device, each carrying its
+    bucket counts, its devices, what is owed on it, and `attribution` — how its devices were
+    attributed. A carrier with a map and no devices is still reported, so "nothing on the shelf" and
+    "we never asked" cannot read the same.
+    """
+    def _cell(cid, label, policy, attribution):
+        return {"carrier_id": cid, "label": label,
+                "sell_within_days": policy["sell_within_days"],
+                "warn_after_days": policy["warn_after_days"],
+                "declared": bool(policy["declared"]),
+                "attribution": attribution,
+                "devices": 0, "owed": 0.0, "owed_missed": 0.0,
+                _aging.BUCKET_FRESH: 0, _aging.BUCKET_WARN: 0, _aging.BUCKET_MISSED: 0,
+                _aging.BUCKET_UNKNOWN: 0}
+
+    cells = {}
+    for m in (maps or []):
+        cid = m.get("carrier_id")
+        if not cid:
+            continue
+        cells[cid] = _cell(cid, m.get("label") or "(unnamed carrier)", policy_for(policies, cid),
+                           ATTRIBUTION_DECLARED)
+    uncertain = 0
+    for r in rows or []:
+        cid, how = carrier_of_row(r, maps)
+        if cid not in cells:
+            if cid is None:
+                uncertain += 1
+            cells[cid] = _cell(cid, (LABEL_UNCERTAIN if cid is None else "(unnamed carrier)"),
+                               policy_for(policies, cid), how)
+        cell = cells[cid]
+        if how != ATTRIBUTION_DECLARED and cell["attribution"] == ATTRIBUTION_DECLARED and cid:
+            cell["attribution"] = how
+        b = str(r.get("aging_bucket") or _aging.BUCKET_UNKNOWN)
+        cell[b] = cell.get(b, 0) + 1
+        cell["devices"] += 1
+        try:
+            owed = float(r.get("owed_to_vip") or 0.0)
+        except (TypeError, ValueError):
+            owed = 0.0
+        cell["owed"] += owed
+        if b == _aging.BUCKET_MISSED:
+            cell["owed_missed"] += owed
+    out = sorted(cells.values(),
+                 key=lambda c: (-(c[_aging.BUCKET_MISSED]), str(c["label"]).lower()))
+    for c in out:
+        c["owed"] = round(c["owed"], 2)
+        c["owed_missed"] = round(c["owed_missed"], 2)
+        # THE LADDER THE CARRIER'S OWN WINDOW MAKES, so a screen cannot print one carrier's edges
+        # over another carrier's devices.
+        c["ladder"] = [{"key": k, "label": lab, "range": rng} for k, lab, rng in
+                       _aging.bucket_ladder({"warn_after_days": c["warn_after_days"],
+                                             "sell_within_days": c["sell_within_days"]})]
+    return {"by_carrier": out,
+            "devices": sum(c["devices"] for c in out),
+            "missed": sum(c[_aging.BUCKET_MISSED] for c in out),
+            "owed": round(sum(c["owed"] for c in out), 2),
+            "carriers": len([c for c in out if c["carrier_id"]]),
+            "carriers_with_no_declared_window": len([c for c in out if not c["declared"]]),
+            "devices_with_no_carrier": uncertain,
+            "basis": ("every unsold device handed in, aged as of today against the carrier's own "
+                      "declared selling window. A device whose carrier is not declared is counted "
+                      "in a row of its own, never added to a carrier that did not sell it.")}

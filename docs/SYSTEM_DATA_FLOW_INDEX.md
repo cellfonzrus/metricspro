@@ -217,7 +217,7 @@ Primary code homes:
 | COMMCALC-75 | **A feed lands the same however its file arrives** | The processor back office is fronted by a security appliance that refuses automated clients at every address tried, and the owner confirmed it offers no scheduled email of its own — so the per-store pull cannot fetch this report and no amount of code will make it. Everything downstream of the fetch was already built and was never at fault: the parse, the terminal-to-store resolution, the idempotent upsert and the bill-payment and fee reconciliations that read the rows. ONLY THE TRANSPORT was broken, so the file gets a door instead of the firewall getting a workaround: one arrival function lands a DELIVERED file — forwarded to the mailbox the email sweep already watches, picked off the Upload page, or sent by the processor if they agree to it — through the SAME ingest the pull uses, with the same dedup and the same store resolution, so a delivered file and a pulled one are indistinguishable downstream. A file that is not this report lands nothing and names the columns it looked for; an empty one is never a green tick. The registry row that lets the route be PICKED is a seeded declaration, not code. |
 | COMMCALC-77 | **A tenant's own sales report answers its own declared categories** | A tenant's daily incentive plan was five correct, active config rows paying off what the reps declare at closing — and its reps had declared ONE line in a month, so a store that traded every day computed to ~$0 while its own POS export carried all 31 days. Which code turns a tenant's own export into the categories IT declared, when that export states no quantity, carries two columns that could both be the category, and writes a sale NEGATIVE — and who decides whether the rep's declaration or the store's own report is the authority? |
 | COMMCALC-78 | **What a day pays, and why every rule paid what it paid** | The engine has answered "what does this store-day owe each person" since mig 1072, and for five weeks NOTHING in the browser called it: a tenant could declare its rules, upload its day, and still have no way to SEE a payout. And the one rule it did run paid $0.00 forever, because the rules editor promises in words that a pool with no categories ticked is "a percentage of the whole day's gross revenue" and then stored a basis that sums the categories it was given — none. Who shows the answer, and who decides what a payout measures? |
-| COMMCALC-76 | **A weekly review pack is one fold, read from the reports that own its figures** | The owner asked for the LuxeLink performance deck as an in-app report on the Management tile, admins only, one report per market plus a consolidated one, with inventory aging per carrier among its items, generated at the end of each week for the Monday review with the DMs — and on demand. It derives nothing: profit, commission, the accessory gap, growth, the reps behind, aging and payroll are each QUOTED from the surface that already owns them, and the fold is pure, so a second derivation cannot grow beside the report it quotes. An item nobody measured carries no figure and says why in words; a store no market claims gets its own named scope rather than vanishing between the market packs and the company one; and the market vocabulary is a required argument, so nothing declared means nothing identified. The gate is the server's on every door — a company-wide reporting scope is not an administrator. |
+| COMMCALC-76 | **A weekly review pack is one fold, read from the reports that own its figures** | The owner asked for the LuxeLink performance deck as an in-app report on the Management tile, admins only, one report per market plus a consolidated one, with inventory aging per carrier among its items, generated at the end of each week for the Monday review with the DMs — and on demand. It derives nothing: profit, commission, the accessory gap, growth, the reps behind, aging and payroll are each QUOTED from the surface that already owns them, and the fold is pure, so a second derivation cannot grow beside the report it quotes. An item nobody measured carries no figure and says why in words; a store no market claims gets its own named scope rather than vanishing between the market packs and the company one; and the market vocabulary is a required argument, so nothing declared means nothing identified. The gate is the server's on every door — a company-wide reporting scope is not an administrator. **Corrected 2026-11-17 (§COMMCALC-76.8):** profit now quotes the P&L's own `profit_by_store`, not the GP report (the two differed by $366k on one org in one month); aging quotes the whole shelf per carrier, not the owed>0 subset in which everything is already overdue; and a row the scope cannot match is kept on the consolidated pack and counted, never dropped — which is what had made October's commission read as nothing. Every item now carries the sentences that explain it, and the pack downloads as a deck (§COMMCALC-76.9). |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -49938,22 +49938,84 @@ a panel whose provenance is a guess (`report_drilldown.origin`'s own rule).
   `backend/tests/integration/test_weekly_review_endpoint.py` (39) — the admin gate on every door, one
   pack per declared market, the unplaced scope, nothing reported as zero, and no tenant's market or
   store in another's pack.
-- Lock: `backend/harness_weekly_review.py` (51 checks), wired into `carrier-vocab-guard.yml`.
+- Lock: `backend/harness_weekly_review.py` (72 checks), wired into `carrier-vocab-guard.yml`.
+  §J and §K are the 2026-11-17 defect locks; the per-carrier aging fold's own proofs are
+  `harness_device_aging_policy.py` §I, and the profit producer's are `harness_profit_by_store.py`.
+
+### COMMCALC-76.8 THE FOUR DEFECTS THE OWNER REPORTED ON 2026-11-17
+
+Verbatim: *"The profit is not correct it should be same as in the finance dashboard , the inventory
+aging is not correct it shows all devices out of the Qpay's day window , it shows no commission paid
+for the month of October / The descriptive ppt is missing like one made before"*. Three were
+reproduced live, on October 2026, before anything was changed. A fourth defect — the accessory gap
+reading "could not be read" since the day this shipped — was found in the same pass.
+
+**1. PROFIT WAS THE WRONG QUESTION'S ANSWER.** The item quoted the GP report's `net_profit`
+(`total_rev - rep_pay - exp_total - net_phone_cost` over store-attributed lines). Measured October
+2026: house org **+$340,102.98** here against the P&L's **-$26,543.19**; LuxeLink **+$31,122.43**
+against **+$576.53**. The item now quotes `account.statement_engine.profit_by_store` — ONE
+`build_inputs_full`, then every scope assembled through the same `engine._assemble` the P&L screen
+uses, so each row's net income IS that scope's statement. **The company pack headlines the
+CONSOLIDATED statement, not the sum of the store rows**, and the difference (lines the books place
+at no store) is reported in words rather than absorbed. The GP report keeps answering the question it
+answers. ~53 s for the house org, essentially all of it the single `build_inputs_full`.
+
+**2. AGING WAS THE UNPAID PART OF THE SHELF, NOT THE SHELF.** `/asset/aging` publishes two
+populations: `age_buckets` (every unsold device) and `buckets` (the owed > 0 BILLING subset). The
+review composed the subset — which is almost entirely old stock, because a device that has been paid
+for carries no `owed_to_vip` — and so reported every device as past its carrier's window. Measured
+2026-11-17, house org: the shelf is **708 inside the window, 245 nearing it, 811 past it**; the
+subset was the 811 alone. The per-carrier fold now has ONE home,
+`payables/unsold_inventory.aging_by_carrier`, published by the aging report as `aging_by_carrier`
+and QUOTED by the review. **Which carrier a device belongs to is declared, never guessed**: a ledger
+row names its carrier, a snapshot row's carrier is the map that declared that snapshot as its unsold
+source, and where two maps declare one feed the devices get a row of their own.
+
+**3. A ROW THAT DID NOT MATCH WAS SILENTLY DROPPED.** The pay engine keys a rep by their store's
+ADDRESS; the scopes were built from declared CODES; `_in_scope` kept what matched and threw the rest
+away without a word. October's commission — **43 reps and $9,829.72** on the house org, 35 and
+$12,304.95 on LuxeLink — read as nothing at all. Now every fact row and every scope's store list is
+stamped through ONE resolver (`router._canonical_store_key_fn`, `weekly_review.STORE_KEY_FIELD`), the
+CONSOLIDATED pack keeps every row that names a store at all, and what no market claims is counted and
+named. **The class: a join that drops what it cannot match reports an absence as a fact.**
+
+**4. THE ACCESSORY GAP HAD NEVER WORKED.** `get_accessory_target_plan` was called in-process without
+its `Query(default=None)` parameters, so the handler received the MARKER OBJECT — truthy and not
+iterable — and raised `'Query' object is not iterable`. The item had reported itself unreadable since
+it shipped. Same class as the `Header` default trap (`core/auth_header`), and
+`harness_weekly_review.py` §J now fails the build if any FastAPI-defaulted parameter of a quoted
+handler is left to its marker.
+
+### COMMCALC-76.9 THE DECK (owner 2026-11-17)
+
+*"The descriptive ppt is missing like one made before"* — the deck built for the 17 Nov Zoom
+explained every figure in a sentence; the report showed the figure alone.
+
+- **The words have ONE home and it is the fold**: `weekly_review.narrative(item, scope)` and
+  `.headline(review, period)`, attached to every item the pack serves. The page prints them, the
+  exported spreadsheet carries them in a `What it says` column, and the deck's slides are them. The
+  page's own hand-written remarks for three items are DELETED — two surfaces describing one figure is
+  the duplicate defect in prose.
+- **`GET /commcalc/weekly-review/deck`** serves the pack as a `.pptx`, behind the same
+  administrators-only gate. `commcalc/weekly_review_deck.py` decides what the deck SAYS (pure: a
+  fold over the pack, provable without PowerPoint); `notify/render.build_pptx` draws it — the house's
+  one home for turning a payload into a file, so the Send bar and a future scheduled send reuse it.
+  `python-pptx` is the dependency that made `.pptx` possible.
 
 ### COMMCALC-76.7 WHAT THIS DOES NOT DO, said plainly
 
 - **It sends nothing by itself.** The standing run GENERATES and stores the pack; the Send bar on the
   report is how it reaches a person (email / WhatsApp through `/notify/send-file`). Emailing the pack
   automatically is a follow-up, not a quiet default.
-- **It exports Excel, PDF and Print, not PowerPoint.** Nothing in the platform writes `.pptx`; the
-  deck that inspired it was built outside the app.
+- **It exports Excel, PDF, Print and now a DECK.** See §COMMCALC-76.8.
 - **It does not fix the data gaps the deck named** (the blank `contract_type` month, the thin approved
   salary sheet, the months with no expense rows). An item those affect reports what it measured and
   says what it could not — it never hides a gap behind a plausible number.
 
 ### §16–18 CROSS-REFERENCES
 
-Depends on: §64 (which store is this string), §61 (the accessory target plan), §59 (who is behind),
+Depends on: §ACCOUNT (the P&L statement engine — `profit_by_store`, the profit item's one source),
+§64 (which store is this string), §61 (the accessory target plan), §59 (who is behind),
 §COMMCALC-26 / §CORE-17.3y (a carrier's own selling window), §ACCOUNT-03 (the one labour authority),
 §CORE-27 (every report carries the standard filters and the send bar), §COMMCALC-49.10 (a tenant's
 declaration is a required argument). Feeds: the Management Overview dashboard (mig 1123 tile).

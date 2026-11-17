@@ -51813,6 +51813,18 @@ def _require_weekly_review(authorization, org_id):
     return caller
 
 
+def _weekly_review_org_label(client, org_id):
+    """The tenant's own name, for the deck's title slide. `storeops.tenants.name` is where the
+    platform keeps it — the same row the standing run enumerates tenants from. Empty on any failure:
+    a deck titled by its week alone is fine, a deck titled with another tenant's name is not."""
+    try:
+        rows = (client.schema("storeops").table("tenants").select("name")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+        return str((rows[0] or {}).get("name") or "").strip() if rows else ""
+    except Exception:
+        return ""
+
+
 def _weekly_review_period(day):
     """The PERIOD (month) a review week is reviewed in — the month its closing day falls in. The
     month-keyed items (profit, commission, accessories, the rep verdict) are month-to-date figures
@@ -51856,29 +51868,64 @@ def _weekly_review_store_week(client, org_id, week):
     return out
 
 
-def _weekly_review_aging_rows(aging):
-    """Every device row the aging report served, in one list. `buckets` is the owed>0 subset and the
-    zero / unknown-age lists are the rest; each row is already stamped with its carrier's own
-    `aging_bucket` by `device_aging_policy`, which is why this never re-buckets a device."""
-    rows = []
-    for b in (aging.get("buckets") or {}).values():
-        rows.extend(b.get("rows") or [])
-    rows.extend((aging.get("zero_inventory") or {}).get("rows") or [])
-    rows.extend((aging.get("unknown_age") or {}).get("rows") or [])
+def _weekly_review_stamp(rows, canon):
+    """Stamp every fact row with its RESOLVED store key, in the one key space the packs match on.
+
+    `canon` is `_canonical_store_key_fn` — the one home for "which store is this string", which
+    already collapses an address, an alias and a declared code onto the same store. Each producer
+    answers in its own vocabulary (the GP report in store codes, the pay engine in store addresses,
+    payroll in either), and matching those against a scope built from codes is what silently emptied
+    the commission item on 2026-11-17. One resolver on both sides, so there is one space.
+    """
+    for r in rows or []:
+        raw = r.get("store_code") or r.get("store") or r.get("address")
+        try:
+            r[_wrev.STORE_KEY_FIELD] = str(canon(raw) or "").strip().upper() if raw else ""
+        except Exception:
+            r[_wrev.STORE_KEY_FIELD] = str(raw or "").strip().upper()
     return rows
 
 
-async def _weekly_review_facts(client, org_id, authorization, week, period):
+async def _weekly_review_facts(client, org_id, authorization, week, period, canon=None):
     """Read every item's facts ONCE for the whole tenant. Each read is independently guarded: an item
     whose source is down is handed in as `Unreadable` with the reason, and the other six still
     produce their numbers."""
     facts, store_week, prior_week_cells = {}, {}, {}
 
+    # PROFIT IS THE BOOKS' OWN FIGURE, not a second answer (owner report 2026-11-17: *"The profit
+    # is not correct it should be same as in the finance dashboard"*). This quoted the Gross Profit
+    # report's `net_profit` — `total_rev - rep_pay - exp_total - net_phone_cost` over the lines a
+    # store carries, which is a different question from net income and answers it very differently:
+    # measured live for October 2026, the house org read +$340,102.98 here against the P&L's
+    # -$26,543.19, and LuxeLink +$31,122.43 against +$576.53. A review that tells a district manager
+    # the company made $340k in a month the books say it lost $26.5k is worse than no review.
+    #
+    # `account.statement_engine.profit_by_store` is the finance module's own producer: ONE
+    # `build_inputs_full`, then every scope assembled through the same `engine._assemble` the P&L
+    # screen uses, so each row's net income IS that scope's statement. The GP report keeps answering
+    # the question it answers; this report stopped asking it the wrong one.
     try:
-        gp = await get_gp_report(period, org_id=org_id, authorization=authorization)
-        facts["profit"] = [r for r in (gp.get("store_rows") or []) if r.get("store_code")]
+        from app.modules.account import statement_engine as _stmt
+        _pbs = _stmt.profit_by_store(client, org_id, period)
+        facts["profit"] = {"meta": None, "rows": [{"store_code": r.get("store_code"),
+                            # The row is stamped from the DECLARED CODE where the statement has
+                            # one, and from the books' own key (the canonical address) otherwise:
+                            # folding an address onto a code is exactly where one store claimed by
+                            # two codes attaches its money to the wrong one. A store in that state
+                            # is REPORTED (`identity_ambiguous` here, and named in the item's
+                            # coverage), never silently resolved.
+                            "store": r.get("store"),
+                            "address": r.get("store_label") or r.get("store"),
+                            "total_rev": r.get("revenue"), "net_profit": r.get("net_income"),
+                            "identity_ambiguous": r.get("identity_ambiguous"),
+                            "store_codes": r.get("store_codes")}
+                           for r in (_pbs.get("stores") or [])]}
+        facts["profit"]["meta"] = {"consolidated": (_pbs.get("consolidated") or {}),
+                                   "coverage": (_pbs.get("coverage") or {}),
+                                   "reconciliation": (_pbs.get("reconciliation") or {}),
+                                   "basis": _pbs.get("basis")}
     except Exception as e:
-        facts["profit"] = _wrev.Unreadable(f"the Gross Profit report could not be read ({str(e)[:200]})")
+        facts["profit"] = _wrev.Unreadable(f"the profit and loss statement could not be read ({str(e)[:200]})")
 
     try:
         rows = await get_commissions(period, authorization=authorization, org_id=org_id)
@@ -51889,8 +51936,16 @@ async def _weekly_review_facts(client, org_id, authorization, week, period):
     except Exception as e:
         facts["commission"] = _wrev.Unreadable(f"the rep commission rows could not be read ({str(e)[:200]})")
 
+    # EVERY FASTAPI-DEFAULTED PARAMETER IS PASSED, because this is an in-process call and a
+    # `Query(default=None)` left unpassed arrives as the marker OBJECT, not as None — truthy and not
+    # iterable, so the handler raised `'Query' object is not iterable` and the accessory item has
+    # been reporting itself unreadable ever since it shipped. Same class as the `Header` default
+    # trap (`core/auth_header`), and `harness_weekly_review.py` now fails the build if any
+    # FastAPI-defaulted parameter of a quoted handler is left to its marker.
     try:
-        plan = get_accessory_target_plan(period, authorization=authorization, org_id=org_id)
+        plan = get_accessory_target_plan(period, today="", mode="", value="", basis="",
+                                         stores=None, markets=None, include_inactive=False,
+                                         authorization=authorization, org_id=org_id)
         facts["accessory"] = [{"store_code": r.get("store_code"),
                                "target": r.get("current_target"),
                                "achieved": r.get("mtd_acc")} for r in (plan.get("rows") or [])]
@@ -51918,8 +51973,11 @@ async def _weekly_review_facts(client, org_id, authorization, week, period):
     try:
         from app.modules.asset.router import get_aging as _get_aging
         aging = await _get_aging(org_id=org_id)
-        facts["aging"] = {"rows": _weekly_review_aging_rows(aging),
-                          "by_carrier": (aging.get("aging_policy") or {}).get("by_carrier") or []}
+        # THE REPORT'S OWN PER-CARRIER FOLD, quoted whole (`unsold_inventory.aging_by_carrier`):
+        # every unsold device against its carrier's declared window. It is NOT `buckets`, the
+        # owed > 0 billing subset this used to compose — that subset is almost all old stock, which
+        # is why the review reported every device as past its window (owner, 2026-11-17).
+        facts["aging"] = aging.get("aging_by_carrier") or {}
     except Exception as e:
         facts["aging"] = _wrev.Unreadable(f"the inventory aging report could not be read ({str(e)[:200]})")
 
@@ -51933,6 +51991,11 @@ async def _weekly_review_facts(client, org_id, authorization, week, period):
                              "amount": r.get("amount")} for r in (pay.get("stores") or [])]
     except Exception as e:
         facts["payroll"] = _wrev.Unreadable(f"payroll could not be read ({str(e)[:200]})")
+
+    # ONE KEY SPACE for every fact, stamped once here rather than guessed per item.
+    if canon is not None:
+        for _k in ("profit", "commission", "accessory", "rep_watch", "payroll"):
+            _weekly_review_stamp(_wrev.fact_rows(facts.get(_k)), canon)
 
     try:
         from datetime import timedelta as _td, date as _dt
@@ -51968,30 +52031,44 @@ async def _weekly_review_pack(client, org_id, authorization, as_of, cfg, markets
     for the stores no market claims."""
     week = _wrev.week_window(as_of, cfg["week_ends_on"])
     period = _weekly_review_period(week["week_ending"])
+    # THE ONE RESOLVER, built once: every fact row and every scope's store list pass through it, so
+    # a row keyed by address and a scope keyed by declared code meet in the same space.
+    canon = _canonical_store_key_fn(client, org_id)
+
+    def _ckey(v):
+        try:
+            return str(canon(v) or "").strip().upper()
+        except Exception:
+            return str(v or "").strip().upper()
+
     facts, store_week, prior_week = await _weekly_review_facts(client, org_id, authorization,
-                                                               week, period)
+                                                               week, period, canon=canon)
     # THE TENANT'S OWN MARKET VOCABULARY — `core.scope.market_index`, the one union of both market
     # spellings. Never a house list: a market a tenant did not declare must not appear on its pack.
     try:
         from app.core import scope as _cscope
         index = _cscope.market_index(client, org_id)
-        declared = {v["market"]: sorted({str(c).strip().upper()
+        declared = {v["market"]: sorted({_ckey(c)
                                          for c in (v.get("codes") or v.get("keys") or set())})
                     for v in (index.get("by_market") or {}).values()}
-        roster = [str(s.get("store_code") or "").strip().upper()
+        roster = [_ckey(s.get("store_code"))
                   for s in (index.get("stores") or []) if s.get("store_code")]
     except Exception as e:
         print(f"WARN weekly-review market index failed: {e}")
         declared, roster = {}, []
-    present = [r.get("store_code") for r in (facts.get("profit") or [])
-               if isinstance(facts.get("profit"), list)]
-    codes = sorted({str(c).strip().upper() for c in list(roster) + list(present) if c})
+    # EVERY STORE ANY FACT NAMES IS PART OF THE ESTATE, not only the ones the GP report placed.
+    # The company pack holds them all and the "no market" pack catches whatever no market claims, so
+    # the market packs and the company pack are always the same set of stores.
+    present = [_wrev.row_store_key(r)
+               for key in ("profit", "commission", "accessory", "rep_watch", "payroll")
+               for r in _wrev.fact_rows(facts.get(key))]
+    codes = sorted({c for c in list(roster) + list(present) if c})
     if markets:
         wanted = {str(m).strip().lower() for m in markets}
         declared = {k: v for k, v in declared.items() if str(k).strip().lower() in wanted}
         codes = sorted({c for v in declared.values() for c in v if c in set(codes)})
     scope_list = _wrev.scopes(markets=declared, store_codes=codes)
-    pack = _wrev.build(scope_list, facts=facts, week=week, as_of=str(as_of)[:10],
+    pack = _wrev.build(scope_list, facts=facts, week=week, as_of=str(as_of)[:10], period=period,
                        facts_by_scope=_weekly_review_growth_by_scope(scope_list, store_week,
                                                                      prior_week))
     # WHERE EACH MEASURED FIGURE CAME FROM (§CORE-17.3). Declared in
@@ -52095,6 +52172,50 @@ def _weekly_review_store_run(client, org_id, pack, generated_by=""):
     except Exception as e:
         print(f"WARN weekly-review snapshot not stored for {org_id}: {e}")
         return False
+
+
+@router.get("/weekly-review/deck")
+async def get_weekly_review_deck(as_of: str = "", markets: Optional[List[str]] = Query(default=None),
+                                 include_markets: bool = True,
+                                 authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """THE REVIEW AS A DECK, downloaded (owner 2026-11-17: *"The descriptive ppt is missing like one
+    made before"*).
+
+    The SAME pack the screen renders, so the deck and the page can never disagree — the slides are
+    folded by `weekly_review_deck.deck_payload` (pure) and drawn by `notify/render`, which is
+    already the one home for turning a payload into a file. ADMINISTRATORS ONLY, the same gate as
+    the review itself: a deck of store profitability, rep pay and payroll is the review, in another
+    container.
+    """
+    require_org(org_id)
+    _require_weekly_review(authorization, org_id)
+    client = sb()
+    cfg, _source = _weekly_review_config(client, org_id)
+    from datetime import datetime as _dtm, timezone as _tzc
+    try:
+        from app.modules.storeops.router import _biz_tz_for
+        today = _dtm.now(_tzc.utc).astimezone(_biz_tz_for(org_id)).date().isoformat()
+    except Exception:
+        today = _dtm.now(_tzc.utc).date().isoformat()
+    try:
+        pack = await _weekly_review_pack(client, org_id, authorization, (as_of or today)[:10], cfg,
+                                         markets=markets)
+    except _wrev.ConfigRefused as e:
+        raise HTTPException(400, f"Weekly review config refused: {e}")
+    from app.modules.commcalc import weekly_review_deck as _wrdeck
+    from app.modules.notify import render as _render
+    payload = _wrdeck.deck_payload(pack, company_label=_weekly_review_org_label(client, org_id),
+                                   markets=bool(include_markets))
+    try:
+        data, filename, mime = _render.render(payload, "pptx")
+    except Exception as e:
+        # NEVER A HALF-FILE. A renderer that failed must say so, because a browser handed 0 bytes
+        # with a .pptx name reports a corrupt deck and nobody learns why.
+        raise HTTPException(500, f"The deck could not be built ({str(e)[:200]}).")
+    from fastapi.responses import StreamingResponse
+    from io import BytesIO
+    return StreamingResponse(BytesIO(data), media_type=mime,
+                             headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @router.post("/weekly-review/run-now")

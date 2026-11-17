@@ -52,6 +52,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from app.modules.commcalc import weekly_review as W                 # noqa: E402
 from app.modules.commcalc import weekly_review_drilldown as D       # noqa: E402
+from app.modules.commcalc import weekly_review_deck as DK          # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -92,6 +93,13 @@ RBAC = src("frontend/src/lib/rbac.ts", base=ROOT)
 INDEX = src("docs/SYSTEM_DATA_FLOW_INDEX.md", base=ROOT)
 LEDGER = src("harness_drilldown_pending.txt")
 MIGRATION = src("database/migrations/1123_weekly_performance_review.sql", base=ROOT)
+#: The two files the aging item quotes: the module that owns carrier attribution and the report
+#: that publishes its fold.
+UNSOLD = src("app/modules/payables/unsold_inventory.py")
+ASSET = src("app/modules/asset/router.py")
+#: The deck: what it says (pure fold) and what draws it (the house's one file renderer).
+DECK = src("app/modules/commcalc/weekly_review_deck.py")
+RENDER = src("app/modules/notify/render.py")
 
 #: The router's own block, bounded at both ends, so a feature appended to router.py later is never
 #: mistaken for this one (the zero-sales lock's BLOCK-with-an-END rule).
@@ -155,7 +163,11 @@ check("c2. no I/O and no clock of its own — the day it reviews is handed in",
 
 print("\n== D. no second derivation — every figure is quoted from its one home ==")
 for name, needle in (
-        ("the Gross Profit report", "get_gp_report("),
+        # PROFIT IS THE P&L'S, NOT THE GP REPORT'S (owner report 2026-11-17). The GP report answers
+        # gross profit after rep pay over store-attributed lines; the finance dashboard answers net
+        # income. Quoting the first and calling it profit read +$340,102.98 on the house org in
+        # October 2026 where the books said -$26,543.19.
+        ("the profit and loss statement", "profit_by_store("),
         ("the pay engine's own rep rows", "get_commissions("),
         ("the accessory target plan", "get_accessory_target_plan("),
         ("the Daily Action Plan's verdict", "get_action_plan("),
@@ -163,6 +175,9 @@ for name, needle in (
         ("the one payroll authority", "get_payroll_by_store"),
         ("the shared sales cells", "_sales_cell_agg(")):
     check(f"d1. it READS {name} rather than deriving that figure again", needle in BLOCK, needle)
+check("d1b. and it no longer quotes the GROSS PROFIT report for profit — two profit answers on one "
+      "pack is the defect this item was reported for",
+      "get_gp_report(" not in BLOCK, "the weekly review must not read get_gp_report")
 check("d2. it computes no pay, no target and no rate of its own",
       not re.search(r"\b(payout_config|commission_plan|tier|rate_for|calculate_pay)\b", BLOCK),
       re.findall(r"\b(payout_config|commission_plan|tier|rate_for|calculate_pay)\b", BLOCK))
@@ -170,21 +185,37 @@ check("d3. it classifies no sale line — the activation predicate has one home"
       not re.search(r"\b(line_class|contract_type|bucket_of)\b", WR_CODE + BLOCK),
       re.findall(r"\b(line_class|contract_type|bucket_of)\b", BLOCK))
 _AGING_FOLD = code_of(WR).split("def _aging", 1)[1].split("def _payroll", 1)[0]
-check("d4. it re-buckets no device — a carrier's selling window is that carrier's contract, so the "
-      "fold READS the bucket the aging report already stamped and does no day arithmetic of its own",
-      "aging_bucket" in _AGING_FOLD
-      and not re.search(r"timedelta|days_aged|acquired_date|warn_fraction|[<>]=?\s*\d+", _AGING_FOLD),
-      re.findall(r"timedelta|days_aged|acquired_date|warn_fraction", _AGING_FOLD))
+check("d4. it buckets no device and counts none — a carrier's selling window is that carrier's "
+      "contract, so the fold QUOTES the per-carrier cells the aging report already folded and does "
+      "no day arithmetic and no tallying of its own",
+      "by_carrier" in _AGING_FOLD
+      and not re.search(r"timedelta|days_aged|acquired_date|warn_fraction|aging_bucket|\+=|[<>]=?\s*\d+",
+                        _AGING_FOLD),
+      re.findall(r"timedelta|days_aged|acquired_date|warn_fraction|aging_bucket|\+=", _AGING_FOLD))
+# THE DEFECT THIS PAIR EXISTS FOR (owner 2026-11-17): the facts function composed the aging report's
+# `buckets` — the owed > 0 BILLING subset — and the review therefore reported every device as past
+# its carrier's window. `buckets` is a subset of the shelf; the shelf is `aging_by_carrier`.
+_AGING_FACT = BLOCK.split('facts["aging"]', 1)[1].split("except", 1)[0]
+check("d6. the aging fact is the report's own per-carrier fold over the WHOLE shelf, never its "
+      "owed > 0 subset",
+      "aging_by_carrier" in _AGING_FACT and "buckets" not in _AGING_FACT, _AGING_FACT.strip()[:120])
+check("d7. the per-carrier fold has ONE home and it is the module that owns carrier attribution",
+      "def aging_by_carrier" in code_of(UNSOLD)
+      and "def aging_by_carrier" not in code_of(WR) + BLOCK,
+      "payables/unsold_inventory.aging_by_carrier is the only fold")
+check("d8. and the aging report publishes it, so the screen and anything quoting it read one answer",
+      "aging_by_carrier" in code_of(ASSET), "asset/router must publish aging_by_carrier")
 check("d5. the drill-down declares rows and relations only — it folds no figure",
       not re.search(r"\bsum\(|\+=", code_of(DD)), re.findall(r"\bsum\(|\+=", code_of(DD)))
 
 
 print("\n== E. the gate is on the server, on every door ==")
 _routes = re.findall(r'@router\.(?:get|post|put)\("(/weekly-review[^"]*)"\)', BLOCK)
-check("e1. all five weekly-review routes exist — the read, the config read and write, the on-demand "
-      "run and the standing run",
-      len(_routes) == 5 and set(_routes) == {"/weekly-review", "/weekly-review/config",
-                                             "/weekly-review/run-now", "/weekly-review/run-due"},
+check("e1. all six weekly-review routes exist — the read, the config read and write, the deck, the "
+      "on-demand run and the standing run",
+      len(_routes) == 6 and set(_routes) == {"/weekly-review", "/weekly-review/config",
+                                             "/weekly-review/deck", "/weekly-review/run-now",
+                                             "/weekly-review/run-due"},
       _routes)
 _handlers = re.split(r"@router\.(?:get|post|put)\(", BLOCK)[1:]
 _ungated = [h.split("\n", 1)[0] for h in _handlers
@@ -294,6 +325,125 @@ except W.ConfigRefused:
     _bad_day = True
 check("i4. a closing weekday outside the week is REFUSED, not read as Sunday", _bad_day)
 
+
+print("\n== J. the defects reported on 2026-11-17, locked ==")
+# (1) NOTHING IS SILENTLY DROPPED. The pay engine keys a rep by their store's ADDRESS; the scopes
+#     are built from declared CODES. Matching the two in one key space and KEEPING what does not
+#     match on the consolidated pack is what brought October's commission back — 43 reps and
+#     $9,829.72 on the house org, which the pack had been reporting as nothing at all.
+_rows = [{"store_code": "B-1", "x": 1}, {"store": "9 Any Street", "x": 2}, {"x": 3}]
+_company = {"kind": "company", "key": "company", "store_codes": ["B-1"]}
+_market = {"kind": "market", "key": "market:NY", "store_codes": ["B-1"]}
+_kept_c, _un_c, _out_c = W._in_scope(_rows, _company)
+_kept_m, _un_m, _out_m = W._in_scope(_rows, _market)
+check("j1. the consolidated pack keeps every row that names a store, even one the market roster "
+      "has not heard of, and says how many",
+      len(_kept_c) == 2 and _out_c == 1 and len(_un_c) == 1, (len(_kept_c), _out_c, len(_un_c)))
+check("j2. a market pack keeps only its own stores — and the row it leaves out is on the "
+      "consolidated pack, not thrown away",
+      len(_kept_m) == 1 and _out_m == 1, (len(_kept_m), _out_m))
+check("j3. every fact row is matched on ONE resolved key, stamped by the one store resolver",
+      "_canonical_store_key_fn" in BLOCK and "STORE_KEY_FIELD" in WR_CODE
+      and "_weekly_review_stamp" in BLOCK,
+      "the router must stamp every fact row through _canonical_store_key_fn")
+
+# (2) THE FASTAPI-MARKER TRAP. An in-process call that leaves a `Query(default=None)` unpassed
+#     receives the MARKER OBJECT — truthy, not iterable — so the handler raises and the item reports
+#     itself unreadable. That is exactly how the accessory gap read "could not be read" from the day
+#     this report shipped until 2026-11-17.
+_called = re.findall(r"\n\s+(?:plan|rows|gp|pay|aging|_pbs)\s*=\s*(?:await\s+)?([a-zA-Z_][\w]*)\(",
+                     BLOCK)
+_marker_misses = []
+for _fn in sorted(set(_called)):
+    _sig = re.search(r"\n(?:async )?def %s\(([\s\S]*?)\):\n" % re.escape(_fn), ROUTER)
+    if not _sig:
+        continue
+    _params = re.findall(r"(\w+)\s*:[^=,]*=\s*(Query|Header|Body|Path|Form)\(", _sig.group(1))
+    _call = re.search(r"%s\(([\s\S]*?)\)\n" % re.escape(_fn), BLOCK)
+    _text = _call.group(1) if _call else ""
+    for _name, _marker in _params:
+        if f"{_name}=" not in _text:
+            _marker_misses.append(f"{_fn}({_name}=… missing, a {_marker} marker would arrive)")
+check("j4. every in-process call passes each FastAPI-defaulted parameter of the handler it quotes — "
+      "an unpassed Query default arrives as the marker object, not as None",
+      _marker_misses == [], _marker_misses)
+
+# (3) THE WORDS HAVE ONE HOME. The page used to compose its own remarks for three of the seven
+#     items; the deck and the file renderer must not start.
+_sample = W.review({"kind": "company", "key": "company", "label": "C", "store_codes": [], "note": ""},
+                   facts={}, week={"label": "w", "date_from": "2026-11-09", "date_to": "2026-11-15",
+                                   "week_ending": "2026-11-15"})
+check("j5. every item carries its sentences, and an unmeasured item's sentence is its REASON",
+      all(i.get("narrative") for i in _sample["items"])
+      and all(i["reason"] in " ".join(i["narrative"])
+              for i in _sample["items"] if i["state"] != W.MEASURED),
+      [i["key"] for i in _sample["items"] if not i.get("narrative")])
+check("j6. the deck PRINTS the fold's sentences and formats no figure of its own — the slide's "
+      "headline and the sentence under it must be the same number",
+      "narrative" in code_of(DECK) and "figure_words" in code_of(DECK)
+      and not re.search(r"[:,]\s*\.?\d*f\}|\$\{|\$\"", code_of(DECK)),
+      re.findall(r"[:,]\s*\.?\d*f\}", code_of(DECK)))
+check("j7. the deck is DRAWN by the house's one file renderer, never a second file writer",
+      "build_pptx" in code_of(RENDER) and "Presentation(" not in code_of(DECK)
+      and "Presentation(" not in BLOCK,
+      "only notify/render may write the file")
+check("j8. a slide's rows are sorted BEFORE they are capped — a cap over an unsorted list shows an "
+      "arbitrary twelve and calls them the worst twelve",
+      [r["net_profit"] for r in DK.item_rows(
+          {"key": "profit", "rows": [{"net_profit": 5}, {"net_profit": -9}, {"net_profit": 1}]},
+          limit=2)] == [-9, 1])
+check("j9. the page renders the server's sentences rather than remarking on the figures itself",
+      "item.narrative" in PAGE and "stores_losing_money" not in PAGE,
+      "the page must not compose its own per-item remarks")
+
+print("\n== K. profit is the books' figure, and aging is the shelf (owner report 2026-11-17) ==")
+_COMPANY = {"kind": "company", "key": "company", "label": "C", "store_codes": ["B-1", "B-2"],
+            "note": ""}
+_MARKET = {"kind": "market", "key": "market:NY", "label": "NY", "store_codes": ["B-1"], "note": ""}
+_PROFIT_FACT = {"rows": [{"store_code": "B-1", "store": "1 Street", "total_rev": 100.0,
+                          "net_profit": 10.0},
+                         {"store_code": "B-2", "store": "2 Street", "total_rev": 50.0,
+                          "net_profit": -4.0}],
+                "meta": {"consolidated": {"net_income": 5.0, "revenue": 160.0},
+                         "reconciliation": {"explained": -1.0, "unexplained": 0.0,
+                                            "reconciles": True},
+                         "coverage": {"stores_with_ambiguous_identity": []},
+                         "basis": "the statement"}}
+_P = W._profit(_PROFIT_FACT, _COMPANY)
+check("k1. the company's profit IS the consolidated statement, not the sum of the store rows — the "
+      "books place some lines at no store and a review that headlines a near miss invites the "
+      "meeting to argue with the P&L",
+      _P["figure"] == 5.0 and _P["detail"]["stores_net_income_total"] == 6.0, _P["figure"])
+check("k2. and the difference is SAID, in the statement's own reconciliation, never absorbed",
+      _P["detail"]["money_at_no_store"] == -1.0 and _P["detail"]["reconciles"] is True,
+      _P["detail"])
+_PM = W._profit(_PROFIT_FACT, _MARKET)
+check("k3. a market's profit is the sum of ITS stores on the same statement, and says so",
+      _PM["figure"] == 10.0 and "market" in str(_PM["detail"]["basis"]), _PM["figure"])
+_P_UNEXPLAINED = W._profit({**_PROFIT_FACT,
+                            "meta": {**_PROFIT_FACT["meta"],
+                                     "reconciliation": {"explained": 0.0, "unexplained": 7.0,
+                                                        "reconciles": False}}}, _COMPANY)
+check("k4. money the store rows cannot account for makes the pack SAY the store list is incomplete",
+      _P_UNEXPLAINED["detail"]["reconciles"] is False
+      and "incomplete" in " ".join(W.narrative(_P_UNEXPLAINED, _COMPANY)),
+      W.narrative(_P_UNEXPLAINED, _COMPANY))
+
+_AGING_FACT = {"by_carrier": [{"carrier_id": "c", "label": "Carrier", "sell_within_days": 60,
+                               "declared": True, "attribution": "declared", "devices": 100,
+                               "under45": 60, "warn": 10, "missed": 30, "unknown_age": 0,
+                               "owed": 9.0}],
+               "devices": 100, "missed": 30, "owed": 9.0, "carriers": 1,
+               "carriers_with_no_declared_window": 0, "devices_with_no_carrier": 0,
+               "basis": "the shelf"}
+_A = W._aging(_AGING_FACT, _COMPANY)
+check("k5. the aging item counts the WHOLE shelf and reports what is still inside the window — the "
+      "defect was a subset in which everything was already past it",
+      _A["figure"] == 30 and _A["detail"]["devices"] == 100
+      and _A["detail"]["within_window"] == 70, _A["detail"])
+check("k6. an aging answer with no per-carrier fold is NOT MEASURED, never an empty shelf",
+      W._aging({"devices": 5}, _COMPANY)["state"] == W.NOT_MEASURED
+      and W._aging({"devices": 5}, _COMPANY)["figure"] is None)
 
 print("\n" + "=" * 60)
 print("%d passed, %d failed" % (PASS, FAIL))

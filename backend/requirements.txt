@@ -24,6 +24,8 @@ httpx==0.28.1          # pinned with supabase — see the note above
 python-dotenv>=1.0.0
 python-dateutil>=2.8.2
 reportlab>=4.2.0
+# Decks (notify/render.build_pptx) — the Weekly Performance Review download, owner 2026-11-17.
+python-pptx>=1.0.2
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 pdfplumber>=0.11.0

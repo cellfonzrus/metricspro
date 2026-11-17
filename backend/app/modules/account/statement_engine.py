@@ -750,3 +750,286 @@ def inventory_reconciliation(client, org_id):
                     "the unsold phones on the device ledger at each store's current snapshot; "
                     "delta = device − report. Unplaced/superseded devices are excluded from the "
                     "cells and counted in device_meta — nothing vanishes silently."}
+
+
+# ── THE PROFIT PRODUCER: "quote the P&L, never derive profit twice" ─────────────────────────────
+# Owner report 2026-11-17, verbatim: "The profit is not correct it should be same as in the finance
+# dashboard".
+#
+# THE CLASS OF DEFECT, named once. A report outside finance needed "profit per store" and computed
+# its own: the Gross Profit report's `net_profit` (`total_rev − rep_pay − exp_total −
+# net_phone_cost`, over store-attributed lines only) is a DIFFERENT QUESTION from net income, and
+# the two answers diverged by $366,646.17 on the house org in October 2026 (GP +340,102.98 vs P&L
+# net income −26,543.19) and by $30,545.90 on LuxeLink (+31,122.43 vs +576.53). A district manager
+# was told the company made $340k in a month the books say it lost $26.5k.
+#
+# The design fix is not a second formula that agrees better — it is that there is ONE producer of
+# "what did the books earn", here, in the finance module, and every other report QUOTES it. So this
+# function states no accounting rule of its own: it runs the SAME `build_inputs_full` inputs through
+# the SAME `_scopes` scope list and the SAME `engine._assemble` over `coa.pl_spec_for` /
+# `coa.pl_label_for` that `_assemble_scope` uses, and hands back what those payloads already carry.
+# Its per-scope `net_income` is `statement(..., kinds=("pl",))["pl"]["net_income"]` for that scope,
+# to the cent, BY CONSTRUCTION — not by arithmetic that happens to match.
+#
+# CHEAP ENOUGH FOR ONE CALL PER REPORT OPEN: P&L only. No balance sheet, no cash flow, no
+# `_stored_bs` prior-BS read, no `engine._prior_accum_ni` per scope — the whole cost is the single
+# `build_inputs_full` (measured live 2026-11-17, October 2026: ~57s house / ~14.5s LuxeLink), and
+# assembling every scope's P&L on top of it is ~3ms for 38 scopes.
+#
+# NOTHING EXISTING CHANGES: additive module surface only. `statement`, `compute_and_store`,
+# `/accounts/pl` and the dashboard payloads are untouched.
+
+#: How a P&L SECTION enters net income — the identity `engine._assemble` itself applies
+#: (`net_income = revenue − cogs − opex − other`). Stated once so the reconciliation below can
+#: explain a company-wide dollar's effect on profit without re-deriving the P&L.
+PL_SECTION_SIGN = {"revenue": 1.0, "cogs": -1.0, "opex": -1.0, "other": -1.0}
+
+
+def pl_figures(pl_payload):
+    """PURE: the figures an ASSEMBLED P&L payload ALREADY CARRIES, read — never re-derived.
+
+    Section subtotals + `gross_profit` / `net_operating_income` / `net_income` exactly as
+    `engine._assemble` computed them. A figure the payload does not carry comes back None (the
+    house rule: a figure nobody measured is None with a reason, never 0)."""
+    p = pl_payload or {}
+    subs = {}
+    for sec in p.get("sections") or []:
+        subs[sec.get("type")] = _round(sec.get("subtotal"))
+    out = {}
+    for sec_type in ("revenue", "cogs", "opex", "other"):
+        out[sec_type] = subs.get(sec_type)
+    for k in ("gross_profit", "net_operating_income", "net_income"):
+        out[k] = _round(p[k]) if k in p else None
+    return out
+
+
+def company_wide_pl_cells(inputs, spec):
+    """PURE: the P&L lines holding money at NO store.
+
+    `engine._scoped` gives these dollars ONLY to a scope with `include_company_wide` — i.e.
+    consolidated. No `store:` scope can ever carry them, so they are the first honest reason a
+    caller summing the store rows does not reach the consolidated figure. Mirrors `_assemble`'s own
+    skips (a `manual`/`computed` line is zeroed there, so it contributes nothing here either)."""
+    out = []
+    for key, label, section, kind, _grain in (spec or []):
+        if section not in PL_SECTION_SIGN or kind in ("manual", "computed"):
+            continue
+        ln = (inputs or {}).get(key)
+        if not isinstance(ln, dict):
+            continue
+        amt = _round(ln.get("company_wide"))
+        if not amt:
+            continue
+        out.append({"key": key, "label": (ln.get("label") or label), "section": section,
+                    "amount": amt,
+                    "net_income_effect": _round(PL_SECTION_SIGN[section] * amt)})
+    return out
+
+
+def unstored_journal_pl_cells(journal, matcher=None, company_of=None):
+    """PURE: the manual P&L journal entries that are NOT keyed to a store.
+
+    `balance_sheet.entry_grain` is the one home for an entry's grain; a company- or tenant-grain
+    entry is counted by consolidated (and by its company scope) and by NO store scope — the second
+    honest reason store rows may not sum to consolidated."""
+    out = []
+    for e in (journal or []):
+        if (str((e or {}).get("statement") or "").strip()) != "pl":
+            continue
+        section = str((e or {}).get("account_type") or "").strip()
+        grain, store, company = balance_sheet.entry_grain(e, matcher, company_of)
+        if grain == "store" and store:
+            continue
+        amt = _round((e or {}).get("amount"))
+        sign = PL_SECTION_SIGN.get(section)
+        out.append({"grain": grain, "company_id": company, "section": section or None,
+                    "line": str((e or {}).get("account_line") or "Manual entry").strip(),
+                    "amount": amt,
+                    "net_income_effect": _round(sign * amt) if sign is not None else None,
+                    "reason": None if sign is not None
+                              else "entry's account_type is not a P&L section — effect not measured"})
+    return out
+
+
+def fold_profit_by_store(period, org_id, consolidated_pl, store_pls, company_pls,
+                         company_wide_cells, unstored_journal_cells,
+                         identity=None, identity_reason=None, scope_counts=None):
+    """PURE: the profit payload — the rows, the consolidated figures, the coverage statement and
+    the reconciliation that tells a caller WHY the store rows may not sum to consolidated.
+
+    `store_pls` / `company_pls` are [(scope_key, scope_label, assembled_pl)]. `identity` is
+    `store_identity.store_identity_index` (canonical store address → code / market / codes), or
+    None with `identity_reason` when it could not be read — the store CODE is then None with a
+    reason on every row rather than a guess.
+
+    The reconciliation is stated, never assumed: residual = consolidated − Σ store rows; `explained`
+    = the company-wide cells' + unstored journal entries' effect on net income; anything left is
+    reported as `unexplained` with `reconciles: false`, so a caller can always tell from the payload
+    alone why the arithmetic does not close."""
+    ident = identity if isinstance(identity, dict) else {}
+
+    def _ident_fields(store):
+        if identity is None:
+            return {"store_code": None, "store_codes": [], "market": None, "salesforce_id": None,
+                    "identity_ambiguous": None, "is_active": None,
+                    "store_code_reason": identity_reason or "store identity was not read"}
+        ent = ident.get(store)
+        if not ent:
+            return {"store_code": None, "store_codes": [], "market": None, "salesforce_id": None,
+                    "identity_ambiguous": False, "is_active": None,
+                    "store_code_reason": "no store_mapping row claims this canonical store key"}
+        return {"store_code": (str(ent.get("store_code") or "").strip() or None),
+                "store_codes": list(ent.get("codes") or []),
+                "market": (str(ent.get("market") or "").strip() or None),
+                "salesforce_id": (str(ent.get("salesforce_id") or "").strip() or None),
+                "identity_ambiguous": bool(ent.get("ambiguous")),
+                "is_active": ent.get("is_active"),
+                "store_code_reason": ("two or more declared codes claim this store key"
+                                      if ent.get("ambiguous") else None)}
+
+    rows = []
+    for scope_key, scope_label, pl in (store_pls or []):
+        store = scope_key.split(":", 1)[1] if ":" in scope_key else scope_key
+        row = {"scope": scope_key, "store": store, "store_label": scope_label}
+        row.update(pl_figures(pl))
+        row.update(_ident_fields(store))
+        rows.append(row)
+    rows.sort(key=lambda r: str(r.get("store") or ""))
+
+    companies = []
+    for scope_key, scope_label, pl in (company_pls or []):
+        ent = {"scope": scope_key, "company_id": scope_key.split(":", 1)[1] if ":" in scope_key else None,
+               "company": scope_label}
+        ent.update(pl_figures(pl))
+        companies.append(ent)
+
+    cons = pl_figures(consolidated_pl)
+    stores_ni = _round(sum(safe_float(r.get("net_income")) for r in rows))
+    residual = _round(safe_float(cons.get("net_income")) - stores_ni)
+    cw_effect = _round(sum(safe_float(c.get("net_income_effect")) for c in (company_wide_cells or [])))
+    je_effect = _round(sum(safe_float(c.get("net_income_effect")) for c in (unstored_journal_cells or [])))
+    explained = _round(cw_effect + je_effect)
+    unexplained = _round(residual - explained)
+    reconciles = abs(unexplained) < 0.01
+
+    why = []
+    if company_wide_cells:
+        why.append(f"{len(company_wide_cells)} P&L line(s) hold money the books place at NO store "
+                   f"(net income effect {cw_effect:+,.2f}); only the consolidated scope counts them")
+    if unstored_journal_cells:
+        why.append(f"{len(unstored_journal_cells)} manual journal entr(ies) are keyed above store "
+                   f"grain (net income effect {je_effect:+,.2f})")
+    if not why:
+        why.append("every dollar on the P&L is placed at a store, so the store rows sum to "
+                   "consolidated")
+    if not reconciles:
+        why.append(f"{unexplained:+,.2f} of the difference is NOT explained by either — treat the "
+                   f"store rows as incomplete and report this figure")
+
+    unplaced = [r["store"] for r in rows if r.get("store_code") is None]
+    return {
+        "producer": "account.statement_engine.profit_by_store",
+        "org_id": org_id,
+        "period": period,
+        "basis": ("Net income as the BOOKS state it: the finance module's own P&L for this period "
+                  "(account.statement_engine over coa.build_inputs + coa.pl_spec_for), i.e. "
+                  "revenue − cost of goods sold − operating expenses − other, per scope. Identical "
+                  "by construction to statement(client, org, period, scope, kinds=('pl',))"
+                  "['pl']['net_income'] for the same scope. It is NOT the Gross Profit report's "
+                  "`net_profit` (total_rev − rep_pay − exp_total − net_phone_cost over "
+                  "store-attributed lines only), which answers a different question."),
+        "consolidated": dict(cons, scope="consolidated"),
+        "stores": rows,
+        "companies": companies,
+        "coverage": {
+            "store_scopes": len(rows),
+            "company_scopes": len(companies),
+            "scopes_total": (scope_counts or {}).get("scopes_total"),
+            "stores_with_no_store_code": unplaced,
+            "stores_with_ambiguous_identity": [r["store"] for r in rows if r.get("identity_ambiguous")],
+            "store_identity_read": identity is not None,
+            "store_identity_reason": identity_reason,
+            "note": ("One row per store scope the P&L books money at — the same scope list the "
+                     "stored snapshots use (statement_engine._scopes). A store with no money in "
+                     "this period has no scope and therefore no row; it is not a zero."),
+        },
+        "reconciliation": {
+            "consolidated_net_income": cons.get("net_income"),
+            "stores_net_income_total": stores_ni,
+            "residual": residual,
+            "explained": explained,
+            "company_wide_net_income_effect": cw_effect,
+            "unstored_journal_net_income_effect": je_effect,
+            "unexplained": unexplained,
+            "reconciles": reconciles,
+            "company_wide_lines": list(company_wide_cells or []),
+            "unstored_journal_entries": list(unstored_journal_cells or []),
+            "why": why,
+        },
+    }
+
+
+def profit_by_store(client, org_id, period):
+    """THE finance-side answer to "what did the books earn this period, company-wide and per store"
+    — the figure every other report must QUOTE instead of deriving profit a second way (owner
+    report 2026-11-17).
+
+    ONE `build_inputs_full`, P&L ONLY (no balance sheet, no cash flow, no prior-BS read), then the
+    existing `_scopes` scope list assembled through `engine._assemble` over `coa.pl_spec_for` /
+    `coa.pl_label_for` — the same machinery `_assemble_scope` uses, so every `net_income` here IS
+    `statement(..., kinds=("pl",))["pl"]["net_income"]` for that scope.
+
+    Org-scoped end to end (every read carries `org_id`; the scope list is built from THIS org's
+    inputs, companies and journal, so no other tenant's row can appear). Each store row carries the
+    store key as the BOOKS place it — the canonical store address `coa.store_resolver` produces —
+    plus that store's declared CODE and market from the one store-identity home
+    (`store_identity.store_identity_index`), so a caller keying stores by code can join without
+    inventing a second resolution. Read-only; moves no money, writes nothing."""
+    from app.modules.account import engine
+    inputs, _cfg, meta = build_inputs_full(client, org_id, period)
+    meta.update(side_meta(inputs))
+    journal = _journal_rows(client, org_id, period)
+    company_of, _default, companies = coa.company_assignment(client, org_id)
+    matcher = balance_sheet.journal_company_matcher(companies)
+    # Profit centers are a scope FAMILY this producer does not report (stores + companies +
+    # consolidated are the grains a caller joins to), so the extra config read is skipped; the
+    # store/company/consolidated entries of the list are identical either way.
+    scopes, _all_stores = _scopes(inputs, companies, company_of, journal, matcher, None)
+    spec, label_map = coa.pl_spec_for(inputs), coa.pl_label_for(inputs)
+
+    def _pl(scope_key, stores_in_scope, include_cw):
+        jscope, _jmeta = balance_sheet.journal_grain_entries(
+            journal, scope_key, stores_in_scope, matcher, company_of)
+        return engine._assemble(inputs, jscope, spec, label_map, PL_SECTIONS,
+                                scope_key, stores_in_scope, include_cw)
+
+    consolidated_pl, store_pls, company_pls = None, [], []
+    for scope_key, scope_label, stores_in_scope, include_cw in scopes:
+        if scope_key == "consolidated":
+            consolidated_pl = _pl(scope_key, stores_in_scope, include_cw)
+        elif scope_key.startswith("store:"):
+            store_pls.append((scope_key, scope_label, _pl(scope_key, stores_in_scope, include_cw)))
+        elif scope_key.startswith("company:"):
+            company_pls.append((scope_key, scope_label, _pl(scope_key, stores_in_scope, include_cw)))
+
+    # THE store identity (§64) — the one home, never a second resolution here.
+    identity, identity_reason = None, None
+    try:
+        from app.modules.account import store_identity as _sid
+        mapping_rows = coa._fetch_all(
+            client, "store_mapping",
+            "store_address,store_code,market,salesforce_id,is_active", {"org_id": org_id})
+        identity = _sid.store_identity_index(mapping_rows, coa.store_resolver(client, org_id))
+    except Exception as e:
+        identity, identity_reason = None, f"store identity unavailable: {str(e)[:160]}"
+        coa._warn("profit_by_store: store identity unavailable — store codes not measured", e)
+
+    out = fold_profit_by_store(
+        period, org_id, consolidated_pl, store_pls, company_pls,
+        company_wide_pl_cells(inputs, spec),
+        unstored_journal_pl_cells(journal, matcher, company_of),
+        identity=identity, identity_reason=identity_reason,
+        scope_counts={"scopes_total": len(scopes)})
+    out["computed_at"] = datetime.now(timezone.utc).isoformat()
+    out["meta"] = meta
+    return out

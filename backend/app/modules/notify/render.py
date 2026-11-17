@@ -276,12 +276,137 @@ def build_pdf(payload: dict) -> bytes:
     return buf.getvalue()
 
 
+PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+# Deck palette. ONE declaration, reused by every slide master below — the same discipline the
+# frontend's theme tokens enforce, for the same reason: a colour written twice drifts.
+DECK_DARK = (22, 32, 63)
+DECK_NAVY = (30, 39, 97)
+DECK_ICE = (202, 220, 252)
+DECK_MUTED = (110, 122, 153)
+DECK_RED = (192, 57, 43)
+DECK_WHITE = (255, 255, 255)
+
+
+def _pptx_text(frame, lines, *, size, color, bold=False, space_after=6):
+    """Fill a text frame with one paragraph per line. `lines` are already WORDS — this renderer
+    never composes a sentence, because the sentences have one home in the fold that made them."""
+    from pptx.util import Pt
+    from pptx.dml.color import RGBColor
+    frame.word_wrap = True
+    first = True
+    for line in [str(x) for x in (lines or []) if str(x or "").strip()]:
+        para = frame.paragraphs[0] if first else frame.add_paragraph()
+        first = False
+        para.text = line
+        para.space_after = Pt(space_after)
+        for run in para.runs:
+            run.font.size = Pt(size)
+            run.font.bold = bold
+            run.font.color.rgb = RGBColor(*color)
+
+
+def build_pptx(payload: dict) -> bytes:
+    """A DECK out of `payload["slides"]` — the third format, beside xlsx and pdf.
+
+    A slide is `{kind, eyebrow, title, bullets, table: {headers, rows} | None, note}`. The CONTENT
+    is decided by whoever asked (for the weekly review that is
+    `commcalc/weekly_review_deck.deck_payload`, a pure fold over the pack); this function only draws
+    it, exactly as `build_xlsx` only draws a sheet. Owner ask 2026-11-17: *"The descriptive ppt is
+    missing like one made before"*.
+    """
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+    from pptx.dml.color import RGBColor
+
+    pres = Presentation()
+    pres.slide_width, pres.slide_height = Inches(13.333), Inches(7.5)
+    blank = pres.slide_layouts[6]
+    W = 13.333
+
+    def _bg(slide, rgb):
+        slide.background.fill.solid()
+        slide.background.fill.fore_color.rgb = RGBColor(*rgb)
+
+    def _box(slide, x, y, w, h):
+        return slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h)).text_frame
+
+    for s in (payload.get("slides") or []):
+        kind = str(s.get("kind") or "item")
+        slide = pres.slides.add_slide(blank)
+        dark = kind in ("title", "section")
+        if dark:
+            _bg(slide, DECK_DARK if kind == "title" else DECK_NAVY)
+        body_color = DECK_ICE if dark else (60, 60, 60)
+        head_color = DECK_WHITE if dark else DECK_NAVY
+        y = 1.3 if dark else 0.45
+        if s.get("eyebrow"):
+            _pptx_text(_box(slide, 0.8, y, W - 1.6, 0.4), [str(s["eyebrow"]).upper()],
+                       size=13, color=DECK_ICE if dark else DECK_MUTED, bold=True)
+            y += 0.45
+        state = str(s.get("state") or "")
+        title_color = (DECK_RED if (state and state != "measured" and not dark) else head_color)
+        _pptx_text(_box(slide, 0.8, y, W - 1.6, 1.2 if dark else 0.9),
+                   [s.get("title") or ""], size=38 if dark else 30, color=title_color, bold=True)
+        y += 1.3 if dark else 1.0
+        bullets = list(s.get("bullets") or [])
+        table = s.get("table")
+        if bullets:
+            _pptx_text(_box(slide, 0.8, y, (W - 1.6) if not table else 5.3,
+                            2.0 if not table else 4.6),
+                       bullets, size=15 if not dark else 16, color=body_color, space_after=10)
+        if table and (table.get("rows") or []):
+            headers = [str(h) for h in (table.get("headers") or [])]
+            rows = table.get("rows") or []
+            left = 6.4 if bullets else 0.8
+            width = W - left - 0.8
+            shape = slide.shapes.add_table(len(rows) + 1, max(1, len(headers)),
+                                           Inches(left), Inches(y),
+                                           Inches(width), Inches(0.32 * (len(rows) + 1)))
+            tbl = shape.table
+            for ci, h in enumerate(headers):
+                cell = tbl.cell(0, ci)
+                cell.text = h
+                for para in cell.text_frame.paragraphs:
+                    for run in para.runs:
+                        run.font.size, run.font.bold = Pt(10), True
+                        run.font.color.rgb = RGBColor(*DECK_NAVY)
+            for ri, row in enumerate(rows, start=1):
+                for ci in range(len(headers)):
+                    v = row[ci] if ci < len(row) else None
+                    cell = tbl.cell(ri, ci)
+                    cell.text = "" if v is None or v == "" else _fmt_cell(v)
+                    for para in cell.text_frame.paragraphs:
+                        for run in para.runs:
+                            run.font.size = Pt(9)
+                            run.font.color.rgb = RGBColor(40, 40, 40)
+        if s.get("note"):
+            _pptx_text(_box(slide, 0.8, 6.75, W - 1.6, 0.4), [s["note"]],
+                       size=9, color=DECK_ICE if dark else DECK_MUTED)
+    buf = BytesIO()
+    pres.save(buf)
+    return buf.getvalue()
+
+
+def _fmt_cell(v):
+    """A table cell as text. A number keeps thousands separators and cents; anything else is its own
+    words — a WORD in a figure column is a measurement claim ("no target saved") and must survive
+    into the deck as itself, never as 0."""
+    if isinstance(v, bool):
+        return "yes" if v else "no"
+    if isinstance(v, (int, float)):
+        return f"{v:,.2f}" if isinstance(v, float) else f"{v:,}"
+    return str(v)
+
+
 def render(payload: dict, fmt: str) -> tuple[bytes, str, str]:
-    """Return (bytes, filename, mime) for fmt in {'xlsx','pdf'}."""
+    """Return (bytes, filename, mime) for fmt in {'xlsx','pdf','pptx'}."""
     base = payload.get("filename") or "report"
     if fmt == "xlsx":
         return (build_xlsx(payload), f"{base}.xlsx",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     if fmt == "pdf":
         return build_pdf(payload), f"{base}.pdf", "application/pdf"
+    if fmt == "pptx":
+        return build_pptx(payload), f"{base}.pptx", PPTX_MIME
     raise ValueError(f"unknown format {fmt!r}")

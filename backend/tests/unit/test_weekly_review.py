@@ -138,32 +138,55 @@ def test_the_accessory_gap_is_measured_against_the_targets_the_tenant_saved():
 
 
 # ── inventory aging, per carrier ──────────────────────────────────────────────────────────────────
-def test_inventory_aging_is_folded_per_carrier_and_names_each_declared_window():
-    rows = [{"carrier_id": "c1", "aging_bucket": "missed", "owed_to_vip": 300.0},
-            {"carrier_id": "c1", "aging_bucket": "warn", "owed_to_vip": 100.0},
-            {"carrier_id": "c2", "aging_bucket": "under45", "owed_to_vip": 50.0}]
-    policies = [{"carrier_id": "c1", "label": "Total", "sell_within_days": 12, "declared": True},
-                {"carrier_id": "c2", "label": "Boost", "sell_within_days": 60, "declared": False}]
-    out = wr.review(_scope(), week=_WEEK,
-                    facts={"aging": {"rows": rows, "by_carrier": policies}})
+#
+# THE FOLD IS NOT HERE ANY MORE, and that is the fix (owner report 2026-11-17: *"the inventory aging
+# is not correct it shows all devices out of the [carrier]'s day window"*). The review used to
+# compose the aging report's `buckets` — the owed > 0 BILLING subset, which is almost entirely old
+# stock — and report every device as past its window. The per-carrier fold over the WHOLE shelf has
+# one home (`payables/unsold_inventory.aging_by_carrier`, proved by `harness_device_aging_policy.py`
+# §I) and the review QUOTES it. What is pinned here is that the quote is honest.
+def _aging_fact(**over):
+    fact = {"by_carrier": [{"carrier_id": "c1", "label": "Total", "sell_within_days": 12,
+                            "declared": True, "attribution": "declared", "devices": 2,
+                            "under45": 0, "warn": 1, "missed": 1, "unknown_age": 0, "owed": 400.0},
+                           {"carrier_id": "c2", "label": "Boost", "sell_within_days": 60,
+                            "declared": False, "attribution": "source", "devices": 1,
+                            "under45": 1, "warn": 0, "missed": 0, "unknown_age": 0, "owed": 50.0}],
+            "devices": 3, "missed": 1, "owed": 450.0, "carriers": 2,
+            "carriers_with_no_declared_window": 1, "devices_with_no_carrier": 0,
+            "basis": "every unsold device handed in"}
+    fact.update(over)
+    return fact
+
+
+def test_inventory_aging_quotes_the_whole_shelf_per_carrier_with_each_declared_window():
+    out = wr.review(_scope(), week=_WEEK, facts={"aging": _aging_fact()})
     item = {i["key"]: i for i in out["items"]}["aging"]
     assert item["state"] == wr.MEASURED
     assert item["figure"] == 1, "one device is past its carrier's own window"
+    # THE REGRESSION: the devices still INSIDE their window are reported, which is precisely what a
+    # pack built from the owed>0 subset could never say.
+    assert item["detail"]["devices"] == 3 and item["detail"]["within_window"] == 2
     by_carrier = {c["label"]: c for c in item["rows"]}
     assert by_carrier["Total"]["sell_within_days"] == 12
     assert by_carrier["Total"]["missed"] == 1 and by_carrier["Total"]["owed"] == 400.0
     # A carrier that declared no window is still reported, saying the house default answered.
     assert by_carrier["Boost"]["declared"] is False
-    assert by_carrier["Boost"]["missed"] == 0
+    assert item["detail"]["carriers_with_no_declared_window"] == 1
 
 
 def test_a_device_whose_carrier_is_not_declared_is_reported_not_silently_bucketed():
-    rows = [{"carrier_id": None, "aging_bucket": "missed", "owed_to_vip": 90.0}]
-    out = wr.review(_scope(), week=_WEEK, facts={"aging": {"rows": rows, "by_carrier": []}})
+    out = wr.review(_scope(), week=_WEEK,
+                    facts={"aging": _aging_fact(devices_with_no_carrier=1)})
     item = {i["key"]: i for i in out["items"]}["aging"]
     assert item["detail"]["devices_with_no_carrier"] == 1
-    assert any(c.get("carrier_id") is None for c in item["rows"]), \
-        "the unattributed devices get a row of their own rather than another carrier's"
+    assert "carrier" in " ".join(item["narrative"]).lower()
+
+
+def test_an_aging_answer_without_its_per_carrier_fold_is_not_measured_never_an_empty_shelf():
+    item = {i["key"]: i for i in
+            wr.review(_scope(), week=_WEEK, facts={"aging": {"devices": 9}})["items"]}["aging"]
+    assert item["state"] == wr.NOT_MEASURED and item["figure"] is None
 
 
 # ── scopes: one review per market, one consolidated, nothing dropped ──────────────────────────────

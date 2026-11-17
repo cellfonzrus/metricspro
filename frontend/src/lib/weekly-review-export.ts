@@ -21,12 +21,17 @@ export type ReviewItem = {
   key: string; label: string; unit: 'money' | 'count' | 'pct'; window: string
   state: 'measured' | 'not_measured'; figure: number | null; reason: string
   rows: ReviewRow[]; detail: ReviewDetail; source: string
+  /** WHAT THE FIGURE SAYS, in sentences — the server's (`weekly_review.narrative`). The page, this
+   *  file and the downloaded deck print them word for word; none of the three writes its own. */
+  narrative?: string[]
 }
 export type Review = {
   scope: { kind: string; label: string; store_codes: string[]; note: string }
   week: { date_from: string; date_to: string; week_ending: string; label: string }
   items: ReviewItem[]
   coverage: { items: number; measured: number; not_measured: number }
+  /** The pack's own opening — what this review is and how complete it is. Server-side, one home. */
+  headline?: string[]
 }
 export type ReviewPack = {
   as_of: string; period: string
@@ -89,13 +94,16 @@ export function weeklyReviewSheets(pack: ReviewPack | null): ExportSheet[] {
     Unit: i.unit,
     State: WR_STATE_WORD[i.state] || i.state,
     'Why not measured': i.state === 'measured' ? '' : i.reason,
+    // WHAT IT SAYS, in the server's own sentences — a spreadsheet read on a Monday morning is
+    // read by someone who was not in the room when the figure was explained.
+    'What it says': (i.narrative || []).join(' '),
     'Read from': i.source,
   })))
   const sheets: ExportSheet[] = [{
     name: 'Review',
     heading: `Weekly Performance Review · week ${pack?.week?.label || ''}`,
     columns: cols(['Scope', 'Item', 'Covers', 'Figure', 'Unit', 'State', 'Why not measured',
-                   'Read from']),
+                   'What it says', 'Read from']),
     rows: summary,
   }]
 
@@ -120,13 +128,16 @@ export function weeklyReviewSheets(pack: ReviewPack | null): ExportSheet[] {
       Carrier: c.label,
       'Sell within (days)': c.sell_within_days ?? '',
       'Window declared': c.declared ? 'yes' : 'no — the house default answered',
-      Devices: c.devices, 'Past the window': c.missed, Owed: c.owed,
+      Devices: c.devices, 'Within the window': Number(c.under45 || 0) + Number(c.warn || 0),
+      'Past the window': c.missed, Owed: c.owed,
+      'Carrier named by': rowText(c.attribution),
     }))
   })
   if (carriers.length) {
     sheets.push({ name: 'Inventory aging', heading: 'Inventory aging by carrier',
                   columns: cols(['Carrier', 'Sell within (days)', 'Window declared', 'Devices',
-                                 'Past the window', 'Owed']),
+                                 'Within the window', 'Past the window', 'Owed',
+                                 'Carrier named by']),
                   rows: carriers, pageBreakBefore: true })
   }
 

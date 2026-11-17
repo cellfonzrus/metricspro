@@ -277,3 +277,79 @@ def test_G2_an_admin_token_is_not_a_sweep_secret(wired, api_client):
 def test_G3_a_refused_standing_run_reads_nothing_and_writes_nothing(wired, api_client):
     api_client.post(RUN_DUE, params={"org_id_filter": ORG_B})
     assert wired.rows("commcalc.weekly_review_run") == []
+
+
+# ── §H the defects the owner reported on 2026-11-17 ───────────────────────────────────────────────
+#
+# Verbatim: *"The profit is not correct it should be same as in the finance dashboard , the inventory
+# aging is not correct it shows all devices out of the Qpay's day window , it shows no commission
+# paid for the month of October / The descriptive ppt is missing like one made before"*.
+#
+# Three of the four were reproduced live before anything was changed (October 2026): the review read
+# the Gross Profit report's `net_profit` and headlined +$340,102.98 where the P&L said -$26,543.19;
+# it composed the aging report's owed>0 subset, so every device read as past its carrier's window;
+# and every commission row was dropped because the pay engine keys a rep by their store's ADDRESS
+# while the scopes were built from declared CODES. The fourth is the deck.
+
+def test_H1_the_profit_item_quotes_the_statement_and_never_the_gross_profit_report():
+    """The one that matters most: two profit answers on one pack is the defect itself."""
+    import inspect
+    from app.modules.commcalc import router as _r
+    src = inspect.getsource(_r._weekly_review_facts)
+    assert "profit_by_store(" in src
+    assert "get_gp_report(" not in src
+
+
+def test_H2_the_aging_item_reads_the_whole_shelf_not_the_owed_subset():
+    import inspect
+    from app.modules.commcalc import router as _r
+    src = inspect.getsource(_r._weekly_review_facts)
+    aging = src.split('facts["aging"]', 1)[1].split("except", 1)[0]
+    assert "aging_by_carrier" in aging and "buckets" not in aging
+
+
+def test_H3_a_commission_row_keyed_by_address_still_reaches_the_pack(wired, api_client):
+    """The regression for "it shows no commission paid": a row whose store is spelled as an address
+    must be counted, not silently discarded for failing a code-shaped match."""
+    from app.modules.commcalc import weekly_review as W
+    scope = {"kind": "company", "key": "company", "label": "C",
+             "store_codes": ["B-1598"], "note": ""}
+    rows = [{"rep": "A", "store_code": "B-1598", "total_payout": 10.0},
+            {"rep": "B", "store": "1598 Mount Ephraim Ave", "total_payout": 5.0}]
+    item = W._commission(rows, scope)
+    assert item["state"] == "measured"
+    assert item["figure"] == 15.0, "a row the roster does not recognise is still the company's"
+    assert len(item["rows"]) == 2
+
+
+def test_H4_the_deck_is_served_and_carries_the_review_gate(wired, api_client):
+    deck = "/api/v1/commcalc/weekly-review/deck"
+    for who, expected in ((ADMIN, 200), (MANAGER, 403), (REP, 403)):
+        r = api_client.get(deck, params={"org_id": HOUSE, "as_of": AS_OF},
+                           headers=_as(wired, HOUSE, who))
+        assert r.status_code == expected, (who, r.status_code, r.text[:200])
+    assert api_client.get(deck, params={"org_id": HOUSE}).status_code in (401, 403)
+
+
+def test_H5_the_deck_says_what_each_figure_says_rather_than_showing_it_alone(wired, api_client):
+    """Owner: *"The descriptive ppt is missing like one made before"*. Every slide that carries a
+    figure carries the fold's sentences about it, and an unmeasured item's sentence is its reason."""
+    from app.modules.commcalc import weekly_review_deck as D
+    pack = _pack(api_client, wired, HOUSE)
+    payload = D.deck_payload(pack, company_label="A Tenant")
+    kinds = [s["kind"] for s in payload["slides"]]
+    assert kinds[0] == "title" and "agenda" in kinds
+    items = [s for s in payload["slides"] if s["kind"] == "item"]
+    assert len(items) >= len(pack["company"]["items"])
+    assert all(s["bullets"] for s in items), "a slide with no sentence is the defect reported"
+    for s, it in zip(items, pack["company"]["items"]):
+        if it["state"] != "measured":
+            assert it["reason"] in " ".join(s["bullets"])
+
+
+def test_H6_the_deck_renders_to_a_real_file(wired, api_client):
+    from app.modules.commcalc import weekly_review_deck as D
+    from app.modules.notify import render as R
+    data, filename, mime = R.render(D.deck_payload(_pack(api_client, wired, HOUSE)), "pptx")
+    assert filename.endswith(".pptx") and mime.endswith("presentationml.presentation")
+    assert data[:2] == b"PK" and len(data) > 10_000, "a .pptx is a zip container, never empty"

@@ -1,13 +1,13 @@
 'use client'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api, getActiveOrg } from '@/lib/client'
+import { api, apiDownload, getActiveOrg } from '@/lib/client'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import ReportExportBar from '@/components/ReportExportBar'
 import DrillDownPanel, { type DrillPanel } from '@/components/DrillDownPanel'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
 import {
-  WR_WINDOW_WORD, detailCount, reviewsOf, rowMoney, rowText, screenFigure, weeklyReviewSheets,
+  WR_WINDOW_WORD, reviewsOf, rowMoney, rowText, screenFigure, weeklyReviewSheets,
   type Review, type ReviewItem, type ReviewPack, type ReviewRow,
 } from '@/lib/weekly-review-export'
 
@@ -75,33 +75,20 @@ function ItemCard({ item, panel, refusal }: {
         </div>
       </div>
 
-      {/* NOT MEASURED IS SAID, NOT DRAWN AS A ZERO. */}
-      {!measured && (
-        <div style={{ marginTop: 8, fontSize: 13, color: 'var(--text2)' }}>
-          <b>Not measured.</b> {item.reason}
+      {/* WHAT THIS NUMBER SAYS — the server's own sentences (`weekly_review.narrative`), which the
+          exported file and the downloaded deck print word for word. An unmeasured item's sentence
+          is its REASON, so "not measured" is never drawn as a zero. The page used to compose its
+          own remarks here for three of the seven items; two surfaces describing one figure is the
+          duplicate defect in prose. */}
+      {!!(item.narrative || []).length && (
+        <div style={{ marginTop: 8, fontSize: 13, color: measured ? 'var(--text2)' : 'var(--text)' }}>
+          {(item.narrative || []).map((line, i) => (
+            <div key={i} style={{ marginTop: i ? 4 : 0 }}>{line}</div>
+          ))}
         </div>
       )}
 
       {measured && !!item.rows.length && <ItemRows item={item} />}
-
-      {measured && item.key === 'profit' && detailCount(item.detail, 'stores_losing_money') > 0 && (
-        <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text2)' }}>
-          {detailCount(item.detail, 'stores_losing_money')} store(s) lost money this period.
-        </div>
-      )}
-      {measured && item.key === 'accessory' && detailCount(item.detail, 'stores_without_a_target') > 0 && (
-        <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text2)' }}>
-          {detailCount(item.detail, 'stores_without_a_target')} store(s) have no accessory target saved, so they are
-          listed without a gap rather than scored against another store&rsquo;s goal.
-        </div>
-      )}
-      {measured && item.key === 'aging'
-        && detailCount(item.detail, 'carriers_with_no_declared_window') > 0 && (
-        <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text2)' }}>
-          {detailCount(item.detail, 'carriers_with_no_declared_window')} carrier(s) have not declared a selling
-          window, so the house default answered for them.
-        </div>
-      )}
 
       {/* WHERE THE FIGURE CAME FROM — the shared panel where the relation behind every row is
           certain, and the server's own refusal, naming the report that does answer, where it is
@@ -132,7 +119,8 @@ const ROW_VALUES: Record<string, (r: ReviewRow) => (string | number | boolean | 
   accessory: r => [r.store_code, r.target, r.achieved, r.gap],
   commission: r => [r.rep, r.store_code, r.payout],
   rep_watch: r => [r.rep, r.store_code, r.verdict],
-  aging: r => [r.label, r.sell_within_days, r.devices, r.missed, r.owed],
+  aging: r => [r.label, r.sell_within_days, r.devices,
+               Number(r.under45 || 0) + Number(r.warn || 0), r.missed, r.owed],
   payroll: r => [r.store_code, r.amount],
 }
 
@@ -147,7 +135,7 @@ function ItemRows({ item }: { item: ReviewItem }) {
     accessory: ['Store', 'Target', 'Achieved', 'Gap'],
     commission: ['Rep', 'Store', 'Payout'],
     rep_watch: ['Rep', 'Store', 'Verdict'],
-    aging: ['Carrier', 'Sell within', 'Devices', 'Past the window', 'Owed'],
+    aging: ['Carrier', 'Sell within', 'Devices', 'Within the window', 'Past the window', 'Owed'],
     payroll: ['Store', 'Payroll'],
   }
   const cells = (r: ReviewRow): string[] => {
@@ -207,6 +195,7 @@ export default function WeeklyReviewPage() {
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
+  const [decking, setDecking] = useState(false)
   const [scope, setScope] = useState(0)
   const [refresh, setRefresh] = useState(0)   // the Refresh button, as a dependency the effect can see
 
@@ -235,6 +224,21 @@ export default function WeeklyReviewPage() {
       })
     return () => { live = false }
   }, [asOf, marketKey, refresh])
+
+  // THE DECK IS A FILE, so it is fetched as bytes and handed to the browser rather than rendered
+  // here. The slides are folded SERVER-side from the same pack this page shows
+  // (`weekly_review_deck.deck_payload`), so the deck and the screen can never tell two stories —
+  // owner 2026-11-17: *"The descriptive ppt is missing like one made before"*.
+  const downloadDeck = useCallback(() => {
+    setDecking(true); setErr('')
+    const q = new URLSearchParams({ as_of: asOf })
+    for (const m of marketKey ? marketKey.split(',') : []) q.append('markets', m)
+    // `apiDownload` is the platform's one door onto a server-rendered file: the same auth, the
+    // same org scoping and the same dead-session handling as every other fetch on the page.
+    apiDownload(`/api/v1/commcalc/weekly-review/deck?${q.toString()}${orgParam()}`)
+      .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setDecking(false))
+  }, [asOf, marketKey])
 
   // The on-demand run is an EVENT, not an effect: it may set state directly.
   const generate = useCallback(() => {
@@ -278,6 +282,11 @@ export default function WeeklyReviewPage() {
               {generating ? 'Generating…' : '▶ Generate now'}
             </button>
             {pack && !pack.error && (
+              <button className="btn btn-secondary" onClick={downloadDeck} disabled={decking}>
+                {decking ? 'Building…' : '⬇ Download deck'}
+              </button>
+            )}
+            {pack && !pack.error && (
               <ReportExportBar
                 title={`Weekly Performance Review — week ${pack.week?.label || ''}`}
                 subtitle={'Every item says whether it was measured and what it covers. An item '
@@ -316,11 +325,20 @@ export default function WeeklyReviewPage() {
 
       {current && (
         <>
-          {current.scope.note && (
+          {/* THE PACK'S OPENING, in the server's words — the same lines the deck's title slide
+              carries. `scope.note` is already one of them, so it is not printed twice. */}
+          {!!(current.headline || []).length ? (
+            <div className="card" style={{ ...card, marginBottom: 12 }}>
+              {(current.headline || []).map((line, i) => (
+                <div key={i} style={{ fontSize: 13, color: i ? 'var(--text2)' : 'var(--text)',
+                                      marginTop: i ? 4 : 0 }}>{line}</div>
+              ))}
+            </div>
+          ) : current.scope.note ? (
             <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 10 }}>
               ℹ︎ {current.scope.note}
             </div>
-          )}
+          ) : null}
           {current.items.map(i => (
             <ItemCard key={i.key} item={i}
                       panel={(current.drilldown || {})[i.key]}
