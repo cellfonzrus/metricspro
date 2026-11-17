@@ -51975,15 +51975,14 @@ def _require_weekly_review(authorization, org_id):
 
 
 def _weekly_review_org_label(client, org_id):
-    """The tenant's own name, for the deck's title slide. `storeops.tenants.name` is where the
-    platform keeps it — the same row the standing run enumerates tenants from. Empty on any failure:
-    a deck titled by its week alone is fine, a deck titled with another tenant's name is not."""
-    try:
-        rows = (client.schema("storeops").table("tenants").select("name")
-                .eq("org_id", org_id).limit(1).execute().data) or []
-        return str((rows[0] or {}).get("name") or "").strip() if rows else ""
-    except Exception:
-        return ""
+    """The tenant's own name, for the deck's title slide — DEREFERENCED from the one home
+    (`core/tenant_identity`, index §POS-02), never re-read here. That module already answers
+    "what is this tenant called", already org-scopes the read and already degrades to "" rather
+    than raising: a deck titled by its week alone is fine, a deck titled with another tenant's
+    name is not. A second `select("name")` in this file would be the fifth spelling the one home
+    was written to end, and §E6 of harness_pos_receipt_render fails the build for it."""
+    from app.modules.core import tenant_identity as _tid
+    return _tid.display_name(client, org_id)
 
 
 def _weekly_review_period(day):
