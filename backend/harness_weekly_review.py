@@ -445,6 +445,69 @@ check("k6. an aging answer with no per-carrier fold is NOT MEASURED, never an em
       W._aging({"devices": 5}, _COMPANY)["state"] == W.NOT_MEASURED
       and W._aging({"devices": 5}, _COMPANY)["figure"] is None)
 
+print("\n== L. the deck is DESIGNED, and the design lives in one block (owner 2026-11-17) ==")
+# Owner, on the first in-app deck: *"this is not the same smart ppt as the firdst one"*. The look
+# was the gap, not the words — so the look is now declared once and the drawing code reads it.
+_RENDER_BODY = code_of(RENDER)
+_DECK_BODY = code_of(DECK)
+check("l1. the renderer declares the deck's look as named constants — a colour, a face or a tone "
+      "spelled inside the drawing code is a look that cannot be changed in one place",
+      all(k in _RENDER_BODY for k in ("DECK_TITLE_FONT", "DECK_BODY_FONT", "DECK_TONES",
+                                      "DECK_CARD", "DECK_BAND", "DECK_RULE")),
+      "the DECK_* block is the one home for the deck's look")
+_DRAW = _RENDER_BODY.split("def build_pptx", 1)[-1]
+check("l2. the drawing code spells no colour of its own",
+      not re.search(r"RGBColor\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)",
+                    _DRAW.replace("RGBColor(40, 40, 40)", "")),
+      re.findall(r"RGBColor\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)", _DRAW))
+check("l3. a stat card and a chart are drawn by the renderer, never folded into a shape by the "
+      "deck module — j7's rule, now that the deck has furniture",
+      "_pptx_cards" in _RENDER_BODY and "_pptx_chart" in _RENDER_BODY
+      and "add_shape" not in _DECK_BODY and "add_chart" not in _DECK_BODY)
+check("l4. the deck module hands over cards and a chart as DATA",
+      "def item_cards" in _DECK_BODY and "def item_chart" in _DECK_BODY
+      and '"cards"' in _DECK_BODY and '"chart"' in _DECK_BODY)
+check("l5. a card never re-spells the headline figure — it is the slide's title already, and a "
+      "number printed twice invites the question of which one is the answer",
+      "figure_words" not in _DECK_BODY.split("def item_cards", 1)[1].split("def ", 1)[0])
+check("l6. the chart plots the SAME rows the table holds, in the same worst-first order",
+      "item_rows(item, limit)" in _DECK_BODY.split("def item_chart", 1)[1].split("def ", 1)[0])
+_CH = DK.item_chart({"key": "profit", "label": "P",
+                     "rows": [{"address": "A", "net_profit": -5},
+                              {"address": "B", "net_profit": -9},
+                              {"address": "C", "net_profit": 3}]})
+check("l7. a chart's bars are worst first and carry the row's own numbers, unformatted",
+      _CH["series"][0]["values"] == [-9.0, -5.0, 3.0] and _CH["categories"] == ["B", "A", "C"], _CH)
+check("l8. too few bars to be worth drawing shows the table instead — one bar says less than the "
+      "row it came from",
+      DK.item_chart({"key": "profit", "rows": [{"address": "A", "net_profit": -5}]}) is None)
+check("l9. an item that declares no chart is unchanged",
+      DK.item_chart({"key": "rep_watch", "rows": [{"rep": "r"}]}) is None)
+_cards, _tone = DK.item_cards({"key": "profit", "label": "Profit", "state": W.MEASURED,
+                               "figure": -10.0, "unit": "money", "window": "period",
+                               "rows": [{"a": 1}, {"a": 2}], "source": "GET /x"})
+check("l10. a card says what the figure was measured over, in the window's own word",
+      any(c["value"] == "month to date" for c in _cards), _cards)
+check("l11. a loss reads as a loss — the fold names the MEANING and the renderer owns the colour",
+      _tone == "bad"
+      and DK.item_cards({"key": "profit", "state": W.MEASURED, "figure": 10.0, "unit": "money",
+                         "window": "period", "rows": []})[1] == "good"
+      and "DECK_RED" not in _DECK_BODY and "RGBColor" not in _DECK_BODY)
+check("l12. an unmeasured item carries no cards and no chart",
+      DK.item_cards({"key": "profit", "state": W.NOT_MEASURED, "figure": None})[0] == []
+      and DK._item_slide({"key": "profit", "state": W.NOT_MEASURED,
+                          "figure": None, "narrative": ["x"]})["chart"] is None)
+check("l13. the other two formats off the same payload ignore the new keys",
+      "sheets" in code_of(RENDER).split("def build_xlsx", 1)[1].split("def ", 1)[0]
+      and "cards" not in code_of(RENDER).split("def build_xlsx", 1)[1].split("def ", 1)[0])
+# Negative controls: each scan above is shown to be capable of failing.
+check("l14. control: the colour scan matches a literal colour",
+      bool(re.search(r"RGBColor\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)", "RGBColor(1, 2, 3)")))
+check("l15. control: the chart fold refuses a row whose value is not a number",
+      DK.item_chart({"key": "profit", "rows": [{"address": "A", "net_profit": "n/a"},
+                                               {"address": "B", "net_profit": "n/a"},
+                                               {"address": "C", "net_profit": "n/a"}]}) is None)
+
 print("\n" + "=" * 60)
 print("%d passed, %d failed" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
