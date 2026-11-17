@@ -1,6 +1,6 @@
 'use client'
 import { Fragment, useEffect, useState } from 'react'
-import { api } from '@/lib/client'
+import { api, apiUpload, ORG_ID } from '@/lib/client'
 import { useConnectors } from '@/lib/connectors'
 
 // WHICH REPORTS THIS LOGIN PULLS, AND HOW — edited here, stored as config (index §COMMCALC-48).
@@ -29,14 +29,32 @@ type Row = {
   // "Download" or "CSV". A portal that spells its button anything else imported nothing while the
   // declaration looked complete.
   report_url?: string; run_selector?: string; export_selector?: string
+  // HOW TO READ THE FILE once it is downloaded (§COMMCALC-77). Three facts about a tenant's own
+  // export that nothing could declare, so no export could answer a declared category: which COLUMN
+  // is which fact when two could be, whether a line states its own quantity or IS one, and which
+  // SIGN is a sale. Every one is blank by default and blank means "nothing declared" — the parser
+  // then reads exactly as it did before any of this existed.
+  column_bindings?: Record<string, string>; unit_basis?: string; amount_sign?: string
   per_day?: boolean; problems?: string[]
 }
 type Loaded = {
   source_id: string; label: string; processor: string; portal_url: string
   reports: Row[]; param_kinds: string[]; date_tokens: string[]; exports: string[]
   control_fields?: string[]
+  // The vocabularies the BACKEND serves, never a list typed here — a second list is how a screen
+  // comes to offer a value the parser refuses (§COMMCALC-36's lesson, and RULE TWO).
+  bindable_fields?: string[]
+  unit_bases?: { value: string; label: string }[]
+  amount_signs?: { value: string; label: string }[]
 }
 type Saved = { reports: Row[]; count: number }
+/** What delivering a file answers with. `delivered` is true only when rows actually LANDED — an
+ *  empty parse is never a green tick, which is the same rule the scheduled pull reports by. */
+type Landed = {
+  report?: string; rows_parsed?: number; rows_ingested?: number; delivered?: boolean
+  warnings?: string[]; unresolved?: { line?: string; store_label?: string; why?: string }[]
+  unresolved_count?: number; error?: string
+}
 /** What the §COMMCALC-39 capture answers with.
  *
  *  THE ROWS COME BACK ALREADY MERGED. This used to be a list of suggestions that this component
@@ -73,6 +91,19 @@ const CONTROL_WORDS: [string, string][] = [
   ['export_selector', 'Export control'],
 ]
 
+/** The facts a binding can name, in the operator's words. The FIELD NAMES come from the backend
+ *  (`bindable_fields` on GET /reports) — these are only the words beside each one, and a field the
+ *  backend serves without a word here still renders, under its own name, rather than vanishing. */
+const BIND_WORDS: Record<string, string> = {
+  business_date: 'the day',
+  store_code: 'the store code',
+  store_label: 'the store name',
+  employee: 'who did it',
+  line_label: 'what was sold',
+  units: 'how many',
+  amount: 'the money',
+}
+
 const BOX: React.CSSProperties = {
   width: '100%', padding: '4px 6px', fontSize: 12, border: '1px solid var(--border)',
   borderRadius: 6, background: 'var(--surface)', color: 'var(--text)',
@@ -91,6 +122,8 @@ export default function PortalReportEditor(
   const [open, setOpen] = useState<string | null>(null)   // the key whose filters are expanded
   // What each report page said on the last capture — shown rather than summed away (§COMMCALC-44).
   const [capture, setCapture] = useState<CaptureRow[] | null>(null)
+  // What delivering a file answered, per report key (§COMMCALC-77).
+  const [landed, setLanded] = useState<Record<string, Landed>>({})
 
   // Every state write happens in the fetch's own CALLBACK, never in the effect body: a setState run
   // synchronously inside an effect cascades a render for nothing. `alive` drops a reply that arrives
@@ -137,6 +170,24 @@ export default function PortalReportEditor(
       setNote(`Reached ${reached} of ${pages} report page${pages === 1 ? '' : 's'} and added `
         + `${added} filter${added === 1 ? '' : 's'}. ${r.note || ''}`.trim())
     } catch (e: unknown) { setErr(why(e)) } finally { setBusy(null) }
+  }
+
+  // DELIVER THE FILE INSTEAD OF PULLING IT (§COMMCALC-77, the §COMMCALC-75 precedent). The same
+  // ingest the scheduled pull uses, so a delivered file and a pulled one are indistinguishable
+  // downstream and a re-upload restates a day rather than duplicating it. The declarations above are
+  // what tell it how to READ the file, so this posts nothing that Save has not already stored.
+  async function deliver(key: string, file: File) {
+    setBusy('deliver:' + key); setErr(null); setNote(null)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      form.append('source_id', sourceId)
+      form.append('report_key', key)
+      const r = await apiUpload(`/api/v1/commcalc/pos-report/upload?org_id=${ORG_ID}`, form) as Landed
+      setLanded(m => ({ ...m, [key]: r }))
+    } catch (e: unknown) {
+      setLanded(m => ({ ...m, [key]: { delivered: false, error: why(e) } }))
+    } finally { setBusy(null) }
   }
 
   // the registry's own name for this connector — blank until the registry has loaded, and blank for a
@@ -303,6 +354,111 @@ export default function PortalReportEditor(
                                      title="The control that downloads the file. Blank means the pull hunts for a button saying Export, Download or CSV — if the portal spells it differently, nothing is imported."
                                      onChange={e => patch(i, { export_selector: e.target.value })} />
                             </div>
+
+                            {/* HOW TO READ THE FILE (§COMMCALC-77). A synonym cannot answer "WHICH of
+                                my two columns is the category" — only this tenant can — and nothing
+                                could say whether a line states its own quantity or IS one, or which
+                                SIGN is a sale. Every control here is BLANK by default, and blank
+                                means nothing declared: the parser then reads exactly as it did
+                                before any of this existed, so no live tenant's figures move. The
+                                choices come from the backend (`bindable_fields`, `unit_bases`,
+                                `amount_signs`), never from a list typed on this screen — a screen
+                                offering a value the parser refuses is the second-list defect. */}
+                            <div style={{ borderTop: '1px solid var(--border)', marginTop: 10, paddingTop: 8 }}>
+                              <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 6 }}>
+                                How to read the file this report downloads. Leave anything blank that
+                                your export does not need — blank means nothing declared, and the file
+                                is read the house way.
+                              </div>
+                              <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+                                {(meta?.bindable_fields || []).map(f => (
+                                  <label key={f} style={{ fontSize: 11, color: 'var(--text3)', flex: '1 1 120px' }}>
+                                    {BIND_WORDS[f] || f}
+                                    <input style={{ ...BOX, marginTop: 2 }}
+                                           value={(r.column_bindings || {})[f] || ''}
+                                           placeholder="column heading"
+                                           title={'Type the heading of the column in YOUR export that holds ' + (BIND_WORDS[f] || f) + '. A heading that names no column of the file identifies nothing — the import says so rather than falling back to a guess.'}
+                                           onChange={e => {
+                                             const next: Record<string, string> = { ...(r.column_bindings || {}) }
+                                             if (e.target.value) next[f] = e.target.value
+                                             else delete next[f]
+                                             patch(i, { column_bindings: next })
+                                           }} />
+                                  </label>
+                                ))}
+                              </div>
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                <label style={{ fontSize: 11, color: 'var(--text3)', flex: '1 1 300px' }}>
+                                  How many a line did
+                                  <select style={{ ...BOX, marginTop: 2 }} value={r.unit_basis || ''}
+                                          onChange={e => patch(i, { unit_basis: e.target.value })}>
+                                    <option value="">Nothing declared — read the quantity column</option>
+                                    {(meta?.unit_bases || []).map(u => (
+                                      <option key={u.value} value={u.value}>{u.label}</option>
+                                    ))}
+                                  </select>
+                                </label>
+                                <label style={{ fontSize: 11, color: 'var(--text3)', flex: '1 1 300px' }}>
+                                  Which sign is a sale
+                                  <select style={{ ...BOX, marginTop: 2 }} value={r.amount_sign || ''}
+                                          onChange={e => patch(i, { amount_sign: e.target.value })}>
+                                    <option value="">Nothing declared — the amount as written</option>
+                                    {(meta?.amount_signs || []).map(a => (
+                                      <option key={a.value} value={a.value}>{a.label}</option>
+                                    ))}
+                                  </select>
+                                </label>
+                              </div>
+                            </div>
+
+                            {/* DELIVER THE FILE INSTEAD OF PULLING IT (§COMMCALC-77, precedent
+                                §COMMCALC-75). It lands through the scheduled pull's OWN ingest, so a
+                                delivered file and a pulled one are indistinguishable afterwards and
+                                re-uploading a month restates those days rather than doubling them.
+                                It reads the declarations as SAVED, not as typed, which is why the
+                                line below says so. */}
+                            <div style={{ borderTop: '1px solid var(--border)', marginTop: 10, paddingTop: 8 }}>
+                              <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 6 }}>
+                                Or send the file yourself, if nobody is pulling it. It is read with the
+                                declarations above <strong>as saved</strong> — press Save first if you
+                                have just changed them. Sending the same month again restates those
+                                days; it does not add them twice.
+                              </div>
+                              <input type="file" disabled={!!busy} style={{ fontSize: 12 }}
+                                     accept=".csv,.tsv,.txt,.xlsx,.xls"
+                                     onChange={e => {
+                                       const f = e.target.files?.[0]
+                                       e.target.value = ''
+                                       if (f) deliver(r.key, f)
+                                     }} />
+                              {busy === 'deliver:' + r.key && (
+                                <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 8 }}>Reading the file…</span>
+                              )}
+                              {landed[r.key] && (
+                                <div style={{ marginTop: 6, fontSize: 11, borderRadius: 6, padding: '6px 8px',
+                                  background: landed[r.key].delivered ? 'var(--c-bg-f0fdf4)' : 'var(--c-bg-fef2f2)',
+                                  color: landed[r.key].delivered ? 'var(--c-fg-166534)' : 'var(--c-fg-991b1b)' }}>
+                                  {/* An empty parse is NEVER a green tick: a file that read cleanly and
+                                      landed nothing is the silent-zero this platform keeps catching. */}
+                                  {landed[r.key].error
+                                    ? landed[r.key].error
+                                    : `Read ${landed[r.key].rows_parsed ?? 0} line${landed[r.key].rows_parsed === 1 ? '' : 's'}`
+                                      + ` and landed ${landed[r.key].rows_ingested ?? 0}.`
+                                      + (landed[r.key].unresolved_count
+                                        ? ` ${landed[r.key].unresolved_count} line${landed[r.key].unresolved_count === 1 ? '' : 's'} matched no declared category and were left out.`
+                                        : '')}
+                                  {(landed[r.key].warnings || []).map((w, n) => (
+                                    <div key={n} style={{ marginTop: 4 }}>{w}</div>
+                                  ))}
+                                  {(landed[r.key].unresolved || []).slice(0, 8).map((u, n) => (
+                                    <div key={'u' + n} style={{ marginTop: 2, fontFamily: 'monospace' }}>
+                                      {[u.line, u.store_label, u.why].filter(Boolean).join(' · ')}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+
                             {(r.params || []).map((p, j) => (
                               <div key={j} style={{ display: 'flex', gap: 6, marginBottom: 5 }}>
                                 <input style={{ ...BOX, flex: 2 }} value={p.label} placeholder="What it is (From date)"

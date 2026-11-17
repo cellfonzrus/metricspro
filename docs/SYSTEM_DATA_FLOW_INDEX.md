@@ -50075,6 +50075,25 @@ Lock `harness_feed_declared_metrics_lock.py` (78 checks, armed controls) fails t
 stops dereferencing any of the four homes, if a second copy appears, or if the migration loses its
 grant, its REVERT or its CHECK.
 
+Its frontend twin `frontend/prove_declared_report_reading.mjs` (33 checks, armed) closes the other
+half. A parser that refuses an unknown unit basis or sign convention is only half a design fix: a
+SCREEN carrying its own list of choices offers the operator a value the parser will refuse, and the
+operator reads that refusal as a defect in their own file. So the three reading vocabularies are
+served from `GET /commcalc/data-sources/{id}/reports` (`bindable_fields`, `unit_bases`,
+`amount_signs`, each dereferenced from `report_declaration`, which dereferences `pos_report_feed`),
+and the proof fails the build if the editor spells a basis or a sign of its own, if a second place
+sends a file, if the org scope leaves the upload URL, if the green tick is computed on the screen
+rather than read off the backend's `delivered`, or if a tenant's own words appear in the component.
+
+### COMMCALC-77.8 WHERE THE FILE IS SENT FROM
+
+The declaration editor, **📄 Reports** on each login (§COMMCALC-48) — not a second screen. "How to
+read this file" and "here is the file" are the same question about the same report, and the
+calibration they both need is already declared there; a separate upload page would have had to ask
+for the bindings again. The control reads the declarations **as saved**, which the screen says in
+words, and shows what landed, what it warned about and what matched no declared category. An empty
+parse is never a green tick — the same rule the scheduled pull already reports by (§COMMCALC-07).
+
 ### §16–18 CROSS-REFERENCES
 
 Depends on: §COMMCALC-07 (the POS-report feed and its table), §COMMCALC-36 (the one column
@@ -50098,6 +50117,8 @@ Files: `backend/app/modules/commcalc/metric_authority.py` (**new**),
 `backend/app/modules/commcalc/router.py`,
 `backend/harness_feed_declared_metrics_lock.py` (**new**),
 `backend/harness_db_resilience.py` (route pin 1849 -> 1850, justified in place),
+`frontend/src/components/commcalc/PortalReportEditor.tsx`,
+`frontend/prove_declared_report_reading.mjs` (**new**),
 `backend/tests/unit/test_feed_declared_metrics.py` (**new**),
 `backend/tests/integration/test_feed_declared_metrics_endpoint.py` (**new**),
 `database/migrations/1124_declared_metric_authority.sql` (**new**),

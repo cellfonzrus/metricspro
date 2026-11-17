@@ -43861,7 +43861,16 @@ def data_source_reports(sid: str, org_id: str = ORG_ID):
             "reports": rd.rows(src), "param_kinds": list(rd.PARAM_KINDS),
             "date_tokens": list(rd.DATE_TOKENS), "exports": list(rd.EXPORTS),
             # The controls the pull presses, DECLARED here rather than listed again in the browser.
-            "control_fields": list(rd.CONTROL_FIELDS)}
+            "control_fields": list(rd.CONTROL_FIELDS),
+            # HOW TO READ A DELIVERED FILE (§COMMCALC-77). The three vocabularies are served from
+            # here so the editor never types its own copy: a screen offering a value the parser
+            # REFUSES is the second-list defect, and `unit_basis_named`/`amount_sign_named` refuse
+            # rather than guess, so a typed-in list would show a choice that cannot be saved.
+            "bindable_fields": list(rd.BINDABLE_FIELDS),
+            "unit_bases": [{"value": v, "label": rd.UNIT_BASIS_LABELS.get(v, v)}
+                           for v in rd.UNIT_BASES],
+            "amount_signs": [{"value": v, "label": rd.AMOUNT_SIGN_LABELS.get(v, v)}
+                             for v in rd.AMOUNT_SIGNS]}
 
 
 @router.put("/data-sources/{sid}/reports")

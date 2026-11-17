@@ -1114,6 +1114,10 @@ on:
       - "backend/harness_portal_report_pull.py"
       - "backend/harness_pos_report_feed.py"
       - "backend/harness_feed_declared_metrics_lock.py"
+      # index §COMMCALC-77 — the frontend twin: the screen reads the three reading vocabularies
+      # off the endpoint, so it cannot offer a value the parser refuses
+      - "frontend/prove_declared_report_reading.mjs"
+      - "frontend/src/components/commcalc/PortalReportEditor.tsx"
       - "backend/app/modules/commcalc/portal_report_pull.py"
       - "backend/app/modules/commcalc/pos_report_feed.py"
       - "backend/app/modules/commcalc/pos_report_sweep.py"
@@ -2425,6 +2429,22 @@ jobs:
       - name: Run the dark-theme lock (generator = stylesheet; every token in both themes; WCAG AA; the pin only shrinks)
         working-directory: frontend
         run: node prove_theme_tokens.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE DECLARED-REPORT-READING PROOF (index §COMMCALC-77) is the frontend twin of
+  # harness_feed_declared_metrics_lock.py. The backend lock proves the parser REFUSES a unit basis or
+  # a sign convention it does not know; this proves the screen never offers one, because it reads all
+  # three vocabularies off GET /data-sources/{id}/reports instead of carrying its own list. It reads
+  # the real component and the real endpoint as text under Node 22 — no npm install, no React.
+  declared-report-reading-proof:
+    name: Upload-screen lock (the screen asks the backend what the choices are)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Run the declared-report-reading proof (three vocabularies dereferenced, one upload door, org-scoped, an empty parse is no green tick, and no tenant's words on the screen - index COMMCALC-77)
+        working-directory: frontend
+        run: node prove_declared_report_reading.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE NAV DEEP-LINK PROOF (index §19.40) drives the REAL rbac.ts and urlTab.ts under Node 22 (type stripping; neither
   # imports anything, so no npm install): a deep-link menu entry (/hr?tab=employees) is visible exactly when its page is,
