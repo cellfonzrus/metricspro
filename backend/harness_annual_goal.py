@@ -18,6 +18,7 @@ fails the build if one appears.
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
 
+import harnesslib as _hl
 from app.modules.commcalc import annual_goal as ag
 from app.modules.commcalc import targets_engine as te
 
@@ -42,25 +43,15 @@ def _code_only(path):
     """The file's CODE, with comments and docstrings thrown away — so a tenant's word may be QUOTED
     in prose (the owner's own ask is quoted at the top of the engine, and should be) while remaining
     forbidden in anything that executes, and so a DEREFERENCE check cannot be satisfied by a mention
-    in a docstring. Tokens are joined by single spaces so a check can name a call the way the parser
-    sees it (`_targets_engine . rate_to_close`) rather than guessing at the author's whitespace.
+    in a docstring.
 
-    THE DOCSTRINGS ARE DROPPED BY THE ONE HOME, `harnesslib.py_code_only`, and never by a private
-    walk of STRING tokens here. A harness that classifies STRING tokens itself is blind to the 3.12
-    f-string shape (an f-string arrives as FSTRING_START / FSTRING_MIDDLE / FSTRING_END, not as one
-    STRING), and `harness_py_string_reader_lock` §C3 fails the build for it — correctly, because a
-    guard that cannot see half the strings in a file reports absence as a fact. Comments are already
-    gone for any that start a line; the COMMENT skip below catches the trailing ones.
-    """
-    import io, tokenize
-    import harnesslib as _hl
-    code = _hl.py_code_only(io.open(path, encoding="utf-8").read())
-    out = []
-    for tok in tokenize.generate_tokens(io.StringIO(code).readline):
-        if tok.type == tokenize.COMMENT:
-            continue
-        out.append(tok.string)
-    return " ".join(out).lower()
+    DEREFERENCED, never hand-rolled: `harnesslib.py_code_only` is the ONE home for "this file with
+    its prose removed". The first version of this helper tokenised the source itself and inspected
+    `tokenize.STRING` to find docstrings — which `harness_py_string_reader_lock` §C3 fails the build
+    on, and rightly: PEP 701 stopped an f-string being one STRING token on 3.12+, so a hand-rolled
+    reader behaves differently on CI's pinned 3.11 than in a container running 3.13. That is exactly
+    how this check passed locally and went red in CI (index §CORE-32)."""
+    return _hl.py_code_only(open(path).read()).lower()
 
 
 

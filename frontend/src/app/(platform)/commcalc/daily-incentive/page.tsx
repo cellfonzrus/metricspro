@@ -2,9 +2,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api, fmt } from '@/lib/client'
+import DateField from '@/components/DateField'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
-import DateField from '@/components/DateField'
 
 // WHAT A DAY PAYS, AND WHY (§COMMCALC-78). Owner 2026-11-17: *"Build that screen"*.
 //
@@ -143,8 +143,11 @@ export default function DailyIncentivePage() {
 
       <div className="card" style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
         <label style={{ fontSize: 11, color: 'var(--text3)' }}>Day
+          {/* ONE HOME DECIDES HOW A DATE IS PICKED (§CORE-23). A bare `type="date"` opens its
+              calendar only on the tiny icon, which the owner asked be fixed everywhere, and
+              `prove_date_field.mjs` fails the build on a new one — it caught this page. */}
           <DateField style={{ ...sel, display: 'block', marginTop: 2 }}
-                     value={date} onChange={e => setDate(e.target.value)} />
+                 value={date} onChange={e => setDate(e.target.value)} />
         </label>
         <label style={{ fontSize: 11, color: 'var(--text3)' }}>Store
           <select style={{ ...sel, display: 'block', marginTop: 2, minWidth: 190 }}

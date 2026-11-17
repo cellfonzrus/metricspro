@@ -160,8 +160,24 @@ ok("def declared(" not in AUTH_X and "def by_employee(" not in AUTH_X,
 print("\n§G — a payout that can measure nothing says so, and still moves no money")
 ok(di.payout_measurable("revenue", [])[0] is True,
    "the whole declared day is a real number — that is not the unmeasurable case")
-ok(di.payout_measurable("amount", [])[0] is False and di.payout_measurable("amount", [])[1],
-   "dollars with no category named cannot be measured, and the reason is in words")
+# NARROWED 2026-11-17 (§COMMCALC-78, owner ruling). This asserted that DOLLARS with no category
+# named cannot be measured. The owner overruled the premise — of the $1,300 a day a pool is paid on:
+# *"that is the total revenue for the day"* — so `payout_measure_basis` resolves a money payout
+# naming nothing to the day's REVENUE, which is a real number. The unmeasurable case is `units`:
+# dollars are dollars and the day has a revenue figure to fall back to, while there is no "day's
+# units" to count, so a unit payout naming nothing stays unmeasurable and still says why.
+#
+# THIS LOCK AND `tests/unit/test_feed_declared_metrics.py` ASSERT THE SAME FACT, and #711 updated
+# only the unit test — two homes for one assertion, and I fixed one. Both halves are pinned in both
+# places now.
+ok(di.payout_measurable("units", [])[0] is False and di.payout_measurable("units", [])[1],
+   "a COUNT with no category named cannot be measured, and the reason is in words")
+ok(di.payout_measurable("amount", [])[0] is True,
+   "but DOLLARS with no category named measure the whole day's revenue (the owner's own rule)")
+ok(di.payout_measure_basis("amount", []) == "revenue",
+   "...resolved by the one home, so the verdict and the measurement cannot disagree")
+ok(di.payout_measure_basis("units", []) == "units",
+   "...which does NOT invent a dollar figure for a payout that asked for a count")
 ok(di.payout_measurable("units", ["k"])[0] is True, "a named category is measurable")
 ok("payout_measurable" in _executable(_src("app/modules/commcalc/daily_incentive.py")),
    "the engine stamps it on its own why-trail")
