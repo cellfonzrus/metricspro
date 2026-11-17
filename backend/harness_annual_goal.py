@@ -42,19 +42,24 @@ def _code_only(path):
     """The file's CODE, with comments and docstrings thrown away — so a tenant's word may be QUOTED
     in prose (the owner's own ask is quoted at the top of the engine, and should be) while remaining
     forbidden in anything that executes, and so a DEREFERENCE check cannot be satisfied by a mention
-    in a docstring. Same technique as `harness_daily_incentive._code_only`; importing that module is
-    not possible because a harness exits on import."""
+    in a docstring. Tokens are joined by single spaces so a check can name a call the way the parser
+    sees it (`_targets_engine . rate_to_close`) rather than guessing at the author's whitespace.
+
+    THE DOCSTRINGS ARE DROPPED BY THE ONE HOME, `harnesslib.py_code_only`, and never by a private
+    walk of STRING tokens here. A harness that classifies STRING tokens itself is blind to the 3.12
+    f-string shape (an f-string arrives as FSTRING_START / FSTRING_MIDDLE / FSTRING_END, not as one
+    STRING), and `harness_py_string_reader_lock` §C3 fails the build for it — correctly, because a
+    guard that cannot see half the strings in a file reports absence as a fact. Comments are already
+    gone for any that start a line; the COMMENT skip below catches the trailing ones.
+    """
     import io, tokenize
-    out, prev = [], tokenize.INDENT
-    for tok in tokenize.generate_tokens(io.StringIO(open(path).read()).readline):
+    import harnesslib as _hl
+    code = _hl.py_code_only(io.open(path, encoding="utf-8").read())
+    out = []
+    for tok in tokenize.generate_tokens(io.StringIO(code).readline):
         if tok.type == tokenize.COMMENT:
             continue
-        if tok.type == tokenize.STRING and prev in (tokenize.INDENT, tokenize.NEWLINE,
-                                                    tokenize.NL, tokenize.DEDENT):
-            continue
         out.append(tok.string)
-        if tok.type not in (tokenize.NL, tokenize.NEWLINE):
-            prev = tok.type
     return " ".join(out).lower()
 
 
