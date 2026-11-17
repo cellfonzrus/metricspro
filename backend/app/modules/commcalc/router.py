@@ -25,7 +25,7 @@ from app.modules.commcalc import prospect_feed_tally as _pft   # 2026-10-16 — 
 # per-month row tally, in the one shape both its readings produce (index §COMMCALC-TALLY)
 from app.modules.core import feed_read as _feed_read   # 2026-10-06 — THE complete paged feed read; no literal row ceiling (index §19.48)
 from app.modules.core import relation_home as _relation_home   # 2026-10-31 — THE one home of which schema holds a relation (index §CORE-30)
-from app.modules.commcalc import pay_data_quality as _pdq   # 2026-10-06 — THE pay-feed balance: placed, or reported unclassified (index §19.48)
+from app.modules.commcalc import pay_data_quality as _pdq   # 2026-10-06 — THE pay-feed balance: placed, or reported unplaced (index §19.48)
 from app.modules.commcalc import device_reimb_recon as _drr   # 2026-10-08 — ePay-paid vs distributor-claimed device reimbursement (index §19.52; pure)
 from app.modules.commcalc import carrier_device_money as _cdm   # THE device-financing dollars per device (index §COMMCALC-44)
 from app.modules.commcalc import report_status   # 2026-11-10 — THE per-report sweep verdict writer (index §COMMCALC-68)
@@ -7792,7 +7792,7 @@ def _intake_tender_columns_block(client, org_id, headers, records, mapped_header
     proposal = _invt.suggest_columns(headers, records, mapped_headers, resolve, keyed_of, tax_header=tax_header, earlier=earlier)
     applied = _invt.apply_decisions(proposal, decisions if isinstance(decisions, dict) else {}, _cr.TENDER_CLASSES)
     return {"step": _intake.STEP_TENDER_COLUMNS, "columns": applied["columns"], "confirmed": applied["columns"],
-            "tenders": applied["tenders"], "taxes": applied["taxes"], "unclassified": proposal["unclassified"],
+            "tenders": applied["tenders"], "taxes": applied["taxes"], "unplaced": proposal["unplaced"],
             "errors": applied["errors"], "scanned": proposal["scanned"], "tax_header": tax_header,
             "vocab": _intake_tender_vocab(), "roles": list(_invt.ROLES),
             "earlier_choices": len(earlier), "decisions": decisions if isinstance(decisions, dict) else {}}
@@ -11834,7 +11834,7 @@ def _device_reimb_recon_inputs(client, org_id: str, period: str):
     # DISCARD, not a set difference folded into the union: `|` binds looser than `-`, so writing this
     # as one expression subtracts {None} from the SECOND set only and leaves a None in the result —
     # which `sorted` then raises on. A row with no readable month is reported by the pure module's
-    # `unclassified` count instead (it can belong to no store-MONTH), so dropping it here loses nothing.
+    # `unplaced` count instead (it can belong to no store-MONTH), so dropping it here loses nothing.
     _months.discard(None)
     months = sorted(_months)
     #    `statement_month_coverage` (§19.54) is that home, not the bare two-feed gap: it knows a
@@ -25009,7 +25009,7 @@ def _compute_gp(client, org_id, period, market=""):
     # LuxeLink's fulfillment says "21880 Hempstead Ave" where the sales feed says "218-80 Hempstead
     # Avenue", and a leading-street-number join would send $9,040.90 to a phantom store. Only used
     # when there is MA income to place; never raises (no resolver -> match on the raw string, which
-    # simply places less, and says so by leaving the money on the honest unclassified row).
+    # simply places less, and says so by leaving the money on the honest unplaced row).
     # ALWAYS built (owner directive 2026-10-09 "chase trhew street number matching"). It used to be
     # gated on `if ma_income`, i.e. only ePay-LESS orgs got it — so the ePay path (the house org) ran
     # the engine's own leading-token join and dropped every carrier dollar whose leading token no
@@ -34559,7 +34559,7 @@ def my_shelf(as_of: str = "", authorization: str = Header(default=""), org_id: s
 
     by_store = {}
     for row in out:
-        b = by_store.setdefault(row["store_code"] or "(unclassified)", [])
+        b = by_store.setdefault(row["store_code"] or "(unplaced)", [])
         b.append(row)
     stores = [{"store_code": k, **_isa.summarise(v)} for k, v in sorted(by_store.items())]
 
@@ -52287,7 +52287,7 @@ async def _weekly_review_pack(client, org_id, authorization, as_of, cfg, markets
     # behind a row is not certain at this level. A composed figure with a guessed table would be a
     # provenance claim nothing checked.
     from app.modules.commcalc import weekly_review_drilldown as _wrdd
-    for _r in [pack.get("company"), pack.get("unclassified")] + list(pack.get("markets") or []):
+    for _r in [pack.get("company"), pack.get("unplaced")] + list(pack.get("markets") or []):
         if not _r:
             continue
         _panels, _refused = _wrdd.review_drilldowns(_r)
