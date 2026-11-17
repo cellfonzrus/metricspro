@@ -285,6 +285,8 @@ SCHEMA_OF = {
     "vip_paygo_payments": "commcalc",
     "vip_sweep_config": "commcalc",
     "watchdog_rule": "commcalc",
+    "weekly_review_config": "commcalc",
+    "weekly_review_run": "commcalc",
     "whatif_source_config": "commcalc",
     "zero_sales_config": "commcalc",
     # ── core ──

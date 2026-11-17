@@ -1596,7 +1596,24 @@ _all_routes = _flatten_routes(real_app.routes)
 # stored total, statement, GP, commission, payable or tax figure can move. Cross-tenant and
 # authority negatives: backend/tests/integration/test_tenant_gates_endpoint.py (23 cases, two
 # tenants with different declared carriers).
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1844"))
+# Re-pinned 1844 -> 1849 on 2026-11-16 (§COMMCALC-76, the Weekly Performance Review). Verified the
+# house way, NOT by arithmetic: `git diff origin/main..HEAD -- backend/ | grep -E '^[+-].*@router\.'`
+# printed exactly FIVE added decorators and NONE removed:
+#     + /commcalc/weekly-review          GET   (the review pack: one review per declared market, one
+#                                               consolidated, one for stores no market claims)
+#     + /commcalc/weekly-review/config   GET   (the tenant's declared week end, run switch, recipients)
+#     + /commcalc/weekly-review/config   PUT   (declare them)
+#     + /commcalc/weekly-review/run-now  POST  (generate on demand and store the snapshot)
+#     + /commcalc/weekly-review/run-due  POST  (the one daily sweep; a tenant is skipped unless today
+#                                               is its own declared week end)
+# All five are behind `_require_weekly_review` (the 'admin' module or super_admin), called as the
+# first statement of each. The pack DERIVES nothing: it quotes the reports that already own each
+# figure (GP, commissions, accessory target plan, action plan, asset aging, payroll by store) so no
+# stored total, statement, GP, commission, payable or tax figure can move. The only writes are the
+# tenant's own config row and a snapshot of the pack it just read. Cross-tenant and authority
+# negatives: backend/tests/integration/test_weekly_review_endpoint.py (39 cases, three tenants with
+# their own markets).
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1849"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

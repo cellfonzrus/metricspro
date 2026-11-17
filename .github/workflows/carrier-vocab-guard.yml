@@ -1452,6 +1452,16 @@ on:
       - "backend/harness_feed_gap_days.py"
       - "backend/harness_zero_sales.py"
       - "backend/harness_zero_sales_lock.py"
+      # index §COMMCALC-76 — the Weekly Performance Review: one fold quoting the reports that own
+      # its figures, administrators only on every door, a pack per declared market plus the company,
+      # and nothing measured ever rendered as a zero. The lock reads the fold, the drill-down
+      # declaration, the router block, the page and the registrations, so a change to any of them
+      # must run it.
+      - "backend/harness_weekly_review.py"
+      - "backend/app/modules/commcalc/weekly_review.py"
+      - "backend/app/modules/commcalc/weekly_review_drilldown.py"
+      - "frontend/src/app/(platform)/commcalc/weekly-review/page.tsx"
+      - "frontend/src/lib/weekly-review-export.ts"
       # index §COMMCALC-54 — "which incentive plan am I on, and what can replace it?" has ONE home,
       # the payout hub dereferences its predicate, and the guided screen renders the steps the
       # backend declares instead of spelling its own. The lock reads the module, the router block,
@@ -2251,6 +2261,9 @@ jobs:
       - name: Run the zero-sales one-home lock (one shifts read, one predicate, one alert fan-out, one dedup key spelling — and the lock's own router BLOCK now has an END, so a feature appended to router.py later cannot be mistaken for zero-sales code)
         working-directory: backend
         run: python3 harness_zero_sales_lock.py | tail -20 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the weekly performance review lock (the review pack derives nothing — every figure is quoted from the report that owns it; an item nobody measured carries NO figure and says why; a store no market claims is reviewed in a scope of its own; the market vocabulary is a required argument; and the admin gate is the server's on every door — owner 2026-11-16, index §COMMCALC-76)
+        working-directory: backend
+        run: python3 harness_weekly_review.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the incentive-plan workflow lock (one answer to "which plan am I on" — the payout hub dereferences the predicate instead of keeping its own; no third write path, the two existing doors only; a plan the workflow creates is switched OFF with nobody assigned, so it cannot move pay; the screen spells no option kind, no step list and no endpoint of its own — owner 2026-11-01, index §COMMCALC-54)
         working-directory: backend
         run: python3 harness_plan_workflow_lock.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
