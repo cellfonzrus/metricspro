@@ -122,12 +122,26 @@ def _round(v):
 
 # ── Measuring ─────────────────────────────────────────────────────────────────────────────────────
 
-def measure(catalog, declared_map, basis, metric_keys):
+def measure(catalog, declared_map, basis, metric_keys, *, unclassified=0.0):
     """One number off a declared store-day (or one employee's slice of it).
 
     basis 'revenue' with no metric_keys is the day's gross revenue — `metric_catalog.gross_revenue`,
     never a local sum, so a qualifier and a target can never disagree about what "sales" means.
     'units' and 'amount' sum the named metrics.
+
+    `unclassified` is money the day's own sales report carried on lines no declared category claimed
+    (owner 2026-11-17: the whole day's revenue counts). It reaches exactly ONE branch — the whole-day
+    one — and that is the whole of its design:
+
+      · A MEASURE THAT NAMES CATEGORIES NEVER SEES IT. Unclassified money is not evidence of any
+        category, so a per_unit or percent-of-amount payout on named categories cannot be inflated
+        by it, and neither can a qualifier gating on them. That is `pos_report_feed`'s refusal to
+        guess, held all the way to the money.
+      · A MEASURE THAT NAMES NONE MEANS THE WHOLE DAY, and the whole day includes it.
+
+    The caller has already resolved WHETHER it counts, through `revenue_scope.unclassified_addend`; a
+    zero here is both "the tenant says it does not count" and "there was none", which need no
+    distinguishing because both add nothing.
 
     Returns (value, missing) where `missing` lists metric keys the catalog does not carry. A caller
     that is gating MUST treat a non-empty `missing` as a failed gate — see `_gate`.
@@ -137,7 +151,7 @@ def measure(catalog, declared_map, basis, metric_keys):
     known = set(mc.keys(catalog))
     missing = [k for k in want if k not in known]
     if b == "revenue" and not want:
-        return mc.gross_revenue(catalog, declared_map), missing
+        return mc.gross_revenue(catalog, declared_map, unclassified=unclassified), missing
     total = 0.0
     for k in want:
         if k not in known:
@@ -149,9 +163,15 @@ def measure(catalog, declared_map, basis, metric_keys):
     return (_round(total) if b != "units" else int(total)), missing
 
 
-def _gate(catalog, qualifier, store_declared, employee_declared):
+def _gate(catalog, qualifier, store_declared, employee_declared, *, unclassified=0.0,
+          employee_unclassified=0.0):
     """Evaluate a rule's qualifier. Returns (passed, detail) — detail always says WHY, so a rep can be
-    shown what they missed rather than an unexplained zero."""
+    shown what they missed rather than an unexplained zero.
+
+    The two unclassified figures are the STORE's and THIS PERSON's unclassified money, and the gate reads
+    whichever its own scope measures. A store-scope revenue gate that read only placed categories is
+    what failed a $1,300 gate on a day the store had cleared it — the defect this change fixes, and
+    the gate is where it was felt."""
     q = qualifier or {}
     scope = _key(q.get("scope")).lower() or "none"
     if scope not in QUALIFIER_SCOPES:
@@ -169,7 +189,8 @@ def _gate(catalog, qualifier, store_declared, employee_declared):
         # employee scope with nothing declared for that person: fails closed.
         return False, {"scope": scope, "passed": False, "op": op_key, "threshold": threshold,
                        "value": 0, "reason": "nothing declared for this employee"}
-    value, missing = measure(catalog, source, basis, q.get("metric_keys"))
+    value, missing = measure(catalog, source, basis, q.get("metric_keys"),
+                             unclassified=(unclassified if scope == "store" else employee_unclassified))
     if missing:
         return False, {"scope": scope, "passed": False, "op": op_key, "threshold": threshold,
                        "value": value, "missing": missing,
@@ -232,7 +253,7 @@ def split_pool(pool, employees, *, basis, hours_by_employee=None, revenue_by_emp
 # ── The engine ────────────────────────────────────────────────────────────────────────────────────
 
 def compute_day(catalog, rules, *, declared_map, per_employee, hours_by_employee=None,
-                employees=None):
+                employees=None, unclassified=0.0, unclassified_by_employee=None):
     """One store-day's incentive.
 
     catalog           `metric_catalog.build(...)`
@@ -245,14 +266,27 @@ def compute_day(catalog, rules, *, declared_map, per_employee, hours_by_employee
     employees         the roster for the day. Defaults to whoever declared something. Passing it
                       explicitly is what lets an equal / by-hours pool include someone who worked and
                       sold nothing.
+    unclassified          $ this day's own sales report carried on lines no declared category claimed,
+                      ALREADY passed through `revenue_scope.unclassified_addend` by the caller — so zero
+                      here means either "the tenant says it does not count" or "there was none", and
+                      both correctly add nothing. Owner 2026-11-17: the whole day's revenue counts.
+    unclassified_by_employee  {name: $} the same money per operator, which is what makes a pool split
+                      proportional to individual sales divide on the whole day rather than on the
+                      part of it we could classify.
 
     Returns {store_revenue, employee_revenue, lines[], by_employee{}, unallocated, rules[]} — every
     line carries the rule, the qualifier verdict and the arithmetic, so a payout is always explainable
     without re-running it.
     """
-    store_rev = mc.gross_revenue(catalog, declared_map)
-    emp_rev = mc.employee_revenue(catalog, per_employee)
-    roster = [n for n in (employees or sorted(per_employee or {})) if _key(n)]
+    unclassified = _num(unclassified)
+    emp_unclassified = {_key(k): _num(v) for k, v in (unclassified_by_employee or {}).items() if _key(k)}
+    store_rev = mc.gross_revenue(catalog, declared_map, unclassified=unclassified)
+    emp_rev = mc.employee_revenue(catalog, per_employee, unclassified_by_employee=emp_unclassified)
+    # The roster picks up anyone the report shows ringing sales, even where every line of theirs was
+    # unclassified: they are absent from the declared map only because nothing they sold could be
+    # placed, and reading that as "sold nothing" is what would hand their share to somebody else.
+    roster = [n for n in (employees or sorted(set(list(per_employee or {}) + list(emp_unclassified))))
+              if _key(n)]
     lines, totals, rule_notes = [], {}, []
     unallocated = 0.0
 
@@ -280,7 +314,8 @@ def compute_day(catalog, rules, *, declared_map, per_employee, hours_by_employee
         _p_ok, _p_note = payout_measurable(pbasis, pkeys)
         _pm = {"payout_measurable": _p_ok, "payout_note": _p_note}
 
-        store_pass, store_detail = _gate(catalog, rule.get("qualifier"), declared_map, None) \
+        store_pass, store_detail = _gate(catalog, rule.get("qualifier"), declared_map, None,
+                                         unclassified=unclassified) \
             if _key((rule.get("qualifier") or {}).get("scope")).lower() == "store" \
             else (True, {"scope": "none", "passed": True, "reason": "no store qualifier"})
 
@@ -288,7 +323,7 @@ def compute_day(catalog, rules, *, declared_map, per_employee, hours_by_employee
             if not store_pass:
                 rule_notes.append({**_pm, "rule": label, "paid": 0.0, "qualifier": store_detail})
                 continue
-            pool_value, missing = measure(catalog, declared_map, pbasis, pkeys)
+            pool_value, missing = measure(catalog, declared_map, pbasis, pkeys, unclassified=unclassified)
             if missing:
                 rule_notes.append({**_pm, "rule": label, "paid": 0.0,
                                    "reason": "pays on a category this business does not declare",
@@ -303,7 +338,8 @@ def compute_day(catalog, rules, *, declared_map, per_employee, hours_by_employee
             for who in roster:
                 if qual_scope == "employee":
                     ok, det = _gate(catalog, rule.get("qualifier"), declared_map,
-                                    per_employee.get(who))
+                                    per_employee.get(who), unclassified=unclassified,
+                                    employee_unclassified=emp_unclassified.get(who, 0.0))
                     per_person_detail[who] = det
                     if not ok:
                         continue
@@ -316,6 +352,8 @@ def compute_day(catalog, rules, *, declared_map, per_employee, hours_by_employee
             if _key(payout.get("split")).lower() == "individual_sales" and pkeys:
                 weights = {}
                 for who in roster:
+                    # NAMED categories, so no unclassified money: a pool built on printing is divided by
+                    # printing, and money nobody classified is not printing.
                     v, _m = measure(catalog, (per_employee or {}).get(who) or {}, pbasis, pkeys)
                     weights[who] = v
             else:
@@ -343,13 +381,21 @@ def compute_day(catalog, rules, *, declared_map, per_employee, hours_by_employee
         for who in roster:
             mine = (per_employee or {}).get(who)
             if mine is None:
-                continue
+                # Nothing of this person's could be classified. They still have a whole-day figure, so
+                # a rule measuring the whole day can pay them; one naming categories measures an
+                # empty map and pays nothing, which is correct and unchanged.
+                if not emp_unclassified.get(who):
+                    continue
+                mine = {}
             if _key((rule.get("qualifier") or {}).get("scope")).lower() == "employee":
-                ok, det = _gate(catalog, rule.get("qualifier"), declared_map, mine)
+                ok, det = _gate(catalog, rule.get("qualifier"), declared_map, mine,
+                                unclassified=unclassified,
+                                employee_unclassified=emp_unclassified.get(who, 0.0))
                 detail[who] = det
                 if not ok:
                     continue
-            value, missing = measure(catalog, mine, pbasis, pkeys)
+            value, missing = measure(catalog, mine, pbasis, pkeys,
+                                     unclassified=emp_unclassified.get(who, 0.0))
             if missing:
                 detail[who] = {"passed": False, "missing": missing,
                                "reason": "pays on a category this business does not declare"}
@@ -371,6 +417,10 @@ def compute_day(catalog, rules, *, declared_map, per_employee, hours_by_employee
     return {
         "store_revenue": store_rev,
         "employee_revenue": emp_rev,
+        # Carried so a screen can say what the revenue figure INCLUDES. A revenue number shown
+        # without this cannot be reconciled against the report the operator is holding.
+        "unclassified_revenue": _round(unclassified),
+        "unclassified_by_employee": {k: _round(v) for k, v in emp_unclassified.items() if v},
         "top_earner": top,
         "lines": sorted(lines, key=lambda l: (l["employee"], l["rule"])),
         "by_employee": totals,
