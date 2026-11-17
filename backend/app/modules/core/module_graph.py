@@ -998,8 +998,19 @@ FACTS: dict[str, dict] = {
         "homes": ('app/modules/commcalc/pos_report_feed.py',),
         "index": ('COMMCALC-07',),
         "locks": ('harness_pos_report_feed.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50: `--bless` silently deleted 11 of 12 facts
+        # on 2026-10-04, and still strips every explanatory comment in this file).
         "callers": {
+            # §COMMCALC-77 — WHICH SOURCE answers a store-day. It reads `basis_is_declared`, the
+            # feed's own allowlist of bases that count as the tenant's word, so "may this pay" is
+            # decided by the ladder's home and never re-decided next to a payment.
+            'app/modules/commcalc/metric_authority.py': ('_feed',),
             'app/modules/commcalc/pos_report_sweep.py': ('feed',),
+            # §COMMCALC-77 — the DECLARATION EDITOR's vocabularies (`UNIT_BASES`,
+            # `UNIT_BASIS_LABELS`, `AMOUNT_SIGNS`, `AMOUNT_SIGN_LABELS`, `COLUMN_SYNONYMS`). The
+            # editor and its endpoint offer exactly what the parser serves, because a screen with
+            # its own list offers a value the parser refuses.
+            'app/modules/commcalc/report_declaration.py': ('_feed',),
         },
     },
     # ── §4a.4 (owner decision 2026-10-19) — which POS departments are DEVICE departments ────────
@@ -2921,6 +2932,12 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/ledger_batch.py': ('CL',),
             'app/modules/commcalc/ledger_ma_sync.py': ('commission_ledger',),
             'app/modules/commcalc/onboarding_intake.py': ('CL',),
+            # §COMMCALC-77 — WHICH SIGN IS A SALE. An export that writes a sale negative is read
+            # through this home's own convention vocabulary (`SIGN_CONVENTIONS`,
+            # `SIGN_PAYOUT_POSITIVE`, `SIGN_CONVENTION_LABELS`, `convention_named`, `direction`,
+            # `booked_amount`): the feed holds no second copy, so the opposite sign NETS OFF rather
+            # than being abs()-ed into a second sale.
+            'app/modules/commcalc/pos_report_feed.py': ('_ledger',),
             # `_month_token` is §60's binding of `parse_payment_month` — "does this label SAY a
             # month", which is exactly that function's own question (its docstring is explicit that
             # the month-of-life LEG question belongs to `month_leg_of` instead).
