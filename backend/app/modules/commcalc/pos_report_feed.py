@@ -100,6 +100,33 @@ def basis_is_declared(basis) -> bool:
     return str(basis or "") in DECLARED_BASES
 
 
+# ── A LINE NO CATEGORY CLAIMED IS STILL A SALE ───────────────────────────────────────────────────
+# Owner 2026-11-17, choosing "Whole day's revenue counts": money we could not classify still happened.
+#
+# So an unclassified line is now EMITTED as a row, at the landing grain — the day it happened, the store
+# it happened in, the person who rang it — carrying no metric key. Before this it existed only in the
+# label-keyed `unmapped` bag below, which is the admin's mapping worklist and has no date on it, so
+# $22,653.31 of a live tenant's October could not be attributed to any day at all.
+#
+# THE KEY IS EMPTY, AND THAT IS THE HONEST SPELLING, not a sentinel standing in for a real category.
+# `metric_key` is the category this line was matched to; nothing matched it; the absence is the fact.
+# It is named here so no caller spells the emptiness itself, and because every existing reader of
+# these rows already skips a row whose key is blank — `metric_authority.lines_from_feed`,
+# `excluded_from_feed` and `declared_feed_recon`'s catalog lookup all guard it — so an unclassified row
+# is inert everywhere that asks a per-CATEGORY question, which is exactly what it should be.
+#
+# WHAT IT MAY NEVER DO is pay a category. `lines_from_feed` carries no unclassified row, so no per_unit
+# or percent-of-amount rule can ever be paid by money nobody classified. Only the WHOLE DAY's
+# revenue may include it, and only where the tenant has declared that it does
+# (`commcalc/revenue_scope.py`).
+UNCLASSIFIED_KEY = ""
+
+
+def is_unclassified(row) -> bool:
+    """Is this row money that no declared category claimed? PURE."""
+    return not str((row or {}).get("metric_key") or "").strip()
+
+
 # ── HOW MANY did this line do (owner 2026-11-17: *"each transaction is qty 1"*) ──────────────────
 # A portal that publishes an AGGREGATE carries its own quantity column; a POS that exports one row
 # per sale LINE carries none, and `_units` read an absent cell as 0 — so every parcel, rental and
@@ -282,8 +309,11 @@ def normalize(table, *, catalog=None, line_map=None, calibration=None, org_id=No
     `resolve_store(raw) -> canonical` is the platform's ONE store resolver
     (`account/store_identity.build_store_resolver`, loaded by the caller). Omitted ⇒ the report's own
     spelling is kept and the row is still STORED, because a figure the portal published is evidence
-    whether or not we can place it; an unplaced row is reported and excluded from store totals rather
-    than being attributed to nobody and read as zero.
+    whether or not we can place it; a row whose STORE could not be placed is reported and excluded from
+    store totals rather than being attributed to nobody and read as zero. ("Unplaced" in this module
+    always means the STORE; a line whose CATEGORY could not be matched is UNCLASSIFIED. The two are
+    independent, and one word for both is how a reader comes to think an unmapped product line was a
+    store-resolution problem.)
     """
     cal = dict(calibration or {})
     syn = cal.get("column_synonyms") or {}
@@ -334,13 +364,11 @@ def normalize(table, *, catalog=None, line_map=None, calibration=None, org_id=No
         if not units and unit_basis == UNIT_BASIS_ROW and "units" not in idx:
             units = 1
         amount = earned_amount(_cell(raw, idx.get("amount")), sign_name)
-        if not key:
-            u = unmapped.setdefault(norm(label), {"line": label, "basis": basis, "units": 0,
-                                                  "amount": 0.0, "rows": 0})
-            u["units"] += units
-            u["amount"] = round(u["amount"] + amount, 2)
-            u["rows"] += 1
-            continue
+        # WHERE AND WHO, resolved BEFORE asking whether the line could be CLASSIFIED. An
+        # unclassified line is still a sale, on a day, in a store, rung by a person, and a day's
+        # revenue needs all three. Resolving only the classified lines is precisely what left a live
+        # tenant's unclassified money with no date and no operator on it, and so unable to reach the
+        # day it belonged to.
         store_raw = (str(_cell(raw, idx.get("store_code")) or "").strip()
                      or str(_cell(raw, idx.get("store_label")) or "").strip()
                      or str(store_code_default or "").strip())
@@ -352,14 +380,27 @@ def normalize(table, *, catalog=None, line_map=None, calibration=None, org_id=No
                     store_code = resolve_store(store_raw) or None
                 except Exception:
                     store_code = None
-        rows_out.append({
+        employee = str(_cell(raw, idx.get("employee")) or "").strip() or None
+        row_out = {
             "org_id": org_id, "source_id": source_id, "portal_key": connector,
             "report_key": report_key, "business_date": day,
             "store_code": store_code, "store_label": store_raw or None,
-            "employee_name": (str(_cell(raw, idx.get("employee")) or "").strip() or None),
-            "metric_key": key, "metric_basis": basis, "line_label": label,
+            "employee_name": employee,
+            "metric_key": key or UNCLASSIFIED_KEY, "metric_basis": basis, "line_label": label,
             "units": units, "amount": amount, "source_line": lineno,
-        })
+        }
+        if not key:
+            # BOTH, deliberately. The label bag is the admin's mapping worklist and keeps its exact
+            # shape — every existing consumer of `unmapped` is unmoved. The ROW is the same money at
+            # the landing grain, which is the only form a day's revenue can read.
+            u = unmapped.setdefault(norm(label), {"line": label, "basis": basis, "units": 0,
+                                                  "amount": 0.0, "rows": 0})
+            u["units"] += units
+            u["amount"] = round(u["amount"] + amount, 2)
+            u["rows"] += 1
+            rows_out.append(row_out)
+            continue
+        rows_out.append(row_out)
     if stale:
         warnings.append("%d mapped report line(s) point at a category this tenant no longer declares."
                         % len(stale))
@@ -414,10 +455,50 @@ def totals_by_store_day(rows):
         sc = r.get("store_code")
         if not sc:
             continue
+        # An UNCLASSIFIED row is excluded here, and not because it is doubtful. This shape is keyed BY
+        # CATEGORY and is what the declaration comparison reads; a bucket for "no category" would be
+        # compared against a declaration that cannot exist. The day's revenue reads that money
+        # through `unclassified_by_store_day` below, where it is a day's total and not a category's.
+        if is_unclassified(r):
+            continue
         k = (sc, str(r.get("business_date") or ""), str(r.get("metric_key") or ""))
         agg = out.setdefault(k, {"units": 0, "amount": 0.0, "declared_basis": True})
         agg["units"] += r.get("units") or 0
         agg["amount"] = round(agg["amount"] + (r.get("amount") or 0.0), 2)
         if not basis_is_declared(r.get("metric_basis")):
             agg["declared_basis"] = False
+    return out
+
+
+def unclassified_by_store_day(rows):
+    """{(store_code, business_date): {amount, units, rows, by_employee{name: amount}}} — the money no
+    declared category claimed, at the grain a day's revenue can read it.
+
+    The sibling of `totals_by_store_day`, and deliberately a SEPARATE shape rather than another
+    bucket inside it: that one answers "what did category X do", keyed by category, and this one
+    answers "what else did the day take", which has no category by definition. One shape answering
+    both would invite a caller to sum a category's figure and a day's remainder into one total.
+
+    `by_employee` is what a pool split proportional to individual sales needs — the owner's own words
+    (2026-11-17): *"which ever sales rep generates the most revenue he get his proportional share"*.
+    The employee spelling is the report's own, UNRESOLVED, exactly as `normalize` left it; a row with
+    no employee on it contributes to the day's total and to nobody's share, which is honest in both
+    directions. Rows with no resolved store are excluded for the same reason `totals_by_store_day`
+    excludes them. PURE."""
+    out = {}
+    for r in rows or []:
+        if not is_unclassified(r):
+            continue
+        sc = r.get("store_code")
+        if not sc:
+            continue
+        k = (sc, str(r.get("business_date") or ""))
+        agg = out.setdefault(k, {"amount": 0.0, "units": 0, "rows": 0, "by_employee": {}})
+        amt = round(float(r.get("amount") or 0.0), 2)
+        agg["amount"] = round(agg["amount"] + amt, 2)
+        agg["units"] += r.get("units") or 0
+        agg["rows"] += 1
+        who = str(r.get("employee_name") or "").strip()
+        if who:
+            agg["by_employee"][who] = round(agg["by_employee"].get(who, 0.0) + amt, 2)
     return out

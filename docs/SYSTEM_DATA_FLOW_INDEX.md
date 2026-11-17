@@ -218,6 +218,8 @@ Primary code homes:
 | COMMCALC-77 | **A tenant's own sales report answers its own declared categories** | A tenant's daily incentive plan was five correct, active config rows paying off what the reps declare at closing — and its reps had declared ONE line in a month, so a store that traded every day computed to ~$0 while its own POS export carried all 31 days. Which code turns a tenant's own export into the categories IT declared, when that export states no quantity, carries two columns that could both be the category, and writes a sale NEGATIVE — and who decides whether the rep's declaration or the store's own report is the authority? |
 | COMMCALC-78 | **What a day pays, and why every rule paid what it paid** | The engine has answered "what does this store-day owe each person" since mig 1072, and for five weeks NOTHING in the browser called it: a tenant could declare its rules, upload its day, and still have no way to SEE a payout. And the one rule it did run paid $0.00 forever, because the rules editor promises in words that a pool with no categories ticked is "a percentage of the whole day's gross revenue" and then stored a basis that sums the categories it was given — none. Who shows the answer, and who decides what a payout measures? |
 | COMMCALC-79 | **Where must the year land, and is it going to** | Every target figure here was a MONTH or a window over one, so a store could carry twelve monthly targets that each looked reasonable and summed to well under the year it was aiming at, with nothing saying so. And "a million in annual sale **including the commission earned**" means at least two different things for a shipping store. Who decides what counts toward a goal, and who may answer "what do I still need" — once? |
+| COMMCALC-76 | **A weekly review pack is one fold, read from the reports that own its figures** | The owner asked for the LuxeLink performance deck as an in-app report on the Management tile, admins only, one report per market plus a consolidated one, with inventory aging per carrier among its items, generated at the end of each week for the Monday review with the DMs — and on demand. It derives nothing: profit, commission, the accessory gap, growth, the reps behind, aging and payroll are each QUOTED from the surface that already owns them, and the fold is pure, so a second derivation cannot grow beside the report it quotes. An item nobody measured carries no figure and says why in words; a store no market claims gets its own named scope rather than vanishing between the market packs and the company one; and the market vocabulary is a required argument, so nothing declared means nothing identified. The gate is the server's on every door — a company-wide reporting scope is not an administrator. |
+| COMMCALC-80 | **Money we could not classify is still the day's revenue** | A day's revenue was the sum of the categories we could place — but whether WE can classify a line says nothing about whether the store sold it. $22,653.31 of one tenant's October sat on lines no declared category claimed, in a label-keyed bag with no date on it, so a revenue gate failed on days the store had in fact cleared. Does unclassified money count, and may it ever pay a category? |
 | COMMCALC-76 | **A weekly review pack is one fold, read from the reports that own its figures** | The owner asked for the LuxeLink performance deck as an in-app report on the Management tile, admins only, one report per market plus a consolidated one, with inventory aging per carrier among its items, generated at the end of each week for the Monday review with the DMs — and on demand. It derives nothing: profit, commission, the accessory gap, growth, the reps behind, aging and payroll are each QUOTED from the surface that already owns them, and the fold is pure, so a second derivation cannot grow beside the report it quotes. An item nobody measured carries no figure and says why in words; a store no market claims gets its own named scope rather than vanishing between the market packs and the company one; and the market vocabulary is a required argument, so nothing declared means nothing identified. The gate is the server's on every door — a company-wide reporting scope is not an administrator. **Corrected 2026-11-17 (§COMMCALC-76.8):** profit now quotes the P&L's own `profit_by_store`, not the GP report (the two differed by $366k on one org in one month); aging quotes the whole shelf per carrier, not the owed>0 subset in which everything is already overdue; and a row the scope cannot match is kept on the consolidated pack and counted, never dropped — which is what had made October's commission read as nothing. Every item now carries the sentences that explain it, and the pack downloads as a deck (§COMMCALC-76.9) whose DESIGN has one home in `notify/render.build_pptx` — tone, stat cards, charts and banded tables, so every caller of the house file writer gets the same face (§COMMCALC-76.10). |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
@@ -26502,6 +26504,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-77 | commcalc |
 | COMMCALC-78 | commcalc |
 | COMMCALC-79 | commcalc |
+| COMMCALC-80 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -50475,6 +50478,181 @@ Files: `backend/app/modules/commcalc/annual_goal.py` (**new**),
 `frontend/src/app/(platform)/commcalc/targets/page.tsx`,
 `frontend/prove_period_goal_card.mjs` (**new**), `backend/harness_annual_goal.py` (**new**),
 `database/migrations/1125_period_goal.sql` (**new**),
+`.github/workflows/carrier-vocab-guard.yml`, `docs/CI_GATES.md` (generated).
+
+---
+
+## §COMMCALC-80. MONEY WE COULD NOT CLASSIFY IS STILL THE DAY'S REVENUE (owner ruling 2026-11-17)
+
+Owner, answering the decision card that asked how $22,653.31 of his October sales report's
+unclassified product lines should count toward the day: **"Whole day's revenue counts"**. And
+earlier, of his store's daily revenue gate: *"that is the total revenue for the day, which ever sales
+rep generates the most revenue he get his proportional share of commission"*.
+
+### COMMCALC-80.1 THE CLASS, NAMED RATHER THAN THE INSTANCE
+
+The general fact that was wrong:
+
+> "A day's revenue is the sum of the categories we could place."
+
+Whether WE can classify a line says nothing about whether the store sold it. **Two different
+questions were being answered with one number:**
+
+| the question | who can answer it | what the old code did |
+|---|---|---|
+| How much did CATEGORY X do? | only a line we could place | correct — folding in an unclassified line would make a category read high, which is the guess `pos_report_feed` exists to refuse |
+| What was the DAY's revenue? | **every** line, classified or not | wrong — the day read low, and a revenue gate failed on a day the store had in fact cleared |
+
+So the sum over placed categories is the right answer to the first and the wrong answer to the
+second, and before this there was only one answer. This is NOT a per-tenant repair: the mechanism
+was wrong for every tenant, every report and every feed that has ever carried a line we could not
+match, and the UPS-store tenant is only where it surfaced.
+
+### COMMCALC-80.2 AN UNCLASSIFIED LINE NOW HAS A DAY ON IT
+
+`pos_report_feed.normalize` previously aggregated an unmatched line into a **label-keyed bag**
+(`unmapped`) carrying no date, no store and no operator. That bag is the admin's mapping worklist and
+is unchanged — but it is the wrong shape for revenue, and it is why that money could not be
+attributed to any day at all.
+
+An unmatched line is now ALSO emitted as a row at the landing grain (day × store × operator),
+carrying `metric_key = ''` and the basis that says why nothing claimed it. The store and operator are
+resolved BEFORE the placement branch, because an unclassified line is still a sale, in a store, rung
+by a person.
+
+**"UNPLACED" AND "UNCLASSIFIED" ARE DIFFERENT THINGS AND THE CODE SAYS SO.** `unplaced` is a house
+word used in a dozen modules for "we could not place this STORE"; `unclassified` is new and means "no
+declared CATEGORY claimed this line". They are independent — a row can be either, both or neither —
+and the first draft of this work reused `unplaced` for both, which would have left a reader thinking
+an unmapped product line was a store-resolution problem.
+
+### COMMCALC-80.3 WHY NO MIGRATION FOR THE ROW ITSELF
+
+`commcalc.portal_metric_day.metric_key` is `not null` and part of the natural key (mig 1078). An
+empty key satisfies both, and the unique index then folds every unclassified line of one
+store-day-operator into ONE row — which is exactly the grain revenue reads, and which `feed.dedupe`
+already sums to before the upsert. **Every existing reader of these rows already skips a blank key**
+— `metric_authority.lines_from_feed`, `excluded_from_feed`, and `declared_feed_recon`'s catalog
+lookup — so an unclassified row is inert everywhere a per-CATEGORY question is asked, which is what
+it should be. `totals_by_store_day` now excludes it explicitly, because that shape is keyed by
+category and a "no category" bucket would be compared against a declaration that cannot exist.
+
+### COMMCALC-80.4 WHAT COUNTS IS DECLARED, AND THE DEFAULT MOVES NOBODY
+
+Reading unclassified money into revenue house-wide would restate **every** tenant's gross revenue,
+and `closing/metric_catalog.gross_revenue` is what every revenue target and every percent-of-amount
+payout measures against. That is a money move nobody approved (the §STOREOPS-07 lesson). So the scope
+is a per-org **declaration** on `commcalc.commission_org_config.declared_revenue_scope` (mig 1126):
+
+| scope | meaning |
+|---|---|
+| `classified_only` | revenue is the categories we could place — **today's behaviour, and what NULL means** |
+| `whole_day` | the whole day's takings count, classified or not |
+
+**And why a house default is legitimate here at all.** The 2026-10-30 rule (§COMMCALC-49.10) bans a
+house default that is really one tenant's VOCABULARY. This names no category, carrier, product or
+tenant: it is a POLICY switch, which is the one thing a house default stays right for. The categories
+themselves remain the tenant's own, required and never defaulted.
+
+**A SCOPE IS NOT A REPAIR.** Declaring `whole_day` does not excuse an unmapped line: the money counts
+toward the day AND the line is still reported as unmapped, so the admin still maps it and each
+category still gets its own figure. A tenant whose report is fully mapped sees no difference at all.
+
+### COMMCALC-80.5 THE BOUNDARY THAT MAKES IT SAFE
+
+`commcalc/revenue_scope.py` is the ONE home for the policy, and `unclassified_addend(scope, money)`
+is the ONE place the switch is read — so no caller branches on the scope next to the money. The
+engine never sees the scope at all; it receives an ADDEND, and `harness_revenue_scope` §F fails the
+build if `daily_incentive` or `metric_catalog` so much as spells a scope name.
+
+`daily_incentive.measure` applies that addend to **exactly one branch** — `revenue` with no
+categories named, which is the only measure that means "the whole day":
+
+- a payout or qualifier that NAMES categories can never be inflated by unclassified money;
+- `metric_authority.lines_from_feed` carries no row without a category, so **no per-unit or
+  percent-of-amount rule can ever be paid out of money nobody classified**, under either scope;
+- a pool split by `individual_sales` over named categories keeps weighting by those categories;
+- only a pool on the whole day divides on the whole day, which is the owner's own words.
+
+An operator who appears ONLY on unclassified lines is added to the roster and to
+`employee_revenue`: they rang sales all day, and reading that as "sold nothing" would hand their
+share to somebody else.
+
+### COMMCALC-80.6 MEASURED, NOT ASSERTED
+
+NY Logistics October 2026 re-run on the real engine against the live rules and the live declaration
+(read-only; nothing written). `classified_only` reproduces the previously-verified figures exactly,
+which is what makes the comparison trustworthy:
+
+| | `classified_only` | `whole_day` |
+|---|---|---|
+| October payout, stored rate | $1,525.00 | **$1,609.94** |
+| October payout, with the owner's pending $2.50 rate correction | $40.00 | **$124.94** |
+| days paying | 2 of 31 | **5 of 31** |
+| days clearing a store gate | 2 | **5** |
+| operators paid | 1 | **3** |
+
+$22,684.82 on 50 distinct labels is unclassified across the month — 99 of 178 grain rows. The three
+days that newly clear the gate are 3, 24 and 27 October. **Two findings REPORTED, not coded around:**
+one of the three operators now paid is `007710`, which is the store's own till id rather than a
+person ($3.50), and another is `295533`, the terminated employee ($55.33).
+
+### COMMCALC-80.7 THE LOCK
+
+`backend/harness_revenue_scope.py` (100 checks) pins the vocabulary and that a mistyped scope is
+REFUSED; that the default is today's behaviour; that the feed carries unclassified money at the
+store-day grain with its operator; that a line with no operator joins the day's total and NOBODY's
+share; that the per-category shape has no "no category" bucket; that a named category never sees the
+money in a payout OR a gate; and the end-to-end gate, pool and proportional split both ways.
+**VERIFIED ARMED** against eight planted defects — the revenue reader ignoring the addend, a named
+measure folding it in, the default flipping to `whole_day`, a mistyped scope falling back, the reader
+losing the operator, `lines_from_feed` carrying unclassified rows, the comparison growing a bucket,
+and `employee_revenue` dropping the operator who sold only unclassified lines. Each was caught.
+
+One plant was NOT caught first time — `lines_from_feed`'s key guard is shadowed by the basis
+allowlist that follows it, because `match_metric` only ever returns a declared basis together with a
+key. These rows come from a table where the two are separate columns, so that pairing is a convention
+and not a constraint; §C5e now feeds the pathological pair (a declared basis with no key) so the key
+guard is load-bearing on its own.
+
+`backend/tests/unit/test_revenue_scope_cross_tenant.py` (7 tests) ships WITH the feature as the
+2026-10-30 directive requires, and proves the ISOLATION a single-tenant fixture cannot: two tenants
+with different categories, different unit prices and opposite declarations through one engine in one
+process, with each one's answer its own and the default tenant's figures byte-identical to the
+no-feature run.
+
+### §16–18 CROSS-REFERENCES
+
+Depends on: §COMMCALC-07 / §COMMCALC-77 (the POS-report feed, `portal_metric_day` mig 1078, and
+which source answers a store-day), §COMMCALC-78 (what a day pays), §72 (the declared-metric catalog,
+mig 1072), §66 (a basis is evidence or it is not), §COMMCALC-49.10 (a tenant's vocabulary is a
+required argument — and why a POLICY is the exception), §COMMCALC-44 (an absence needs the right
+reason).
+Neighbours: §COMMCALC-79 (where the year must land — this changes what COUNTS toward it),
+§COMMCALC-02 (the target axis, which measures against the same `gross_revenue`).
+
+§17 (endpoints): **`GET /commcalc/daily-incentive/{close_date}`** — unchanged route, gaining
+`?revenue_scope=` (a preview that persists nothing, the same posture as `metric_source`) and
+answering with `revenue_scope`, `revenue_scope_declared`, `revenue_scope_note`,
+`revenue_scope_options`, `revenue_scope_declaration_pending`, `unclassified_found` and
+`unclassified_found_rows` — the money is reported under BOTH scopes, so an operator on
+`classified_only` can see what declaring `whole_day` would add. No new route; the
+`harness_db_resilience` route count is unchanged at 1852.
+
+§18 (tables): Changed: **`commcalc.commission_org_config`** gains `declared_revenue_scope`
+(mig 1126) — nullable, CHECK-constrained, NULL = today's behaviour. New: none.
+
+Files: `backend/app/modules/commcalc/revenue_scope.py` (**new**),
+`backend/app/modules/commcalc/pos_report_feed.py` (emits the unclassified row;
+`unclassified_by_store_day`), `backend/app/modules/commcalc/metric_authority.py`
+(`unclassified_from_feed`), `backend/app/modules/commcalc/daily_incentive.py`,
+`backend/app/modules/closing/metric_catalog.py` (`gross_revenue` / `employee_revenue` addend),
+`backend/app/modules/commcalc/router.py`, `backend/harness_revenue_scope.py` (**new**),
+`backend/harness_pos_report_feed.py` (locks the new contract — see §80.7),
+`backend/tests/unit/test_revenue_scope_cross_tenant.py` (**new**),
+`frontend/src/components/commcalc/DailyIncentiveRevenueNote.tsx` (**new**),
+`frontend/src/app/(platform)/commcalc/daily-incentive/page.tsx`,
+`database/migrations/1126_revenue_scope.sql` (**new**),
 `.github/workflows/carrier-vocab-guard.yml`, `docs/CI_GATES.md` (generated).
 
 ---

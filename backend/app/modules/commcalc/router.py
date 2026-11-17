@@ -35,6 +35,7 @@ from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee
 from app.modules.commcalc import daily_incentive as _daily_incentive   # 2026-10-10 — THE daily-incentive shapes (mig 1072); every rule is a config row (index §74)
 from app.modules.commcalc import annual_goal as _annual_goal       # 2026-11-17 — WHERE a scope's YEAR must land, and whether it is going to (mig 1125, §COMMCALC-79)
 from app.modules.commcalc import metric_authority as _metric_authority  # 2026-11-17 — WHICH source answers a store-day: the declaration or the store's own report (§COMMCALC-77)
+from app.modules.commcalc import revenue_scope as _revenue_scope  # 2026-11-17 — does money no declared category claimed count toward the day's revenue (§COMMCALC-80)
 from app.modules.commcalc import pos_report_sweep as _pos_report_sweep  # the POS-report feed's own home: its table, its connector and its ingest (§COMMCALC-07)
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
 from app.modules.commcalc import peer_comparison as _peercmp   # 2026-10-08 — THE peer traffic-band comparison (index §59)
@@ -11694,7 +11695,7 @@ def pay_feed_balance(period: str = "", org_id: str = ORG_ID):
     OWNER 2026-10-06: *"the numbers are off"*. They were, and nothing said so, because the pay path
     treated "I could not place this money" as "there is no money" (index §19.48). This endpoint is
     the honest total: for one period it accounts for every `raw_payment_detail` row as PLACED in a
-    pay bucket or UNPLACED under a named reason, and returns `balances` as the arithmetic proof.
+    pay bucket or UNCLASSIFIED under a named reason, and returns `balances` as the arithmetic proof.
 
     Measured live the day it shipped (house org, August 2026): feed $408,989.99, placed $68,479.60.
     $288,813.11 in six quarter-named promo types nobody had mapped, $16,952.28 on 73 rep logins
@@ -50159,7 +50160,8 @@ def _period_goal_pending(client, org_id):
 
 @router.get("/daily-incentive/{close_date}")
 def get_daily_incentive(close_date: str, store_code: str = "", metric_source: str = "",
-                        org_id: str = ORG_ID, authorization: str = Header(default="")):
+                        revenue_scope: str = "", org_id: str = ORG_ID,
+                        authorization: str = Header(default="")):
     """What one store-day's declared categories pay each employee, with the full why-trail.
 
     COMPUTES ONLY — nothing is persisted and nobody is paid by calling this (the same posture as the
@@ -50193,20 +50195,35 @@ def get_daily_incentive(close_date: str, store_code: str = "", metric_source: st
     src_declared, src_pending = _declared_metric_authority(client, org_id)
     source = _metric_authority.resolve(metric_source or src_declared)
     feed_rows, excluded = [], []
+    unclassified = {"amount": 0.0, "rows": 0, "by_employee": {}}
     if source == _metric_authority.SOURCE_FEED:
         feed_rows = _portal_metric_rows(client, org_id, store_code, close_date)
         lines = _metric_authority.lines_from_feed(feed_rows, business_date=str(close_date))
         excluded = _metric_authority.excluded_from_feed(feed_rows)
+        # The money this day's report carried on lines no declared category claimed. Read in ONE
+        # home, and only from the feed: a rep's declaration cannot carry an unclassified line,
+        # because a rep declares into a category by construction.
+        unclassified = _metric_authority.unclassified_from_feed(feed_rows, business_date=str(close_date))
     else:
         lines = _metric_lines(client, org_id, store_code, close_date)
     declared = _mc.declared(cat, row, lines)
     per_emp = _mc.by_employee(cat, lines)
     hours, roster = _incentive_hours_for_day(client, org_id, store_code, close_date)
-    people = sorted(set(list(per_emp) + list(roster)))
+    # WHETHER that money counts is the org's own declaration, resolved in one home (§COMMCALC-80).
+    # The endpoint passes the ADDEND, never the scope: the engine must not be able to re-decide the
+    # policy next to the money, and `unclassified_addend` is the only place the switch is read.
+    scope_declared, scope_pending = _declared_revenue_scope(client, org_id)
+    scope = _revenue_scope.resolve(revenue_scope or scope_declared)
+    unclassified_amount = _revenue_scope.unclassified_addend(scope, unclassified["amount"])
+    unclassified_by_emp = ({k: _revenue_scope.unclassified_addend(scope, v)
+                        for k, v in (unclassified["by_employee"] or {}).items()}
+                       if unclassified_amount else {})
+    people = sorted(set(list(per_emp) + list(roster) + list(unclassified_by_emp)))
     rules = _incentive_rules(client, org_id, active_only=True)
     result = _daily_incentive.compute_day(cat, rules, declared_map=declared,
                                           per_employee=per_emp, hours_by_employee=hours,
-                                          employees=people)
+                                          employees=people, unclassified=unclassified_amount,
+                                          unclassified_by_employee=unclassified_by_emp)
     result["close_date"] = str(close_date)
     result["store_code"] = store_code
     result["hours"] = hours
@@ -50223,6 +50240,21 @@ def get_daily_incentive(close_date: str, store_code: str = "", metric_source: st
     # The standing declaration needs mig 1124; until it lands the column cannot be read and the
     # endpoint says so rather than reporting "the reps declare it" as a settled choice.
     result["metric_source_declaration_pending"] = src_pending
+    # WHAT THE REVENUE FIGURE INCLUDES, in words, beside the figure. A revenue number shown without
+    # this cannot be reconciled against the report the operator is holding — which is how $22,653.31
+    # of one tenant's October went unnoticed.
+    result["revenue_scope"] = scope
+    result["revenue_scope_declared"] = scope_declared
+    result["revenue_scope_overridden"] = bool(revenue_scope)
+    result["revenue_scope_declaration_pending"] = scope_pending
+    result["revenue_scope_options"] = [{"value": s, "label": _revenue_scope.SCOPE_LABELS[s]}
+                                       for s in _revenue_scope.SCOPES]
+    result["revenue_scope_note"] = _revenue_scope.scope_sentence(
+        scope, unclassified=unclassified["amount"], lines=unclassified["rows"])
+    # The money ITSELF, whether or not this scope counts it — so the figure can be reconciled under
+    # either answer and an operator on classified_only can see what declaring whole_day would add.
+    result["unclassified_found"] = unclassified["amount"]
+    result["unclassified_found_rows"] = unclassified["rows"]
     result["migration_pending"] = not rules and not lines
     return result
 
@@ -50242,6 +50274,24 @@ def _declared_metric_authority(client, org_id):
     except Exception:
         return "", True
     return (str((rows[0] if rows else {}).get("declared_metric_authority") or "").strip(), False)
+
+
+def _declared_revenue_scope(client, org_id):
+    """(the org's declared revenue scope, whether its column is still missing).
+
+    The sibling of `_declared_metric_authority`, and degrading for the same reason: code deploys on
+    merge here while a migration waits for the owner, so a read of a column that does not exist yet
+    must answer "nothing declared" — which resolves to today's behaviour for every tenant — rather
+    than 500 at the point a rep opens the screen. The second half of the pair says the column is
+    missing, so a surface can tell "they chose the placed categories" from "they have not been able
+    to choose yet"."""
+    try:
+        rows = (client.schema("commcalc").table("commission_org_config")
+                .select("declared_revenue_scope").eq("org_id", org_id).limit(1)
+                .execute().data) or []
+    except Exception:
+        return "", True
+    return (str((rows[0] if rows else {}).get("declared_revenue_scope") or "").strip(), False)
 
 
 def _portal_metric_rows(client, org_id, store_code, close_date, date_to=None):

@@ -332,21 +332,50 @@ def by_employee(catalog, metric_lines, *, closing_row=None):
     return out
 
 
-def gross_revenue(catalog, declared_map):
-    """The store-day's declared gross revenue: the sum over `revenue_keys`. THE definition — a target
-    and a payout rule that both ask here can never disagree about what a day's sales were."""
+def gross_revenue(catalog, declared_map, *, unclassified=0.0):
+    """The store-day's gross revenue: the sum over `revenue_keys`, plus any money the day took that
+    no declared category claimed. THE definition — a target and a payout rule that both ask here can
+    never disagree about what a day's sales were.
+
+    `unclassified` is money this day's own sales report carried on lines no category could be matched to
+    (owner 2026-11-17, choosing "Whole day's revenue counts"). It is an ARGUMENT and not a lookup,
+    and it defaults to nothing, for two reasons that both matter:
+
+      · WHETHER it counts is the tenant's declared policy, resolved in one home
+        (`commcalc/revenue_scope.unclassified_addend`) by the caller that knows the org. This module
+        stays pure and stays ignorant of orgs, exactly as it is today.
+      · A caller asking "how much did CATEGORY X do" passes nothing and is unmoved. Unclassified
+        money is not evidence of any category, and this argument cannot make it so: it joins the
+        day's total and never a `revenue_keys` entry's own figure.
+
+    So every existing caller reads the same number it always did."""
     rk = set(revenue_keys(catalog))
     # DEREFERENCED, not reached into: `money_of` is the one home for "the dollars on an entry", so
     # this definition and every other dollar question read the same field by the same rule.
-    return round(sum(money_of((declared_map or {}).get(k)) for k in rk), 2)
+    placed = sum(money_of((declared_map or {}).get(k)) for k in rk)
+    return round(placed + _num(unclassified), 2)
 
 
-def employee_revenue(catalog, per_employee):
-    """{employee_name: their declared revenue} from `by_employee` output. Same definition as
-    `gross_revenue`, one person at a time — this is the "who generated the most today" answer."""
+def employee_revenue(catalog, per_employee, *, unclassified_by_employee=None):
+    """{employee_name: their revenue} from `by_employee` output. Same definition as `gross_revenue`,
+    one person at a time — this is the "who generated the most today" answer, and so the weight a
+    pool split proportional to individual sales divides on.
+
+    `unclassified_by_employee` is {name: $} of that person's own unclassified lines, on the same terms as
+    `gross_revenue`'s `unclassified`: the caller resolved the policy, the default moves nobody. A person
+    who appears ONLY there is included — they rang sales all day, and the only reason they are absent
+    from the declared map is that nothing they sold could be classified. Leaving them out would read
+    as having sold nothing, which is the absence-needs-the-right-reason defect in the place it decides
+    a share."""
+    extra = {str(k).strip(): _num(v) for k, v in (unclassified_by_employee or {}).items()
+             if str(k or "").strip()}
     out = {}
     for who, metrics in (per_employee or {}).items():
-        out[who] = round(sum(money_of(v) for v in metrics.values() if v.get("in_revenue")), 2)
+        out[who] = round(sum(money_of(v) for v in metrics.values() if v.get("in_revenue"))
+                         + extra.get(str(who).strip(), 0.0), 2)
+    for who, amt in extra.items():
+        if who not in out:
+            out[who] = round(amt, 2)
     return out
 
 
