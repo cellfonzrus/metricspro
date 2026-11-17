@@ -18,7 +18,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 |---|---|---|
 | `access-probe-rotation.yml` | 1 | `schedule`, `workflow_dispatch` |
 | `branch-base-guard.yml` | 1 | `pull_request_target`, `workflow_dispatch` |
-| `carrier-vocab-guard.yml` | 47 | `pull_request`, `push`, `workflow_dispatch` |
+| `carrier-vocab-guard.yml` | 48 | `pull_request`, `push`, `workflow_dispatch` |
 | `data-qa-guard.yml` | 4 | `pull_request`, `push`, `workflow_dispatch` |
 | `deploy-reachability.yml` | 1 | `deployment_status`, `workflow_dispatch` |
 | `deploy-website.yml` | 1 | `push`, `workflow_dispatch` |
@@ -62,6 +62,7 @@ the Runs on column is how you can tell.
 | `harness_alert_autofix.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_alert_channel_record.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_ambiguous_tenant.py` | `carrier-vocab-guard.yml` | An internal self-call carries the tenant it is acting as (`internal-self-call-tenant`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_annual_goal.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_anonymous_write_surface.py` | `security.yml` | What an anonymous caller may write, and under whose name (`anonymous-write-surface`) | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
 | `harness_any_columns.py` | `tests.yml` | Proof harnesses, group 2 of 4 (`harness-suite-2`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_any_columns_lock.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |

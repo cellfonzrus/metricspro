@@ -3467,6 +3467,11 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/targets_drilldown.py': ('_te',),
             # The visit-priority dropdown offers the axis as assignable deliverables.
             'app/modules/storevisit/visit_plan_router.py': ('_te',),
+            # §COMMCALC-79 — the ANNUAL goal. It is the one figure that governs the months rather
+            # than slicing one, and it dereferences `rate_to_close` so "what do I need to reach X"
+            # has one answer whether the horizon is a day or a year. It owns no axis: the tickable
+            # categories are served from the tenant's declared catalog, never listed here.
+            'app/modules/commcalc/annual_goal.py': ('_targets_engine',),
         },
     },
     # ── §COMMCALC-11 (owner report 2026-10-15) — a check that GATES a sign-in ────────────────────

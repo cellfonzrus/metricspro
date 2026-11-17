@@ -33,6 +33,7 @@ from app.modules.commcalc import month_trend as _month_trend   # 2026-11-12 — 
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
 from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
 from app.modules.commcalc import daily_incentive as _daily_incentive   # 2026-10-10 — THE daily-incentive shapes (mig 1072); every rule is a config row (index §74)
+from app.modules.commcalc import annual_goal as _annual_goal       # 2026-11-17 — WHERE a scope's YEAR must land, and whether it is going to (mig 1125, §COMMCALC-79)
 from app.modules.commcalc import metric_authority as _metric_authority  # 2026-11-17 — WHICH source answers a store-day: the declaration or the store's own report (§COMMCALC-77)
 from app.modules.commcalc import pos_report_sweep as _pos_report_sweep  # the POS-report feed's own home: its table, its connector and its ingest (§COMMCALC-07)
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
@@ -50004,6 +50005,158 @@ def delete_incentive_rule(rule_id: str, org_id: str = ORG_ID,
     return {"ok": True}
 
 
+@router.get("/period-goal/{period}")
+def get_period_goal(period: str, store_code: str = "", grain: str = "year", today: str = "",
+                    metric_source: str = "", org_id: str = ORG_ID,
+                    authorization: str = Header(default="")):
+    """WHERE MUST THIS SCOPE'S YEAR LAND, AND IS IT GOING TO (owner ask 2026-11-17, §COMMCALC-79).
+
+    `period` is the horizon's first period: '2027' for a year, '2027-04' for a quarter. READ-ONLY —
+    nothing is computed into the goal and nothing is paid from it.
+
+    WHAT COUNTS IS THE GOAL'S OWN DECLARATION, never a default. A goal naming no category comes back
+    `measured: false` with a sentence saying so, because a store that traded all year reading as
+    having sold nothing is the defect §COMMCALC-49.10 shipped with. The `axis` block is the
+    tenant's declared money categories, so the screen offers its OWN vocabulary and no house words
+    are behind the list.
+
+    `metric_source` ('declaration' | 'feed') answers THIS call only and persists nothing — the same
+    override, resolved through the same home, as the daily incentive's (§COMMCALC-77). The answer
+    always NAMES the source it came from.
+
+    NO SECOND ARITHMETIC. The need and the per-month rate are `annual_goal.progress`, which
+    dereferences `targets_engine.rate_to_close` — the same home the per-day backward calculation
+    asks — so "what do I need to reach X" means one thing on this platform."""
+    require_org(org_id)
+    client = sb()
+    from app.modules.closing.router import _metric_catalog, _declared_by_day
+    cat = _metric_catalog(client, org_id)
+    row = _period_goal_row(client, org_id, store_code, period, grain)
+    goal_row = row or {"period": str(period), "grain": _annual_goal.grain_named(grain),
+                       "goal_value": 0, "metric_keys": [], "label": ""}
+    d_from, d_to = _annual_goal.horizon_bounds(goal_row)
+    src_declared, src_pending = _declared_metric_authority(client, org_id)
+    source = _metric_authority.resolve(metric_source or src_declared)
+    amounts, excluded = {}, []
+    if d_from:
+        if source == _metric_authority.SOURCE_FEED:
+            feed_rows = _portal_metric_rows(client, org_id, store_code, d_from, date_to=d_to)
+            # The SAME projection the daily path uses, over a wider window: no date is passed, so
+            # every row the read already scoped is carried. There is no second fold.
+            for ln in _metric_authority.lines_from_feed(feed_rows):
+                k = str(ln.get("metric_key") or "")
+                amounts[k] = round(amounts.get(k, 0.0) + safe_float(ln.get("amount")), 2)
+            excluded = _metric_authority.excluded_from_feed(feed_rows)
+        else:
+            # `in_money=True`: a GOAL is dollars, and `figure_of` would add a count of drop-offs to
+            # dollars of printing and call the total money (§COMMCALC-79).
+            by_day = _declared_by_day(client, org_id, store_code, d_from, d_to, catalog=cat,
+                                      in_money=True) or {}
+            for _day, figs in by_day.items():
+                for k, v in (figs or {}).items():
+                    amounts[k] = round(amounts.get(k, 0.0) + safe_float(v), 2)
+    prog = _annual_goal.progress(goal_row, amounts, today or _date.today().isoformat())
+    prog["store_code"] = store_code
+    prog["declared"] = bool(row)
+    prog["measure"] = _annual_goal.measure_named(goal_row, cat)
+    prog["notes"] = str((row or {}).get("notes") or "")
+    # THE TENANT'S OWN MONEY CATEGORIES, so the screen's tick list is its vocabulary and not the
+    # house's. A tenant that has declared none gets an EMPTY axis and a sentence, never four
+    # wireless words (owner directive 2026-10-30).
+    prog["axis"] = [{"key": m.get("key"), "label": m.get("label")}
+                    for m in (cat or []) if m.get("in_revenue")]
+    prog["axis_note"] = ("" if prog["axis"] else
+                         "This company has not declared any category that carries money, so there "
+                         "is nothing a goal could be measured over yet. Declare them on "
+                         "Daily Closing \u2192 Count Fields.")
+    prog["grains"] = list(_annual_goal.GRAINS)
+    prog["horizon"] = {"from": d_from, "to": d_to}
+    prog["metric_source"] = source
+    prog["metric_source_declared"] = src_declared
+    prog["metric_source_options"] = [{"value": s, "label": _metric_authority.SOURCE_LABELS[s]}
+                                     for s in _metric_authority.SOURCES]
+    prog["metric_source_overridden"] = bool(metric_source)
+    prog["metric_source_note"] = _metric_authority.source_sentence(
+        source, rows=len(amounts), excluded=len(excluded))
+    prog["metric_source_declaration_pending"] = src_pending
+    prog["may_edit"] = _can_edit_targets(authorization, org_id)[0]
+    prog["migration_pending"] = _period_goal_pending(client, org_id)
+    return prog
+
+
+@router.put("/period-goal/{period}")
+def put_period_goal(period: str, body: dict = Body(...), org_id: str = ORG_ID,
+                    authorization: str = Header(default="")):
+    """Declare (or clear) a scope's goal for a horizon. THE user-filled entry the owner asked for.
+
+    Gated by `_require_target_edit` — the SAME permission and store-span gate `PUT /targets/{period}`
+    uses, so this widens nobody's access and a district manager can set a goal only for their own
+    stores.
+
+    A goal of 0 with no categories DELETES the row rather than storing an unmeasurable goal, because
+    a row that can never be measured is indistinguishable on a screen from one nobody has set and
+    would be read as "it is set" by the next person to look."""
+    require_org(org_id)
+    code = str((body or {}).get("store_code") or "").strip()
+    _require_target_edit(authorization, org_id, code)
+    grain = _annual_goal.grain_named((body or {}).get("grain"))
+    value = safe_float((body or {}).get("goal_value"))
+    if value < 0:
+        raise HTTPException(400, "A goal cannot be negative — it is a figure to reach.")
+    keys = [str(k).strip() for k in ((body or {}).get("metric_keys") or []) if str(k or "").strip()]
+    if _annual_goal.horizon_bounds({"period": str(period), "grain": grain})[0] is None:
+        raise HTTPException(400, "The period must be a year ('2027') or a quarter's first month "
+                                 "('2027-04').")
+    client = sb()
+    if value <= 0 and not keys:
+        try:
+            (client.schema("commcalc").table("period_goal").delete()
+             .eq("org_id", org_id).eq("store_code", code).eq("period", str(period))
+             .eq("grain", grain).execute())
+        except Exception as e:
+            raise HTTPException(500, f"could not clear the goal (is migration 1125 applied?): {e}")
+        return {"saved": True, "cleared": True}
+    payload = {"org_id": org_id, "store_code": code, "period": str(period), "grain": grain,
+               "goal_value": value, "metric_keys": keys,
+               "label": str((body or {}).get("label") or "").strip() or None,
+               "notes": str((body or {}).get("notes") or "").strip() or None,
+               "updated_by": _caller_uid(authorization), "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    try:
+        (client.schema("commcalc").table("period_goal").upsert(
+            payload, on_conflict="org_id,store_code,period,grain").execute())
+    except Exception as e:
+        raise HTTPException(500, f"could not save the goal (is migration 1125 applied?): {e}")
+    return {"saved": True, "cleared": False}
+
+
+def _period_goal_row(client, org_id, store_code, period, grain):
+    """THE ONE READ of `commcalc.period_goal`. None before mig 1125 is applied, so every surface
+    degrades to "no goal set" — which is what every tenant has today — instead of failing at the
+    point somebody opens the screen."""
+    try:
+        rows = (client.schema("commcalc").table("period_goal").select("*")
+                .eq("org_id", org_id).eq("store_code", str(store_code or ""))
+                .eq("period", str(period)).eq("grain", _annual_goal.grain_named(grain))
+                .limit(1).execute().data) or []
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def _period_goal_pending(client, org_id):
+    """True when `commcalc.period_goal` cannot be read at all — i.e. mig 1125 has not landed.
+
+    Separate from "no row": a surface must be able to tell "nobody has set a goal" from "the table
+    is not there yet", because the first is a prompt to the user and the second is a prompt to the
+    owner. Code deploys on merge here while a migration waits for him."""
+    try:
+        (client.schema("commcalc").table("period_goal").select("id")
+         .eq("org_id", org_id).limit(1).execute())
+        return False
+    except Exception:
+        return True
+
+
 @router.get("/daily-incentive/{close_date}")
 def get_daily_incentive(close_date: str, store_code: str = "", metric_source: str = "",
                         org_id: str = ORG_ID, authorization: str = Header(default="")):
@@ -50091,16 +50244,24 @@ def _declared_metric_authority(client, org_id):
     return (str((rows[0] if rows else {}).get("declared_metric_authority") or "").strip(), False)
 
 
-def _portal_metric_rows(client, org_id, store_code, close_date):
-    """`commcalc.portal_metric_day` rows for ONE store-day, org-scoped. The read only — every rule
-    about which of these rows may pay belongs to `metric_authority`, so a second caller cannot apply
-    a different one."""
+def _portal_metric_rows(client, org_id, store_code, close_date, date_to=None):
+    """`commcalc.portal_metric_day` rows for ONE store-day, org-scoped — or for a DATE RANGE when
+    `date_to` is given. The read only — every rule about which of these rows may pay belongs to
+    `metric_authority`, so a second caller cannot apply a different one.
+
+    The range form is a PARAMETER rather than a second reader, the same choice `_metric_lines` made
+    for the same reason: a caller that needed a span and found only a single day would query the
+    table itself, and this read is the one place the org scoping lives."""
     try:
         q = (client.schema("commcalc").table(_pos_report_sweep.TABLE).select("*")
-             .eq("org_id", org_id).eq("business_date", str(close_date)))
+             .eq("org_id", org_id))
+        if date_to is None:
+            q = q.eq("business_date", str(close_date))
+        else:
+            q = q.gte("business_date", str(close_date)).lte("business_date", str(date_to))
         if store_code:
             q = q.eq("store_code", str(store_code))
-        return q.limit(5000).execute().data or []
+        return q.limit(20000 if date_to is not None else 5000).execute().data or []
     except Exception:
         return []
 

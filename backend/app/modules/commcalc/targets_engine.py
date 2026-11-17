@@ -734,6 +734,29 @@ def grain_windows(scope_result: dict, grain: str = 'week', week_starts: int = 0)
     return out
 
 
+def rate_to_close(goal: float, achieved: float, units_left: int) -> dict:
+    """THE ONE HOME for "what is still owed, and at what flat rate per remaining unit".
+
+    The unit is the CALLER'S — a day for `backward_from_goal` below, a month for
+    `commcalc/annual_goal.py`. The arithmetic does not care, and that is the point: two surfaces
+    answering "what do I need to reach X" over different horizons must not each own a copy of the
+    subtraction and the division, because they would drift the first time one of them learned to
+    treat over-achievement, or a horizon of zero, differently from the other.
+
+    Returns `need` (what is still owed, never negative — over-achievement needs nothing, it does not
+    need a negative amount) and `per_unit` (None with no units left: the honest answer to "what per
+    month do I need with no months remaining" is that there is no such rate, and handing back the
+    need itself would state something false). PURE.
+
+    This function deliberately does NOT name the unit in its output. A caller labels the rate in its
+    own words, so a per-month figure can never reach a screen wearing the word "per day"."""
+    need = max(0.0, safe_float(goal) - safe_float(achieved))
+    units = int(units_left or 0)
+    return {'goal': round(safe_float(goal), 2), 'achieved': round(safe_float(achieved), 2),
+            'need': round(need, 2), 'units_left': units,
+            'per_unit': round(need / units, 2) if units > 0 else None}
+
+
 def backward_from_goal(goal: float, achieved: float, open_days_left: int,
                        open_days_per_week: float = 0.0) -> dict:
     """"What do I need to reach X?" — the owner's backward calculation, stated once.
@@ -747,14 +770,16 @@ def backward_from_goal(goal: float, achieved: float, open_days_left: int,
     an infinity: the honest answer to "what per day do I need with no days remaining" is that there
     is no such rate, and a caller showing the need as a daily figure would be stating something
     false. Over-achievement returns a need of 0 and rates of 0, never a negative."""
-    need = max(0.0, safe_float(goal) - safe_float(achieved))
-    days = int(open_days_left or 0)
-    per_day = round(need / days, 2) if days > 0 else None
+    # WHAT IS STILL OWED, AND THE FLAT RATE THAT CLOSES IT is asked of `rate_to_close` rather than
+    # done here, so this route and the annual goal cannot disagree about it. The DAY is this
+    # function's unit; the labels below are this function's own words for it.
+    closed = rate_to_close(goal, achieved, open_days_left)
+    per_day = closed['per_unit']
     per_week = None
     if per_day is not None and (open_days_per_week or 0) > 0:
         per_week = round(per_day * safe_float(open_days_per_week), 2)
-    return {'goal': round(safe_float(goal), 2), 'achieved': round(safe_float(achieved), 2),
-            'need': round(need, 2), 'open_days_left': days,
+    return {'goal': closed['goal'], 'achieved': closed['achieved'],
+            'need': closed['need'], 'open_days_left': closed['units_left'],
             'per_day': per_day, 'per_week': per_week}
 
 

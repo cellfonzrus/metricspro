@@ -1118,6 +1118,14 @@ on:
       # off the endpoint, so it cannot offer a value the parser refuses
       - "frontend/prove_declared_report_reading.mjs"
       - "frontend/src/components/commcalc/PortalReportEditor.tsx"
+      # index §COMMCALC-79 — where a scope's YEAR must land. Both locks name themselves for the
+      # §13e reason: an allowlist that omits its own subject skips silently.
+      - "frontend/prove_period_goal_card.mjs"
+      - "frontend/src/components/commcalc/PeriodGoalCard.tsx"
+      - "backend/harness_annual_goal.py"
+      - "backend/app/modules/commcalc/annual_goal.py"
+      - "backend/app/modules/commcalc/targets_engine.py"
+      - "database/migrations/1125_period_goal.sql"
       # index §COMMCALC-78 — the screen that shows what a day pays, and the one home for
       # what a payout measures
       - "frontend/prove_daily_incentive_screen.mjs"
@@ -2147,6 +2155,9 @@ jobs:
       - name: Run the declared-metric catalog lock (ONE home for what a business declares daily; no second copy of the vocabulary, no caller reaching past it - index 72)
         working-directory: backend
         run: python3 harness_metric_catalog_lock.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the annual-goal proof (an empty measure is UNMEASURED not zero, an absence is never a verdict, the horizon places on a leap day, and the per-month rate IS the per-day home with a different unit - index COMMCALC-79)
+        working-directory: backend
+        run: python3 harness_annual_goal.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the declared-vs-captured proof (one parser for a feed counterpart, one derivation of financed units, four absences with four reasons, the grain is the category's, nothing blocks a close - index CLOSING-02)
         working-directory: backend
         run: python3 harness_declared_feed_recon.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -2451,6 +2462,24 @@ jobs:
       - name: Run the daily-incentive screen proof (one read, no second fold, every rule shown with its reason, the source named, and the payout-basis home dereferenced - index COMMCALC-78)
         working-directory: frontend
         run: node prove_daily_incentive_screen.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE PERIOD-GOAL CARD PROOF (index §COMMCALC-79). A goal is the one figure on this platform that
+  # governs the months rather than slicing one, so it is the easiest place for a browser to grow its
+  # own subtraction. This proves the card renders the server's need, per-month rate, run-rate and
+  # verdict and derives none of them; that the tickable categories are the TENANT'S declarations and
+  # not a house list; that `on_pace: null` is never shown as "behind"; and that `annual_goal` keeps
+  # dereferencing `targets_engine.rate_to_close` so there is one answer to "what do I need to reach
+  # X". Text-only under Node 22 — no npm install, no React.
+  period-goal-card-proof:
+    name: Annual-goal lock (the card shows the server's verdict, and an absence is never one)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Run the period-goal card proof (no card-side need, the tenant's own categories, null is not "behind", and the rate-to-close home stays dereferenced - index COMMCALC-79)
+        working-directory: frontend
+        run: node prove_period_goal_card.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE DECLARED-REPORT-READING PROOF (index §COMMCALC-77) is the frontend twin of
   # harness_feed_declared_metrics_lock.py. The backend lock proves the parser REFUSES a unit basis or
