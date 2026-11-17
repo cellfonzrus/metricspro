@@ -196,6 +196,7 @@ SCHEMA_OF = {
     "ops_chargeback_policy": "commcalc",
     "payable_source_map": "commcalc",
     "payment_categories": "commcalc",
+    "period_goal": "commcalc",
     "payout_config": "commcalc",
     "payout_exclusion_map": "commcalc",
     "payout_schedule": "commcalc",
