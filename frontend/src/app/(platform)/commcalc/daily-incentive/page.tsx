@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { api, fmt } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
+import DateField from '@/components/DateField'
 
 // WHAT A DAY PAYS, AND WHY (§COMMCALC-78). Owner 2026-11-17: *"Build that screen"*.
 //
@@ -142,8 +143,8 @@ export default function DailyIncentivePage() {
 
       <div className="card" style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
         <label style={{ fontSize: 11, color: 'var(--text3)' }}>Day
-          <input type="date" style={{ ...sel, display: 'block', marginTop: 2 }}
-                 value={date} onChange={e => setDate(e.target.value)} />
+          <DateField style={{ ...sel, display: 'block', marginTop: 2 }}
+                     value={date} onChange={e => setDate(e.target.value)} />
         </label>
         <label style={{ fontSize: 11, color: 'var(--text3)' }}>Store
           <select style={{ ...sel, display: 'block', marginTop: 2, minWidth: 190 }}

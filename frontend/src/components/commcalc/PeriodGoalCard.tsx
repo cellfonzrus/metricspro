@@ -1,6 +1,7 @@
 'use client'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, fmt } from '@/lib/client'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // WHERE MUST THIS YEAR LAND (owner ask 2026-11-17, index §COMMCALC-79).
 //
@@ -166,8 +167,9 @@ export default function PeriodGoalCard({ storeCode = '', year = '' }: { storeCod
           not there yet" — the first is a prompt to the user, the second to the owner. */}
       {d.migration_pending && (
         <div style={{ padding: '9px 16px', fontSize: 12.5, color: 'var(--text2)', background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
-          ⚙️ Goals cannot be stored yet — migration <strong>1125</strong> has not been applied to this
-          database. Everything below reads as &ldquo;no goal set&rdquo; until it is.
+          ⚙️ <SetupNotice
+            lead={'Goals cannot be stored yet, so everything below reads as “no goal set”.'}
+            detail={'1125_period_goal.sql — commcalc.period_goal'} />
         </div>
       )}
 
