@@ -33,6 +33,8 @@ from app.modules.commcalc import month_trend as _month_trend   # 2026-11-12 — 
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
 from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
 from app.modules.commcalc import daily_incentive as _daily_incentive   # 2026-10-10 — THE daily-incentive shapes (mig 1072); every rule is a config row (index §74)
+from app.modules.commcalc import metric_authority as _metric_authority  # 2026-11-17 — WHICH source answers a store-day: the declaration or the store's own report (§COMMCALC-77)
+from app.modules.commcalc import pos_report_sweep as _pos_report_sweep  # the POS-report feed's own home: its table, its connector and its ingest (§COMMCALC-07)
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
 from app.modules.commcalc import peer_comparison as _peercmp   # 2026-10-08 — THE peer traffic-band comparison (index §59)
 from app.modules.commcalc import product_mix as _pmix       # 2026-10-09 — THE device price mix / port discipline (index §62)
@@ -49994,14 +49996,20 @@ def delete_incentive_rule(rule_id: str, org_id: str = ORG_ID,
 
 
 @router.get("/daily-incentive/{close_date}")
-def get_daily_incentive(close_date: str, store_code: str = "", org_id: str = ORG_ID,
-                        authorization: str = Header(default="")):
+def get_daily_incentive(close_date: str, store_code: str = "", metric_source: str = "",
+                        org_id: str = ORG_ID, authorization: str = Header(default="")):
     """What one store-day's declared categories pay each employee, with the full why-trail.
 
     COMPUTES ONLY — nothing is persisted and nobody is paid by calling this (the same posture as the
     management incentive). Hours for a by-hours pool come from the schedule through the one home the
     workforce module already uses; a day with no hours leaves the pool UNALLOCATED and says so rather
-    than inventing an even split."""
+    than inventing an even split.
+
+    `metric_source` ('declaration' | 'feed') answers THIS call only and persists nothing — it is how
+    an operator sees what the store's own sales report would pay before declaring it as the standing
+    authority. Omitted, the org's own declaration answers; absent that, the reps' declarations do,
+    which is what every tenant has today (§COMMCALC-77). The answer always NAMES the source it came
+    from: a figure shown without it is one of two disagreeing answers presented as the only one."""
     require_org(org_id)
     client = sb()
     from app.modules.closing.router import _metric_catalog, _metric_lines
@@ -50017,7 +50025,18 @@ def get_daily_incentive(close_date: str, store_code: str = "", org_id: str = ORG
         row = rows[0] if rows else None
     except Exception:
         row = None
-    lines = _metric_lines(client, org_id, store_code, close_date)
+    # WHICH SOURCE ANSWERS THIS DAY is a declaration, resolved in ONE home (§COMMCALC-77). The
+    # declaration half is unchanged; the feed half PROJECTS `portal_metric_day` onto the very shape
+    # the catalog reader already takes, so there is no second fold and `daily_incentive` is untouched.
+    src_declared, src_pending = _declared_metric_authority(client, org_id)
+    source = _metric_authority.resolve(metric_source or src_declared)
+    feed_rows, excluded = [], []
+    if source == _metric_authority.SOURCE_FEED:
+        feed_rows = _portal_metric_rows(client, org_id, store_code, close_date)
+        lines = _metric_authority.lines_from_feed(feed_rows, business_date=str(close_date))
+        excluded = _metric_authority.excluded_from_feed(feed_rows)
+    else:
+        lines = _metric_lines(client, org_id, store_code, close_date)
     declared = _mc.declared(cat, row, lines)
     per_emp = _mc.by_employee(cat, lines)
     hours, roster = _incentive_hours_for_day(client, org_id, store_code, close_date)
@@ -50031,8 +50050,99 @@ def get_daily_incentive(close_date: str, store_code: str = "", org_id: str = ORG
     result["hours"] = hours
     result["declared"] = declared
     result["metrics"] = cat
+    result["metric_source"] = source
+    result["metric_source_declared"] = src_declared
+    result["metric_source_note"] = _metric_authority.source_sentence(
+        source, rows=len(lines), excluded=len(excluded))
+    result["metric_source_overridden"] = bool(metric_source)
+    result["metric_source_not_counted"] = excluded[:50]
+    result["metric_source_options"] = [{"value": s, "label": _metric_authority.SOURCE_LABELS[s]}
+                                       for s in _metric_authority.SOURCES]
+    # The standing declaration needs mig 1124; until it lands the column cannot be read and the
+    # endpoint says so rather than reporting "the reps declare it" as a settled choice.
+    result["metric_source_declaration_pending"] = src_pending
     result["migration_pending"] = not rules and not lines
     return result
+
+
+def _declared_metric_authority(client, org_id):
+    """(the org's declared metric authority, whether its column is still missing).
+
+    DEGRADES UNTIL ITS MIGRATION LANDS. Code deploys on merge here while a migration waits for the
+    owner, so a read of a column that does not exist yet must answer "nothing declared" — which is
+    today's behaviour for every tenant — rather than 500 at the point a rep opens the screen. The
+    second half of the pair says the column is missing, so a surface can tell "they chose the
+    declarations" from "they have not been able to choose yet"."""
+    try:
+        rows = (client.schema("commcalc").table("commission_org_config")
+                .select("declared_metric_authority").eq("org_id", org_id).limit(1)
+                .execute().data) or []
+    except Exception:
+        return "", True
+    return (str((rows[0] if rows else {}).get("declared_metric_authority") or "").strip(), False)
+
+
+def _portal_metric_rows(client, org_id, store_code, close_date):
+    """`commcalc.portal_metric_day` rows for ONE store-day, org-scoped. The read only — every rule
+    about which of these rows may pay belongs to `metric_authority`, so a second caller cannot apply
+    a different one."""
+    try:
+        q = (client.schema("commcalc").table(_pos_report_sweep.TABLE).select("*")
+             .eq("org_id", org_id).eq("business_date", str(close_date)))
+        if store_code:
+            q = q.eq("store_code", str(store_code))
+        return q.limit(5000).execute().data or []
+    except Exception:
+        return []
+
+
+@router.post("/pos-report/upload")
+async def upload_pos_report(file: UploadFile = File(...), source_id: str = Form(...),
+                            report_key: str = Form(""), org_id: str = Form(ORG_ID),
+                            authorization: str = Header(default="")):
+    """Land a back-office POS report that arrived as a FILE, through the SAME ingest the pull uses.
+
+    THE §COMMCALC-75 PRECEDENT, applied (owner 2026-11-17: *"make a way to upload this report"*).
+    Everything downstream of the download was already built and was never at fault: the header
+    reading, the line → declared-category match, the store resolution and the idempotent upsert on
+    the mig-1078 natural key. ONLY THE TRANSPORT was missing, so the file gets a door rather than the
+    parser getting a sibling: a delivered file and a pulled one are indistinguishable downstream,
+    land under the same keys and restate a day instead of duplicating it.
+
+    A file that is not this report lands NOTHING and names the columns it looked for. An empty parse
+    is never a green tick — `delivered` is true only when rows actually landed, which is the same
+    rule the pull reports by."""
+    require_org(org_id)
+    client = sb()
+    rows = _ds_rows(client.schema("commcalc").table("data_source")
+                    .select("*").eq("id", source_id).eq("org_id", org_id).limit(1))
+    if not rows:
+        raise HTTPException(404, "That data source was not found for this company.")
+    src = rows[0]
+    if str(src.get("processor") or "") != _pos_report_sweep.CONNECTOR:
+        raise HTTPException(400, "That data source is not a back-office POS report login, so this "
+                                 "file has nothing to land under. Pick the POS report source.")
+    specs = _pos_report_sweep.report_specs(src.get("processor"), src_row=src) or []
+    want = _pos_report_sweep.spec_key(report_key) if report_key else ""
+    spec = next((s for s in specs if _pos_report_sweep.spec_key(s) == want), None) if want else None
+    if spec is None:
+        if want:
+            raise HTTPException(400, "This source declares no report called %r. It declares: %s."
+                                % (report_key, ", ".join(_pos_report_sweep.spec_key(s) for s in specs)
+                                   or "(none yet)"))
+        if len(specs) != 1:
+            raise HTTPException(400, "Say which of this source's declared reports this file is: %s."
+                                % (", ".join(_pos_report_sweep.spec_key(s) for s in specs)
+                                   or "(this source declares no reports yet)"))
+        spec = specs[0]
+    payload = await file.read()
+    if not payload:
+        raise HTTPException(400, "That file is empty.")
+    out = _pos_report_sweep.ingest_report(client, org_id, src, src.get("processor"), spec,
+                                          payload, filename=getattr(file, "filename", "") or "")
+    out["source_id"] = source_id
+    out["delivered_as"] = "upload"
+    return out
 
 
 def _incentive_hours_for_day(client, org_id, store_code, close_date):

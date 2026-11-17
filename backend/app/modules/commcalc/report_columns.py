@@ -51,27 +51,82 @@ def merge_synonyms(base, extra=None):
     return out
 
 
-def map_headers(header_row, base, extra=None):
+def bound_columns(header_row, bindings=None):
+    """{field: column index} for the columns a tenant has NAMED outright, plus the bindings that
+    name no column of this export.
+
+    WHY A BINDING EXISTS AT ALL, AND WHY A SYNONYM COULD NOT DO IT (owner 2026-11-17). A synonym
+    answers "what other words mean this field"; it cannot answer "WHICH of my two columns is it".
+    `merge_synonyms` puts a tenant's words in front and `map_headers` then sorted every synonym by
+    LENGTH, throwing that order away — so an export carrying both a category column and a
+    product-name column was read on whichever the house table claimed first, and declaring the
+    synonym did not change it. A promise kept in one function and lost in the next.
+
+    A BINDING THAT MISSES IDENTIFIES NOTHING. It must not fall back to the house default, because
+    the house default is precisely the column the tenant rejected — a silent fall back would hand
+    them back the wrong column and read as agreement (owner 2026-10-30: *nothing declared means
+    nothing identified, and the surface says so*). The caller is given the misses so it can say
+    which declared column is not on the file.
+
+    PURE. Returns `(bound, missed)`.
+    """
+    bound, missed = {}, []
+    for field, header in dict(bindings or {}).items():
+        want = norm(header)
+        if not want:
+            continue
+        hit = None
+        for i, cell in enumerate(header_row or []):
+            h = norm(cell)
+            if not h:
+                continue
+            if h == want or want in h:
+                hit = i
+                break
+        if hit is None:
+            missed.append(str(field))
+        else:
+            bound[str(field)] = hit
+    return bound, sorted(missed)
+
+
+def binding_misses(header_row, bindings=None):
+    """The declared bindings that name no column of this export. PURE."""
+    return bound_columns(header_row, bindings)[1]
+
+
+def map_headers(header_row, base, extra=None, bindings=None):
     """{field: column index} for the headers this vocabulary recognizes.
 
-    LONGEST SYNONYM FIRST, so "net sales" wins over "sales" on a header that contains both, and a
-    field already claimed by an earlier (longer) synonym is not re-claimed. Matching is on the
-    normalized spelling, by equality or containment — an export that prints "Trans Date (local)"
-    still reads as the date.
+    A DECLARED BINDING WINS OUTRIGHT (`bound_columns`): the tenant has said which column this is, so
+    no synonym — house or declared, long or short — may claim that field, and a binding that names
+    no column of the export leaves its field UNRESOLVED rather than falling back.
+
+    Otherwise, LONGEST SYNONYM FIRST, so "net sales" wins over "sales" on a header that contains
+    both, and a field already claimed by an earlier (longer) synonym is not re-claimed. Matching is
+    on the normalized spelling, by equality or containment — an export that prints "Trans Date
+    (local)" still reads as the date.
+
+    `bindings` omitted, None or empty is byte-identical to this function before bindings existed.
     """
+    bound, missed = bound_columns(header_row, bindings)
+    claimed = set(bound) | set(missed)
+    taken = set(bound.values())
     syn = merge_synonyms(base, extra)
     pairs = []
     for field, words in syn.items():
         for w in words:
             pairs.append((len(w), w, field))
     pairs.sort(reverse=True)
-    out = {}
+    out = dict(bound)
     for i, cell in enumerate(header_row or []):
+        if i in taken:
+            continue
         h = norm(cell)
         if not h:
             continue
         for _n, w, field in pairs:
-            if field in out:
+            if field in out or field in claimed:
                 continue
             if h == norm(w) or norm(w) in h:
                 out[field] = i

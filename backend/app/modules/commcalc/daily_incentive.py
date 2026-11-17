@@ -51,6 +51,30 @@ OPS = {
 }
 
 
+def payout_measurable(basis, metric_keys):
+    """Can this rule's PAYOUT be measured at all? Returns (ok, why). PURE.
+
+    THE CASE THIS NAMES (found 2026-11-17 against a live tenant's own rules). `measure` answers a
+    'units' or 'amount' basis by SUMMING the named categories — so a payout that names a basis of
+    dollars or units and NO category sums nothing and the rule pays $0.00. That zero is
+    indistinguishable from "the store did nothing today", which is the absence-needs-the-right-reason
+    defect in the place it costs the most: a correctly-gated rule, a store that traded all day, and a
+    payout of nothing with no explanation.
+
+    'revenue' with no categories is NOT this case — it is the whole declared day, which is a real
+    number `metric_catalog.gross_revenue` owns.
+
+    This CHANGES NO AMOUNT. It only lets the why-trail say which rule cannot be measured, so the
+    operator fixes the config row rather than hunting a phantom in the data.
+    """
+    b = _key(basis).lower() or "revenue"
+    keys = [k for k in (metric_keys or []) if _key(k)]
+    if b == "revenue" or keys:
+        return True, ""
+    return False, ("this rule pays on %s but names no category, so there is nothing to measure — "
+                   "name the categories it pays on, or set its basis to the whole day's revenue" % b)
+
+
 def _num(v, d=0.0):
     try:
         return float(d) if v in (None, "") else float(v)
@@ -218,6 +242,10 @@ def compute_day(catalog, rules, *, declared_map, per_employee, hours_by_employee
             pbasis = "amount"
         pkeys = payout.get("metric_keys") or []
         cap = payout.get("cap")
+        # Stamped on every verdict this rule produces, so a $0.00 can always be told from a rule
+        # that could never have measured anything. Changes no amount — see `payout_measurable`.
+        _p_ok, _p_note = payout_measurable(pbasis, pkeys)
+        _pm = {"payout_measurable": _p_ok, "payout_note": _p_note}
 
         store_pass, store_detail = _gate(catalog, rule.get("qualifier"), declared_map, None) \
             if _key((rule.get("qualifier") or {}).get("scope")).lower() == "store" \
@@ -225,11 +253,11 @@ def compute_day(catalog, rules, *, declared_map, per_employee, hours_by_employee
 
         if kind == "threshold_pool":
             if not store_pass:
-                rule_notes.append({"rule": label, "paid": 0.0, "qualifier": store_detail})
+                rule_notes.append({**_pm, "rule": label, "paid": 0.0, "qualifier": store_detail})
                 continue
             pool_value, missing = measure(catalog, declared_map, pbasis, pkeys)
             if missing:
-                rule_notes.append({"rule": label, "paid": 0.0,
+                rule_notes.append({**_pm, "rule": label, "paid": 0.0,
                                    "reason": "pays on a category this business does not declare",
                                    "missing": missing})
                 continue
@@ -269,14 +297,14 @@ def compute_day(catalog, rules, *, declared_map, per_employee, hours_by_employee
                                        f"{_key(payout.get('split')).lower() or 'equal'}",
                               "qualifier": store_detail})
                 totals[who] = _round(totals.get(who, 0.0) + amt)
-            rule_notes.append({"rule": label, "pool": pool, "paid": _round(pool - un),
+            rule_notes.append({**_pm, "rule": label, "pool": pool, "paid": _round(pool - un),
                                "unallocated": un, "note": note, "qualifier": store_detail,
                                "eligible": eligible, "per_employee_qualifier": per_person_detail})
             continue
 
         # per_unit / percent_of_amount — paid on each employee's OWN production.
         if not store_pass:
-            rule_notes.append({"rule": label, "paid": 0.0, "qualifier": store_detail})
+            rule_notes.append({**_pm, "rule": label, "paid": 0.0, "qualifier": store_detail})
             continue
         paid_total, detail = 0.0, {}
         for who in roster:
@@ -303,7 +331,7 @@ def compute_day(catalog, rules, *, declared_map, per_employee, hours_by_employee
                           "qualifier": detail.get(who, store_detail)})
             totals[who] = _round(totals.get(who, 0.0) + amt)
             paid_total = _round(paid_total + amt)
-        rule_notes.append({"rule": label, "paid": paid_total, "qualifier": store_detail,
+        rule_notes.append({**_pm, "rule": label, "paid": paid_total, "qualifier": store_detail,
                            "per_employee_qualifier": detail})
 
     top = max(emp_rev.items(), key=lambda kv: (kv[1], kv[0]))[0] if emp_rev else None
