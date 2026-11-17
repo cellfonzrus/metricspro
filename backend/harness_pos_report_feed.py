@@ -136,24 +136,39 @@ print("\nD. the normalizer — rows, and the rows it will not write")
 res = normalize()
 rows = res["rows"]
 by = {(r["store_code"], r["employee_name"], r["metric_key"]): r for r in rows}
-eq(len(rows), 5, "five (store, worker, category) rows from this export")
+eq(len(rows), 6, "six (store, worker, category) rows from this export — five placed, one not")
 eq(by[("0001", "Asha", "pkg_dropoff")]["units"], 10,
    "two lines of one category on one day are SUMMED, not overwritten (6 + 4)")
 eq(by[("0001", "Asha", "ship_second_day")]["amount"], 1240.50, "'$1,240.50' parses as money")
 eq(by[("0001", "Bea", "printing")]["units"], 0, "an amount-only category keeps its zero units")
 ok(all(r["business_date"] == "2026-10-11" for r in rows), "MM/DD/YYYY became an ISO business date")
 ok(("0002", "Cyd", "ship_third_day") in by, "the second store's worker is kept separate")
-ok(not any(r["metric_key"] == "" for r in rows), "no row carries an empty category")
 ok(all(r["employee_name"] for r in rows), "the worker's own spelling is kept on every row")
-ok("Notary" not in str(rows), "the unmatched line produced NO row…")
+# CHANGED 2026-11-17 by the owner's own ruling ("Whole day's revenue counts"), and the old assertion
+# — "the unmatched line produced NO row" — is what this replaces. A line no declared category claimed
+# is still a sale that happened, so it is now EMITTED at the landing grain, carrying no category. The
+# rule it must still obey is the one below: it may never become a category, and so may never pay one.
+_unclassified = [r for r in rows if feed.is_unclassified(r)]
+eq(len(_unclassified), 1, "the unmatched line DOES produce a row, so its money has a day on it")
+eq(_unclassified[0]["metric_key"], feed.UNCLASSIFIED_KEY,
+   "…carrying no category, which is the honest spelling of 'nothing claimed it'")
+eq(_unclassified[0]["metric_basis"], feed.BASIS_UNMATCHED, "…and the basis that says why")
+ok(_unclassified[0]["business_date"] and _unclassified[0]["employee_name"],
+   "…WITH its day and its worker, which is the whole reason the row exists")
+ok(not feed.basis_is_declared(_unclassified[0]["metric_basis"]),
+   "…and it is NOT the tenant's declaration about any category")
+ok(all(not feed.is_unclassified(r) for r in rows if r["metric_key"]),
+   "every row with a category is classified — the two states are exclusive")
 unmapped = {u["line"]: u for u in res["unmapped"]}
-ok("Notary Service" in unmapped, "…and is reported, with the money it carried")
+ok("Notary Service" in unmapped,
+   "…and the label is STILL reported for mapping — counting the money is not classifying the line")
 eq(unmapped["Notary Service"]["amount"], 15.00, "the unmapped line's dollars are stated, not dropped")
 ok(any("not mapped to a declared category" in w for w in res["warnings"]),
    "the pull's answer says a human must map it or add the category")
 ok(not any(r.get("line_label", "").upper() == "TOTAL" for r in rows),
    "the TOTAL row is not a day (no date ⇒ skipped, never summed as one)")
-eq(sum(1 for r in rows if r["store_code"] == "0001"), 4, "store 0001 contributes four worker-category rows")
+eq(sum(1 for r in rows if r["store_code"] == "0001" and not feed.is_unclassified(r)), 4,
+   "store 0001 contributes four worker-category rows")
 
 print("\nE. two spellings of one store-day-worker-category restate each other")
 twice = feed.dedupe([
@@ -178,7 +193,11 @@ res2 = normalize(resolve_store=lambda raw: "B-100" if raw == "0001" else None)
 placed = [r for r in res2["rows"] if r["store_code"]]
 unplaced = [r for r in res2["rows"] if not r["store_code"]]
 ok(all(r["store_code"] == "B-100" for r in placed), "a resolvable store lands on its canonical code")
-eq(len(unplaced), 1, "store 0002 resolves to nothing — its row is still STORED")
+# TWO rows now: store 0002's own category row, and its unclassified line. "Unplaced" here is the
+# STORE; "unclassified" is the CATEGORY. The two are independent, which this count demonstrates.
+eq(len(unplaced), 2, "store 0002 resolves to nothing — its rows are still STORED")
+eq(sum(1 for r in unplaced if feed.is_unclassified(r)), 1,
+   "…one of them is also unclassified, and the two conditions do not imply each other")
 ok(unplaced and all(r["store_label"] == "0002" for r in unplaced),
    "…keeping the portal's own spelling as evidence")
 totals = feed.totals_by_store_day(res2["rows"])

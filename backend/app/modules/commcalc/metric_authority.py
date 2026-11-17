@@ -122,3 +122,37 @@ def source_sentence(source, *, rows=None, excluded=0) -> str:
         base += (" %d further line(s) matched a category only by wording, so they are reported and "
                  "not counted." % int(excluded))
     return base
+
+
+def unclassified_from_feed(portal_rows, *, business_date=None):
+    """The feed's money that NO declared category claimed: {amount, rows, by_employee{name: $}}.
+
+    Owner 2026-11-17, choosing "Whole day's revenue counts". This is the one home for reading that
+    money out of feed rows, and it is deliberately NOT part of `lines_from_feed`: a line nobody
+    classified may never be paid AS a category, so it must never enter the shape `metric_catalog`
+    folds into categories. It reaches a day's revenue — and only a day's revenue — as an addend,
+    and only where `revenue_scope` says the tenant declared that it counts.
+
+    `by_employee` carries the report's own spelling of the operator, unresolved, exactly as
+    `lines_from_feed` leaves `employee_name`. A line with no operator is in `amount` and in nobody's
+    share: it was revenue, and it was nobody's sale.
+
+    `business_date` narrows to one day when the caller read a wider window. PURE.
+    """
+    want = str(business_date) if business_date else None
+    total, nrows, by_emp = 0.0, 0, {}
+    for r in (portal_rows or []):
+        if not _feed.is_unclassified(r):
+            continue
+        if want and str((r or {}).get("business_date") or "")[:10] != want[:10]:
+            continue
+        try:
+            amt = round(float((r or {}).get("amount") or 0.0), 2)
+        except (TypeError, ValueError):
+            amt = 0.0
+        total = round(total + amt, 2)
+        nrows += 1
+        who = str((r or {}).get("employee_name") or "").strip()
+        if who:
+            by_emp[who] = round(by_emp.get(who, 0.0) + amt, 2)
+    return {"amount": total, "rows": nrows, "by_employee": by_emp}
