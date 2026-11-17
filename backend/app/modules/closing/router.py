@@ -3788,7 +3788,8 @@ def _metric_lines(client, org_id, store_code, close_date, date_to=None, limit=No
         return []
 
 
-def _declared_by_store_day(client, org_id, date_from, date_to, store_code="", catalog=None):
+def _declared_by_store_day(client, org_id, date_from, date_to, store_code="", catalog=None,
+                           in_money=False):
     """WHAT WAS DECLARED, PER STORE PER DAY, OVER A RANGE — folded across both physical stores.
 
     THE one home for the ranged question, as `declared()` is for a single store-day. It exists so a
@@ -3803,6 +3804,12 @@ def _declared_by_store_day(client, org_id, date_from, date_to, store_code="", ca
 
     The value is the metric's own unit — units for a count metric, dollars for a money one —
     because `metric_catalog.figure_of` is dereferenced for it rather than decided here.
+
+    `in_money=True` answers in DOLLARS for every metric instead, through `metric_catalog.money_of`.
+    It is a parameter rather than a second reader for the same reason `_metric_lines`' `date_to` is:
+    a caller that needed money and found only this would query the tables itself. It exists because
+    an annual GOAL is a money figure (§COMMCALC-79), and summing `figure_of` into one would add a
+    count of drop-offs to dollars of printing and show the total as money.
 
     Degrades to {} on any failure, so a surface that asks before mig 1072/1074 are applied behaves
     as it did before rather than failing."""
@@ -3847,11 +3854,13 @@ def _declared_by_store_day(client, org_id, date_from, date_to, store_code="", ca
         # one home — `metric_catalog.figure_of` — and this fold dereferences it, as the targets
         # engine dereferences `figure_unit` for the same metric's unit. Deciding it inline here
         # would let a target be SET in units and MEASURED in dollars.
-        out.setdefault(store, {})[day] = {k: _metrics.figure_of(c) for k, c in folded.items()}
+        _fig = _metrics.money_of if in_money else _metrics.figure_of
+        out.setdefault(store, {})[day] = {k: _fig(c) for k, c in folded.items()}
     return out
 
 
-def _declared_by_day(client, org_id, store_code, date_from, date_to, catalog=None):
+def _declared_by_day(client, org_id, store_code, date_from, date_to, catalog=None,
+                     in_money=False):
     """One store's declarations per day: {date_string: {metric_key: value}}.
 
     A DEREFERENCE of _declared_by_store_day, not a second reader — the store-keyed form above is
@@ -3860,7 +3869,8 @@ def _declared_by_day(client, org_id, store_code, date_from, date_to, catalog=Non
     codes that way everywhere else (see coa._norm_store) and quietly folding it in one reader is how
     one surface would start finding a store the rest of the system does not."""
     by_store = _declared_by_store_day(client, org_id, date_from, date_to,
-                                      store_code=store_code, catalog=catalog)
+                                      store_code=store_code, catalog=catalog,
+                                      in_money=in_money)
     return by_store.get(str(store_code or "").strip()) or {}
 
 

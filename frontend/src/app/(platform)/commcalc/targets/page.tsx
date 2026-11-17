@@ -8,6 +8,9 @@ import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
 import { LinkedText } from '@/components/ScreenLink'
 import { useTargetAxis } from '@/lib/target-axis'
+// WHERE MUST THE YEAR LAND (§COMMCALC-79). On THIS screen because the owner asked for the goal
+// "where the targets have to be declared"; it computes nothing and serves its own read.
+import PeriodGoalCard from '@/components/commcalc/PeriodGoalCard'
 import DrillDownPanel, {
   DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
 } from '@/components/DrillDownPanel'
@@ -239,6 +242,10 @@ export default function DailyTargetsPage() {
           page; if it keeps saying this, the server could not be reached.
         </div>
       )}
+
+      {/* The YEAR above the months (§COMMCALC-79). One store when exactly one is selected, else
+          the whole company — the goal is declared per scope and this card never guesses which. */}
+      <PeriodGoalCard storeCode={selStores.length === 1 ? selStores[0] : ''} />
 
       <FreshnessBanner daily={freshness?.daily} dlar={freshness?.dlar} period={period} />
 
