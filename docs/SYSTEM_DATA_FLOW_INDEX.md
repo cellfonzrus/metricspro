@@ -49690,6 +49690,35 @@ month" before building anything. FOUND, and EXTENDED rather than joined:
 NOT a new derivation, a new table, a new endpoint or a new report. One module, `labour_cost`, is
 the DOOR onto the existing producer, and one deletion removes the sibling.
 
+### STOREOPS-10.1a THE LAST CENT — a per-store cell is rounded as it accumulates, and that is accepted
+
+Written down because two sessions have now measured it and the second nearly changed a money path for
+$0.01 (2026-11-17). **`payroll_salary.apply_to_by_store` rounds each store bucket to cents as it
+subtracts the hourly figure and adds the derived one**, so the SUM OF THE CELLS can sit a cent above
+the sum of the employees. Measured live, LuxeLink October 2026: assigning a manager (§STOREOPS-11)
+moved a cell onto `Belmont`, whose bucket carried a sub-cent remainder, and the report's own total
+went $121,632.67 → $121,632.68 with `Belmont` a cent above its plain share.
+
+**Why this is accepted and not a defect to chase:**
+
+- **The two surfaces still tie EXACTLY.** The P&L wages line and `labour_cost.per_store` both read
+  $121,632.68, difference $0.00 — they dereference one producer, which is what this section IS. A
+  books-vs-report break is impossible here; what moves is the producer's own total.
+- **It is DETERMINISTIC.** Three runs in one process against production: 24 cells, $121,632.68, zero
+  cells differing. That is the whole distinction from the §STOREOPS-10.2(E) defect fixed the same
+  week ($6,083.83 / $6,083.84 at `Cicero` on alternate runs) — that one was ONE question answering
+  TWO ways and had to go; a figure that always comes out the same cannot throw a reconciliation.
+- **The invariant reconciliation needs holds: each employee's own pay foots to the cent.** $6,642.86
+  = 19 × $332.14 + $332.20; $5,280.23 = 9 × $528.02 + $528.05. `allocate_across_stores` fixes the
+  remainder on the last store, and that survives the `covered=` path.
+- Both `round(..., 2)` calls predate §STOREOPS-11 (byte-identical at `8471904`) and have run for
+  every salaried employee with hours since the pay-basis feature shipped. A manager assignment only
+  made an existing property visible.
+
+So: **do not "fix" the last cent by changing rounding in the pay path**, and do not read a one-cent
+gap between the cell sum and the employee sum as drift. If it is ever worth closing, it is its own
+change with its own measurement, not a tidy-up ridden along with something else.
+
 ### STOREOPS-10.2 The mechanism
 
 `backend/app/modules/storeops/labour_cost.py` — the one home for "what did this period's labour
