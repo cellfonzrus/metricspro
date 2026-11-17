@@ -45,6 +45,7 @@ from `merchant_portals` — the platform's existing PURE portal-export readers, 
 """
 import re
 
+from app.modules.commcalc import commission_ledger as _ledger
 from app.modules.commcalc.merchant_portals import iso_date, money
 # The column-vocabulary MECHANISM lives in ONE home (§COMMCALC-36) and the VOCABULARY lives here.
 # `norm`, `map_headers` and `header_score` below are DEREFERENCES of it, kept at their old spellings
@@ -99,6 +100,67 @@ def basis_is_declared(basis) -> bool:
     return str(basis or "") in DECLARED_BASES
 
 
+# ── HOW MANY did this line do (owner 2026-11-17: *"each transaction is qty 1"*) ──────────────────
+# A portal that publishes an AGGREGATE carries its own quantity column; a POS that exports one row
+# per sale LINE carries none, and `_units` read an absent cell as 0 — so every parcel, rental and
+# activation on such an export counted as nothing and a units gate could never pass.
+#
+# WHICH SHAPE THIS EXPORT IS, IS DECLARED. It cannot be inferred: an export with no quantity column
+# might equally be one whose quantities are genuinely unknown, and counting a row as a unit there
+# would invent volume nobody sold. `column` is what every existing tenant has, so an absent
+# declaration moves nobody.
+UNIT_BASIS_COLUMN = "column"   # the export states its own quantity (today's behaviour)
+UNIT_BASIS_ROW = "row"         # one row IS one unit, when the export states no quantity
+UNIT_BASES = (UNIT_BASIS_COLUMN, UNIT_BASIS_ROW)
+UNIT_BASIS_DEFAULT = UNIT_BASIS_COLUMN
+UNIT_BASIS_LABELS = {
+    UNIT_BASIS_COLUMN: "The export states a quantity on each line",
+    UNIT_BASIS_ROW: "Each line of the export is one transaction",
+}
+
+
+def unit_basis_named(raw):
+    """The declared unit basis. Blank/None reads as the house default; anything else is REFUSED
+    rather than guessed — a mistyped basis that silently counted rows would invent volume. PURE."""
+    v = str(raw or "").strip().lower() or UNIT_BASIS_DEFAULT
+    if v not in UNIT_BASES:
+        raise ValueError("unit_basis must be one of %s" % ", ".join(UNIT_BASES))
+    return v
+
+
+# ── WHICH SIGN IS A SALE — dereferenced, never re-decided here ───────────────────────────────────
+# A POS that writes a sale NEGATIVE and a refund POSITIVE is an ordinary export shape, and read as
+# written it pays every percent-of-amount rule a negative number. "Which sign is money earned" is
+# already one home in this platform (`commission_ledger`, mig 1006) and it already nets a reversal
+# into the thing it reverses. A second rule here would be the divergence the house rules forbid, so
+# this is a DEREFERENCE: the vocabulary, the parser and the netting are all that module's.
+#
+# The DEFAULT is the opposite of that module's, deliberately and by measurement: every tenant reading
+# this feed today has its amounts taken as written, so `payout_positive` is the only default that
+# moves nobody.
+AMOUNT_SIGNS = _ledger.SIGN_CONVENTIONS
+AMOUNT_SIGN_DEFAULT = _ledger.SIGN_PAYOUT_POSITIVE
+AMOUNT_SIGN_LABELS = _ledger.SIGN_CONVENTION_LABELS
+
+
+def amount_sign_named(raw):
+    """The declared sign convention's name. Blank/None reads as the house default; an unknown name
+    is REFUSED, because silently defaulting would flip a tenant's revenue. PURE."""
+    v = str(raw or "").strip().lower() or AMOUNT_SIGN_DEFAULT
+    if v not in AMOUNT_SIGNS:
+        raise ValueError("amount_sign must be one of %s" % ", ".join(AMOUNT_SIGNS))
+    return v
+
+
+def earned_amount(raw_amount, sign_name=None):
+    """One cell → the money this line EARNED, under the declared convention. A reversal books
+    negative so it nets off; it is never `abs()`-ed into a second sale. PURE, and every step of it
+    is `commission_ledger`'s."""
+    conv = _ledger.convention_named(amount_sign_named(sign_name))
+    amt = money(raw_amount)
+    return round(_ledger.booked_amount(amt, _ledger.direction(amt, conv)), 2)
+
+
 def norm(v) -> str:
     """Normalized matching spelling — `report_columns.norm` (§COMMCALC-36). Kept at this spelling
     because `pos_report_sweep._project` builds the upsert's KEY columns with it: `store_key` and
@@ -107,11 +169,12 @@ def norm(v) -> str:
     return rc.norm(v)
 
 
-def map_headers(header_row, synonyms=None):
+def map_headers(header_row, synonyms=None, bindings=None):
     """{field: column index} for the headers we recognize — `report_columns.map_headers` over THIS
-    feed's vocabulary. Longest synonym first; the tenant's declared extras outrank the house
-    defaults. The mechanism is not re-implemented here (§COMMCALC-36)."""
-    return rc.map_headers(header_row, COLUMN_SYNONYMS, synonyms)
+    feed's vocabulary. A tenant's declared BINDING names the column outright and outranks every
+    synonym; otherwise longest synonym first. The mechanism is not re-implemented here
+    (§COMMCALC-36)."""
+    return rc.map_headers(header_row, COLUMN_SYNONYMS, synonyms, bindings=bindings)
 
 
 def header_score(row, synonyms=None) -> int:
@@ -224,13 +287,30 @@ def normalize(table, *, catalog=None, line_map=None, calibration=None, org_id=No
     """
     cal = dict(calibration or {})
     syn = cal.get("column_synonyms") or {}
+    bindings = cal.get("column_bindings") or {}
+    unit_basis = unit_basis_named(cal.get("unit_basis"))
+    sign_name = amount_sign_named(cal.get("amount_sign"))
     rows_out, skipped, warnings, unmapped = [], [], [], {}
     table = [list(r) for r in (table or []) if r is not None]
     if not table:
         return {"rows": [], "skipped": [], "warnings": ["The export was empty."], "unmapped": [],
                 "stale_map": []}
-    idx = map_headers(table[0], syn)
+    idx = map_headers(table[0], syn, bindings=bindings)
+    # A DECLARED COLUMN THAT IS NOT ON THE FILE IS SAID OUT LOUD, naming the column the tenant asked
+    # for and what the export actually carries. Falling back to the house default here would hand
+    # back the very column the binding rejected and read as agreement.
+    missed = rc.binding_misses(table[0], bindings)
+    if missed:
+        warnings.append(
+            "This source names %s as the column(s) for %s, and the export has no such column. "
+            "Nothing is read from it — correct the column name on this source, or remove the "
+            "binding to fall back to the usual headers. The export's own columns are: %s."
+            % (", ".join(repr(str(bindings.get(f))) for f in missed), ", ".join(missed),
+               ", ".join(str(c) for c in table[0] if str(c or "").strip())[:300]))
     if "line_label" not in idx:
+        if missed:
+            return {"rows": [], "skipped": [], "unmapped": [], "stale_map": [],
+                    "warnings": warnings}
         return {"rows": [], "skipped": [], "unmapped": [], "stale_map": [],
                 "warnings": ["No column on this export names the report line (the category). Map the "
                              "export's own header on this source's column synonyms."]}
@@ -248,8 +328,12 @@ def normalize(table, *, catalog=None, line_map=None, calibration=None, org_id=No
             skipped.append({"line": lineno, "why": "no report line on the row"})
             continue
         key, basis = match_metric(label, catalog=catalog, line_map=lm)
+        # The export's OWN quantity always wins where it states one — a `row` basis declared on an
+        # export that does carry quantities must never silently replace 4 activations with 1.
         units = _units(_cell(raw, idx.get("units")))
-        amount = round(money(_cell(raw, idx.get("amount"))), 2)
+        if not units and unit_basis == UNIT_BASIS_ROW and "units" not in idx:
+            units = 1
+        amount = earned_amount(_cell(raw, idx.get("amount")), sign_name)
         if not key:
             u = unmapped.setdefault(norm(label), {"line": label, "basis": basis, "units": 0,
                                                   "amount": 0.0, "rows": 0})

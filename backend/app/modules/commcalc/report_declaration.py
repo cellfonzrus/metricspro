@@ -37,13 +37,15 @@ Proof: `backend/harness_report_declaration.py` — DB-free and browser-free.
 """
 from app.modules.commcalc import pos_report_sweep as _sweep
 from app.modules.commcalc import portal_report_pull as _prp
+from app.modules.commcalc import pos_report_feed as _feed
 from app.modules.commcalc import report_columns as _rc
 
 # The fields an editor row carries. Everything here is either stored or DERIVED from what is stored —
 # `per_day` is derived (§COMMCALC-37: a report whose filters mention {date} IS a per-day report, and a
 # flag beside that could disagree with it), and `problems` is advice, never stored.
 ROW_FIELDS = ("key", "label", "nav", "export", "params", "line_map",
-              "report_url", "run_selector", "export_selector")
+              "report_url", "run_selector", "export_selector",
+              "column_bindings", "unit_basis", "amount_sign")
 # THE CONTROLS THE PULL PRESSES, and the address it may go to instead of clicking menu words
 # (owner, 2026-11-04: "How to get the filters right"). `portal_report_pull` reads FOUR facts per
 # report off `portal_calibration` — `params`, `run_selector`, `export_selector` and one of
@@ -67,6 +69,38 @@ MAX_PARAMS = 24               # per report
 # pull cannot apply would be offering a filter that is silently ignored.
 PARAM_KINDS = _prp.PARAM_KINDS
 DATE_TOKENS = _prp.DATE_TOKENS
+
+# HOW TO READ THIS REPORT once it has been downloaded (owner 2026-11-17). Three facts about a
+# tenant's own export that nothing could declare, so no export could answer a declared category:
+# which COLUMN is which fact when two could be (`column_bindings`), whether a line states its own
+# quantity or IS one (`unit_basis`), and which SIGN is a sale (`amount_sign`). Every one of them is
+# DEREFERENCED from the home that owns it — this editor adds no vocabulary of its own, and the
+# defaults are what every existing tenant already reads by, so a report nobody has declared these on
+# is parsed byte-identically to before.
+READING_FIELDS = ("column_bindings", "unit_basis", "amount_sign")
+UNIT_BASES = _feed.UNIT_BASES
+UNIT_BASIS_LABELS = dict(_feed.UNIT_BASIS_LABELS)
+AMOUNT_SIGNS = _feed.AMOUNT_SIGNS
+AMOUNT_SIGN_LABELS = dict(_feed.AMOUNT_SIGN_LABELS)
+#: The fields a binding may name — the AXES `pos_report_feed` reads, never a category.
+BINDABLE_FIELDS = tuple(_feed.COLUMN_SYNONYMS)
+
+
+def _clean_bindings(value):
+    """{field: the export's own column header} for the axes this feed reads. A binding naming a
+    field the feed does not read is dropped — it could never be honoured and storing it would look
+    like a declaration that works. PURE."""
+    out = {}
+    for field, header in (dict(value) if isinstance(value, dict) else {}).items():
+        f, h = str(field or "").strip(), str(header or "").strip()
+        if f in BINDABLE_FIELDS and h:
+            out[f] = h[:120]
+    return out
+
+
+def _clean_choice(value, allowed):
+    v = str(value or "").strip().lower()
+    return v if v in allowed else ""
 
 
 def _clean_words(v):
@@ -177,7 +211,10 @@ def row(item, calibration=None):
     out = {"key": key, "label": label, "nav": list(nav),
            "export": export if export in EXPORTS else "csv",
            "params": clean_params(cal.get("params")),
-           "line_map": dict(line_map)}
+           "line_map": dict(line_map),
+           "column_bindings": _clean_bindings(cal.get("column_bindings")),
+           "unit_basis": _clean_choice(cal.get("unit_basis"), UNIT_BASES),
+           "amount_sign": _clean_choice(cal.get("amount_sign"), AMOUNT_SIGNS)}
     # DEREFERENCED from the one declaration of which controls the pull presses, so a field added
     # there reaches the editor without a second list here.
     for field in CONTROL_FIELDS:
@@ -237,6 +274,17 @@ def columns(editor_rows, existing_calibration=None):
         reports.append(spec)
         entry = dict(keep.get(key) or {})
         entry["params"] = clean_params(item.get("params"))
+        # Cleared on the screen means cleared in the declaration — the key is DROPPED rather than
+        # stored empty, so the parser reads "nothing declared" exactly as it did before this editor
+        # could write it, and the house default applies instead of an empty string.
+        for field, cleaner in (("column_bindings", _clean_bindings),
+                               ("unit_basis", lambda v: _clean_choice(v, UNIT_BASES)),
+                               ("amount_sign", lambda v: _clean_choice(v, AMOUNT_SIGNS))):
+            val = cleaner(item.get(field))
+            if val:
+                entry[field] = val
+            else:
+                entry.pop(field, None)
         for field in CONTROL_FIELDS:
             val = _clean_control(item.get(field))
             # A field CLEARED on the screen is cleared in the declaration — the key is dropped rather

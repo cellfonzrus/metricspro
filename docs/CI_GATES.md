@@ -18,7 +18,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 |---|---|---|
 | `access-probe-rotation.yml` | 1 | `schedule`, `workflow_dispatch` |
 | `branch-base-guard.yml` | 1 | `pull_request_target`, `workflow_dispatch` |
-| `carrier-vocab-guard.yml` | 45 | `pull_request`, `push`, `workflow_dispatch` |
+| `carrier-vocab-guard.yml` | 46 | `pull_request`, `push`, `workflow_dispatch` |
 | `data-qa-guard.yml` | 4 | `pull_request`, `push`, `workflow_dispatch` |
 | `deploy-reachability.yml` | 1 | `deployment_status`, `workflow_dispatch` |
 | `deploy-website.yml` | 1 | `push`, `workflow_dispatch` |
@@ -33,7 +33,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 628 gates
+## Gated — 629 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -268,6 +268,7 @@ the Runs on column is how you can tell.
 | `harness_feature_gate.py` | `org-scope-guard.yml` | What each tenant is offered (`tenant-gates`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_feature_gate_lock.py` | `org-scope-guard.yml` | What each tenant is offered (`tenant-gates`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_feed_day_grain.py` | `carrier-vocab-guard.yml` | A feed window asks for the tenant's own day (one home, required at every caller) (`feed-window-tenant-day`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_feed_declared_metrics_lock.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_feed_gap_days.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_feed_read_lock.py` | `org-scope-guard.yml` | A paged read is a read of the data (`feed-read-lock`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_feed_watchdog.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |

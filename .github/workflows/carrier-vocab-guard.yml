@@ -1113,6 +1113,11 @@ on:
       # stops a third feed copying the loop can only hold if a change to any of them runs the job.
       - "backend/harness_portal_report_pull.py"
       - "backend/harness_pos_report_feed.py"
+      - "backend/harness_feed_declared_metrics_lock.py"
+      # index §COMMCALC-77 — the frontend twin: the screen reads the three reading vocabularies
+      # off the endpoint, so it cannot offer a value the parser refuses
+      - "frontend/prove_declared_report_reading.mjs"
+      - "frontend/src/components/commcalc/PortalReportEditor.tsx"
       - "backend/app/modules/commcalc/portal_report_pull.py"
       - "backend/app/modules/commcalc/pos_report_feed.py"
       - "backend/app/modules/commcalc/pos_report_sweep.py"
@@ -2152,6 +2157,9 @@ jobs:
       - name: Run the POS-report feed proof (a report line is matched to a DECLARED category by the tenant's own mapping or its own label; a line two categories could claim resolves to NEITHER; every row carries the basis it was matched on - index COMMCALC-07)
         working-directory: backend
         run: python3 harness_pos_report_feed.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the feed-as-declared-metrics lock (a tenant's declared column binding outranks every synonym and a binding that misses identifies NOTHING; the unit basis and the sign convention are declared, dereferenced and refused when unknown; which source answers a store-day has one resolver; only a basis the tenant DECLARED may pay - index COMMCALC-77)
+        working-directory: backend
+        run: python3 harness_feed_declared_metrics_lock.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the supplier-invoice lock (ONE column-vocabulary mechanism so neither feed grows its own normalizer; a blank charge is None and never 0.00; the natural key equals the migration's unique index; the distributor-only sibling is named not hidden - index COMMCALC-38)
         working-directory: backend
         run: python3 harness_supplier_invoice_feed.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -2421,6 +2429,22 @@ jobs:
       - name: Run the dark-theme lock (generator = stylesheet; every token in both themes; WCAG AA; the pin only shrinks)
         working-directory: frontend
         run: node prove_theme_tokens.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE DECLARED-REPORT-READING PROOF (index §COMMCALC-77) is the frontend twin of
+  # harness_feed_declared_metrics_lock.py. The backend lock proves the parser REFUSES a unit basis or
+  # a sign convention it does not know; this proves the screen never offers one, because it reads all
+  # three vocabularies off GET /data-sources/{id}/reports instead of carrying its own list. It reads
+  # the real component and the real endpoint as text under Node 22 — no npm install, no React.
+  declared-report-reading-proof:
+    name: Upload-screen lock (the screen asks the backend what the choices are)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Run the declared-report-reading proof (three vocabularies dereferenced, one upload door, org-scoped, an empty parse is no green tick, and no tenant's words on the screen - index COMMCALC-77)
+        working-directory: frontend
+        run: node prove_declared_report_reading.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE NAV DEEP-LINK PROOF (index §19.40) drives the REAL rbac.ts and urlTab.ts under Node 22 (type stripping; neither
   # imports anything, so no npm install): a deep-link menu entry (/hr?tab=employees) is visible exactly when its page is,
