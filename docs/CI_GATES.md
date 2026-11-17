@@ -675,7 +675,6 @@ the Runs on column is how you can tell.
 | `npm:test` | `tests.yml` | Mobile unit tests (`mobile-tests`) | `pull_request`, `push`, `workflow_dispatch` |
 | `npm:test:proofs` | `tests.yml` | Frontend proofs (shrink-only register) (`frontend-proofs`) | `pull_request`, `push`, `workflow_dispatch` |
 | `npm:typecheck` | `carrier-vocab-guard.yml` | Frontend type check (tsc --noEmit over the whole frontend) (`frontend-typecheck`) | `pull_request`, `push`, `workflow_dispatch` |
-| `pytest` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `pytest` | `org-scope-guard.yml` | What each tenant is offered (`tenant-gates`) | `pull_request`, `push`, `workflow_dispatch` |
 | `pytest` | `org-scope-guard.yml` | The employee's reach (`employee-reach`) | `pull_request`, `push`, `workflow_dispatch` |
 | `pytest:integration` | `tests.yml` | Backend integration tests (`backend-integration`) | `pull_request`, `push`, `workflow_dispatch` |

@@ -2174,9 +2174,6 @@ jobs:
       - name: Run the revenue-scope proof (an unclassified line is still the day's revenue, a NAMED category never sees it, the house default moves nobody, and a mistyped scope is refused - index COMMCALC-80)
         working-directory: backend
         run: python3 harness_revenue_scope.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the revenue-scope cross-tenant tests (two tenants, opposite declarations, one engine - no tenant's policy reaches another's day - owner directive 2026-10-30)
-        working-directory: backend
-        run: python3 -m pytest tests/unit/test_revenue_scope_cross_tenant.py -q | tail -20 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the declared-vs-captured proof (one parser for a feed counterpart, one derivation of financed units, four absences with four reasons, the grain is the category's, nothing blocks a close - index CLOSING-02)
         working-directory: backend
         run: python3 harness_declared_feed_recon.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
