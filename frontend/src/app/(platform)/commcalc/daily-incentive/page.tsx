@@ -5,6 +5,7 @@ import { api, fmt } from '@/lib/client'
 import DateField from '@/components/DateField'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
+import DailyIncentiveRevenueNote, { type RevenueScopeFields } from '@/components/commcalc/DailyIncentiveRevenueNote'
 
 // WHAT A DAY PAYS, AND WHY (§COMMCALC-78). Owner 2026-11-17: *"Build that screen"*.
 //
@@ -60,7 +61,9 @@ type Day = {
   metric_source_overridden?: boolean; metric_source_not_counted?: NotCounted[]
   metric_source_options?: { value: string; label: string }[]
   metric_source_declaration_pending?: boolean
+  unclassified_revenue?: number; unclassified_by_employee?: Record<string, number>
 }
+type DayWithScope = Day & RevenueScopeFields
 type Store = { store_code?: string; store_address?: string }
 
 function why(e: unknown): string {
@@ -200,6 +203,10 @@ export default function DailyIncentivePage() {
           )}
         </div>
       )}
+
+      {/* WHAT THE REVENUE FIGURE INCLUDES (§COMMCALC-80). A revenue number shown without this
+          cannot be reconciled against the report the operator is holding. */}
+      <DailyIncentiveRevenueNote d={d as DayWithScope | null} />
 
       {d && (
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>

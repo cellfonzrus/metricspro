@@ -1126,6 +1126,19 @@ on:
       - "backend/app/modules/commcalc/annual_goal.py"
       - "backend/app/modules/commcalc/targets_engine.py"
       - "database/migrations/1125_period_goal.sql"
+      # index §COMMCALC-80 — money no declared category claimed is still the day's revenue. The
+      # lock names itself for the §13e reason: an allowlist that omits its own subject skips
+      # silently. The two revenue readers are named because the ADDEND lives in them, and the feed
+      # because it is what emits the unclassified row at the landing grain.
+      - "backend/harness_revenue_scope.py"
+      - "backend/app/modules/commcalc/revenue_scope.py"
+      - "backend/app/modules/commcalc/metric_authority.py"
+      - "backend/app/modules/commcalc/pos_report_feed.py"
+      - "backend/app/modules/commcalc/daily_incentive.py"
+      - "backend/app/modules/closing/metric_catalog.py"
+      - "backend/tests/unit/test_revenue_scope_cross_tenant.py"
+      - "frontend/src/components/commcalc/DailyIncentiveRevenueNote.tsx"
+      - "database/migrations/1126_revenue_scope.sql"
       # index §COMMCALC-78 — the screen that shows what a day pays, and the one home for
       # what a payout measures
       - "frontend/prove_daily_incentive_screen.mjs"
@@ -2158,6 +2171,9 @@ jobs:
       - name: Run the annual-goal proof (an empty measure is UNMEASURED not zero, an absence is never a verdict, the horizon places on a leap day, and the per-month rate IS the per-day home with a different unit - index COMMCALC-79)
         working-directory: backend
         run: python3 harness_annual_goal.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the revenue-scope proof (an unclassified line is still the day's revenue, a NAMED category never sees it, the house default moves nobody, and a mistyped scope is refused - index COMMCALC-80)
+        working-directory: backend
+        run: python3 harness_revenue_scope.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the declared-vs-captured proof (one parser for a feed counterpart, one derivation of financed units, four absences with four reasons, the grain is the category's, nothing blocks a close - index CLOSING-02)
         working-directory: backend
         run: python3 harness_declared_feed_recon.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
