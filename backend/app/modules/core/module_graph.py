@@ -1923,6 +1923,10 @@ FACTS: dict[str, dict] = {
             'app/modules/account/balance_sheet.py': ('_sid_fold',),
             'app/modules/account/device_payable.py': ('_sid_fold',),
             'app/modules/account/store_identity_audit.py': ('_sid',),
+            # §COMMCALC-76 (2026-11-17) — `profit_by_store` stamps each P&L store row with that
+            # store's DECLARED CODE and market through this home's own index, so a report quoting
+            # net income per store can join to codes without resolving a store a second way.
+            'app/modules/account/statement_engine.py': ('_sid',),
             # The B2B clock feed's own folds (`_fold`, login + punch-type keys) and the employee
             # matcher's person key ride the same accent fold, so a person and a store are folded by
             # one rule (mig 1073, §14z).

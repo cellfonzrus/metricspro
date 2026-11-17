@@ -255,6 +255,62 @@ for banned in ('.get("merchant_invoice")', '"merchant_invoice,', 'table("raw_ma_
 ok("merchant_invoice" in open("app/modules/asset/invoice_due.py").read(),
    "G9b ...while the NOTE still names the source that answered, so a reader is never left guessing")
 
+# ── §I  THE SHELF IS NOT THE UNPAID PART OF THE SHELF (owner report 2026-11-17) ────────────────
+# Verbatim: *"the inventory aging is not correct it shows all devices out of the [carrier]'s day
+# window"*. The Weekly Performance Review composed the aging report's `buckets` — the owed > 0
+# BILLING-exposure subset — and presented it as the shelf. A device that has been paid for carries
+# no `owed_to_vip`, so that subset is almost entirely old stock: measured live on the house org,
+# 2026-11-17, the shelf was 708 inside the window / 245 nearing it / 811 past it, and the subset the
+# review quoted was the 811 and nothing else.
+print("\n§I  aging per carrier, over the WHOLE shelf")
+_MAPS = [{"carrier_id": "boost", "label": "Boost / VIP", "unsold_source": "source_table",
+          "sell_within_days": 60},
+         {"carrier_id": "total", "label": "Total / MA", "unsold_source": "payable_ledger",
+          "sell_within_days": 12}]
+_POLICIES = {m["carrier_id"]: ap.resolve_policy(m) for m in _MAPS}
+_SHELF = [
+    # the snapshot carrier's rows carry NO carrier_id — its carrier is the map that declared that
+    # snapshot as its unsold source
+    {"aging_bucket": ap.BUCKET_FRESH, "owed_to_vip": 0},
+    {"aging_bucket": ap.BUCKET_WARN, "owed_to_vip": 0},
+    {"aging_bucket": ap.BUCKET_MISSED, "owed_to_vip": 500.0},
+    # the ledger carrier names itself
+    {"carrier_id": "total", "aging_bucket": ap.BUCKET_FRESH, "owed_to_vip": 10.0,
+     "_source": "payable_ledger"},
+    {"carrier_id": "total", "aging_bucket": ap.BUCKET_MISSED, "owed_to_vip": 20.0,
+     "_source": "payable_ledger"},
+]
+_FOLD = ui.aging_by_carrier(_SHELF, _POLICIES, _MAPS)
+_CELLS = {c["carrier_id"]: c for c in _FOLD["by_carrier"]}
+ok(_FOLD["devices"] == 5 and _FOLD["missed"] == 2,
+   "I1 every handed-in device is counted, not only the ones with money still owed — the defect was "
+   "a caller passing the owed>0 subset and reporting every device as past its window")
+ok(_CELLS["boost"]["devices"] == 3 and _CELLS["boost"][ap.BUCKET_FRESH] == 1
+   and _CELLS["boost"][ap.BUCKET_MISSED] == 1,
+   "I2 a device inside its window is REPORTED as inside it, on its own carrier's row")
+ok(_CELLS["boost"]["attribution"] == ui.ATTRIBUTION_SOURCE
+   and _CELLS["total"]["attribution"] == ui.ATTRIBUTION_DECLARED,
+   "I3 a snapshot row's carrier is the map that DECLARED that snapshot; a ledger row names its own")
+ok(_CELLS["boost"]["sell_within_days"] == 60 and _CELLS["total"]["sell_within_days"] == 12
+   and _CELLS["boost"]["ladder"] != _CELLS["total"]["ladder"],
+   "I4 each carrier's cell carries ITS OWN window and its own ladder, never one carrier's edges "
+   "printed over another's devices")
+ok(_CELLS["total"]["owed"] == 30.0 and _CELLS["total"]["owed_missed"] == 20.0,
+   "I5 what is owed and what is owed on OVERDUE stock are two figures, both reported")
+_TWO_SNAPSHOTS = ui.aging_by_carrier(
+    [{"aging_bucket": ap.BUCKET_MISSED, "owed_to_vip": 1.0}], _POLICIES,
+    _MAPS + [{"carrier_id": "third", "label": "Third", "unsold_source": "source_table"}])
+ok(_TWO_SNAPSHOTS["devices_with_no_carrier"] == 1
+   and any(c["carrier_id"] is None and c["attribution"] == ui.ATTRIBUTION_UNCERTAIN
+           for c in _TWO_SNAPSHOTS["by_carrier"]),
+   "I6 two carriers declaring one feed is an AMBIGUITY, reported on a row of its own — never "
+   "resolved by handing the devices to whichever map sorted first")
+ok(all(c["devices"] == 0 for c in ui.aging_by_carrier([], _POLICIES, _MAPS)["by_carrier"])
+   and len(ui.aging_by_carrier([], _POLICIES, _MAPS)["by_carrier"]) == 2,
+   "I7 a carrier with a map and no devices is still reported — 'nothing on the shelf' and 'we never "
+   "asked' must not read the same")
+
+
 # ── §H  negative controls: the lock must be able to go RED ─────────────────────────────────────
 print("\n§H  negative controls")
 ok(ap.bucket(13, BOOST) != ap.bucket(13, TOTAL),

@@ -1934,6 +1934,15 @@ async def get_aging(
         "age_buckets_basis": ("every unsold device, bucketed by days held on the carrier's own "
                               "declared window. `buckets` counts only devices with owed > 0 "
                               "(a billing-exposure read) and is a subset of this."),
+        # EVERY UNSOLD DEVICE, AGED PER CARRIER against that carrier's own declared window
+        # (owner report 2026-11-17: *"the inventory aging is not correct it shows all devices out
+        # of the [carrier]'s day window"*). Folded by the ONE home that owns carrier attribution
+        # (`payables/unsold_inventory.aging_by_carrier`) over the SAME `all_rows` and the SAME
+        # stamp as `age_buckets` above, so this is a per-carrier CUT of that population and not a
+        # second aging derivation. `buckets` — the owed > 0 billing subset — is deliberately not
+        # what this reads: a caller that quotes the subset as the shelf reports every device as
+        # past its window, which is exactly the defect this was reported for.
+        "aging_by_carrier": _unsold.aging_by_carrier(all_rows, policies, maps, today=today),
         # The window each carrier declared, so the screen can print the right deadline instead of
         # one carrier's. `declared` False = the house default answered.
         "aging_policy": {

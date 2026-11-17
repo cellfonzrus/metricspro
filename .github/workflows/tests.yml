@@ -393,6 +393,10 @@ jobs:
         working-directory: backend
         if: always()   # a red harness must not hide the 60 after it
         run: python3 harness_setup_fee_market_scope.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_profit_by_store
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_profit_by_store.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: harness_statement_engine
         working-directory: backend
         if: always()   # a red harness must not hide the 60 after it

@@ -1639,7 +1639,17 @@ _all_routes = _flatten_routes(real_app.routes)
 # added to them. Cross-tenant negatives: the read is org-scoped on every query and the measure is
 # the tenant's OWN declared categories, which `prove_period_goal_card.mjs` §B fails the build on if
 # a house list appears.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1852"))
+# 2026-11-17 (§COMMCALC-76, the owner's four defect reports on the Weekly Performance Review)
+#   1852 -> 1853. ONE route added and NONE removed, verified the house way:
+#     git diff origin/main..HEAD -- backend/ | grep -E '^[+-].*@router\.'
+#   shows exactly one addition on this branch and nothing deleted.
+#     + /commcalc/weekly-review/deck  GET  (the review pack as a downloadable .pptx)
+# GATE: `_require_weekly_review` — the review's own administrators-only gate, asserted by
+# backend/tests/integration/test_weekly_review_endpoint.py::test_H4 for an admin, a market manager,
+# a rep and an unauthenticated caller. NO stored figure can move: the route reads the same pack
+# `GET /weekly-review` serves, folds it to slide content (`weekly_review_deck`, pure) and renders it
+# through `notify/render` — read-only end to end, no write, no recompute, no persistence.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1853"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
