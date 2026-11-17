@@ -1118,6 +1118,11 @@ on:
       # off the endpoint, so it cannot offer a value the parser refuses
       - "frontend/prove_declared_report_reading.mjs"
       - "frontend/src/components/commcalc/PortalReportEditor.tsx"
+      # index §COMMCALC-78 — the screen that shows what a day pays, and the one home for
+      # what a payout measures
+      - "frontend/prove_daily_incentive_screen.mjs"
+      - "frontend/src/app/(platform)/commcalc/daily-incentive/page.tsx"
+      - "backend/app/modules/commcalc/daily_incentive.py"
       - "backend/app/modules/commcalc/portal_report_pull.py"
       - "backend/app/modules/commcalc/pos_report_feed.py"
       - "backend/app/modules/commcalc/pos_report_sweep.py"
@@ -2429,6 +2434,23 @@ jobs:
       - name: Run the dark-theme lock (generator = stylesheet; every token in both themes; WCAG AA; the pin only shrinks)
         working-directory: frontend
         run: node prove_theme_tokens.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE DAILY-INCENTIVE SCREEN PROOF (index §COMMCALC-78). The engine has answered "what does this
+  # store-day pay" since mig 1072; until 2026-11-17 nothing in the browser called it. This proves the
+  # screen shows that answer and never computes one of its own (no reduce, no running total — a
+  # second fold of the money is the duplicate defect in the place it costs most), that every rule is
+  # shown including the ones that paid nothing, and that `payout_measure_basis` stays the one home
+  # for what a payout measures. Text-only under Node 22 — no npm install, no React.
+  daily-incentive-screen-proof:
+    name: What-a-day-pays lock (the screen shows the engine's answer, and computes none of its own)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Run the daily-incentive screen proof (one read, no second fold, every rule shown with its reason, the source named, and the payout-basis home dereferenced - index COMMCALC-78)
+        working-directory: frontend
+        run: node prove_daily_incentive_screen.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE DECLARED-REPORT-READING PROOF (index §COMMCALC-77) is the frontend twin of
   # harness_feed_declared_metrics_lock.py. The backend lock proves the parser REFUSES a unit basis or

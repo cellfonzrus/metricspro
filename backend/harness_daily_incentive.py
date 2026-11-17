@@ -278,6 +278,54 @@ _sh3, _un3, _ = di.split_pool(50.0, [], basis="equal")
 eq(_un3, 50.00, "G8 a pool nobody qualified for is unallocated, not dropped")
 
 
+print("\n§I  a payout that names no category means the WHOLE DAY (the screen's own promise)")
+# THE DEFECT THIS SECTION EXISTS FOR (found 2026-11-17 against the live tenant's own row).
+# The rules editor tells the admin, in words, "The pool is a percentage of the whole day's gross
+# revenue. Tick categories below to base it on just those instead." — and then seeds the payout with
+# basis 'amount'. `measure` answers an 'amount' basis by SUMMING the named categories, so a payout
+# naming NONE summed nothing and the pool was $0.00 for a store that had traded all day. The config
+# row was never wrong; the screen's promise was. Every rule above was written with basis 'revenue',
+# which is why the engine's own proof never exercised the shape the editor actually writes.
+#
+# The rule, in one home: A PAYOUT THAT NAMES NO CATEGORY MEASURES THE WHOLE DAY'S REVENUE. Dollars
+# are dollars, so 'amount' with no categories IS the day's revenue. UNITS are not — there is no
+# "day's units" — so that case stays unmeasurable and keeps saying so.
+_AS_WRITTEN = [{"key": "whole_day_pool", "label": "Whole-Day Pool", "rule_kind": "threshold_pool",
+                "qualifier": {"scope": "store", "basis": "revenue", "metric_keys": [],
+                              "op": "gte", "threshold": 1300.00},
+                # exactly what the editor stores today: money basis, no categories ticked
+                "payout": {"basis": "amount", "metric_keys": [], "rate": 0.02,
+                           "split": "individual_sales"}}]
+RI = di.compute_day(CAT, _AS_WRITTEN, declared_map=BIG, per_employee=PER_EMP,
+                    employees=["Ana", "Ben"])
+RI_rev = di.compute_day(CAT, [dict(_AS_WRITTEN[0],
+                                   payout=dict(_AS_WRITTEN[0]["payout"], basis="revenue"))],
+                        declared_map=BIG, per_employee=PER_EMP, employees=["Ana", "Ben"])
+ok(RI["total"] > 0, "I1 the shape the editor actually writes PAYS")
+eq(RI["total"], RI_rev["total"],
+   "I2 ...exactly what the same rule written 'revenue' pays — one answer, not two")
+eq(RI["by_employee"], RI_rev["by_employee"], "I3 ...split the same way too")
+ok(RI["rules"][0]["payout_measurable"] is True,
+   "I4 ...and it is no longer reported unmeasurable")
+# The genuinely unmeasurable case is UNCHANGED: there is no "day's units" to fall back to.
+_UNITS = [{"key": "u", "label": "Units, no category", "rule_kind": "per_unit",
+           "qualifier": {"scope": "none"},
+           "payout": {"basis": "units", "metric_keys": [], "rate": 5.00}}]
+RU = di.compute_day(CAT, _UNITS, declared_map=BIG, per_employee=PER_EMP, employees=["Ana"])
+eq(RU["total"], 0.0, "I5 a UNITS payout naming no category still pays nothing")
+ok(RU["rules"][0]["payout_measurable"] is False and RU["rules"][0]["payout_note"],
+   "I6 ...and still says, in words, that it cannot be measured")
+# The one home, dereferenced — not re-decided next to the money.
+eq(di.payout_measure_basis("amount", []), "revenue", "I7 the one home turns money-with-no-category into the day")
+eq(di.payout_measure_basis("amount", ["printing"]), "amount", "I8 ...and leaves a named category alone")
+eq(di.payout_measure_basis("units", []), "units", "I9 ...and does NOT invent a day's units")
+eq(di.payout_measure_basis("revenue", []), "revenue", "I10 ...and passes the already-right shape through")
+# NEGATIVE CONTROL: a payout on a named category must NOT become the whole day.
+_NAMED = [dict(_AS_WRITTEN[0], payout=dict(_AS_WRITTEN[0]["payout"], metric_keys=["printing"]))]
+RN = di.compute_day(CAT, _NAMED, declared_map=BIG, per_employee=PER_EMP, employees=["Ana", "Ben"])
+ok(RN["total"] < RI["total"],
+   "I11 NEGATIVE CONTROL: a pool on one category is still smaller than the whole day")
+
 print("\n§H  negative controls")
 import subprocess
 _SRC = ["app/modules/closing/metric_catalog.py", "app/modules/commcalc/daily_incentive.py"]

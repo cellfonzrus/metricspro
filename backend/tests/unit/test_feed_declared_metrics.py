@@ -346,10 +346,35 @@ def test_f5_no_tenant_word_is_spelled_in_the_modules_under_test():
 
 
 def test_f6_a_payout_that_measures_nothing_says_so_rather_than_paying_a_confident_zero():
-    """A rule whose payout names units/dollars but NO category measures 0.00 and reads as "we looked
-    and the store did nothing". An absence needs the right reason, so the trail must name it."""
-    mute = [dict(RULES_A[0], payout=dict(RULES_A[0]["payout"], basis="amount", metric_keys=[]))]
+    """A rule whose payout names UNITS but NO category measures 0.00 and reads as "we looked and the
+    store did nothing". An absence needs the right reason, so the trail must name it.
+
+    NARROWED 2026-11-17 (§COMMCALC-78), deliberately. This case used to be asserted with a MONEY
+    basis and no category, and that shape no longer belongs here: dollars are dollars, so a payout
+    naming no category now measures the whole day's revenue — which is what the rules editor has
+    always told the admin it does, and what `payout_measure_basis` is the one home for. UNITS have
+    no such fallback (there is no "day's units"), so that is the case this test keeps, and the
+    companion below pins the half that changed so neither can drift back."""
+    mute = [dict(RULES_A[0], payout=dict(RULES_A[0]["payout"], basis="units", metric_keys=[]))]
     r = _day_from_feed(TABLE_A, CAT_A, CAL_A, mute)
     trail = (r.get("rules") or [])
     assert trail and trail[0].get("payout_measurable") is False
     assert trail[0].get("payout_note")
+
+
+def test_f6b_a_money_payout_naming_no_category_is_the_whole_day_not_a_silent_zero():
+    """The other half of f6, and the defect found against this tenant's own live rule row.
+
+    The rules editor promises, in words, that a payout with no categories ticked is a percentage of
+    the whole day. It stored basis 'amount', which SUMS the named categories — so naming none summed
+    nothing and the rule paid $0.00 for a store that had traded all day. Asserting it both ways here
+    means neither the promise nor the engine can move without the other."""
+    whole = [dict(RULES_A[0], payout=dict(RULES_A[0]["payout"], basis="amount", metric_keys=[]))]
+    as_rev = [dict(RULES_A[0], payout=dict(RULES_A[0]["payout"], basis="revenue", metric_keys=[]))]
+    r_whole = _day_from_feed(TABLE_A, CAT_A, CAL_A, whole)
+    r_rev = _day_from_feed(TABLE_A, CAT_A, CAL_A, as_rev)
+    assert r_whole["total"] == r_rev["total"], "the two spellings must be one answer"
+    assert r_whole["total"] > 0, "the shape the editor actually writes has to pay"
+    assert (r_whole.get("rules") or [])[0].get("payout_measurable") is True
+    assert di.payout_measure_basis("amount", []) == "revenue"
+    assert di.payout_measure_basis("units", []) == "units"

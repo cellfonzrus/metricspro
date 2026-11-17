@@ -216,6 +216,7 @@ Primary code homes:
 | COMMCALC-74 | **A refusal names which refusal it is** | One operator sentence covered two states with opposite remedies, and the same source row produced both inside 25 minutes: first a saved address pointing INSIDE the portal (the sentence was right), then the FRONT DOOR being refused by a security appliance, where the address was already correct and "Check the address saved on this source" sent the owner to look at something that was fine. The page is what tells them apart — an appliance says so in the words a person reads and hands over a support id, which is the only reference the portal's own security team can look the refusal up by. So the refusal SENTENCE is now derived from the page rather than from the kind alone: the edge state never asks for the address and quotes the id, the inside-the-portal state is unchanged, and a caller with no page in hand still gets the actionable one rather than a guess. No new kind and no migration — the kind column's CHECK constraint allows three, and the markers stay per-org config. The login verdict's own second copy of the refusal sentence is gone: it reports the one that came with the evidence. |
 | COMMCALC-75 | **A feed lands the same however its file arrives** | The processor back office is fronted by a security appliance that refuses automated clients at every address tried, and the owner confirmed it offers no scheduled email of its own — so the per-store pull cannot fetch this report and no amount of code will make it. Everything downstream of the fetch was already built and was never at fault: the parse, the terminal-to-store resolution, the idempotent upsert and the bill-payment and fee reconciliations that read the rows. ONLY THE TRANSPORT was broken, so the file gets a door instead of the firewall getting a workaround: one arrival function lands a DELIVERED file — forwarded to the mailbox the email sweep already watches, picked off the Upload page, or sent by the processor if they agree to it — through the SAME ingest the pull uses, with the same dedup and the same store resolution, so a delivered file and a pulled one are indistinguishable downstream. A file that is not this report lands nothing and names the columns it looked for; an empty one is never a green tick. The registry row that lets the route be PICKED is a seeded declaration, not code. |
 | COMMCALC-77 | **A tenant's own sales report answers its own declared categories** | A tenant's daily incentive plan was five correct, active config rows paying off what the reps declare at closing — and its reps had declared ONE line in a month, so a store that traded every day computed to ~$0 while its own POS export carried all 31 days. Which code turns a tenant's own export into the categories IT declared, when that export states no quantity, carries two columns that could both be the category, and writes a sale NEGATIVE — and who decides whether the rep's declaration or the store's own report is the authority? |
+| COMMCALC-78 | **What a day pays, and why every rule paid what it paid** | The engine has answered "what does this store-day owe each person" since mig 1072, and for five weeks NOTHING in the browser called it: a tenant could declare its rules, upload its day, and still have no way to SEE a payout. And the one rule it did run paid $0.00 forever, because the rules editor promises in words that a pool with no categories ticked is "a percentage of the whole day's gross revenue" and then stored a basis that sums the categories it was given — none. Who shows the answer, and who decides what a payout measures? |
 | COMMCALC-76 | **A weekly review pack is one fold, read from the reports that own its figures** | The owner asked for the LuxeLink performance deck as an in-app report on the Management tile, admins only, one report per market plus a consolidated one, with inventory aging per carrier among its items, generated at the end of each week for the Monday review with the DMs — and on demand. It derives nothing: profit, commission, the accessory gap, growth, the reps behind, aging and payroll are each QUOTED from the surface that already owns them, and the fold is pure, so a second derivation cannot grow beside the report it quotes. An item nobody measured carries no figure and says why in words; a store no market claims gets its own named scope rather than vanishing between the market packs and the company one; and the market vocabulary is a required argument, so nothing declared means nothing identified. The gate is the server's on every door — a company-wide reporting scope is not an administrator. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
@@ -26498,6 +26499,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-75 | commcalc |
 | COMMCALC-76 | commcalc |
 | COMMCALC-77 | commcalc |
+| COMMCALC-78 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -50122,6 +50124,111 @@ Files: `backend/app/modules/commcalc/metric_authority.py` (**new**),
 `backend/tests/unit/test_feed_declared_metrics.py` (**new**),
 `backend/tests/integration/test_feed_declared_metrics_endpoint.py` (**new**),
 `database/migrations/1124_declared_metric_authority.sql` (**new**),
+`.github/workflows/carrier-vocab-guard.yml`, `docs/CI_GATES.md` (generated).
+
+---
+
+## §COMMCALC-78. WHAT A DAY PAYS, AND WHY EVERY RULE PAID WHAT IT PAID (owner 2026-11-17)
+
+Owner, verbatim: *"Build that screen"*, and — answering what the day's threshold measures —
+*"that is the total revenue for the day , which ever sales rep generates the most revenue he get his
+proportional share of commission"*.
+
+### COMMCALC-78.1 TWO THINGS WERE WRONG, AND ONLY ONE OF THEM WAS VISIBLE
+
+**A mechanism nobody could reach.** `GET /commcalc/daily-incentive/{close_date}` has computed a
+store-day's payouts since mig 1072 (§74). `grep -rn "daily-incentive" frontend/` returned **nothing**:
+`/commcalc/incentive-plan` and `/commcalc/incentive-rules` both only read and write the RULES
+(`/api/v1/commcalc/incentive`), and `management-incentive` is a different feature whose
+`metric_source` field is not this one. So a tenant could declare its categories, declare its rules,
+deliver its sales report (§COMMCALC-77) — and have no way to see a single payout. That is §19.18's
+"a registry written without wiring the callers is not a fix at all" in the place it costs most.
+
+**A promise kept in one place and lost in the next.** The rules editor tells the admin, in words:
+*"The pool is a percentage of the whole day's gross revenue. Tick categories below to base it on just
+those instead."* — and then seeds the payout with `basis: 'amount'`. `measure` answers an `amount`
+basis by SUMMING the named categories, so a payout naming **none** summed nothing and the rule paid
+**$0.00** for a store that had traded all day. The config row was never wrong; the screen's promise
+was. This is the same SHAPE as §COMMCALC-77's column binding — a guarantee made by one function and
+thrown away by the next — and the engine's own proof never caught it because every rule in
+`harness_daily_incentive.py` was written with the correct `revenue` basis, which is not the shape the
+editor actually writes.
+
+Measured across the platform before the fix: **2 rules, both on one tenant**, could never pay. No
+other tenant uses `commcalc.incentive_rule` at all, so no other tenant's money moves.
+
+### COMMCALC-78.2 THE ONE HOME: WHAT DOES A PAYOUT MEASURE
+
+`daily_incentive.payout_measure_basis(basis, metric_keys)`. **A payout that names no category
+measures the whole day's revenue.**
+
+Dollars are dollars, so `amount` with no category IS the day's revenue and this resolves it there.
+**UNITS are not** — there is no "day's units" to fall back to — so a `units` payout naming nothing
+stays unmeasurable and `payout_measurable` keeps saying so in words. Resolving that to revenue would
+invent a dollar figure for a rule that asked for a count.
+
+`compute_day` dereferences it instead of defaulting to a basis itself, and `payout_measurable` asks
+the same home, so the two can never disagree about whether a rule can pay.
+
+### COMMCALC-78.3 THE SCREEN COMPUTES NOTHING
+
+`/commcalc/daily-incentive` ("What a Day Pays"). Every number on it — the total, each person's
+figure, each rule's paid amount, each qualifier verdict, each reason — comes off the one endpoint,
+which is a projection of `compute_day`. **The only arithmetic in the page is `.length`.** A total
+added up in the browser would be a second answer to "what is owed" and the two would drift silently,
+because both look right until a pool goes unallocated or a cap bites.
+
+It shows **every rule, including the ones that paid nothing**, because the engine already tells three
+cases apart and showing only the money throws that away: the store missed a gate (a coaching
+conversation), the rule names a category nobody declares (a configuration job), and the rule can
+never be measured at all (a defect in the rule). A rep who sees $0.00 with no reason assumes the
+software is broken — §COMMCALC-44's absence-needs-a-reason, where it is most expensive.
+
+It names **which source answered** on every reply (§COMMCALC-77) and offers the override, so an
+operator can see what the store's own sales report would pay **before** declaring it the standing
+authority — a separate, deliberate act that this screen does not perform.
+
+### COMMCALC-78.4 DUPLICATE CHECK
+
+`/commcalc/daily-commission` already exists and is **a different question**: carrier commission
+ACCRUED per rep per day, the cash advanced against it and the balance (`/commcalc/payout/accrual`,
+`/payout/record`, `/payout/ledger`). It is an expected-value accrual with cash advances; this is what
+a tenant's own declared-category rules say is owed for one store-day, with no accrual and no cash.
+Different engine, different tables, no overlap — but the names are close enough to mislead, so both
+`ScreenLink` entries say which is which.
+
+Nothing else answers "what does this store-day pay": the engine, the rules editor and the catalog
+were all reused unchanged.
+
+### COMMCALC-78.5 THE LOCK
+
+`frontend/prove_daily_incentive_screen.mjs` (44 checks, armed controls, its own CI job) fails the
+build if the page grows a `reduce` or a running total, if it filters the rule list down to the
+payers, if it re-derives a verdict instead of reading one, if it spells a source value of its own, if
+a second place asks for a day, if the page index grows a second label for it, or if a tenant's words
+appear in it. Verified armed by planting a page-side total and by breaking `compute_day`'s
+dereference — each was caught.
+
+`harness_daily_incentive.py` grows §I (11 checks): the shape the editor actually writes pays, pays
+**exactly** what the same rule written `revenue` pays, splits the same way, and a `units` payout
+naming nothing still pays nothing and still says why.
+
+### §16–18 CROSS-REFERENCES
+
+Depends on: §74 (the daily incentive engine and mig 1072), §COMMCALC-77 (which source answers a
+store-day), §COMMCALC-44 (an absence needs the right reason), §19.18 (a mechanism nobody can reach).
+Neighbours: §COMMCALC-54 (the rules editor), `/commcalc/daily-commission` (the carrier accrual, a
+different question — see 78.4).
+
+§17 (endpoints): none new. `GET /commcalc/daily-incentive/{close_date}` gains its first caller.
+§18 (tables): none new, none changed.
+
+Files: `backend/app/modules/commcalc/daily_incentive.py`,
+`frontend/src/app/(platform)/commcalc/daily-incentive/page.tsx` (**new**),
+`frontend/prove_daily_incentive_screen.mjs` (**new**),
+`frontend/src/lib/rbac.ts`, `frontend/src/lib/route-index.ts`,
+`frontend/src/components/ScreenLink.tsx`,
+`backend/harness_daily_incentive.py`, `backend/tests/unit/test_feed_declared_metrics.py`,
 `.github/workflows/carrier-vocab-guard.yml`, `docs/CI_GATES.md` (generated).
 
 ---

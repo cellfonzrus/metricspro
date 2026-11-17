@@ -844,6 +844,11 @@ export const NAV: NavGroup[] = [
     // Daily incentive on the categories this business declares (mig 1072, index §74). Every rule is a
     // config row; the categories come from the closing metric catalog, never a list kept in the page.
     { href: '/commcalc/incentive-rules', label: 'Daily Incentive Rules', icon: '🎯', module: 'commissions', scopes: ['all'], tileOnly: true },
+    // What one store-day actually pays, run through those rules (index §COMMCALC-78). The engine has
+    // answered this since mig 1072 and nothing in the browser called it, so a rule could be declared
+    // and its payout never seen. Same module and same scope as the rules it reads — a screen that
+    // shows what a rule pays may not be reachable by anyone who cannot see the rule.
+    { href: '/commcalc/daily-incentive', label: "What a Day Pays", icon: '💵', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/plan-installments', label: 'Multi‑Month Installments', icon: '🗓️', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/payout-schedules', label: 'Payout Schedules', icon: '📆', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/settings', label: 'Boost Rates (KPI‑tier)', icon: '⚙️', module: 'commissions', scopes: ['all'], tileOnly: true },
