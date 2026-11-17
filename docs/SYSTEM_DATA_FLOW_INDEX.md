@@ -7450,7 +7450,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `storeops.org_units/levels/managers` | org-hierarchy UI (storeops) | `org_span_for_manager` RPC → RBAC span, MI store set |
 | `storeops.org_units` / `org_levels` / `org_managers` / `employees` / `stores` (read together by `storeops.router.org_chain_inputs`) | org-hierarchy UI (storeops) | **THE ORG-TREE WALK, one home** — pure `storeops/org_chain.py` (`index_tree` → `district_for` → `managers_at` → `chain_for` → `dm_by_store`/`dm_names`): which district and DM own a store, answered in BULK. Callers: `storeops._dm_for_store` (notify routing), `storeops._managers_above_dm` (escalation), `GET /closing/accountability-chain`'s `dm` cell (§48.7). Lock `harness_org_chain.py` |
 | `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3); **P&L wages estimate** `coa.wages_by_store`→`derive_wage_cells` (actual_hours else scheduled_hours — the owner's 2026-09-08 rule, already implemented); **salary coverage basis** `labour_coverage.load_shift_hours`→`hours_basis_by_code` (hours only, never dollars — §4) |
-| `storeops.employees` / `stores` / `org_units` (+ RPC `org_span_for_manager`) | storeops roster + org tree | **OVERHEAD ALLOCATION** `storeops/overhead_allocation.gather` → `classify_employee` (structural: active + salaried + blank `home_store`) / `covered_stores` (span RPC → org-unit subtree ∪ the MARKET rung → org-wide; §STOREOPS-09) / `level_of_person` + `level_lines` (the per-LEVEL expense lines, named from `storeops.org_levels`, §STOREOPS-09) / `build_overhead` → the P&L `overhead_wages` + `overhead_comm` + one `overhead_wages_l<rank>` line per declared level (§14t, §STOREOPS-09, mig `997`, house default OFF). Reads the roster only; derives NO pay — the conversion is `coa.monthly_salary_equivalent`, the commission is `management_incentive_payout` (§9) |
+| `storeops.employees` / `stores` / `org_units` (+ RPC `org_span_for_manager`) | storeops roster + org tree | **OVERHEAD ALLOCATION** `storeops/overhead_allocation.gather` → `classify_employee` (structural: active + salaried + blank `home_store`) / `covered_stores` (span RPC → org-unit subtree ∪ the MARKET rung → org-wide; §STOREOPS-09) / **`org_coverage_context` + `coverage_for` — the IO half of that ladder, shared with `GET /storeops/payroll-by-store` so a manager's own pay divides over the stores they cover (§STOREOPS-11); `seed_from_placement=False` there, because `employees.org_unit_id` is a placement and not a statement of responsibility** / `level_of_person` + `level_lines` (the per-LEVEL expense lines, named from `storeops.org_levels`, §STOREOPS-09) / `build_overhead` → the P&L `overhead_wages` + `overhead_comm` + one `overhead_wages_l<rank>` line per declared level (§14t, §STOREOPS-09, mig `997`, house default OFF). Reads the roster only; derives NO pay — the conversion is `coa.monthly_salary_equivalent`, the commission is `management_incentive_payout` (§9) |
 | `commcalc.account_config.overhead_config` (JSONB, mig `997`) | Settings / owner SQL | §14t — `mode` / `basis` (`equal_stores` \| `equal_market_then_store` \| `weighted`) / `span_fallback` / `roles[]` / labels / `commission_source` / `manual_expense_names[]` / **`level_lines` (`on` default) + `level_label_template` (`"{level} salaries (allocated to stores)"`) — §STOREOPS-09, no migration: both live inside the SAME JSONB**. Read ONLY via `coa._account_config` → `overhead_allocation.resolve_config`. NULL = house default = nothing booked |
 | `storeops.employees.epay_salesperson` / `epay_login` (the POS/b2b IDENTITY columns — the reason `commcalc.name_map` is not needed) | Employee Setup / HR editors (`POST`/`PATCH /storeops/employees`, `EMP_FIELDS`); **mig `1001`** seeds them VERBATIM from the b2b feed for the PA-market roster (§14u — owner-run, not applied) | `commission_engine` seller match (`epay_salesperson || name`, `:554,613,1141`) and its remediation text (`:1195`); `GET /commcalc/rep-employee-map` aliases; `GET /commcalc/commission-plans/roster` assignment VALUE; `hr/router` + `hr/letters` chargeback/commission keying. Setting them to the feed's exact bytes is what makes a `name_map` row unnecessary (§14u) |
 | `storeops.employees.pay_rate` / `pay_amount` (the per-employee PAY columns) | Employee Setup / HR "Employees & Pay" / Roles & Access grid (`PATCH /storeops/employees/{id}`, pay-write gated by `gate_pay_write` like every other pay writer — §19.44; every edit logged to `storeops.payroll_change_log`; the HR + Roles browser writes are built ONLY in `frontend/src/lib/employeeRowSlices.ts` and planned per row by `lib/rowSave.ts::planRowSave` — §19.35; a save counts only what the reply shows stored, `rowSave.notPersisted` reading the PATCH echo + `pay_fields_ignored` — §19.37) | **EVERY read path that emits them is gated by `storeops/pay_visibility.can_see_pay` + `strip_pay`** — the six original money surfaces + `/storeops/payroll-raw` (fail-closed 403), and since 2026-09-10 the DM sweep: `/storeops/employees`, `/storeops/payroll-change-log` (the logged VALUES), the `PATCH` echo, `/storeops/pto-accrual/{period}`, `/storeops/salary-advance/additional-payroll/{period}` + `/history`, `/core/employees` (+ `/hr/employees`), `/core/employee-dashboard` (others' bundles), `/marketing/event-sales/roi`, `POST /hr/employees`. Store-level aggregates derived from these columns (`coa.derive_wage_cells`, `overhead_allocation`, `labour_coverage`, per-store payroll expenses) are deliberately NOT gated — §14 DM sweep |
@@ -7526,7 +7526,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `POST /storeops/payroll/clock-variance-ask/run-due` | `storeops/clock_variance_api.py` → `clock_variance_ask` per tenant | the pg_cron entrypoint behind the ask, `NOTIFY_RUN_SECRET`-guarded. One hourly job serves every tenant; each org's ask weekday is read in ITS OWN business timezone, so no weekday is spelled in the cron line (§14z) |
 | the FOUR shift-row pay paths — `account/coa.wages_by_store` (the P&L wage line) · `commcalc/labour_coverage` · `storeops/pto_accrual` (via `_pto_gather` / `_payex_gather`) · `hr/router.compensation` | `storeops/payroll_evidence.period_evidence` → `paid_hours_rows` → `payroll_hours_basis.resolve_day` | each one used to reach the one home with **NO punch evidence**, so it answered from the dead `shifts.actual_hours` column and a clocked-only org booked **$374,733.02 → $0.00** over Jun–Oct 2026. Each now passes the day's real evidence, consults `interlock`, and REPORTS a refusal instead of publishing a zero (§14y.1) |
 | `storeops/payroll_evidence.read_pay_evidence` | `storeops.timelog` + `storeops.manual_hours`, org-scoped, half-open `[lo, hi)` | **THE ONE punch/correction read on the pay path.** It used to live inside `clock_variance_api._load`, which is why four other pay paths had no way to get the rows; `_load` now dereferences it. A second punch-fetching path fails the build (`harness_payroll_hours_basis_lock.py` §H4) (§14y.1) |
-| `GET /storeops/payroll` · `GET /storeops/payroll-by-store` | `storeops/router.py` | **no longer decide hours themselves** — they dereference `payroll_hours_basis.resolve_shift_row` / `punch_counts_for_pay`, and every hours figure carries its basis (§14y) |
+| `GET /storeops/payroll` · `GET /storeops/payroll-by-store` | `storeops/router.py` | **no longer decide hours themselves** — they dereference `payroll_hours_basis.resolve_shift_row` / `punch_counts_for_pay`, and every hours figure carries its basis (§14y). A salaried person the org has ASSIGNED to manage two or more stores has their derived pay divided EVENLY over those stores instead of parked on their `home_store` — the covered set from `overhead_allocation.coverage_for`, the spread from `overhead_allocation.allocate`, neither decided here (§STOREOPS-11) |
 
 - `GET /commcalc/expenses/apply-config` — additionally serves `labour_rows` (the resolved per-org labour vocabulary from its one home, with `payroll_source` / `commission_source` / `mode` / `grain`), so the Expenses sheet DEREFERENCES which of its rows the platform auto-fills instead of keeping a copy; its `default_tokens` are now DERIVED from that same vocabulary rather than a literal list (§4e).
 - `GET /account/pl/{period}?scope=&stores=&markets=` — unchanged, and now ALSO the drill path of the Account hub: company → market → store is this one read with one more thing in the filter, spelled by the one frontend helper `plStatement.plQuery`. Its per-scope snapshots now carry real per-line drill `detail` (§4e).
@@ -26548,6 +26548,7 @@ status word rather than a blank that reads as nil.
 | STOREOPS-10 | storeops, account |
 | ACCOUNT-05 | storeops, account |
 | ACCOUNT-06 | account, commcalc |
+| STOREOPS-11 | storeops, account |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -50070,3 +50071,138 @@ store-month — this chooses its authority) · §STOREOPS-10 / §ACCOUNT-05 (the
 trusts) · §4e (a flat allocation is not a measurement) · §19.18 (one fact, one home, dereferenced) ·
 §19.50 (absence is never zero) · §16 (reports — none added) · §17 (endpoints — none added) · §18
 (tables — one COLUMN added, `commcalc.account_config.payroll_authority_source`, migration 1122).
+
+## §STOREOPS-11. A MANAGER'S SALARY FOLLOWS THE STORES THEY COVER (owner 2026-11-16)
+
+Owner, verbatim: *"brendas salary is attached to diversey nbut her salary should be divided among
+the store she is handling"*.
+
+### THE DEFECT this closes
+
+`payroll_salary.allocate_across_stores` divided a salaried person's derived pay across the stores
+they personally WORKED, proportional to hours, and at **zero recorded hours put 100% on their
+`home_store`**. That is right for a rep, who is paid for being in one store. It is wrong for a
+manager, who is paid to cover several and may clock in at none of them.
+
+Measured live on production, LuxeLink October 2026, through `storeops/labour_cost.per_store` (the
+one door of §STOREOPS-10, so this is exactly what the dashboard, the Gross Profit report and the
+P&L carried):
+
+| person | derived October pay | where it booked | why |
+| --- | --- | --- | --- |
+| the Chicago market manager (`E180`) | **$5,280.23** | 100% `Diversey` | no hours logged ⇒ home store |
+| four other salaried people | $4,684.06 / $4,598.89 / $4,939.54 / $5,280.23 | 100% to one store each | same rule |
+| a market manager with no `home_store` (`E223`) | $6,642.86 | `Unassigned` ⇒ company-wide | nothing to park it on |
+
+So five of fifteen salaried LuxeLink people in one month had their whole month's pay sitting on a
+single store, and one store's P&L carried a manager's entire salary as if it were its own staff cost.
+
+### THE ARITHMETIC WAS ALREADY RULED — do not re-ask it
+
+Owner directive **2026-09-09**, verbatim: *"All employees who are salaried and not attached to
+stores like the DM and market manager shoudl have thier won seaprat line and thier salary will be
+divided amongs he store they handle , if th market manager is 78000 and he handles all markets then
+his salary will be 78000/ the number of stores in each market"*. That is an **even split per
+covered store**, and it is the default `overhead_allocation.allocate` has honoured since mig `997`
+(§14t). The pay path is the one that never asked. Nothing new is decided here.
+
+### DUPLICATE CHECK (build gate)
+
+Searched for every existing mechanism that answers either half of this before building:
+
+| question | the existing home | what happened |
+| --- | --- | --- |
+| which stores does this person manage | `overhead_allocation.covered_stores` + the §STOREOPS-09.4 ladder (`org_span_for_manager` §13 → the unit subtree ∪ the MARKET rung §13a → org-wide) | **REUSED.** The IO half was lifted OUT of `gather` into `org_coverage_context` + `coverage_for` so a second reader asks the SAME rungs; `gather` dereferences them and its 52 checks are unchanged. Lock 6(d) still holds: one `covered_stores`, one ladder |
+| how is a covered salary spread | `overhead_allocation.allocate` (three declared bases, cents-exact, `equal_stores` default) | **REUSED**, injected into the pure module as `spread=` — same pattern as `classify_employee`'s `monthly_equivalent=`. The pay path never implements a basis |
+| the downward org walk | `org_chain.subtree_ids` | **REUSED** through the context. No second traversal (lock 6(e)) |
+| what did this store's labour cost | `storeops/labour_cost` (§STOREOPS-10) | **UNTOUCHED.** This changes which store a cell lands on, never the total |
+| whose figure books a store-month | `labour_coverage.measured_fill` (§ACCOUNT-03) / the authority (§ACCOUNT-06) | **UNTOUCHED** |
+
+Nothing is forked and no new pay is derived: the same dollars land on different stores.
+
+### `employees.org_unit_id` IS NOT A STATEMENT OF COVERAGE — the defect caught before shipping
+
+The ladder's rung 2 reads the employee's own `org_unit_id`, which is correct for its population: a
+salaried person with **no home store**, for whom placement is the only evidence there is and whose
+pay otherwise lands nowhere. Reused as-is for the pay path it would have been a money defect.
+Measured on production, LuxeLink: **13 employees carry an `org_unit_id` and almost all are rank and
+file**, three of them salaried STORE staff placed under the same market node as the market manager —
+
+| person | pay | home store | placed under |
+| --- | --- | --- | --- |
+| Natasha Cabrera | $45,000.00/yr | `Narragansett` | Chicago (market) |
+| Nallely Espinoza | $44,999.80/yr | `Cermark` | Chicago (market) |
+| Ruby Ortiz | $44,999.78/yr | `Grand` | Chicago (market) |
+
+Each would have answered "covers the Chicago subtree" — ten stores — spreading roughly **$135,000 a
+year of ordinary store pay over stores those people never worked at**, while their own store lost
+its own employee's salary. The §ACCOUNT-04 class: a column that means one thing read as the answer
+to another question.
+
+**So the pay path asks the ladder with `seed_from_placement=False`**: only an explicit
+`storeops.org_managers` assignment can move a salary that already lands on a store. `gather` keeps
+`True`, unchanged and documented. The flag is a question about EVIDENCE, and it is named in both
+callers' source so neither can drift silently.
+
+### THE MECHANISM
+
+- **`overhead_allocation.org_coverage_context(client, org_id, cfg, so=)`** — the once-per-period org
+  reads the ladder needs: store roster, the canonical store→market index and its inverse (§13a), the
+  org tree with its one downward walk, every explicit manager ASSIGNMENT, the declared level
+  vocabulary. Never raises; `ok=False` distinguishes "could not look" from "covers nothing".
+- **`overhead_allocation.coverage_for(ctx, emp, cfg, client=, org_id=, seed_from_placement=)`** —
+  `(covered codes, how)` for one roster row, through `covered_stores` and nothing else.
+- **`payroll_salary.allocate_across_stores(store_hours, total, home_store, covered=, spread=)`** —
+  the ladder: (1) two or more covered stores ⇒ the declared spread, **worked hours ignored**;
+  (2) hours, proportional — unchanged; (3) zero hours ⇒ `home_store`, blank ⇒ the `Unassigned`
+  sentinel. **A single covered store is deliberately not rung 1** — indistinguishable from an
+  ordinary store employee. **It REFUSES rather than guesses:** a `spread` that returns nothing, that
+  raises, or that does not foot to the cent is not used; the hours rule stands and the pay still books.
+- **`GET /storeops/payroll-by-store`** resolves the covered set per salaried employee and binds the
+  spread to the tenant's declared basis. Every reader of §STOREOPS-10 — dashboard, Gross Profit, P&L,
+  Store Expenses — is fixed at once because none of them derives a wage any more.
+- **THE INTERLOCK.** `overhead_allocation` spreads its own population over the same covered set once
+  a tenant switches `overhead_config` to `derive`; a person both paths would spread is one salary
+  booked twice. The populations are made disjoint in the router against the mode **live for that
+  org**, by dereferencing `classify_employee` — never by a rule restated in a second module.
+
+### LIVE EFFECT, measured per store on production (all four tenants × Sep/Oct/Nov)
+
+**It ships inert.** Every tenant-month's total is unchanged (the same dollars, regrouped), and the
+only cell that moves anywhere today is **$0.09** at Cellfonz R Us, from `B-5135` onto `Cellular
+Services` — one assigned manager whose `pay_amount` is the placeholder `annual = 1.0`. LuxeLink,
+Vzone and NY LOGISTICS: **zero cells move**, because `storeops.org_managers` is EMPTY for LuxeLink
+and NY LOGISTICS, and Vzone's two assigned managers each cover one store (below rung 1).
+
+It switches on per assignment. Simulated against live October data with the owner's answer of
+2026-11-16 (*"All 10 Chicago stores"*) applied to `E180`:
+
+| | before | after |
+| --- | --- | --- |
+| `Diversey` | $11,875.76 | **$7,123.55** |
+| each of the nine other Chicago stores | — | **+$528.02** |
+| LuxeLink October total | $121,632.67 | $121,632.67 |
+
+### LOCKS — `harness_manager_coverage_allocation.py` (53 checks)
+
+| § | what it fails the build for |
+| --- | --- |
+| A | coverage stops beating hours, the split stops being even, or it stops footing to the cent |
+| B | a person the org assigned nothing stops getting today's rule, a single covered store becomes rung 1, or the `Unassigned` sentinel is lost |
+| C | a spread that loses, invents or raises is USED instead of refused |
+| D | `payroll_salary` grows a coverage resolution or a second spread of its own (`org_managers`, `org_unit_id`, the span RPC, a subtree walk, `classify_employee`, a market read — checked against CODE, not comments), or `covered_stores` / `coverage_for` gains a second definition |
+| E | the pay path stops asking `seed_from_placement=False`, or `gather` stops asking `True`; proved with a synthetic salaried store employee placed under a market node, who must cover NOTHING |
+| F | the interlock loses the live-mode test, stops dereferencing `classify_employee`, or the covered set / spread stops reaching the rule |
+| G | **cross-tenant** (owner 2026-10-30): the same employee id resolves to each org's own stores, one read never changes the next, a covered set never holds a store its org does not have, and no tenant word reaches either module's code (RULE TWO) |
+
+Tests: `tests/unit/test_manager_salary_coverage.py` (18, two tenant shapes). `harness_overhead_allocation.py`
+(52), `harness_payroll_salary.py` (68), `harness_org_chain.py`, `harness_labour_cost_one_home.py`,
+`harness_labour_coverage.py` and the full `tests/unit` + `tests/integration` suite all unchanged and green.
+
+### STILL DATA, not coded around
+
+`storeops.org_managers` is empty for LuxeLink and NY LOGISTICS, so no manager there covers anything
+until the org names them. `E223`'s `org_unit_id` points at one market while he runs another — which
+this design never reads, and which is still a roster correction somebody has to make. Two Cellfonz
+employees are salaried at `annual = 1.0`. `Cellular Services` is carried in `storeops.stores` as an
+active store although it is a company, so it takes a share of any estate-wide spread.

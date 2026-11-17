@@ -51,6 +51,12 @@ setup-UI's live preview shows ("$52,000/yr = $1,000.00 per weekly period").
 │ Expenses (Gate-1 F1 fix, 2026-07-27). This is the DOCUMENTED DEFAULT the dispatch asked to implement,  │
 │ flagged owner-confirmable in docs/handoffs/people.md — not the only defensible choice (a flat          │
 │ 100%-home-store rule for every salaried employee regardless of hours would be the other obvious one). │
+│ COVERAGE OVERRIDES BOTH (owner 2026-11-16, §STOREOPS-11). A person the org has ASSIGNED to manage      │
+│ several stores is not paid for standing in one of them, so worked hours do not say where their pay     │
+│ belongs and neither does their home store. Their pay divides EVENLY over the stores they cover —       │
+│ owner directive 2026-09-09, verbatim: "if th market manager is 78000 and he handles all markets then   │
+│ his salary will be 78000/ the number of stores in each market". Everyone the org has assigned nothing  │
+│ keeps the hours rule above, untouched.                                                                 │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ ZERO-ACTIVITY SALARIED EMPLOYEES (Gate-1 F1 fix, 2026-07-27, `synthesize_zero_activity_rows`) ─────┐
@@ -233,14 +239,70 @@ def derive_salary_pay(pay_basis, pay_amount, settings, lo: date, hi: date,
 UNASSIGNED_STORE = "Unassigned"
 
 
-def allocate_across_stores(store_hours: dict, total_amount: float, home_store):
-    """Proportional-to-worked-hours store allocation (see module docstring). Cents-HALF_UP per store
-    with the remainder fixed up on the LAST (smallest-share) store so the allocation sums EXACTLY to
-    total_amount — a Store Expenses reconciliation must never be a penny short/over vs. the Payroll
-    Report total for the same employee. Zero recorded hours anywhere -> 100% to home_store; if even
-    home_store is blank, the whole amount lands in an explicit 'Unassigned' bucket (Gate-1 F1 —
-    the pay must land somewhere visible, never silently vanish)."""
+def _even_over(total, codes):
+    """The even split, cents-exact, with the LAST code absorbing the residue — the SAME convention
+    as the hours split below and as `overhead_allocation._spread`, so the two round alike. Used only
+    when no `spread` is injected (a pure caller, a harness); production injects the one home."""
+    n = len(codes)
+    out, running = {}, Decimal("0.00")
+    for i, c in enumerate(codes):
+        amt = (total - running) if i == n - 1 else (total / Decimal(n)).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP)
+        out[c] = float(amt)
+        running += amt
+    return out
+
+
+def allocate_across_stores(store_hours: dict, total_amount: float, home_store,
+                           covered=None, spread=None):
+    """Store allocation for ONE salaried employee's derived pay. Cents-HALF_UP per store with the
+    remainder fixed up on the LAST store so the allocation sums EXACTLY to total_amount — a Store
+    Expenses reconciliation must never be a penny short/over vs. the Payroll Report total for the
+    same employee.
+
+    THE LADDER, and nothing here decides WHO covers what:
+
+      1. `covered` — the stores the org has ASSIGNED this person to manage (two or more). Their pay
+         divides over those stores and WORKED HOURS ARE IGNORED, because a manager is paid to cover
+         them, not to stand in one. Owner 2026-11-16: *"brendas salary is attached to diversey nbut
+         her salary should be divided among the store she is handling"*; the even split is his own
+         2026-09-09 directive ("78000 / the number of stores in each market") and is the same
+         default `overhead_allocation.allocate` has honoured since mig 997.
+      2. worked hours, proportional — unchanged, and still the right rule for everyone the org has
+         assigned nothing: a rep IS paid for being in a store.
+      3. zero hours anywhere -> 100% to `home_store`; blank home store -> the explicit
+         'Unassigned' bucket (Gate-1 F1 — the pay must land somewhere visible, never silently
+         vanish). `storeops/labour_cost` reads that sentinel and books it company-wide.
+
+    `covered` is REQUIRED TO BE AN ASSIGNMENT, never a placement — `overhead_allocation.coverage_for`
+    is the one home for the question and carries the measurement that makes the distinction matter.
+    A single covered store is deliberately NOT rung 1: it is indistinguishable from an ordinary store
+    employee, and the hours rule already lands a one-store person's pay on that store.
+
+    `spread(amount, codes) -> {code: amount}` is INJECTED, same pattern as
+    `overhead_allocation.classify_employee`'s `monthly_equivalent`: in production it is
+    `overhead_allocation.allocate` bound to the tenant's declared basis, so the EVEN split (and any
+    basis a tenant declares instead) has exactly one implementation in the codebase and this module
+    stays pure. With no `spread` the even split is expressed as equal weights through the same
+    cents-exact loop below — never a second rounding convention.
+
+    REFUSES RATHER THAN GUESSES: a `spread` that returns nothing, or that does not foot to
+    total_amount to the cent, is NOT used — the hours rule stands and the pay still books. A silently
+    short allocation would take real dollars off the books."""
     total = _money(total_amount)
+    codes = sorted({str(c).strip() for c in (covered or []) if str(c or "").strip()})
+    if len(codes) > 1 and total:
+        alloc = None
+        if spread is not None:
+            try:
+                got = spread(float(total), codes) or {}
+                alloc = {str(k): float(v) for k, v in got.items() if str(k or "").strip()}
+            except Exception:
+                alloc = None
+        if alloc is None:
+            alloc = _even_over(total, codes)
+        if alloc and _money(sum(alloc.values())) == total:
+            return alloc
     hours_total = sum(v for v in (store_hours or {}).values() if v)
     if hours_total <= 0:
         store = (home_store or "").strip() or UNASSIGNED_STORE
@@ -384,14 +446,17 @@ def synthesize_zero_activity_rows(rows, employees, settings, lo: date, hi: date)
     return out
 
 
-def apply_to_by_store(by_store, employees, emp_store_hours, emp_store_dollars, settings, lo: date, hi: date):
+def apply_to_by_store(by_store, employees, emp_store_hours, emp_store_dollars, settings,
+                      lo: date, hi: date, covered_by_emp=None, spread=None):
     """GET /payroll-by-store's post-aggregation salary override (Deliverable 4). For each salaried
     employee with a USABLE derived figure: subtract their hourly-computed $ contribution from every
     store bucket it landed in (emp_store_dollars — gathered by router.py's own per-row loops, the
     SAME basis `by_store['hours']`/'amount' already used, so this nets to exactly zero drift for a
     non-salaried tenant), then add the derived period pay back in, allocated across those SAME stores
     proportional to hours worked there (or 100%/'Unassigned' at zero hours — see
-    allocate_across_stores). An employee whose salary can't be derived (misconfigured — pay_basis set
+    allocate_across_stores — including its COVERAGE rung, through `covered_by_emp`/`spread`, both
+    injected so this module never resolves who manages what nor how a covered salary is spread).
+    An employee whose salary can't be derived (misconfigured — pay_basis set
     but no usable pay_amount) is left COMPLETELY UNTOUCHED here — their original hourly-computed $
     stands rather than being zeroed out with nothing to replace it. `hours` in by_store is never
     modified — still the hourly-basis figure, always displayed (owner directive: "hours columns still
@@ -427,7 +492,14 @@ def apply_to_by_store(by_store, employees, emp_store_hours, emp_store_dollars, s
         for store, amt in old_dollars.items():
             if store in out:
                 out[store]["amount"] = round(out[store]["amount"] - amt, 2)
-        alloc = allocate_across_stores(emp_store_hours.get(eid, {}), derived["amount"], emp.get("home_store"))
+        # THE COVERED SET, if the org has assigned this person one. `covered_by_emp` is resolved by
+        # the caller through `overhead_allocation.coverage_for` — the one home for the question —
+        # and is EMPTY for anyone the org has assigned nothing, which is why the hours rule stays
+        # the answer for every rep.
+        alloc = allocate_across_stores(emp_store_hours.get(eid, {}), derived["amount"],
+                                       emp.get("home_store"),
+                                       covered=(covered_by_emp or {}).get(eid),
+                                       spread=spread)
         for store, amt in alloc.items():
             d = out.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
             d["amount"] = round(d["amount"] + amt, 2)
