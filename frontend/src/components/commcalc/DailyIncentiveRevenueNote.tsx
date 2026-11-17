@@ -17,6 +17,7 @@
  * engine's is how a screen comes to disagree with the payout it is describing.
  */
 import { fmt } from '@/lib/client'
+import { SetupNotice } from '@/lib/setupNotice'
 
 export type RevenueScopeFields = {
   revenue_scope?: string
@@ -58,11 +59,16 @@ export default function DailyIncentiveRevenueNote({ d }: { d?: RevenueScopeField
           a rule that names a category, because nothing has said which category it is.
         </div>
       )}
+      {/* THE MIGRATION'S NAME GOES THROUGH `SetupNotice`, NEVER INTO THE SENTENCE (owner 2026-09-29,
+          §19.36). A file name and a schema.table mean nothing to the person running the store and
+          everything to an attacker; `SetupNotice` shows the detail to the platform super admin only
+          and gives everyone else the consequence in their own terms. `harness_carrier_vocab_guard`
+          reads RENDERED COPY for exactly this, and caught it here. */}
       {d.revenue_scope_declaration_pending && (
         <div style={{ marginTop: 4, color: 'var(--text3)' }}>
-          ⚙️ This business has not been able to choose yet — the setting is not in the database
-          (1126_revenue_scope.sql / commcalc.commission_org_config.declared_revenue_scope). Until it
-          is, only the categories we can place count, which is what every company reads today.
+          ⚙️ <SetupNotice lead="This business cannot choose yet, so only the categories we can place
+                                 count toward the day — which is what every company reads today."
+                          detail="1126_revenue_scope.sql / commission_org_config.declared_revenue_scope" />
         </div>
       )}
     </div>
