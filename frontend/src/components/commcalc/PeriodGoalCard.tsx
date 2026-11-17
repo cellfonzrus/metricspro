@@ -1,6 +1,8 @@
 'use client'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, fmt } from '@/lib/client'
+// A MIGRATION NAME IS NOT CUSTOMER COPY (§19.36). This is its one sanctioned carrier.
+import { SetupNotice } from '@/lib/setupNotice'
 
 // WHERE MUST THIS YEAR LAND (owner ask 2026-11-17, index §COMMCALC-79).
 //
@@ -163,11 +165,17 @@ export default function PeriodGoalCard({ storeCode = '', year = '' }: { storeCod
 
       {/* A MIGRATION THAT HAS NOT LANDED SAYS SO. Code deploys on merge here while the migration
           waits for the owner, and "no goal set" must not be shown when the truth is "the table is
-          not there yet" — the first is a prompt to the user, the second to the owner. */}
+          not there yet" — the first is a prompt to the user, the second to the owner.
+
+          THROUGH `SetupNotice`, NOT IN THE SENTENCE (owner 2026-09-29, §19.36: "this migration
+          should not be mentioned in customer facing"). A tenant reads one plain sentence; the
+          migration NUMBER reaches the platform super admin alone, through the one `detail` prop
+          that is the sanctioned carrier of it. `harness_carrier_vocab_guard` §SETUP fails the build
+          on a migration named in any page's rendered copy — and it caught this card. */}
       {d.migration_pending && (
         <div style={{ padding: '9px 16px', fontSize: 12.5, color: 'var(--text2)', background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
-          ⚙️ Goals cannot be stored yet — migration <strong>1125</strong> has not been applied to this
-          database. Everything below reads as &ldquo;no goal set&rdquo; until it is.
+          ⚙️ <SetupNotice lead="Goals cannot be stored yet, so everything below reads as &ldquo;no goal set&rdquo;."
+                          detail="1125_period_goal.sql / commcalc.period_goal" />
         </div>
       )}
 
