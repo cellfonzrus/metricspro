@@ -1613,7 +1613,19 @@ _all_routes = _flatten_routes(real_app.routes)
 # tenant's own config row and a snapshot of the pack it just read. Cross-tenant and authority
 # negatives: backend/tests/integration/test_weekly_review_endpoint.py (39 cases, three tenants with
 # their own markets).
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1849"))
+# 2026-11-17 (§COMMCALC-77) 1849 -> 1850. ONE route added and NONE removed, verified the house way:
+#     git diff origin/main..HEAD -- backend/ | grep -E '^[+-].*@router\.'
+#   shows exactly one addition on this branch and nothing deleted, and the counts were measured on
+#   both trees (merged main 1849, this branch 1850).
+#     + /commcalc/pos-report/upload  POST  (a back-office POS report delivered as a FILE)
+# It is behind `require_org` and lands through `pos_report_sweep.ingest_report` — the SAME ingest
+# the scheduled portal pull already uses, upserting on the mig-1078 natural key, so a delivered file
+# restates a store-day instead of duplicating it and no new write path exists. NO stored total,
+# statement, GP, commission, payable or tax figure can move: `portal_metric_day` is read by the
+# daily incentive, which computes only and persists nothing (§76.4). Cross-tenant and authority
+# negatives: backend/tests/integration/test_feed_declared_metrics_endpoint.py (31 cases, three
+# orgs, two of which share a store code so only the org scope separates them).
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1850"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

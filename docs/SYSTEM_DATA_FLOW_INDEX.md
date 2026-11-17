@@ -215,6 +215,7 @@ Primary code homes:
 | COMMCALC-73 | **A pull nobody recorded is a report that looks a month stale** | The owner pasted the Data Imports page: two of three tiles read *"Last upload: Oct 8, 2026 … via manual upload"* while the ePay owners-portal sweep had been landing their rows every night since 12 Nov (§COMMCALC-69), `raw_comp_report` 78,053 → 89,556. The rows arrived; the RECORD of their arrival did not. The sweep has THREE storage paths — the month replace, the per-day replace and the Daily-Transaction ingest hook — and each decided for itself whether to write a landing record. Exactly one did, which is why MI/ATU's tile was right and the other two were a month stale over current data. The two journals every "last upload" surface reads now have ONE writer, which `router`'s trace helper dereferences too (it could not before: the home lived in `router`, which imports the sweep), and the record plus the §6l post-landing hook are ONE call every storage path makes, locked by `harness_upload_trace_coverage` (f/j/k) so a new path cannot land silently. The third tile, the monthly sales archive, is NOT this defect: its promotion is switched off in its own registry row — reported, not patched. |
 | COMMCALC-74 | **A refusal names which refusal it is** | One operator sentence covered two states with opposite remedies, and the same source row produced both inside 25 minutes: first a saved address pointing INSIDE the portal (the sentence was right), then the FRONT DOOR being refused by a security appliance, where the address was already correct and "Check the address saved on this source" sent the owner to look at something that was fine. The page is what tells them apart — an appliance says so in the words a person reads and hands over a support id, which is the only reference the portal's own security team can look the refusal up by. So the refusal SENTENCE is now derived from the page rather than from the kind alone: the edge state never asks for the address and quotes the id, the inside-the-portal state is unchanged, and a caller with no page in hand still gets the actionable one rather than a guess. No new kind and no migration — the kind column's CHECK constraint allows three, and the markers stay per-org config. The login verdict's own second copy of the refusal sentence is gone: it reports the one that came with the evidence. |
 | COMMCALC-75 | **A feed lands the same however its file arrives** | The processor back office is fronted by a security appliance that refuses automated clients at every address tried, and the owner confirmed it offers no scheduled email of its own — so the per-store pull cannot fetch this report and no amount of code will make it. Everything downstream of the fetch was already built and was never at fault: the parse, the terminal-to-store resolution, the idempotent upsert and the bill-payment and fee reconciliations that read the rows. ONLY THE TRANSPORT was broken, so the file gets a door instead of the firewall getting a workaround: one arrival function lands a DELIVERED file — forwarded to the mailbox the email sweep already watches, picked off the Upload page, or sent by the processor if they agree to it — through the SAME ingest the pull uses, with the same dedup and the same store resolution, so a delivered file and a pulled one are indistinguishable downstream. A file that is not this report lands nothing and names the columns it looked for; an empty one is never a green tick. The registry row that lets the route be PICKED is a seeded declaration, not code. |
+| COMMCALC-77 | **A tenant's own sales report answers its own declared categories** | A tenant's daily incentive plan was five correct, active config rows paying off what the reps declare at closing — and its reps had declared ONE line in a month, so a store that traded every day computed to ~$0 while its own POS export carried all 31 days. Which code turns a tenant's own export into the categories IT declared, when that export states no quantity, carries two columns that could both be the category, and writes a sale NEGATIVE — and who decides whether the rep's declaration or the store's own report is the authority? |
 | COMMCALC-76 | **A weekly review pack is one fold, read from the reports that own its figures** | The owner asked for the LuxeLink performance deck as an in-app report on the Management tile, admins only, one report per market plus a consolidated one, with inventory aging per carrier among its items, generated at the end of each week for the Monday review with the DMs — and on demand. It derives nothing: profit, commission, the accessory gap, growth, the reps behind, aging and payroll are each QUOTED from the surface that already owns them, and the fold is pure, so a second derivation cannot grow beside the report it quotes. An item nobody measured carries no figure and says why in words; a store no market claims gets its own named scope rather than vanishing between the market packs and the company one; and the market vocabulary is a required argument, so nothing declared means nothing identified. The gate is the server's on every door — a company-wide reporting scope is not an administrator. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
@@ -26496,6 +26497,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-74 | commcalc |
 | COMMCALC-75 | commcalc |
 | COMMCALC-76 | commcalc |
+| COMMCALC-77 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -49976,6 +49978,130 @@ Files: `backend/app/modules/commcalc/weekly_review.py` (**new**),
 `frontend/src/lib/weekly-review-export.test.ts` (**new**), `frontend/src/lib/rbac.ts`,
 `frontend/src/lib/reports.ts`, `frontend/src/lib/route-index.ts`,
 `.github/workflows/carrier-vocab-guard.yml`.
+
+---
+
+## §COMMCALC-77. A TENANT'S OWN SALES REPORT ANSWERS ITS OWN DECLARED CATEGORIES (owner 2026-11-17)
+
+Owner, verbatim: *"daily numbers shouold come from the daily sales report i just uploaded, make a way
+to upload this report"*, *"each transaction is qty 1"*, *"the nda is nexday air, 2 day i 2 day air"*,
+*"let the feed be the authority till all reps are fully trained to enter daily data, keep teh switch
+closed but open later when needed"*.
+
+### COMMCALC-77.1 WHAT WAS ACTUALLY WRONG
+
+Measured, not assumed: a tenant's five daily-incentive rules (§76.4) were active and correct, and its
+reps had written **one** `commcalc.closing_metric_line` row in the whole of October 2026. The engine
+fails closed by design, so the month computed to ~$0 for a store that traded all 31 days. Its own POS
+export held every day. **Nothing joined the two**, and no amount of code in the engine could.
+
+### COMMCALC-77.2 WHAT WAS ALREADY BUILT AND IS NOT BUILT AGAIN
+
+The duplicate check (CLAUDE.md build gate) found that §COMMCALC-07 had already built most of this a
+month earlier, at the same owner's request. **Reused unchanged:** `commcalc.portal_metric_day`
+(mig 1078 — store-day × worker × declared category), `pos_report_feed.match_metric` (the config
+ladder that resolves a report line to a declared category and stamps the BASIS it matched on),
+`report_columns` (§COMMCALC-36), `pos_report_sweep.ingest_report`, `closing/metric_catalog`,
+`account/store_identity` via `coa.store_resolver`, and `commission_ledger`'s sign convention
+(mig 1006). **No new table, no second parser, no second fold, and `daily_incentive` is untouched**
+apart from one additive why-trail field.
+
+### COMMCALC-77.3 THE TRANSPORT GETS A DOOR (the §COMMCALC-75 precedent, applied)
+
+`POST /commcalc/pos-report/upload` lands a DELIVERED file through the SAME `ingest_report` the
+scheduled pull uses — same dedup, same store resolution, same category matching, same mig-1078
+natural key — so a delivered file and a pulled one are indistinguishable downstream and a re-upload
+restates a store-day instead of duplicating it. A file that is not this report lands NOTHING and
+names the columns it looked for; an empty parse is never a green tick.
+
+### COMMCALC-77.4 THE FOUR FACTS THAT HAD NO HOME
+
+| Fact | One home | Absent reads as |
+|---|---|---|
+| WHICH COLUMN is which fact | `report_columns.bound_columns` / `binding_misses` | nothing bound — the header mapping is byte-identical to before |
+| HOW MANY a line did | `pos_report_feed.unit_basis_named` | `column` — the export's own quantity |
+| WHICH SIGN is a sale | `pos_report_feed.earned_amount`, **dereferenced** from `commission_ledger` | amount as written |
+| WHICH SOURCE answers a store-day | `commcalc/metric_authority.resolve` | `declaration` — what the reps typed |
+
+**The binding exists because a synonym could not do its job.** `merge_synonyms` puts a tenant's
+declared words in front and promises they "outrank the house defaults"; `map_headers` then sorted
+every synonym by LENGTH and threw that order away. An export carrying both a category column and a
+product-name column was read on whichever the house table claimed first — two service levels became
+one indistinguishable line, and declaring the synonym did not fix it. A promise kept in one function
+and lost in the next. **A binding that names no column of the export identifies NOTHING** and says
+which column it wanted and which the file carries: falling back would hand back the very column the
+tenant rejected and read as agreement (owner 2026-10-30).
+
+**An absent quantity column counted zero.** `_units` read an absent cell as 0, so a line-level export
+could never pass a units gate. Declared, never inferred — an export with no quantity column might
+equally be one whose quantities are unknown, and counting a row there would invent volume nobody
+sold. **The export's own quantity always wins where it states one.**
+
+**A guess may not become a payment.** `metric_authority.lines_from_feed` carries only rows whose
+basis `pos_report_feed.basis_is_declared` allows (`line_map` / `label`). A `label_part` containment
+match is a text coincidence; it is reported by `excluded_from_feed`, never counted. §66's rule in the
+place it decides money.
+
+**The feed side PROJECTS, it does not fold.** `lines_from_feed` returns the exact
+`closing_metric_line` shape `metric_catalog.declared` / `by_employee` already read, so there is no
+second reader of a store-day and no second definition of a day's revenue.
+
+### COMMCALC-77.5 A PAYOUT THAT CAN MEASURE NOTHING SAYS SO
+
+Found against a live tenant's own rules. `measure` answers a `units` / `amount` basis by SUMMING the
+named categories, so a payout naming a basis and NO category sums nothing and the rule pays `$0.00`
+— indistinguishable from *the store did nothing today*. `daily_incentive.payout_measurable` stamps
+every verdict, so the operator fixes the config row instead of hunting a phantom in the data.
+`revenue` with no categories is NOT this case: that is the whole declared day, which
+`metric_catalog.gross_revenue` owns. **It changes no amount.**
+
+### COMMCALC-77.6 SAFE ON DEPLOY, AND SAFE ON APPLY
+
+Code deploys on merge here while a migration waits for the owner, so every default above is today's
+behaviour and migration `1124`'s NULL reads as `declaration` — **applying it moves no tenant's
+figures until somebody chooses**. An absent value reading as `feed` would have started paying off a
+feed because nobody answered a question (§STOREOPS-07, 2026-11-12). The endpoint reads the new column
+through a degrading helper, so between merge and apply it answers "nothing declared", never a 500.
+`GET /commcalc/daily-incentive` still **computes only and persists nothing** (§76.4).
+
+### COMMCALC-77.7 TESTS AND THE LOCK
+
+29 unit cases over two deliberately opposite export shapes (line-level / two candidate label columns
+/ negative-signed / no quantity, versus aggregated / quantity column / positive-signed / declaring
+nothing). 31 integration cases through the real app over three orgs, **two of which share a store
+code, a business date and a category key**, so only the org scope separates their figures — verified
+by arming: removing `.eq("org_id", …)` fails the leak tests, and before the shared code it did not.
+Lock `harness_feed_declared_metrics_lock.py` (78 checks, armed controls) fails the build if a caller
+stops dereferencing any of the four homes, if a second copy appears, or if the migration loses its
+grant, its REVERT or its CHECK.
+
+### §16–18 CROSS-REFERENCES
+
+Depends on: §COMMCALC-07 (the POS-report feed and its table), §COMMCALC-36 (the one column
+vocabulary), §COMMCALC-75 (a feed lands the same however its file arrives), §76 (the declared-metric
+catalog and the daily incentive), §66 (a fallback basis is not evidence), §64 (which store is this
+string), §25.12 (which sign is money earned), §COMMCALC-49.10 (a tenant's declaration is a required
+argument). Feeds: `GET /commcalc/daily-incentive/{date}`. Neighbours: §CLOSING-02 (declared vs
+captured — that one CHECKS a declaration against a feed and serves only `financing:` /
+`recon_class:`; it cannot SOURCE a declaration, which is why it is not extended here).
+
+§17 (endpoints): `POST /commcalc/pos-report/upload` (**new**);
+`GET /commcalc/daily-incentive/{close_date}` gains `metric_source` and reports which source answered.
+§18 (tables): no new table. `commcalc.commission_org_config.declared_metric_authority` —
+migration `1124`, additive, `CHECK`ed, granted to `service_role`.
+
+Files: `backend/app/modules/commcalc/metric_authority.py` (**new**),
+`backend/app/modules/commcalc/pos_report_feed.py`,
+`backend/app/modules/commcalc/report_columns.py`,
+`backend/app/modules/commcalc/report_declaration.py`,
+`backend/app/modules/commcalc/daily_incentive.py`,
+`backend/app/modules/commcalc/router.py`,
+`backend/harness_feed_declared_metrics_lock.py` (**new**),
+`backend/harness_db_resilience.py` (route pin 1849 -> 1850, justified in place),
+`backend/tests/unit/test_feed_declared_metrics.py` (**new**),
+`backend/tests/integration/test_feed_declared_metrics_endpoint.py` (**new**),
+`database/migrations/1124_declared_metric_authority.sql` (**new**),
+`.github/workflows/carrier-vocab-guard.yml`, `docs/CI_GATES.md` (generated).
 
 ---
 
