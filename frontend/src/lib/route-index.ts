@@ -182,6 +182,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/connectors' },
   { path: '/commcalc/custom-report' },
   { path: '/commcalc/daily-commission' },
+  { path: '/commcalc/daily-incentive', aliases: ['daily incentive', 'what does the day pay', 'what do we owe for the day', 'daily payout', 'incentive payout for a day', 'who earned what today', 'why did this rule pay nothing', 'pool split', 'daily bonus'] },
   { path: '/commcalc/device-cost-recon' },
   { path: '/commcalc/device-history' },
   { path: '/commcalc/device-line-reimbursement' },

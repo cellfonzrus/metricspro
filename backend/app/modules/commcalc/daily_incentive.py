@@ -51,6 +51,36 @@ OPS = {
 }
 
 
+def payout_measure_basis(basis, metric_keys):
+    """What a payout MEASURES, resolved in one place. Returns a basis from `MEASURE_BASES`. PURE.
+
+    THE RULE: A PAYOUT THAT NAMES NO CATEGORY MEASURES THE WHOLE DAY'S REVENUE.
+
+    Why this is a design fix and not a kindness to one config row (found 2026-11-17 against a live
+    tenant). The rules editor tells the admin, in words, that a pool with no categories ticked is
+    "a percentage of the whole day's gross revenue" — and then stores the payout with basis
+    'amount'. `measure` answers an 'amount' basis by SUMMING the named categories, so a payout
+    naming none summed nothing and the rule paid $0.00 for a store that had traded all day. The
+    stored row was never wrong. The promise was kept by the screen's copy and broken by the engine,
+    which is the same shape of defect as §COMMCALC-77's column binding: a guarantee made in one
+    place and lost in the next.
+
+    DOLLARS ARE DOLLARS, so 'amount' with no category IS the day's revenue and this resolves it
+    there. UNITS ARE NOT — there is no "day's units" to fall back to — so a 'units' payout naming
+    nothing stays unmeasurable and `payout_measurable` keeps saying so in words. Resolving it to
+    revenue there would invent a dollar figure for a rule that asked for a count.
+
+    Every caller that needs "what does this payout measure" dereferences THIS. A caller that
+    re-decides it next to the money is the second copy the house rules forbid.
+    """
+    b = _key(basis).lower()
+    if b not in MEASURE_BASES:
+        b = "revenue"
+    if b == "amount" and not [k for k in (metric_keys or []) if _key(k)]:
+        return "revenue"
+    return b
+
+
 def payout_measurable(basis, metric_keys):
     """Can this rule's PAYOUT be measured at all? Returns (ok, why). PURE.
 
@@ -67,7 +97,7 @@ def payout_measurable(basis, metric_keys):
     This CHANGES NO AMOUNT. It only lets the why-trail say which rule cannot be measured, so the
     operator fixes the config row rather than hunting a phantom in the data.
     """
-    b = _key(basis).lower() or "revenue"
+    b = payout_measure_basis(basis, metric_keys)
     keys = [k for k in (metric_keys or []) if _key(k)]
     if b == "revenue" or keys:
         return True, ""
@@ -237,10 +267,13 @@ def compute_day(catalog, rules, *, declared_map, per_employee, hours_by_employee
             continue
         payout = rule.get("payout") or {}
         rate = _num(payout.get("rate"))
-        pbasis = _key(payout.get("basis")).lower() or ("units" if kind == "per_unit" else "amount")
-        if pbasis not in MEASURE_BASES:
-            pbasis = "amount"
         pkeys = payout.get("metric_keys") or []
+        # WHAT THIS PAYOUT MEASURES is asked of the one home, never decided here. A per_unit rule
+        # that declares nothing still means units; everything else that names no category means the
+        # whole day, which is what the editor promises the admin in words.
+        pbasis = payout_measure_basis(
+            _key(payout.get("basis")).lower() or ("units" if kind == "per_unit" else "amount"),
+            pkeys)
         cap = payout.get("cap")
         # Stamped on every verdict this rule produces, so a $0.00 can always be told from a rule
         # that could never have measured anything. Changes no amount — see `payout_measurable`.
