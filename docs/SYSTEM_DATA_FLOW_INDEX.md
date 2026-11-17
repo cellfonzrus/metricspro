@@ -217,6 +217,7 @@ Primary code homes:
 | COMMCALC-75 | **A feed lands the same however its file arrives** | The processor back office is fronted by a security appliance that refuses automated clients at every address tried, and the owner confirmed it offers no scheduled email of its own — so the per-store pull cannot fetch this report and no amount of code will make it. Everything downstream of the fetch was already built and was never at fault: the parse, the terminal-to-store resolution, the idempotent upsert and the bill-payment and fee reconciliations that read the rows. ONLY THE TRANSPORT was broken, so the file gets a door instead of the firewall getting a workaround: one arrival function lands a DELIVERED file — forwarded to the mailbox the email sweep already watches, picked off the Upload page, or sent by the processor if they agree to it — through the SAME ingest the pull uses, with the same dedup and the same store resolution, so a delivered file and a pulled one are indistinguishable downstream. A file that is not this report lands nothing and names the columns it looked for; an empty one is never a green tick. The registry row that lets the route be PICKED is a seeded declaration, not code. |
 | COMMCALC-77 | **A tenant's own sales report answers its own declared categories** | A tenant's daily incentive plan was five correct, active config rows paying off what the reps declare at closing — and its reps had declared ONE line in a month, so a store that traded every day computed to ~$0 while its own POS export carried all 31 days. Which code turns a tenant's own export into the categories IT declared, when that export states no quantity, carries two columns that could both be the category, and writes a sale NEGATIVE — and who decides whether the rep's declaration or the store's own report is the authority? |
 | COMMCALC-78 | **What a day pays, and why every rule paid what it paid** | The engine has answered "what does this store-day owe each person" since mig 1072, and for five weeks NOTHING in the browser called it: a tenant could declare its rules, upload its day, and still have no way to SEE a payout. And the one rule it did run paid $0.00 forever, because the rules editor promises in words that a pool with no categories ticked is "a percentage of the whole day's gross revenue" and then stored a basis that sums the categories it was given — none. Who shows the answer, and who decides what a payout measures? |
+| COMMCALC-79 | **Where must the year land, and is it going to** | Every target figure here was a MONTH or a window over one, so a store could carry twelve monthly targets that each looked reasonable and summed to well under the year it was aiming at, with nothing saying so. And "a million in annual sale **including the commission earned**" means at least two different things for a shipping store. Who decides what counts toward a goal, and who may answer "what do I still need" — once? |
 | COMMCALC-76 | **A weekly review pack is one fold, read from the reports that own its figures** | The owner asked for the LuxeLink performance deck as an in-app report on the Management tile, admins only, one report per market plus a consolidated one, with inventory aging per carrier among its items, generated at the end of each week for the Monday review with the DMs — and on demand. It derives nothing: profit, commission, the accessory gap, growth, the reps behind, aging and payroll are each QUOTED from the surface that already owns them, and the fold is pure, so a second derivation cannot grow beside the report it quotes. An item nobody measured carries no figure and says why in words; a store no market claims gets its own named scope rather than vanishing between the market packs and the company one; and the market vocabulary is a required argument, so nothing declared means nothing identified. The gate is the server's on every door — a company-wide reporting scope is not an administrator. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
@@ -26500,6 +26501,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-76 | commcalc |
 | COMMCALC-77 | commcalc |
 | COMMCALC-78 | commcalc |
+| COMMCALC-79 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -50229,6 +50231,153 @@ Files: `backend/app/modules/commcalc/daily_incentive.py`,
 `frontend/src/lib/rbac.ts`, `frontend/src/lib/route-index.ts`,
 `frontend/src/components/ScreenLink.tsx`,
 `backend/harness_daily_incentive.py`, `backend/tests/unit/test_feed_declared_metrics.py`,
+`.github/workflows/carrier-vocab-guard.yml`, `docs/CI_GATES.md` (generated).
+
+---
+
+## §COMMCALC-79. WHERE MUST THE YEAR LAND, AND IS IT GOING TO (owner ask 2026-11-17)
+
+Owner, verbatim: *"The goal is to make the store a platinum store which is 1 Million in annual sale
+including the commission earned - make this user filled entry but fill it for me where the targets
+have to be declared"*.
+
+### COMMCALC-79.1 WHAT DID NOT EXIST
+
+Every target figure on this platform was a MONTH, or a window over one. `targets_engine` owns exactly
+one piece of arithmetic — a monthly figure spread over the scope's scheduled hours — and
+`target_line.grain` ('day' | 'week' | 'month') names a slice of a month that is already known. There
+was nowhere to say where the YEAR has to land, and therefore nowhere to answer the only question an
+annual goal is for: **a store can carry twelve monthly targets that each look reasonable and sum to
+well under the goal, and nothing on the platform said so.**
+
+`GET /commcalc/targets/{period}/backward` (§COMMCALC-02.5) already answered "what do I need to reach
+X?" — but the goal was a URL PARAMETER, nothing stored it, and the horizon was one month.
+
+### COMMCALC-79.2 WHY THIS IS NOT A `target_line` ROW (the build-gate duplicate check)
+
+1. **`grain` points the other way.** 'day' / 'week' / 'month' name a WINDOW over the monthly spread —
+   a smaller slice of something already computed. A year is the opposite direction: the figure that
+   GOVERNS the months. Adding 'year' to that CHECK would hand `derive_monthly_by_cat` a row it must
+   then learn to skip, which is the same shape as the built-in-category row that fold already ignores
+   defensively.
+2. **A `target_line` row names exactly ONE `metric_key`,** and its unique key is built on it. A goal
+   is measured over a SET of categories ("sales **including the commission earned**"), which that
+   shape cannot express without one row per category and no way to say they are one goal.
+
+So the goal is its own declaration — **but the arithmetic is not a second copy.**
+
+### COMMCALC-79.3 THE ONE HOME, FACTORED RATHER THAN COPIED
+
+`targets_engine.rate_to_close(goal, achieved, units_left)` is now THE home for *"what is still owed,
+and at what flat rate per remaining unit"*. **The unit is the caller's** — a day for
+`backward_from_goal`, a month for `annual_goal.progress` — and the home deliberately **does not name
+the unit in its output**, so a per-month figure can never reach a screen wearing the word "per day".
+`backward_from_goal`'s own fields are unchanged byte-for-byte; it dereferences the home and labels the
+rate in its own words.
+
+`harness_annual_goal.py` §E proves the annual per-month rate **IS** `rate_to_close`'s answer, and that
+the engine neither subtracts nor divides for itself. Arming that lock is what exposed its first
+version: the check grepped the whole file, and `rate_to_close` is NAMED in the engine's docstring, so
+a planted second copy of the arithmetic passed. The lock now reads the **tokenised code** with
+comments and docstrings stripped, and catches it.
+
+### COMMCALC-79.4 WHAT COUNTS IS DECLARED, NEVER DEFAULTED
+
+The owner said "including the commission earned", and for a shipping store there are at least two
+things that could mean: the commission the STORE earns from the carrier on a shipment, and the
+commission the store PAYS its reps. **Nothing in this subsystem decides.** The goal carries
+`metric_keys` — the tenant's own declared categories (mig 1072) — and whichever reading is right is
+expressed by **ticking the category that holds it**. A tenant whose "commission earned" has no
+category declares one; no code learns the phrase (RULE TWO).
+
+**An empty measure is UNMEASURED, and the surface says so in words.** It is not read as "every
+category" and it is not read as zero. A store that traded all year reading as having sold nothing is
+exactly the defect §COMMCALC-49.10 shipped with, and zero is the plausible-looking answer that hides
+it. For the same reason `on_pace` is **three-valued**: `null` when the goal cannot be measured or the
+horizon cannot be placed, because a store told it is BEHIND on a figure nobody measured would act on
+nothing.
+
+The card's tickable list is the **endpoint's** `axis` — this tenant's declared money categories. A
+tenant that has declared none gets an empty axis and a sentence pointing at Count Fields, never four
+wireless words.
+
+### COMMCALC-79.5 A GOAL IS DOLLARS, AND `figure_of` IS NOT
+
+`metric_catalog.figure_of` answers in the metric's OWN unit — a COUNT for a counted category — so
+summing figures into a money total would add 12 drop-offs to $400 of printing and print $412 as
+money. New sibling **`metric_catalog.money_of(entry)`**: THE money on a declared entry, in dollars,
+whatever the metric's unit. `gross_revenue` and `employee_revenue` now dereference it instead of
+reaching into the dict themselves, so one rule reads the dollars everywhere.
+
+`_declared_by_store_day` / `_declared_by_day` gain **`in_money=True`**, and `_portal_metric_rows`
+gains **`date_to`** — both PARAMETERS on the existing one read, the choice `_metric_lines` already
+made for the same reason: a caller that needed money, or a span, and found only the other would query
+the tables itself.
+
+### COMMCALC-79.6 THE CARD COMPUTES NOTHING
+
+The need, the per-month rate, the run-rate, the pace it is measured against, the verdict and every
+reason are fields of `GET /commcalc/period-goal/{period}`. A browser-side need would be a second
+answer that drifts silently, because both look right. The card lives on **`/commcalc/targets`** —
+"where the targets have to be declared" in the owner's own words — rather than on a sibling page
+nobody would find, and it is the only reader of that endpoint in the whole frontend (the lock scans
+the tree, it does not assert it).
+
+The save is gated by **`_require_target_edit`** — the same permission AND store-span gate
+`PUT /targets/{period}` uses — so this widens nobody's access and a DM can set a goal only for their
+own stores. A goal of 0 with no categories **deletes** the row rather than storing an unmeasurable
+one, because a row that can never be measured is indistinguishable on a screen from one nobody set.
+
+Migration 1125 **degrades until it lands**: `migration_pending` is reported separately from "no goal
+set", because the first is a prompt to the owner and the second to the user, and code deploys on merge
+here while a migration waits.
+
+### COMMCALC-79.7 THE LOCK
+
+`frontend/prove_period_goal_card.mjs` (57 checks, its own CI job) fails the build on a card-side
+subtraction or division, on a hand-listed category, on `on_pace: null` rendered as a verdict, on a
+second reader of the endpoint anywhere in `src/`, on the server losing its `rate_to_close`
+dereference, on the dollar read falling back to `figure_of`, on the ranged feed read becoming a
+sibling, on the save losing its gate, and on the migration seeding a tenant row or dropping its
+grant. **Verified armed** by planting a card-side `need`, a house category word, and a second copy
+of the server arithmetic — each was caught.
+
+`harness_annual_goal.py` (118 checks) pins the horizon vocabulary, that an empty measure is unmeasured
+rather than zero, that a partly-measured goal says which categories are missing, that today's month
+counts on BOTH sides of the elapsed/remaining split, that the horizon places correctly across a year
+end and onto a **leap day**, that over-achievement needs zero rather than a negative, that a closed
+horizon has no per-month rate at all, and that a plan short because eight months carry no target says
+so rather than reading as twelve targets set too low.
+
+### §16–18 CROSS-REFERENCES
+
+Depends on: §COMMCALC-02 (the target axis and mig 1074), §COMMCALC-02.5 (the per-day backward
+calculation that now shares this arithmetic), §72 (the declared-metric catalog, mig 1072),
+§COMMCALC-77 (which source answers a span), §COMMCALC-49.10 (a tenant's vocabulary is a required
+argument), §COMMCALC-44 (an absence needs the right reason).
+Neighbours: §61 (one company accessory goal split per store — a MONTH's figure distributed across
+stores, not a horizon above the months), §COMMCALC-78 (what a day pays).
+
+§17 (endpoints): **`GET /commcalc/period-goal/{period}`** (`?store_code=&grain=&today=&metric_source=`)
+— where a scope's horizon must land, what it has earned over its own declared measure, the need, the
+per-month rate, the run-rate against the pace it needs, and the verdict; READ-ONLY, computes nothing
+into the goal and pays nothing from it. **`PUT /commcalc/period-goal/{period}`** — the user-filled
+declaration, through `_require_target_edit`.
+
+§18 (tables): **`commcalc.period_goal` (mig 1125, NEW)** — one goal per (org, store_code, period,
+grain); `store_code = ''` is the whole company; `metric_keys` EMPTY means unmeasured, never "all".
+Changed: none.
+
+Files: `backend/app/modules/commcalc/annual_goal.py` (**new**),
+`backend/app/modules/commcalc/targets_engine.py` (`rate_to_close` factored),
+`backend/app/modules/commcalc/router.py`,
+`backend/app/modules/closing/metric_catalog.py` (`money_of`),
+`backend/app/modules/closing/router.py` (`in_money`),
+`backend/app/modules/core/module_graph.py` (hand-edited, never blessed),
+`frontend/src/components/commcalc/PeriodGoalCard.tsx` (**new**),
+`frontend/src/app/(platform)/commcalc/targets/page.tsx`,
+`frontend/prove_period_goal_card.mjs` (**new**), `backend/harness_annual_goal.py` (**new**),
+`database/migrations/1125_period_goal.sql` (**new**),
 `.github/workflows/carrier-vocab-guard.yml`, `docs/CI_GATES.md` (generated).
 
 ---

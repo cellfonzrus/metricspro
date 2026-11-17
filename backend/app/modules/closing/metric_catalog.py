@@ -232,6 +232,20 @@ def figure_of(entry) -> float:
     return 0 if v is None else v
 
 
+def money_of(entry) -> float:
+    """THE MONEY from a `declared()` entry, in dollars, whatever the metric's own unit is.
+
+    The sibling of `figure_of`, and the one every DOLLAR question must ask. `figure_of` answers in
+    the metric's unit — a COUNT for a counted category — so a caller summing figures into a money
+    total would add 12 drop-offs to $400 of printing and show $412. `declared()` has already put the
+    money on the entry (`_earned`: an amount declared outright, else units x the declared unit
+    price), so this reads it rather than recomputing it.
+
+    Zero, never None, so a category nobody declared reads as a real zero of money."""
+    v = (entry or {}).get("amount")
+    return 0.0 if v is None else round(_num(v), 2)
+
+
 def _blank(metric):
     return {"key": metric["key"], "label": metric["label"], "units": 0, "amount": 0.0,
             "value_kind": metric["value_kind"], "declared_by": metric["declared_by"],
@@ -322,7 +336,9 @@ def gross_revenue(catalog, declared_map):
     """The store-day's declared gross revenue: the sum over `revenue_keys`. THE definition — a target
     and a payout rule that both ask here can never disagree about what a day's sales were."""
     rk = set(revenue_keys(catalog))
-    return round(sum(_num((declared_map or {}).get(k, {}).get("amount")) for k in rk), 2)
+    # DEREFERENCED, not reached into: `money_of` is the one home for "the dollars on an entry", so
+    # this definition and every other dollar question read the same field by the same rule.
+    return round(sum(money_of((declared_map or {}).get(k)) for k in rk), 2)
 
 
 def employee_revenue(catalog, per_employee):
@@ -330,7 +346,7 @@ def employee_revenue(catalog, per_employee):
     `gross_revenue`, one person at a time — this is the "who generated the most today" answer."""
     out = {}
     for who, metrics in (per_employee or {}).items():
-        out[who] = round(sum(_num(v.get("amount")) for v in metrics.values() if v.get("in_revenue")), 2)
+        out[who] = round(sum(money_of(v) for v in metrics.values() if v.get("in_revenue")), 2)
     return out
 
 
