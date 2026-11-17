@@ -1625,7 +1625,21 @@ _all_routes = _flatten_routes(real_app.routes)
 # daily incentive, which computes only and persists nothing (§76.4). Cross-tenant and authority
 # negatives: backend/tests/integration/test_feed_declared_metrics_endpoint.py (31 cases, three
 # orgs, two of which share a store code so only the org scope separates them).
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1850"))
+# 2026-11-17 (§COMMCALC-79) 1850 -> 1852. TWO routes added and NONE removed, verified the house way:
+#     git diff origin/main..HEAD -- backend/ | grep -E '^[+-].*@router\.'
+#   shows exactly two additions on this branch and nothing deleted, and the count was measured on
+#   this tree (1852) against the pin the merged main left (1850).
+#     + /commcalc/period-goal/{period}  GET  (where a scope's horizon must land, and whether it will)
+#     + /commcalc/period-goal/{period}  PUT  (the user-filled declaration)
+# Both are behind `require_org`; the PUT is additionally behind `_require_target_edit` — the SAME
+# permission AND store-span gate `PUT /targets/{period}` already uses — so no caller gains reach it
+# did not have. NO stored total, statement, GP, commission, payable or tax figure can move: the GET
+# is read-only and computes nothing into any payout path, and the PUT writes one row of
+# `commcalc.period_goal` (mig 1125) and nothing else. The goal is compared against figures, never
+# added to them. Cross-tenant negatives: the read is org-scoped on every query and the measure is
+# the tenant's OWN declared categories, which `prove_period_goal_card.mjs` §B fails the build on if
+# a house list appears.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1852"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
