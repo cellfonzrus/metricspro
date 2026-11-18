@@ -211,3 +211,66 @@ def test_without_its_migration_the_surface_degrades_by_name(api_client, monkeypa
     assert out["svg"].startswith("<svg")
     assert out["recorded_id"] is None
     assert out["note"] == SETUP_NOTICE
+
+
+# ── Bulk: a shelf of packages, not one at a time (owner 2026-11-18) ─────────────────────────────
+def test_a_batch_answers_every_photo_on_its_own_terms(api_client, wired):
+    out = api_client.post(f"{BASE}/read-batch", params={"org_id": ORG_A}, json={"photos": [
+        {"name": "one.jpg", "image": _data_url(_photo_bytes("DTHdkRH1RRMA"))},
+        {"name": "two.jpg", "image": _data_url(_photo_bytes("DxJKPcHgRRMA"))},
+        {"name": "blank.jpg", "image": _data_url(_blank_photo())},
+    ]}).json()
+    assert out["photos"] == 3
+    assert out["references_found"] == 2
+    got = [r["reference"] for item in out["items"] for r in item["readings"]]
+    assert got == ["DTHdkRH1RRMA", "DxJKPcHgRRMA"]
+    # ★ The one that failed is NAMED, never folded into a total — a silent short answer here is a
+    # package left on the shelf.
+    assert out["unread_photos"] == ["blank.jpg"]
+    assert wired.rows("storeops.dropoff_label_scan") == []
+
+
+def test_a_batch_prints_a_sheet_and_records_each_one(api_client, wired):
+    out = api_client.post(f"{BASE}/barcodes", params={"org_id": ORG_A}, json={
+        "store_code": "7710",
+        "items": [{"reference": "DTHdkRH1RRMA", "reading": {"source": "barcode", "reference": "DTHdkRH1RRMA"}},
+                  {"reference": "DxJKPcHgRRMA", "reading": {"source": "barcode", "reference": "DxJKPcHgRRMA"}},
+                  {"reference": "DTHdkRH1RRMA"}],         # the same package twice: one barcode
+    }).json()
+    assert [i["reference"] for i in out["items"]] == ["DTHdkRH1RRMA", "DxJKPcHgRRMA"]
+    assert all(i["svg"].startswith("<svg") for i in out["items"])
+    assert out["recorded"] == 2
+    assert len(wired.rows("storeops.dropoff_label_scan")) == 2
+
+
+def test_one_bad_reference_does_not_sink_the_sheet(api_client, wired):
+    out = api_client.post(f"{BASE}/barcodes", params={"org_id": ORG_A}, json={"items": [
+        {"reference": "DTHdkRH1RRMA"},
+        {"reference": "RMé123"},
+    ]}).json()
+    assert [i["reference"] for i in out["items"]] == ["DTHdkRH1RRMA"]
+    assert [r["reference"] for r in out["refused"]] == ["RMé123"]
+
+
+def test_a_label_type_that_declares_qr_is_drawn_as_a_qr(api_client, fake_supabase, monkeypatch):
+    """A Happy Returns bag carries QR codes, not bars. Which code to draw is the tenant's
+    declaration — and the answer says whether the platform has PROVED that code is a duplicate of
+    what the label carried (it has, for Code 128; it has not, for QR)."""
+    monkeypatch.setattr("app.modules.storeops.dropoff_label_api.get_supabase",
+                        lambda: fake_supabase)
+    fake_supabase.seed("storeops.dropoff_label_profile", [
+        {"id": "prof-hr", "org_id": ORG_A, "label_name": "Returns partner bag",
+         "reference_pattern": r"HR[A-Z0-9]{6}-\d{3,6}-\d+", "symbology": "qr",
+         "notes": None, "active": True}])
+    fake_supabase.seed("storeops.dropoff_label_scan", [])
+    out = api_client.post(f"{BASE}/barcode", params={"org_id": ORG_A}, json={
+        "reference": "HRVX3CYZ-7710-1",
+        "reading": {"source": "text", "reference": "HRVX3CYZ-7710-1", "profile_id": "prof-hr"}}).json()
+    assert out["symbology"] == "qr"
+    assert out["verified_symbology"] is False
+    assert out["svg"].startswith("<svg")
+
+    bars = api_client.post(f"{BASE}/barcode", params={"org_id": ORG_A},
+                           json={"reference": "DTHdkRH1RRMA"}).json()
+    assert bars["symbology"] == "code128b"
+    assert bars["verified_symbology"] is True

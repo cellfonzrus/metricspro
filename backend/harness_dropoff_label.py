@@ -31,6 +31,7 @@ sys.path.insert(0, HERE)
 from app.modules.core.code128 import encode_modules  # noqa: E402
 from app.modules.storeops import dropoff_label as L  # noqa: E402
 from app.modules.storeops import dropoff_photo as P  # noqa: E402
+from app.modules.storeops import dropoff_render as R  # noqa: E402
 
 PASS, FAIL = [], []
 
@@ -217,6 +218,27 @@ if _IMAGING:
     check("…and the same blur over fatter bars still reads",
           P.decode_barcode_image(photograph(REF, blur=2.0, scale=8)).get("best"), REF)
 
+    # ★ SIDEWAYS. A scanline is a row of pixels, so a label photographed with the package lying on
+    # the counter has its bars running DOWN the picture and no row crosses them. One of the first
+    # eight real photos was exactly this.
+    import io as _io2
+    turned = Image.open(_io2.BytesIO(photograph(REF))).rotate(90, expand=True, fillcolor=255)
+    buf = _io2.BytesIO(); turned.convert("RGB").save(buf, format="JPEG", quality=92)
+    check("★ a label photographed sideways still reads",
+          P.decode_barcode_image(buf.getvalue()).get("best"), REF)
+
+    # Several packages in one photo: the batch form must not stop at the first one it agrees on.
+    many = photograph(REF)
+    stacked = Image.new("L", (900, 420), 255)
+    stacked.paste(Image.open(_io2.BytesIO(many)).convert("L").resize((860, 150)), (20, 20))
+    stacked.paste(Image.open(_io2.BytesIO(photograph("HR-0192837465"))).convert("L").resize((860, 150)),
+                  (20, 230))
+    buf = _io2.BytesIO(); stacked.convert("RGB").save(buf, format="JPEG", quality=92)
+    both = P.decode_barcode_image(buf.getvalue(), expect_many=True)["references"]
+    check("★ two labels in one photo both read", sorted(both), sorted([REF, "HR-0192837465"]))
+    check("…and the single form still answers with one",
+          P.decode_barcode_image(buf.getvalue())["best"] in (REF, "HR-0192837465"), True)
+
     other = P.decode_barcode_image(photograph("HR-0192837465")).get("best")
     check("reads a different tenant's reference shape just as well", other, "HR-0192837465")
 
@@ -241,6 +263,49 @@ if _IMAGING:
     tiny = P.decode_barcode_image(photograph(REF, scale=1))
     check("a barcode too small to measure is reported as unread, not guessed",
           tiny["best"] in (None, REF), True)
+
+
+# ── H. the symbology a label type declares ──────────────────────────────────────────────────────
+section("H. which code to draw is the tenant's declaration, the symbology itself is a policy")
+check("an undeclared label type draws the house default", R.normalize(None), R.CODE128)
+check("a nonsense declaration draws the house default rather than refusing",
+      R.normalize("wingdings"), R.CODE128)
+for spelling in ("qr", "QR", "qr-code", "QR_Code", "qrcode"):
+    check(f"'{spelling}' is understood as a QR", R.normalize(spelling), R.QR)
+check("★ Code 128 is the only symbology this platform has PROVED carries the printed reference",
+      (R.verified_symbology("code128b"), R.verified_symbology("qr")), (True, False))
+svg_1d = R.render("DTHdkRH1RRMA")
+svg_qr = R.render("HRVX3CYZ-7710-1", "qr")
+check("a 1D code renders as an svg", svg_1d.startswith("<svg") and "DTHdkRH1RRMA" in svg_1d)
+check("a QR renders as an svg", svg_qr.startswith("<svg"))
+check("the two are not the same drawing", svg_1d != svg_qr)
+for bad in ("", "   "):
+    try:
+        R.render(bad, "qr")
+        check("an empty reference is refused as a QR too", False)
+    except Exception:
+        check("an empty reference is refused as a QR too", True)
+        break
+
+section("H2. several references from one photo, each with its own provenance")
+P_A = TENANT_A
+multi = L.resolve_readings(barcode={"references": ["DTHdkRH1RRMA", "DxJKPcHgRRMA"]}, text="",
+                           profiles=P_A)
+check("every decoded barcode comes back", [m["reference"] for m in multi],
+      ["DTHdkRH1RRMA", "DxJKPcHgRRMA"])
+check("…each needing no confirmation", [m["confirm_required"] for m in multi], [False, False])
+lst = L.resolve_readings(barcode=None,
+                         text="DQ84bsHIRRMA TSK\nDH54V6HGRRMA TSK\nDv2NpvIYRRMA CMS", profiles=P_A)
+check("a photo of a LIST yields every reference on it", len(lst), 3)
+check("…all of them flagged for a person to check",
+      all(x["confirm_required"] for x in lst), True)
+check("nothing readable yields nothing, not a blank row",
+      L.resolve_readings(barcode=None, text="no references here", profiles=P_A), [])
+check("an org that declared nothing gets nothing from the TEXT of a photo",
+      L.resolve_readings(barcode=None, text=A_LABEL, profiles=[]), [])
+check("★ …but a decoded barcode still comes back for that org",
+      [m["reference"] for m in L.resolve_readings(barcode={"references": ["DTHdkRH1RRMA"]},
+                                                  text="", profiles=[])], ["DTHdkRH1RRMA"])
 
 
 # ── G. the audit row ─────────────────────────────────────────────────────────────────────────────

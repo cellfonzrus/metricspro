@@ -193,6 +193,50 @@ def resolve_reading(*, barcode: dict | None, text: str, profiles: list[dict]) ->
     }
 
 
+def resolve_readings(*, barcode: dict | None, text: str, profiles: list[dict]) -> list[dict]:
+    """EVERY reference one photo yields, each with its own provenance — the bulk form of
+    `resolve_reading`.
+
+    Owner 2026-11-18: *"the screen should be able to read the picture as I sent not one by one and
+    create bar codes in bulk"*. A back room holds a shelf of stranded packages, and photographing
+    them one at a time is the reason a tool stops being used.
+
+    The order is the same as the single form and for the same reason: decoded bars first, because
+    each is check-verified in its own right, and a photo that yields three decodes yields three
+    facts. Only when NO bars decoded does the printed text get a say, and then every candidate the
+    organisation's own declarations recognise is returned — a screenshot of a consolidation list is
+    a photo with twenty references on it.
+
+    Returns [] when nothing was found; the caller reports that per photo rather than folding it into
+    a total, because "that one did not read" is the thing a person needs to act on.
+    """
+    out: list[dict] = []
+    seen: set[str] = set()
+    decoded = list((barcode or {}).get("references") or [])
+    best = ((barcode or {}).get("best") or "").strip()
+    if best and best not in decoded:
+        decoded.insert(0, best)
+    for ref in decoded:
+        if not ref or ref in seen:
+            continue
+        seen.add(ref)
+        hit = matches_any(ref, profiles or [])
+        out.append({"source": "barcode", "reference": ref, "label_name": (hit or {}).get("label_name"),
+                    "profile_id": (hit or {}).get("id"), "matched_declaration": hit is not None,
+                    "confirm_required": False, "ambiguous": [], "reason": None})
+    if out:
+        return out
+    read = read_reference(text, profiles if profiles is not None else [])
+    for c in read.get("candidates") or []:
+        if c["reference"] in seen:
+            continue
+        seen.add(c["reference"])
+        out.append({"source": "text", "reference": c["reference"], "label_name": c.get("label_name"),
+                    "profile_id": c.get("profile_id"), "matched_declaration": True,
+                    "confirm_required": True, "ambiguous": c.get("ambiguous") or [], "reason": None})
+    return out
+
+
 # ── What the vision model is asked ───────────────────────────────────────────────────────────────
 # Deliberately NOT "find the RMA". The model is asked to TRANSCRIBE, and this module decides what
 # counts as a reference using the tenant's declarations. A prompt that names one tenant's field

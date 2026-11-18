@@ -32,8 +32,11 @@ from fastapi import APIRouter, Body, Header, HTTPException, Response
 from app.core.config import settings
 from app.core.database import get_supabase
 from app.modules.core import ai_gate as _ai_gate
-from app.modules.core.code128 import Code128Error, render_svg
+from app.modules.core.code128 import Code128Error
 from app.modules.storeops import dropoff_label as _label
+# THE one "draw this reference" home: which symbology a label type uses is the tenant's declaration,
+# and a second copy of that choice in an endpoint is the duplicate the build gate forbids.
+from app.modules.storeops import dropoff_render as _render
 from app.modules.storeops import dropoff_photo as _photo
 
 router = APIRouter()
@@ -50,6 +53,15 @@ TRANSCRIBE_MAX_RETRIES = 1
 # A photo bigger than this is refused by size rather than read slowly: a modern phone photo is
 # 2-5 MB, and anything past 12 MB is a mistake (a video frame dump, a scanned PDF page set).
 MAX_PHOTO_BYTES = 12 * 1024 * 1024
+# A shelf of stranded packages in one go. 25 is a working batch, not a ceiling anyone should hit:
+# past it the person is better served by two batches than by one request that may time out at a
+# gateway and lose the lot.
+MAX_PHOTOS = 25
+# The whole batch's budget. Reading a photo that HAS a barcode costs well under a second; the
+# expensive case is a photo that has none, and a batch of those must still come back. Photos past
+# the budget are REPORTED as unread rather than dropped — a silent short answer here means packages
+# left on the shelf, which is the defect this feature exists to fix.
+BATCH_SECONDS = 25.0
 
 
 def sb():
@@ -150,6 +162,19 @@ def retire_profile(profile_id: str, org_id: str = ORG_ID):
     return {"retired": True, "id": profile_id}
 
 
+def _symbology_for(reading: dict, profiles: list[dict], explicit: str | None = None) -> str:
+    """Which symbology to draw this reference in: what the caller asked for, else what the label
+    type the reading matched declares, else the house default (Code 128 — a POLICY, see
+    dropoff_render)."""
+    if explicit:
+        return _render.normalize(explicit)
+    pid = (reading or {}).get("profile_id")
+    for p in profiles or []:
+        if pid and str(p.get("id")) == str(pid):
+            return _render.normalize(p.get("symbology"))
+    return _render.normalize(None)
+
+
 def _caller(authorization: str, org_id: str) -> str | None:
     try:
         who = _ai_gate.resolve_caller(get_supabase(), authorization, org_id) or {}
@@ -226,6 +251,114 @@ def _transcribe(raw: bytes, ext: str, *, authorization: str, org_id: str, declar
     return text, meta
 
 
+@router.post("/dropoff-label/read-batch")
+def read_labels(body: dict = Body(...), authorization: str = Header(default=""),
+                org_id: str = ORG_ID):
+    """Several photos at once → every reference each one yields. WRITES NOTHING.
+
+    Owner 2026-11-18: *"the screen should be able to read the picture as I sent not one by one and
+    create bar codes in bulk"*. Body: {photos: [{name?, image}], skip_text?}.
+
+    Each photo is answered on its own terms: its references with their provenance, or the reason it
+    gave none. A batch never folds a failure into a total — "22 read" with three silently missing is
+    three packages still on the shelf.
+    """
+    photos = body.get("photos")
+    if not isinstance(photos, list) or not photos:
+        raise HTTPException(400, "send one or more photos")
+    if len(photos) > MAX_PHOTOS:
+        raise HTTPException(400, f"that is more than {MAX_PHOTOS} photos — send them in two batches")
+    profiles, blocker = _profiles(org_id)
+
+    import time as _time
+    deadline = _time.monotonic() + BATCH_SECONDS
+    items: list[dict] = []
+    for i, photo in enumerate(photos):
+        name = str((photo or {}).get("name") or f"photo {i + 1}")[:200]
+        if _time.monotonic() > deadline:
+            items.append({"name": name, "readings": [], "reason": "not_read_yet", "skipped": True})
+            continue
+        try:
+            raw, ext = _decode_image((photo or {}).get("image"))
+        except HTTPException as e:
+            items.append({"name": name, "readings": [], "reason": str(e.detail), "skipped": False})
+            continue
+        left = max(1, len(photos) - i)
+        try:
+            barcode = _photo.decode_barcode_image(
+                raw, expect_many=True, budget_s=max(0.5, (deadline - _time.monotonic()) / left))
+        except _photo.PhotoReadUnavailable:
+            barcode = {"best": None, "references": []}
+        text, ai_meta = "", {"skipped": "not_attempted"}
+        if not barcode.get("references") and not body.get("skip_text"):
+            text, ai_meta = _transcribe(raw, ext, authorization=authorization, org_id=org_id,
+                                        declared=bool(profiles))
+        readings = _label.resolve_readings(barcode=barcode, text=text, profiles=profiles)
+        items.append({
+            "name": name,
+            "readings": readings,
+            "reason": None if readings else (
+                "no_label_types_declared" if not profiles else "nothing_readable"),
+            "skipped": False,
+            "ai": {k: v for k, v in ai_meta.items() if k != "response"},
+        })
+    found = sum(len(i["readings"]) for i in items)
+    return {"items": items, "photos": len(photos), "references_found": found,
+            "unread_photos": [i["name"] for i in items if not i["readings"]],
+            "declared_label_types": len(profiles), "blocker": blocker}
+
+
+@router.post("/dropoff-label/barcodes")
+def make_barcodes(body: dict = Body(...), authorization: str = Header(default=""),
+                  org_id: str = ORG_ID):
+    """Several CONFIRMED references → a barcode each, and one audit row each.
+
+    Body: {items: [{reference, reading?, photo_name?}], store_code?, record?}. One refused reference
+    does not sink the batch: it comes back named, with its reason, beside the ones that printed.
+    """
+    items = body.get("items")
+    if not isinstance(items, list) or not items:
+        raise HTTPException(400, "send one or more references")
+    if len(items) > MAX_PHOTOS * 4:
+        raise HTTPException(400, "that is too many references for one sheet — split it")
+    store_code = body.get("store_code")
+    who = _caller(authorization, org_id)
+    profiles, _blocker = _profiles(org_id)
+    made: list[dict] = []
+    refused: list[dict] = []
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for it in items:
+        reference = str((it or {}).get("reference") or "").strip()
+        if not reference or reference in seen:
+            continue
+        seen.add(reference)
+        reading = (it or {}).get("reading") if isinstance((it or {}).get("reading"), dict) else {}
+        symbology = _symbology_for(reading, profiles, (it or {}).get("symbology"))
+        try:
+            svg = _render.render(reference, symbology)
+        except Code128Error as e:
+            refused.append({"reference": reference, "reason": str(e)})
+            continue
+        made.append({"reference": reference, "svg": svg, "symbology": symbology,
+                     # Says whether this is a proven DUPLICATE of what the label carried, or the
+                     # platform's reconstruction from the reference it read. Different promises.
+                     "verified_symbology": _render.verified_symbology(symbology),
+                     "source": reading.get("source"), "label_name": reading.get("label_name")})
+        rows.append(_label.scan_row(
+            org_id=org_id, store_code=store_code, reading=reading, confirmed_reference=reference,
+            source_photo_name=(it or {}).get("photo_name"), read_by=who))
+    note = None
+    recorded = 0
+    if rows and body.get("record", True):
+        try:
+            saved = sb().table("dropoff_label_scan").insert(rows).execute().data or []
+            recorded = len(saved)
+        except Exception as e:
+            note = f"not recorded — migration {MIGRATION} may not be applied ({str(e)[:140]})"
+    return {"items": made, "refused": refused, "recorded": recorded, "note": note}
+
+
 @router.post("/dropoff-label/barcode")
 def make_barcode(body: dict = Body(...), authorization: str = Header(default=""),
                  org_id: str = ORG_ID):
@@ -241,12 +374,14 @@ def make_barcode(body: dict = Body(...), authorization: str = Header(default="")
         raise HTTPException(400, "a reference is required")
     if len(reference) > 64:
         raise HTTPException(400, "that reference is too long to print as one barcode")
+    reading = body.get("reading") if isinstance(body.get("reading"), dict) else {}
+    profiles, _blocker = _profiles(org_id)
+    symbology = _symbology_for(reading, profiles, body.get("symbology"))
     try:
-        svg = render_svg(reference)
+        svg = _render.render(reference, symbology)
     except Code128Error as e:
         raise HTTPException(400, str(e))
 
-    reading = body.get("reading") if isinstance(body.get("reading"), dict) else {}
     recorded, note = None, None
     if body.get("record", True):
         row = _label.scan_row(
@@ -260,16 +395,18 @@ def make_barcode(body: dict = Body(...), authorization: str = Header(default="")
             # Under the message key `note`, so the §19.36 boundary neutralises the migration name
             # and the database's own words for a tenant, and keeps them whole for a platform admin.
             note = f"not recorded — migration {MIGRATION} may not be applied ({str(e)[:140]})"
-    return {"reference": reference, "svg": svg, "recorded_id": recorded, "note": note,
+    return {"reference": reference, "svg": svg, "symbology": symbology,
+            "verified_symbology": _render.verified_symbology(symbology),
+            "recorded_id": recorded, "note": note,
             "corrected": bool(reading.get("reference") and reading.get("reference") != reference)}
 
 
 @router.get("/dropoff-label/barcode.svg")
-def barcode_svg(reference: str, org_id: str = ORG_ID):
-    """The same barcode as an image, for printing. Reads nothing and writes nothing — it is the
+def barcode_svg(reference: str, symbology: str = "", org_id: str = ORG_ID):
+    """The same code as an image, for printing. Reads nothing and writes nothing — it is the
     renderer, so a print dialog can reload it without creating a second audit row."""
     try:
-        svg = render_svg(reference.strip())
+        svg = _render.render(reference.strip(), symbology or None)
     except Code128Error as e:
         raise HTTPException(400, str(e))
     return Response(content=svg, media_type="image/svg+xml",

@@ -105,12 +105,25 @@ def _decode_line(widths: list[int]) -> list[str]:
     return found
 
 
-def decode_barcode_image(raw: bytes) -> dict:
-    """Photo bytes → {"found": [...], "best": str|None, "votes": int, "scanlines": int}.
+def decode_barcode_image(raw: bytes, *, expect_many: bool = False,
+                         budget_s: float | None = None) -> dict:
+    """Photo bytes → {"found": [...], "best": str|None, "votes": int, "scanlines": int,
+    "references": [...]}.
 
     `best` is None whenever no reading reached MIN_VOTES — never the most popular near-miss. A
     barcode this module cannot vouch for must send the caller to the text read, where a person
     confirms, rather than hand over a number that will scan cleanly into the wrong record.
+
+    `budget_s` overrides the per-photo ceiling. A BATCH divides its own budget by the photos left,
+    so twenty-five pictures cannot add up to a request that times out at a gateway and loses the
+    lot; a clean label decodes in well under a second, so the division costs the common case nothing.
+
+    `expect_many` is for a photo of SEVERAL packages at once, which is how a back room actually
+    looks: the scan does not stop at the first agreed reading, and `references` carries every
+    reading that reached MIN_VOTES, in the order they were agreed. Each one is check-verified in its
+    own right — finding a second barcode makes the first no less certain — so the caller can print a
+    sheet of them. Without the flag the scan still stops early, because one package at a counter is
+    the common case and a person is waiting.
     """
     try:
         import numpy as np
@@ -123,47 +136,62 @@ def decode_barcode_image(raw: bytes) -> dict:
     if img.width > MAX_WIDTH:
         img = img.resize((MAX_WIDTH, max(1, int(img.height * MAX_WIDTH / img.width))))
     g = np.asarray(img, dtype=float)
-    h, w = g.shape
-    if w < 60 or h < 10:
-        return {"found": [], "best": None, "votes": 0, "scanlines": 0}
+    if g.shape[1] < 60 or g.shape[0] < 10:
+        return {"found": [], "references": [], "best": None, "votes": 0, "scanlines": 0,
+                "timed_out": False}
 
-    # A local mean, not one threshold for the picture: half a label in shadow is the normal case,
-    # and a global threshold turns the shaded half into one solid bar. Two window widths and four
-    # darkness offsets are tried because the hard photos are hard in different ways — one of the
-    # four real samples decodes ONLY at the wider window, and another only at the faintest offset.
-    # A pass that fails costs one convolution; a pass that is missing costs the store a package.
     import time as _time
-    deadline = _time.monotonic() + MAX_SECONDS
+    deadline = _time.monotonic() + (MAX_SECONDS if budget_s is None else max(0.3, budget_s))
     votes: Counter = Counter()
     lines = 0
-    for k in (max(9, (w // 40) | 1), max(9, (w // 22) | 1)):
-        ker = np.ones(k) / k
-        for y in range(0, h, ROW_STEP):
-            if _time.monotonic() > deadline or (votes and votes.most_common(1)[0][1] >= ENOUGH_VOTES):
-                break
-            row = g[y]
-            local = np.convolve(np.pad(row, (k // 2, k // 2), mode="edge"), ker, mode="valid")
-            for offset in (1, 4, 8, 14, 22):  # a blurred print → a dark one
-                bits = (row < local - offset).astype(int)
-                idx = bits.nonzero()[0]
-                if idx.size < 30:
-                    continue
-                widths = _runs(bits[idx[0]:idx[-1] + 1].tolist())
-                if len(widths) < 20:
-                    continue
-                lines += 1
-                for text in _decode_line(widths):
-                    votes[text] += 1
+
+    # BOTH ORIENTATIONS. A scanline is a ROW of pixels, so a label photographed sideways — the
+    # package lying on a counter, the phone held upright — has its bars running down the picture and
+    # not one row crosses them. That is not a rare photo: of the first eight real samples, one was
+    # sideways and one upside down. Transposing is the whole fix (a 90° turn of the picture), and it
+    # costs one pass. The alternative, telling a store person to re-take the photo straight, is how a
+    # tool stops being used.
+    for turned, grid in ((False, g), (True, np.ascontiguousarray(g.T))):
+        if _time.monotonic() > deadline or (not expect_many and votes
+                                            and votes.most_common(1)[0][1] >= ENOUGH_VOTES):
+            break
+        h, w = grid.shape
+        if w < 60 or h < 10:
+            continue
+        for k in (max(9, (w // 40) | 1), max(9, (w // 22) | 1)):
+            ker = np.ones(k) / k
+            for y in range(0, h, ROW_STEP):
+                if _time.monotonic() > deadline:
+                    break
+                if not expect_many and votes and votes.most_common(1)[0][1] >= ENOUGH_VOTES:
+                    break
+                row = grid[y]
+                local = np.convolve(np.pad(row, (k // 2, k // 2), mode="edge"), ker, mode="valid")
+                for offset in (1, 4, 8, 14, 22):  # a blurred print → a dark one
+                    bits = (row < local - offset).astype(int)
+                    idx = bits.nonzero()[0]
+                    if idx.size < 30:
+                        continue
+                    widths = _runs(bits[idx[0]:idx[-1] + 1].tolist())
+                    if len(widths) < 20:
+                        continue
+                    lines += 1
+                    for text in _decode_line(widths):
+                        votes[text] += 1
+
+    references = [t for t, n in votes.most_common() if n >= MIN_VOTES]
     best = None
     top = votes.most_common(1)
     if _time.monotonic() > deadline and not top:
         # Say that the search was cut short rather than reporting a clean "no barcode here": the
         # two mean different things to the person holding the package.
-        return {"found": [], "best": None, "votes": 0, "scanlines": lines, "timed_out": True}
+        return {"found": [], "references": [], "best": None, "votes": 0, "scanlines": lines,
+                "timed_out": True}
     if top and top[0][1] >= MIN_VOTES:
         best = top[0][0]
     return {
         "found": [t for t, _ in votes.most_common(5)],
+        "references": references,
         "best": best,
         "votes": (top[0][1] if top else 0),
         "scanlines": lines,
