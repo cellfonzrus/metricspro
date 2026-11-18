@@ -1139,6 +1139,16 @@ on:
       - "backend/tests/unit/test_revenue_scope_cross_tenant.py"
       - "frontend/src/components/commcalc/DailyIncentiveRevenueNote.tsx"
       - "database/migrations/1126_revenue_scope.sql"
+      # index §COMMCALC-81 — a missed gate is not a zero. The lock names itself for the §13e reason:
+      # an allowlist that omits its own subject skips silently. The engine is named because the
+      # forgone figure is ITS answer (opened-gate re-run) and the §H one-way-dependency check reads
+      # it; the closing router because the ranged read it owns was extracted there, not copied.
+      - "backend/harness_incentive_shortfall.py"
+      - "backend/app/modules/commcalc/incentive_shortfall.py"
+      - "backend/app/modules/closing/router.py"
+      - "backend/tests/unit/test_incentive_shortfall_cross_tenant.py"
+      - "frontend/src/components/commcalc/IncentiveNearMissFlow.tsx"
+      - "frontend/src/app/(platform)/commcalc/coaching/page.tsx"
       # index §COMMCALC-78 — the screen that shows what a day pays, and the one home for
       # what a payout measures
       - "frontend/prove_daily_incentive_screen.mjs"
@@ -2174,6 +2184,9 @@ jobs:
       - name: Run the revenue-scope proof (an unclassified line is still the day's revenue, a NAMED category never sees it, the house default moves nobody, and a mistyped scope is refused - index COMMCALC-80)
         working-directory: backend
         run: python3 harness_revenue_scope.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the incentive-shortfall proof (the forgone figure is the pay on work ALREADY DONE and is the engine's own answer, a ceiling gate and an unverifiable gate are each refused, an out-of-reach miss is never dressed up as nearly there, and the tightest miss is the one coached - index COMMCALC-81)
+        working-directory: backend
+        run: python3 harness_incentive_shortfall.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the declared-vs-captured proof (one parser for a feed counterpart, one derivation of financed units, four absences with four reasons, the grain is the category's, nothing blocks a close - index CLOSING-02)
         working-directory: backend
         run: python3 harness_declared_feed_recon.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

@@ -9,6 +9,7 @@ import DrillDownPanel, {
 } from '@/components/DrillDownPanel'
 import { narrowPanel, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
 import { GoogleRatingChips, GoogleRatingDetail, ratingsText, useGoogleRatings } from '../_lib/googleRatings'
+import IncentiveNearMissFlow, { type NearMissPayload } from '@/components/commcalc/IncentiveNearMissFlow'
 
 // Rep coaching — which KPIs each rep met vs missed + WHY they're losing money (commission at risk
 // below tier + chargebacks) + flags. Sorted by money left on the table. Admin/DM (market-scoped).
@@ -49,6 +50,11 @@ export default function RepCoachingPage() {
   const [repF, setRepF] = useState('')
   const [q, setQ] = useState('')
   const [data, setData] = useState<any>(null)
+  // §COMMCALC-81 — the days that nearly earned a gated payout. A SECOND call rather than a field on
+  // the coaching payload: it is a different grain (a store-day gate, not a period tier) and it reads
+  // a month of days, so folding it into this endpoint would slow the page every tenant already uses
+  // for a panel only a tenant with a gated rule can see. It fails silently for the same reason.
+  const [nearMiss, setNearMiss] = useState<NearMissPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState<Record<string, boolean>>({})
 
@@ -60,6 +66,8 @@ export default function RepCoachingPage() {
     setLoading(true)
     api(`/api/v1/commcalc/coaching/${encodeURIComponent(period)}`)
       .then(setData).catch(console.error).finally(() => setLoading(false))
+    api(`/api/v1/commcalc/incentive-coaching/${encodeURIComponent(period)}`)
+      .then(setNearMiss).catch(() => setNearMiss(null))
   }, [period])
   useEffect(() => { load() }, [load])
 
@@ -140,6 +148,12 @@ export default function RepCoachingPage() {
           Which KPIs each rep met vs missed, and the money they&apos;re leaving on the table (incentive below tier + chargebacks). Sorted by biggest opportunity.
         </p>
       </div>
+
+      {/* PAY THEY HAD ALREADY EARNED — above the tier table on purpose. A gate missed by one or two
+          sales is the most actionable thing on this screen: the work is done, the money is withheld,
+          and one conversation tomorrow changes it. It follows the rep filter, so coaching one person
+          shows that person's days. */}
+      <IncentiveNearMissFlow data={nearMiss} repFilter={repF} />
 
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
         {allMarkets.length > 0 && (

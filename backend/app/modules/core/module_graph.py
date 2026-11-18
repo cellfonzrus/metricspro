@@ -1795,6 +1795,11 @@ FACTS: dict[str, dict] = {
             # `amount_of` — so a payout rule and a target cannot disagree about what a day's sales
             # were. It holds no category list and no second definition of revenue.
             'app/modules/commcalc/daily_incentive.py': ('mc',),
+            # §COMMCALC-81 — the shortfall reader asks the catalog for a category's own WORDS
+            # (`by_key`) and the day's figures (`units_of` / `amount_of`), so a rep is coached in the
+            # words their own business declared. It holds no label and no figure of its own; this
+            # entry was DERIVED by `harness_module_graph_guard.derive()`, not written by hand.
+            'app/modules/commcalc/incentive_shortfall.py': ('mc',),
             # The rule editor and the day calculation reach the catalog through the closing home's
             # `_metric_catalog`, never by building one.
             'app/modules/commcalc/router.py': ('_mc',),
