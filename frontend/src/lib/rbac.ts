@@ -1044,6 +1044,10 @@ export const NAV: NavGroup[] = [
     { href: '/storeops/staffing', label: 'Staffing Heat Map', icon: '🔥', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
     { href: '/storeops/timeclock', label: 'Time Clock', icon: '⏱️', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
     { href: '/storeops/attendance', label: 'Attendance Exceptions', icon: '🚨', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
+    // Drop-off barcode rescue (index §STOREOPS-12, mig 1127). 'store' scope on purpose: the person
+    // holding the unscanned package IS the store, and a tool only a district manager can open is a
+    // tool that is not used at the counter.
+    { href: '/storeops/dropoff-barcode', label: 'Drop-off Barcode Rescue', icon: '🏷️', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
     // RENAMED from 'Accountability' (Phase W2) — same route, same module/scopes, label only.
     { href: '/storeops/accountability', label: 'Lateness %', icon: '🎓', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
     { href: '/storeops/employees', label: 'Employees', icon: '👥', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
@@ -1541,7 +1545,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   // Store Operations (workforce + daily closing)
   ['/storeops', 'ops'], ['/storeops/schedule', 'ops'], ['/storeops/timeoff', 'ops'], ['/storeops/swaps', 'ops'],
   ['/storeops/shift-extensions', 'ops'], ['/storeops/timeclock-permissions', 'ops'], ['/storeops/hours-budget', 'ops'], ['/storeops/timeclock', 'ops'],
-  ['/storeops/attendance', 'ops'],
+  ['/storeops/attendance', 'ops'], ['/storeops/dropoff-barcode', 'ops'],
   ['/storeops/employees', 'ops'], ['/storeops/team', 'ops'], ['/storeops/visits', 'ops'], ['/storeops/reports', 'ops'],
   ['/storeops/visits/plan', 'ops'],
   ['/closing', 'ops'], ['/closing/verify', 'ops'], ['/closing/management', 'ops'], ['/closing/recon', 'ops'],

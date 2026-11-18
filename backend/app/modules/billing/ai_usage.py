@@ -118,6 +118,12 @@ AI_CALL_SITES = (
     {"key": "pos_receipt_ocr", "purpose": "pos_receipt_ocr", "metered": True,
      "module": "pos", "label": "POS receipt OCR",
      "file": "app/modules/pos/receipt_import.py (ocr_receipt)"},
+    {"key": "dropoff_label_transcribe", "purpose": "dropoff_label_transcribe", "metered": True,
+     "module": "storeops", "label": "Drop-off return label transcription",
+     "file": "app/modules/storeops/dropoff_label_api.py (_transcribe)",
+     "note": "The FALLBACK only: the bars are decoded offline first (storeops/dropoff_photo.py) and "
+             "the model is asked nothing when they decode, nor when the org has declared no label "
+             "types -- there would be nothing to match a transcription against."},
     {"key": "doc_intel_extraction", "purpose": "doc_intel_extraction", "metered": True,
      "module": "storeops", "label": "Lease / insurance document extraction",
      "file": "app/modules/storeops/doc_intel_ai.py",

@@ -85,7 +85,12 @@ _DISTANCE_RE = re.compile(
     r"""math\.asin|math\.acos|math\.radians"""        # the haversine's own trigonometry
     r"""|6371|6378137|EARTH_RADIUS"""                  # an Earth radius, metres or km
     r"""|def\s+_?haversine|def\s+_?distance_m\b"""     # a helper whose whole job it is
-    r"""|111\s*32|0\.000009""")                        # a degrees-to-metres fudge factor
+    # The degrees-to-metres fudge factor, as it is actually written: 111.32 km per degree, or the
+    # same number in metres. `111\s*32` used to stand here, which matches any digits "111" followed
+    # by "32" — including the Code 128 symbol pattern "111323" in core/code128.py, a bar-width table
+    # with no arithmetic in it at all (2026-11-18). A lock that fires on a false positive gets
+    # relaxed by the next person in a hurry, so the digits now have to be a NUMBER.
+    r"""|\b111\s*[.,]\s*32|\b111320\b|\b0\.000009""")
 
 # Comparing a distance against a fence — the decision itself, not the inputs to it.
 _FENCE_RE = re.compile(

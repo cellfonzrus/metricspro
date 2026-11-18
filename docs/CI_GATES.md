@@ -33,7 +33,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 633 gates
+## Gated — 635 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -166,6 +166,7 @@ the Runs on column is how you can tell.
 | `harness_closing_submit_refusal.py` | `carrier-vocab-guard.yml` | Closing refusal lock (a refused closing leaves a record) (`closing-refusal-lock`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_closing_summary_keyerror.py` | `tests.yml` | Proof harnesses, group 4 of 4 (`harness-suite-4`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_closing_unfinished_day.py` | `carrier-vocab-guard.yml` | Unfinished closing day lock (a started day is never blank, and never money) (`closing-unfinished-day-lock`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_code128.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_column_mapping_save.py` | `tests.yml` | Proof harnesses, group 2 of 4 (`harness-suite-2`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_column_render_lock.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_commcalc_market_dropdown.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
@@ -237,6 +238,7 @@ the Runs on column is how you can tell.
 | `harness_doc_intel.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_drill_narrow_fixtures.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_drilldown_coverage.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_dropoff_label.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_eep_retail_ops.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_email_sweep_dispatch.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_employee_dashboard_access.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |

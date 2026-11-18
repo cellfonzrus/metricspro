@@ -79,13 +79,48 @@ def _page(route):
 #: in: a page can satisfy a source check by TALKING about the component. Every source this gate reads
 #: therefore has its comments stripped first, and the mutation (element deleted → B1 and D2 red) is
 #: confirmed rather than assumed.
-_BLOCK = re.compile(r"/\*.*?\*/", re.S)
-_JSX = re.compile(r"\{\s*/\*.*?\*/\s*\}", re.S)
+#: …AND A STRING IS NOT A COMMENT EITHER, which is the other half of the same lesson and cost this
+#: gate a silent blind spot until 2026-11-18. The stripper below used to be three regexes over the
+#: raw text, and `/\*` has a perfectly ordinary home inside a string: `accept="image/*"` on a file
+#: input. That opener pairs with the NEXT `*/` in the file — the end of the next JSX comment — and
+#: from there every comment delimiter is off by one, so the stripper swallowed 10KB of real JSX,
+#: including the page's `<ReportExportBar>` and `<StandardFilterBar>`. FOUR pages carry
+#: `accept="image/*"` today, and two of them were being counted as owing a filter bar they
+#: actually render. The gate read a page's coverage off a mangled copy of it and reported the
+#: result as fact — exactly the vacuity the paragraph above exists to refuse, one layer further in.
+#: So the stripper now walks the source and knows where a string is. A `/*` inside `'…'`, `"…"` or
+#: a template literal is TEXT; only one outside them opens a comment.
 _LINE = re.compile(r"^\s*//.*$", re.M)
 
 
 def _strip_comments(src):
-    return _LINE.sub("", _BLOCK.sub("", _JSX.sub("", src)))
+    """Remove comments, and ONLY comments. Walks the text tracking string literals, because a
+    comment delimiter inside a string is data — see the note above for what it cost to learn.
+
+    A mangled read errs toward RED (an element strips out → the route reads `owes` → the ratchet
+    bites and somebody looks), never toward green, which is the direction a lock may err in."""
+    out, i, n = [], 0, len(src)
+    quote = None                       # the ' , " or ` we are inside, if any
+    while i < n:
+        c = src[i]
+        if quote:
+            out.append(c)
+            if c == "\\" and i + 1 < n:          # an escape consumes the next character whole
+                out.append(src[i + 1]); i += 2; continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in "'\"`":
+            quote = c; out.append(c); i += 1; continue
+        if src.startswith("/*", i):               # a real block comment, outside every string
+            end = src.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+            continue
+        out.append(c); i += 1
+    # `{/* … */}` leaves its braces behind once the comment inside is gone; drop the empty pair so
+    # the result reads like the code it is, then take the line comments.
+    return _LINE.sub("", re.sub(r"\{\s*\}", "", "".join(out)))
 
 
 def _src(route):
@@ -185,6 +220,41 @@ check("D8 the five state words have ONE home and the page dereferences it — no
       "ZS_STATE_WORD" in conv and "zsStateWord(k)" in zs_src
       and not re.search(r"word:\s*'", zs_src),
       "the page still spells a state word of its own")
+
+# ── The stripper itself, both ways. ────────────────────────────────────────────────────────────
+# This gate's whole measurement is taken off `_strip_comments`, so a defect in it is a defect in
+# every number above. Each of these would have been RED before 2026-11-18 or would be RED if the
+# older, regex-only stripper came back.
+print("\n== F. the stripper removes comments, and ONLY comments ==")
+# The measured shape, exactly: `accept="image/*"` on the file input, the page's real elements
+# below it, and a `/** … */` doc comment further down — which is where the regex stripper found the
+# `*/` to pair the string's `/*` with, swallowing everything between. Verified by running the old
+# stripper over this fixture: both elements disappeared and `accept="image` was left dangling.
+_IMG = ('<input accept="image/*" />\n'
+        '<ReportExportBar title="x" />\n'
+        '<StandardFilterBar value={f} />\n'
+        '/** a doc comment further down the file. */\n'
+        'function escapeHtml(s) { return s }\n')
+check("F1 a `/*` inside a STRING does not open a comment — `accept=\"image/*\"` on a file input, "
+      "paired by the old stripper with the next doc comment's `*/`, is what blinded this gate",
+      _renders(_strip_comments(_IMG), SEND_PROVIDERS) == "ReportExportBar"
+      and _renders(_strip_comments(_IMG), FILTER_PROVIDERS) == "StandardFilterBar")
+check("F2 …and the four pages that really carry `accept=\"image/*\"` are read whole, not truncated "
+      "at it — the measured defect, pinned to the files themselves",
+      all(len(_src(r)) > 0.7 * len(open(_page(r), encoding="utf-8").read())
+          for r in ("/closing/pickup", "/closing/billpay-pickup")))
+check("F3 CONTROL — a line comment is still not code (the 2026-10-30 lesson, still locked)",
+      _renders(_strip_comments("// <ReportShell> would do\nconst a = 1\n"), SEND_PROVIDERS) is None)
+check("F4 CONTROL — nor is a block comment",
+      _renders(_strip_comments("/* <ReportShell> */\nconst a = 1\n"), SEND_PROVIDERS) is None)
+check("F5 CONTROL — nor is a JSX comment, which is how a page would TALK its way to green",
+      _renders(_strip_comments("{/* <ReportExportBar /> */}\n"), SEND_PROVIDERS) is None)
+check("F6 CONTROL — an unterminated block comment eats the rest, as a compiler would",
+      _renders(_strip_comments("/* oops\n<ReportExportBar />\n"), SEND_PROVIDERS) is None)
+check("F7 CONTROL — an escaped quote does not end the string it is inside, so the `/*` after it "
+      "is still text",
+      _renders(_strip_comments('const s = "a \\" b /*"\n<ReportExportBar />\n'), SEND_PROVIDERS)
+      == "ReportExportBar")
 
 print("\n== E. registration ==")
 IDX = open(f"{ROOT}/docs/SYSTEM_DATA_FLOW_INDEX.md", encoding="utf-8").read()

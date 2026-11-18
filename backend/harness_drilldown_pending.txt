@@ -60,6 +60,7 @@
 /hr/people	flat	already shows the source rows; nothing is summarised above them
 /remediation	flat	already shows the source rows; nothing is summarised above them
 /storeops/attendance	flat	already shows the source rows; nothing is summarised above them
+/storeops/dropoff-barcode	flat	one row per rescued package is already the atom — the reference, what it was read from, who printed it; nothing is summarised above it
 /storeops/shift-extensions	flat	already shows the source rows; nothing is summarised above them
 /storeops/swaps	flat	already shows the source rows; nothing is summarised above them
 /storeops/timeoff	flat	already shows the source rows; nothing is summarised above them

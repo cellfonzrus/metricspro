@@ -12186,3 +12186,8 @@ def set_pay_from_schedule(employee_id: str, body: dict = Body(default={}),
 # this one lazily, inside each endpoint, so this line's position stays irrelevant to import order.
 from app.modules.storeops.clock_variance_api import router as _clock_variance_router  # noqa: E402
 router.include_router(_clock_variance_router)
+
+# THE DROP-OFF LABEL RESCUE SURFACE (mig 1127, index §STOREOPS-12) — mounted here for the same
+# reason as the block above: main.py is shared and no agent edits it (AGENT_CONTRACT §1).
+from app.modules.storeops.dropoff_label_api import router as _dropoff_label_router  # noqa: E402
+router.include_router(_dropoff_label_router)
