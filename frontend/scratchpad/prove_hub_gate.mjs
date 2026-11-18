@@ -42,7 +42,7 @@ const litHrefs = src => {
 }
 const kpiHrefs = src => [...src.matchAll(/<StatTile\b[\s\S]*?href="([^"]+)"/g)].map(m => m[1])
 const WF_TILES = litHrefs(WF), WF_KPI = kpiHrefs(WF), PR_TILES = litHrefs(PR)
-ok('parsed the Workforce tile literal', WF_TILES.length === 21, `${WF_TILES.length} items`)
+ok('parsed the Workforce tile literal', WF_TILES.length === 22, `${WF_TILES.length} items`)
 ok('parsed the Workforce KPI row', WF_KPI.length === 6, `${WF_KPI.length} tiles`)
 ok('parsed the Payroll tile literal', PR_TILES.length > 10, `${PR_TILES.length} items`)
 
@@ -121,8 +121,12 @@ for (const { who, logins, perms } of ROLES) {
   ok(`§2 ${who}: the gate only REMOVES — it never invents a link`, shownT.every(h => WF_TILES.includes(h)))
 }
 ok('§2 an admin loses nothing', WF_TILES.filter(h => canOpen(ROLES[4].perms, h)).length === WF_TILES.length)
-ok('§2 a store-scoped rep keeps the 10 pages that are genuinely theirs',
-  WF_TILES.filter(h => canOpen(rep, h)).length === 10)
+// 11 since 2026-11-18, not 10: the Store Ops tile gained /storeops/dropoff-barcode (§STOREOPS-12),
+// and a store-scoped rep SHOULD open it — the person who takes the package over the counter and finds
+// the barcode unscannable is the rep, not the DM. The pin is here so a page reaching reps is a
+// decision somebody wrote down, never a side effect of adding a tile.
+ok('§2 a store-scoped rep keeps the 11 pages that are genuinely theirs',
+  WF_TILES.filter(h => canOpen(rep, h)).length === 11)
 ok('§2 ...and Schedule is one of them', WF_TILES.filter(h => canOpen(rep, h)).includes('/storeops/schedule'))
 
 // ── §3 the one setting that keeps 39 logins out, and the fallback rules ──────────────────────────

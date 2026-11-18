@@ -51,6 +51,24 @@ interface Row {
 
 const BASE = '/api/v1/storeops/dropoff-label'
 
+// The shapes the four endpoints answer with. Written out rather than left as `any` so that a field
+// renamed on the backend fails the type check here instead of rendering as `undefined` at a counter.
+interface Blocker { reason?: string }
+interface ProfilesResponse { profiles?: Profile[]; available?: boolean; blocker?: Blocker }
+interface ScansResponse { scans?: Scan[] }
+interface ReadBatchResponse { items?: BatchItem[]; photos?: number }
+interface BarcodesResponse { items?: Made[]; refused?: { reference: string; reason?: string }[]; note?: string }
+/** One photo on its way up: the file's name, and the file itself as a data URL. */
+interface PhotoUpload { name: string; image: string }
+
+/** What a failed call says to the person. A thrown value is not necessarily an Error, which is the
+ *  reason this is one function and not an `any` at every catch. */
+function errText(e: unknown): string {
+  if (e instanceof Error) return e.message
+  if (e && typeof e === 'object' && 'message' in e) return String((e as { message: unknown }).message)
+  return String(e)
+}
+
 // What each reason means in words a store person can act on. The platform never prints a reason
 // code at somebody holding a package.
 const REASONS: Record<string, string> = {
@@ -74,26 +92,26 @@ export default function DropoffBarcodePage() {
   const [scans, setScans] = useState<Scan[]>([])
 
   const loadProfiles = useCallback(() => {
-    api(`${BASE}/profiles`).then((r: any) => {
+    api(`${BASE}/profiles`).then((r: ProfilesResponse) => {
       setProfiles(r.profiles || [])
       setDeclaredBlocked(r.available === false ? (r.blocker?.reason || 'Not set up yet.') : '')
-    }).catch((e: any) => setDeclaredBlocked(e?.message || String(e)))
+    }).catch((e: unknown) => setDeclaredBlocked(errText(e)))
   }, [])
   const loadScans = useCallback(() => {
-    api(`${BASE}/scans?limit=200`).then((r: any) => setScans(r.scans || [])).catch(() => setScans([]))
+    api(`${BASE}/scans?limit=200`).then((r: ScansResponse) => setScans(r.scans || [])).catch(() => setScans([]))
   }, [])
   useEffect(() => { loadProfiles(); loadScans() }, [loadProfiles, loadScans])
 
   async function onPhotos(files: FileList) {
     setBusy(true); setMsg(''); setMade([]); setRows([]); setUnread([])
     try {
-      const photos = await Promise.all(Array.from(files).slice(0, 25).map(f => new Promise<any>((resolve, reject) => {
+      const photos = await Promise.all(Array.from(files).slice(0, 25).map(f => new Promise<PhotoUpload>((resolve, reject) => {
         const fr = new FileReader()
         fr.onload = () => resolve({ name: f.name, image: String(fr.result || '') })
         fr.onerror = () => reject(new Error(`could not read ${f.name}`))
         fr.readAsDataURL(f)
       })))
-      const r: any = await api(`${BASE}/read-batch`, { method: 'POST', body: JSON.stringify({ photos }) })
+      const r: ReadBatchResponse = await api(`${BASE}/read-batch`, { method: 'POST', body: JSON.stringify({ photos }) })
       const next: Row[] = []
       const missed: { name: string; reason: string | null }[] = []
       ;(r.items || []).forEach((it: BatchItem, i: number) => {
@@ -108,8 +126,8 @@ export default function DropoffBarcodePage() {
       setMsg(next.length
         ? `Read ${next.length} reference${next.length === 1 ? '' : 's'} from ${r.photos} photo${r.photos === 1 ? '' : 's'}.`
         : 'Nothing readable in those photos.')
-    } catch (e: any) {
-      setMsg('❌ ' + (e?.message || e))
+    } catch (e: unknown) {
+      setMsg('❌ ' + errText(e))
     } finally { setBusy(false) }
   }
 
@@ -133,7 +151,7 @@ export default function DropoffBarcodePage() {
     if (!chosen.length) return
     setBusy(true); setMsg('')
     try {
-      const r: any = await api(`${BASE}/barcodes`, {
+      const r: BarcodesResponse = await api(`${BASE}/barcodes`, {
         method: 'POST',
         body: JSON.stringify({
           store_code: storeCode.trim() || undefined,
@@ -145,12 +163,12 @@ export default function DropoffBarcodePage() {
       const refused = (r.refused || []).length
       setMsg([
         `${(r.items || []).length} barcode${(r.items || []).length === 1 ? '' : 's'} ready.`,
-        refused ? `${refused} could not be printed: ${(r.refused || []).map((x: any) => x.reference).join(', ')}` : '',
+        refused ? `${refused} could not be printed: ${(r.refused || []).map(x => x.reference).join(', ')}` : '',
         unproven ? `${unproven} is built from the reference we read rather than a proven copy of the original code — scan it before you rely on it.` : '',
         r.note || '',
       ].filter(Boolean).join(' '))
       loadScans()
-    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
+    } catch (e: unknown) { setMsg('❌ ' + errText(e)) } finally { setBusy(false) }
   }
 
   function printSheet() {
@@ -169,10 +187,14 @@ export default function DropoffBarcodePage() {
       `<!doctype html><title>Drop-off barcodes</title><style>` +
       `body{font-family:system-ui;margin:18px}` +
       `table{width:100%;border-collapse:collapse}` +
-      `tr{page-break-inside:avoid;border-bottom:1px dashed #999}` +
+      // No colour LITERAL anywhere in this stylesheet, and none of the app's theme tokens either:
+      // this is a separate document printed on paper, so `var(--c-fg-…)` would resolve to nothing
+      // here, and the dark-theme lock is right to refuse a hex. `currentColor` for the cut line and
+      // `opacity` for the label name give the same look out of the printer with neither.
+      `tr{page-break-inside:avoid;border-bottom:1px dashed}` +
       `td{padding:10px 8px;vertical-align:middle}` +
       `.ref{font-family:monospace;font-size:15px;letter-spacing:1px;white-space:nowrap;width:1%}` +
-      `.sub{font-family:system-ui;font-size:11px;color:#555;letter-spacing:0}` +
+      `.sub{font-family:system-ui;font-size:11px;opacity:.65;letter-spacing:0}` +
       `.bc{text-align:right}.bc svg{max-width:100%}` +
       `</style><body><table>${rowsHtml}</table></body>`)
     w.document.close(); w.focus(); w.print()
@@ -365,11 +387,11 @@ function LabelTypes({ profiles, blocked, reload }: { profiles: Profile[]; blocke
     try {
       await api(`${BASE}/profiles`, { method: 'POST', body: JSON.stringify({ label_name: name.trim(), reference_pattern: pattern.trim() }) })
       setName(''); setPattern(''); setMsg('✅ Added.'); reload()
-    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    } catch (e: unknown) { setMsg('❌ ' + errText(e)) }
   }
   async function retire(id: string) {
     try { await api(`${BASE}/profiles/${id}`, { method: 'DELETE' }); reload() }
-    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    catch (e: unknown) { setMsg('❌ ' + errText(e)) }
   }
 
   return (
