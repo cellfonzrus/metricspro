@@ -187,15 +187,17 @@ export default function DropoffBarcodePage() {
   const shown = useMemo(() => filterRows(scans, filt, {
     store: x => x.store_code || '', date: x => (x.created_at || '').slice(0, 10),
   }), [scans, filt])
+  const sourceLabel = (x: Scan) =>
+    x.read_source === 'barcode' ? 'barcode' : x.read_source === 'text' ? 'printed text' : 'typed in'
   const cols: ExportColumn[] = [
-    { key: 'created_at', label: 'When' },
-    { key: 'store_code', label: 'Store' },
-    { key: 'confirmed_reference', label: 'Reference printed' },
-    { key: 'read_source', label: 'Read from' },
-    { key: 'read_reference', label: 'What the platform read' },
-    { key: 'corrected', label: 'Corrected by hand' },
-    { key: 'label_name', label: 'Label type' },
-    { key: 'read_by', label: 'By' },
+    { header: 'When', field: 'created_at', type: 'date', get: x => (x.created_at || '').replace('T', ' ').slice(0, 16) },
+    { header: 'Store', field: 'store_code', role: 'store', get: x => x.store_code || '' },
+    { header: 'Reference printed', field: 'confirmed_reference', get: x => x.confirmed_reference },
+    { header: 'Read from', field: 'read_source', get: x => sourceLabel(x) },
+    { header: 'What the platform read', field: 'read_reference', get: x => x.read_reference || '' },
+    { header: 'Corrected by hand', field: 'corrected', get: x => (x.corrected ? 'yes' : '') },
+    { header: 'Label type', field: 'label_name', get: x => x.label_name || '' },
+    { header: 'By', field: 'read_by', get: x => x.read_by || '' },
   ]
 
   return (
@@ -326,14 +328,14 @@ export default function DropoffBarcodePage() {
         {!shown.length && <p style={{ color: 'var(--c-fg-6b7280)' }}>Nothing rescued yet.</p>}
         {!!shown.length && (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
-            <thead><tr>{cols.map(c => <th key={c.key} style={th}>{c.label}</th>)}</tr></thead>
+            <thead><tr>{cols.map(c => <th key={c.field} style={th}>{c.header}</th>)}</tr></thead>
             <tbody>
               {shown.map(s => (
                 <tr key={s.id}>
                   <td style={td}>{(s.created_at || '').replace('T', ' ').slice(0, 16)}</td>
                   <td style={td}>{s.store_code || '—'}</td>
                   <td style={{ ...td, fontFamily: 'monospace' }}>{s.confirmed_reference}</td>
-                  <td style={td}>{s.read_source === 'barcode' ? 'barcode' : s.read_source === 'text' ? 'printed text' : 'typed in'}</td>
+                  <td style={td}>{sourceLabel(s)}</td>
                   <td style={{ ...td, fontFamily: 'monospace' }}>{s.read_reference || '—'}</td>
                   <td style={td}>{s.corrected ? 'yes' : ''}</td>
                   <td style={td}>{s.label_name || '—'}</td>
