@@ -466,6 +466,8 @@ SCHEMA_OF = {
     "dm_visit_priority_rule": "storeops",
     "document_contact": "storeops",
     "document_extraction": "storeops",
+    "dropoff_label_profile": "storeops",
+    "dropoff_label_scan": "storeops",
     "employee_alias": "storeops",
     "employee_onboarding": "storeops",
     "employee_onboarding_profile": "storeops",
