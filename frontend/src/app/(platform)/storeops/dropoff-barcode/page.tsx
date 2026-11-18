@@ -37,7 +37,10 @@ interface Scan {
   created_at?: string
 }
 /** One line of the sheet: the reference on the left, its barcode on the right. */
-interface Made { reference: string; svg: string; source?: string | null; label_name?: string | null }
+interface Made {
+  reference: string; svg: string; source?: string | null; label_name?: string | null
+  symbology?: string; verified_symbology?: boolean
+}
 
 /** A reference the person is about to commit to, with where it came from and whether they edited it. */
 interface Row {
@@ -138,10 +141,12 @@ export default function DropoffBarcodePage() {
         }),
       })
       setMade(r.items || [])
+      const unproven = (r.items || []).filter((m: Made) => m.verified_symbology === false).length
       const refused = (r.refused || []).length
       setMsg([
         `${(r.items || []).length} barcode${(r.items || []).length === 1 ? '' : 's'} ready.`,
         refused ? `${refused} could not be printed: ${(r.refused || []).map((x: any) => x.reference).join(', ')}` : '',
+        unproven ? `${unproven} is built from the reference we read rather than a proven copy of the original code — scan it before you rely on it.` : '',
         r.note || '',
       ].filter(Boolean).join(' '))
       loadScans()
@@ -291,6 +296,11 @@ export default function DropoffBarcodePage() {
                 <tr key={m.reference} style={{ borderBottom: '1px dashed var(--c-border-e5e7eb)' }}>
                   <td style={{ ...td, fontFamily: 'monospace', fontSize: 15, whiteSpace: 'nowrap', width: '1%' }}>
                     {m.reference}
+                    {m.verified_symbology === false && (
+                      <div style={{ fontFamily: 'system-ui', fontSize: 11, color: 'var(--c-fg-92400e)' }}>
+                        rebuilt from the reference, not a proven copy
+                      </div>
+                    )}
                   </td>
                   <td style={{ ...td, textAlign: 'right' }} dangerouslySetInnerHTML={{ __html: m.svg }} />
                 </tr>

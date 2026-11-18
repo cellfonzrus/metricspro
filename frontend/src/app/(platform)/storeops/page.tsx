@@ -94,6 +94,7 @@ const GROUPS: HubGroup[] = [
       { href: '/storeops/visits', icon: '📝', label: 'Store Visits', desc: 'DM store-visit reports — checklist scores, findings, follow-ups.' },
       { href: '/storeops/visits/settings', icon: '🧾', label: 'Visit Checklist', desc: 'Configure the visit checklist sections and items (admin only).' },
       { href: '/storeops/visits/plan', icon: '🗺️', label: 'DM Visit Plan', desc: 'The daily visit quota, who is assigned which stores, and the priority order when nobody assigned.' },
+      { href: '/storeops/dropoff-barcode', icon: '🏷️', label: 'Drop-off Barcode Rescue', desc: 'A return package whose label barcode will not scan: photograph the labels, print fresh codes, scan them in.' },
       { href: '/storeops/reviews', icon: '⭐', label: 'Google Reviews', desc: 'Rating vs target per store, review feed and trends.' },
       { href: '/storeops/reviews/config', icon: '⚙️', label: 'Reviews Setup', desc: 'API key, per-store place IDs & targets, sweep schedule (admin only).' },
     ],

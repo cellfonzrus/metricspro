@@ -230,6 +230,7 @@ Primary code homes:
 | STOREOPS-05 | **The phone shows the week the TENANT declared, and whose shifts it shows is the server's answer** | "Make scheduling and hr with store vista and closing live in the app also" — the rota, time off and cover requests existed only on the web, and the phone had no schedule at all. The gates were already right (`gate_person_rows`, §14w) and the week start was already declared per tenant; what was missing was a surface. Who decides which seven days a week IS on a phone, and what stops a client-side filter from being mistaken for a permission? |
 | STOREOPS-07 | **A correction a human types reaches the figure, or nothing does** | "i just fixed the hours in ny logistics , went in to check it still shows the old hours , check and fix for good platform wide" — and nothing he could have typed could have moved those figures. **616 hand-typed corrections** sat in `storeops.manual_hours` (51 house, 565 LuxeLink; ±4,441h gross), eight of them filed in the ten days before the report, and no pay or hours path read that table at all. All four tenants had declared `count_manual_hours = true` and `resolve_config` forced it FALSE for the three on `schedule_fallback`. The one correction the figure DID honour, `shifts.actual_hours`, is written by nothing in the product — the frontend displays it in seven places and writes it in none. And the mig-914 RPC decided `correction > punch > schedule` in SQL, where it could read neither the corrections nor the declaration. Who owns "what are this person's paid hours that day", what does a correction MEAN when 2,249 of its hours are negative, and what stops a closed month restating the moment the fold is switched on? |
 | STOREOPS-09 | **An expense line per org level, named in the tenant's own words** | "Anybody who is a dm their salary is divided among the stores they are responsible for , similarly for the regional manager or market manager whatever stores they cover their salary is divided amount their stores , add a line in the expenses with the name dm salary and rm salary or mm salary , if we add another level the expense report should automatically add they level and then divide the salary based on the people who report to them" — the mechanism existed (§14t) and booked ONE combined line. Four live tenants declare four different level vocabularies agreeing on not one rung, so whose word names the line, what stops a house default from labelling one tenant's expenses in another's language, and what makes a level added tomorrow appear with no deploy? |
+| STOREOPS-12 | **A package the scanner refused still has its number, and the platform can re-print it** | "sometimes the barcode, which is used to consolidate the packages, do not work properly, and we have packages sitting in the store which are not scanned ... the user should be able to upload the picture to our platform and the platform should generate a barcode using the reference numbers" — the reference is printed under the bars the whole time, so what is lost is a MACHINE-READABLE copy of it. Which symbology does a label actually use (measured, not assumed), what part of this is a published standard and what part is one tenant's description of one vendor's paperwork, and what stops a reference read off a photograph from printing a barcode that scans perfectly into the wrong record? |
 | CORE-33 | **What an employee may reach is one declaration, and the API is what enforces it** | "on ny logistics Manan was able to go past [the clock-in screen] and also see the adjustment hours, this should not be allowed for any sales reps — this is universal across the board". The browser was the only gate: a menu row the viewer could see opened its whole subtree by URL, and the payroll writes behind those pages asked for no authority at all. Who decides what a surface's audience is, and what makes the API refuse a caller the menu would not offer it to? |
 | CORE-42 | **A gate proved in-process is a claim, not a measurement** | "create a testng agent who deciatedly is checking the data leakage, unwanted access to modules even if theya re gated like the case of manan and we discovered by accident, c annot have an accident of this sort, put it on schdule and one module at a time from the front end as though somebnbody was trying to hack in to the system". Every access control here is proved by a harness that imports the handler — which catches a wrong rule and not a right rule that was never reached. Who asks the DEPLOYED platform what it actually answers an unprivileged outsider, one module at a time, and what stops that probe from writing to production or from reporting a pass on a question it never asked? |
 | CORE-32 | **A guard that reads source code must be told f-strings exist** | Found by running the suite on a newer interpreter than CI's: the guard that stops our own setup internals reaching a customer was RED on Python 3.13 and GREEN on 3.11. PEP 701 stopped making an f-string one string token, so it had stopped seeing f-strings — and the same file held a SECOND reader of the same fact that had been taught the new shape. What proves a capability that depends on the interpreter, when CI pins one? |
@@ -7237,6 +7238,8 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 
 ## 16. Cross-reference: by TABLE
 
+- `storeops.dropoff_label_profile` (mig `1127`) — WHICH return labels a tenant handles and what their references look like, in that tenant's OWN words: `label_name`, an anchored `reference_pattern`, and the `symbology` its code is drawn in (`code128b` | `qr`). **Seeded with NOTHING, not even for the tenant that asked** — a house default here would be one tenant's description of one vendor's paperwork answering for every tenant (owner 2026-10-30), so an org that has declared none is told so and the printed-text read stays inert for it. Read in ONE place, `storeops/dropoff_label_api._profiles`, and passed as a REQUIRED argument to `dropoff_label.read_reference`. Decoding the BARS reads none of this: a published symbology is a POLICY (§STOREOPS-12).
+- `storeops.dropoff_label_scan` (mig `1127`) — one row per rescued package: `read_reference` (what the platform proposed), `confirmed_reference` (what the person accepted, and what was printed), `corrected` when they differ, plus the read's source, the label type, the photo's name and who confirmed it. An AUDIT trail, not a queue — nothing in the platform decides anything from it; it exists so that "this package went back to the wrong vendor" is answerable down to the character that was wrong (§STOREOPS-12).
 - `commcalc.receipt_source_map` (mig `1115`) — THE per-tenant declaration of INBOUND money: which feed states what a carrier/processor will pay us (`source_table`), which column is the money (`amount_field`), and on what rhythm it pays (`payout_cadence` + its one day/lag column). **The column that DATES a row is deliberately NOT here**: it is dereferenced from `data_lineage_registry.DATA_DATE_COLUMN_BY_TABLE`, that fact's one home since the feed watchdog shipped, and that map's `None` entries are DECLARATIONS — a period-keyed snapshot is refused as a receipt source rather than guessed around. **Seeded with NOTHING, on purpose**: a house default here would be one tenant's commercial arrangement answering for every tenant (owner 2026-10-30), so an undeclared carrier reads NOT MEASURED and the calendar says so. Read in ONE place, `payables/expected_receipts.declared_sources`, through `payables/receipt_schedule.resolve_schedule`; written only by `PUT /payables/receipt-sources`, which validates the cadence against the home's vocabulary before it can be stored (§PAYABLES-02).
 - `storeops.stores.geo_lat` / `geo_lng` / `geofence_radius_m` / `geo_pin_source` / `geo_pinned_at` / `geo_pinned_by` (mig `1112`) — WHERE THE STORE IS, as the tenant has DECLARED it. **No default and no geocoding**: a coordinate guessed from the `address` string would be a fence nobody declared and would flag honest reps, so an unpinned store resolves to `None` and every punch at it reads `unverified_no_target`. A CHECK makes a pin both coordinates or neither. `geofence_radius_m` is NULL by design — the store inherits its tenant's radius until somebody declares that THIS store needs a tighter one. Read in ONE place, `core/store_geofence.store_pin`; written only by `PUT /storeops/stores/{store_code}/geo-pin`, which stamps who and when because moving a pin changes who gets flagged (§STOREOPS-04).
 - `storeops.tenants.punch_geo_enabled` / `punch_geofence_radius_m` / `punch_geo_max_accuracy_m` / `punch_geo_retention_days` (mig `1112`) — the punch-geofence POLICY, house defaults ON / 150 m / 200 m / 180 days. POLICY is exactly what a house default is right for (owner 2026-10-30); the PIN above is the tenant's own words and has none. ON for every tenant from day one and safely inert, because an unpinned store cannot produce a verdict. Resolved in ONE place, `core/store_geofence.resolve_config`, which both the punch path and `GET|PUT /storeops/timeclock/geo-config` read through (§STOREOPS-04).
@@ -7511,6 +7514,8 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 
 ## 17. Cross-reference: by ENDPOINT (high-value)
 
+
+- `POST /storeops/dropoff-label/read-batch` · `POST …/barcodes` — up to 25 label photos → every reference each one yields, each with its provenance; then the confirmed references → a printable code each and one audit row each. A decoded barcode is a FACT (Code 128 carries its own check symbol) and needs no declaration from the tenant; a reference read off the printed text is a SUGGESTION, always `confirm_required`, with its look-alike characters named. An unread photo is NAMED, never folded into a total. Singular siblings `…/read` and `…/barcode`; `GET …/barcode.svg` is the renderer alone; `GET …/scans` is org-scoped at the query (§STOREOPS-12).
 | endpoint | code | what it is the one home of |
 | --- | --- | --- |
 | `GET /core/filter-options` | the org-scoped option source behind the shared `StandardFilterBar` — stores (+markets) from `storeops.stores` ∪ `commcalc.store_mapping`, reps from `storeops.employees` ∪ `storeops.app_users`. **ACTIVE-ONLY since 2026-11-14** through `core/roster_visibility`, with `include_inactive=1` and an `inactive_hidden` count so hiding is never silent | `core/router.filter_options` → `StandardFilterBar` `optionsUrl` | §CORE-45 · §3d |
@@ -26561,6 +26566,7 @@ status word rather than a blank that reads as nil.
 | ACCOUNT-05 | storeops, account |
 | ACCOUNT-06 | account, commcalc |
 | STOREOPS-11 | storeops, account |
+| STOREOPS-12 | storeops, core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -51134,3 +51140,136 @@ until the org names them. `E223`'s `org_unit_id` points at one market while he r
 this design never reads, and which is still a roster correction somebody has to make. Two Cellfonz
 employees are salaried at `annual = 1.0`. `Cellular Services` is carried in `storeops.stores` as an
 active store although it is a company, so it takes a share of any estate-wide spread.
+
+
+
+
+## §STOREOPS-12. A PACKAGE THE SCANNER REFUSED STILL HAS ITS NUMBER (owner 2026-11-18)
+
+Owner, verbatim: *"sometimes the barcode, which is used to consolidate the packages, do not work
+properly, and we have packages sitting in the store which are not scanned ... the user should be
+able to upload the picture to our platform and the platform should generate a barcode using the
+reference numbers this way, the barcodes can then be scanned back into the UPS system"*. Then, an
+hour later: *"the screen should be able to read the picture as I sent not one by one and create bar
+codes in bulk with the ref number on the left and the bar code on the right"*.
+
+### WHAT WAS MEASURED BEFORE ANYTHING WAS BUILT
+
+Eleven photographs of real packages (red, green and blue Amazon return labels and a Happy Returns
+bag, dropped off 12–18 Nov 2026 at the Brooklyn store) were decoded here, bar by bar, from the
+photographs themselves — not assumed from what carrier labels usually carry.
+
+| Measured | Finding |
+| --- | --- |
+| Symbology | **Code 128, start code B**, standard modulo-103 check. Identical on red, green and blue |
+| Payload | **exactly the RMA printed beneath the bars** — no prefix, no suffix, no delimiters |
+| Reference shape | 12 characters, `D` + 7 mixed-case alphanumerics + `RRMA`; matches every row of the store's own iShip "Enter or scan RMA to select" list |
+| Sort colour | **irrelevant to the barcode.** It tells staff which bag the package goes in |
+| Happy Returns | a different animal: **QR codes**, and a BAG ID (`HRVX3CYZ-7710-1`) carrying the store number. What its QR encodes is NOT yet proved |
+
+Those decodes are fixtures in `harness_code128.py` (the pixel run-lengths of three scanlines), so the
+claim is re-proved on every run rather than remembered — including one label photographed upside
+down, which decodes only when read in reverse.
+
+### THE FOUR HOMES
+
+| Question | Home | Note |
+| --- | --- | --- |
+| What IS a barcode | `core/code128.py` | encode + decode together: two statements of ONE symbol table, which buys a true round-trip proof and forbids the copy that would drift |
+| Where are the bars in this photograph | `storeops/dropoff_photo.py` | measures widths in pixels; owns nothing about what they mean |
+| Which string is THE REFERENCE | `storeops/dropoff_label.py` | reads the ORG's declarations; pure |
+| Which code to draw | `storeops/dropoff_render.py` | Code 128 or QR, from the label type's declaration |
+
+`storeops/dropoff_label_api.py` is I/O and HTTP shape only, mounted on the storeops router.
+
+### WHAT IS A POLICY AND WHAT IS A TENANT'S WORD (owner directive 2026-10-30)
+
+The split is the design, not a detail:
+
+- **A symbology is a published standard — a POLICY**, so a house default is right, and *decoding the
+  bars needs no declaration from anybody*. A tenant with an empty table rescues a package from its
+  first minute. Code 128 carries its own check symbol, so a decode is a FACT.
+- **Which labels a tenant handles, and what their references look like, are that tenant's own
+  words**, declared per org in `storeops.dropoff_label_profile` (mig `1127`). `read_reference` takes
+  `profiles` as a REQUIRED argument; an org that declared none is told `no_label_types_declared` and
+  never handed another tenant's patterns. Migration 1127 **seeds nothing — not even for the tenant
+  that asked.**
+- A pattern is **anchored at both ends** by the reader, and a match may not continue into a longer
+  alphanumeric run: a smudge that lengthens a reference must not have a valid-looking prefix pulled
+  out of it.
+
+### A TEXT READ IS A GUESS AND SAYS SO
+
+A decoded barcode is returned with `confirm_required: false`. A reference read off the PRINTED text
+is always `confirm_required: true`, with its look-alike characters named (`1`/`l`/`I`, `0`/`O`,
+`5`/`S`): the platform reports them and never substitutes one, because a wrong reference prints a
+barcode that scans perfectly into the wrong record — worse than the package sitting on the shelf.
+The audit row (`storeops.dropoff_label_scan`) keeps BOTH what was read and what the person
+confirmed, with `corrected` when they differ.
+
+`verified_symbology()` carries the same honesty into the printing: **true for Code 128** (proved by
+decoding real labels), **false for QR** (the Happy Returns bag's QR content is unconfirmed), so the
+screen can say "a duplicate of the barcode" versus "built from the reference we read".
+
+### WHAT THE PHOTOGRAPHS FORCED INTO THE READER
+
+Each of these is a property of real photos, not a refinement:
+
+- **Per-symbol module width.** A photo is never square to the camera, so apparent module width
+  drifts; a single global estimate read `Dv9` and lost the rest of that label.
+- **Both directions.** One of the first four samples was upside down.
+- **Both orientations.** A scanline is a ROW, so a label photographed sideways has no row crossing
+  its bars. The blue-label photo was exactly this.
+- **Two threshold windows, five darkness offsets.** One sample decodes only at the wider window,
+  another only at the faintest offset.
+- **A time ceiling, and a batch that divides it.** The expensive case is a photo with NO barcode;
+  25 photos must still come back inside one request.
+- **No false positives.** Blank, noise and regular stripes must read as nothing — the property that
+  stops the reader inventing a reference out of printed text.
+
+### THE SURFACE
+
+| Endpoint | Does |
+| --- | --- |
+| `GET /storeops/dropoff-label/profiles` | this org's declared label types; `declared: 0` says so |
+| `POST /storeops/dropoff-label/profiles` · `DELETE …/{id}` | declare / retire one (a pattern that will not compile is refused as it is made) |
+| `POST /storeops/dropoff-label/read` | one photo → one reading, writes nothing |
+| `POST /storeops/dropoff-label/read-batch` | up to 25 photos → every reference each yields, writes nothing |
+| `POST /storeops/dropoff-label/barcode` · `…/barcodes` | confirmed reference(s) → code(s) + the audit row(s) |
+| `GET /storeops/dropoff-label/barcode.svg` | the renderer alone, so a print dialog cannot create a second audit row |
+| `GET /storeops/dropoff-label/scans` | what this org has rescued (org-scoped at the query) |
+
+Screen: `/storeops/dropoff-barcode` — photograph many, check the table, print one sheet with the
+reference LEFT and its code RIGHT, one package per row, `page-break-inside: avoid` so a code is
+never split across two sheets. Standard filters and the export/send bar on the rescued-packages
+report, per the 2026-10-30 report rule.
+
+### DEGRADES UNTIL ITS MIGRATION LANDS
+
+Code deploys on merge; `1127` is applied by the owner afterwards. Every endpoint probes and answers
+`available: false` with the reason, and the barcode itself still prints — paper in hand is the job,
+and it needs no table. The setup hint goes out under message keys so the §19.36 boundary neutralises
+the migration name for a tenant.
+
+### WHAT WOULD BREAK THIS
+
+| # | A change that must fail the build |
+| --- | --- |
+| A | a symbol-table entry stops being 11 modules or loses its bar-parity, or the encoder and decoder stop sharing one table |
+| B | a decoder returns a best guess when the check symbol does not verify |
+| C | `read_reference` gains a default for `profiles`, or any house patterns appear in code (RULE TWO) |
+| D | a text read stops being `confirm_required`, or a look-alike character is silently corrected |
+| E | the photo reader stops trying both directions, both orientations, or its threshold ladder |
+| F | a batch folds an unread photo into a total instead of naming it |
+| G | **cross-tenant**: one org's declaration recognises another org's reference, or a scan row or profile row is readable across orgs |
+| H | `verified_symbology` starts claiming a symbology this platform has not proved |
+
+Tests: `tests/unit/test_dropoff_label_rules.py`, `tests/integration/test_dropoff_label_endpoints.py`,
+`harness_code128.py` (40) and `harness_dropoff_label.py` (78), both run in CI.
+
+### STILL OPEN, not coded around
+
+What a Happy Returns QR actually encodes is unconfirmed — a re-printed one is the platform's
+reconstruction from the BAG ID, and is labelled as such until a printed one is scanned at the
+counter and accepted. No organisation has declared a label type yet, so the text-reading path is
+inert until one does; the bar-decoding path is live for everyone.
