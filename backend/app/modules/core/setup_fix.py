@@ -181,6 +181,21 @@ FIXES = {
         "page": "/commcalc/connectors",
         "gate": ADMIN,
     },
+    "dropoff_label_types": {
+        "title": "No drop-off label types have been set up for your company yet.",
+        "consequence": "A barcode still prints from a reference typed in by hand, but the platform "
+                       "cannot pick the reference out of a photograph\u2019s printed text, so every "
+                       "label whose own barcode will not scan has to be read off the paper and typed "
+                       "in by somebody.",
+        "steps": [
+            "Open Drop-off Barcode Rescue.",
+            "In Label types, add the kind of label your stores take in \u2014 its name, and what its "
+            "reference looks like.",
+            "Press Add. Add one line for each kind of label you handle.",
+        ],
+        "page": "/storeops/dropoff-barcode",
+        "gate": ADMIN,
+    },
     # ── genuinely ours (a server credential) — nobody in a tenant can close these ───────────────────
     "notify_email_sender": {
         "title": "Sending email is not switched on for this platform yet.",

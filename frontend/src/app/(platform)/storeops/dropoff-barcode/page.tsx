@@ -4,6 +4,7 @@ import { api } from '@/lib/client'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
+import { FixItNotice, useFixGuide } from '@/lib/fix-it'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 
 // DROP-OFF BARCODE RESCUE (index §STOREOPS-12, mig 1127).
@@ -393,6 +394,8 @@ function escapeHtml(s: string): string {
 }
 
 function LabelTypes({ profiles, blocked, reload }: { profiles: Profile[]; blocked: string; reload: () => void }) {
+  // Asked for ONLY while the gap is open, so a company that has declared its labels fetches nothing.
+  const labelTypeFix = useFixGuide(profiles.length ? null : 'dropoff_label_types', 'Drop-off Barcode Rescue')
   const [name, setName] = useState('')
   const [pattern, setPattern] = useState('')
   const [msg, setMsg] = useState('')
@@ -417,12 +420,11 @@ function LabelTypes({ profiles, blocked, reload }: { profiles: Profile[]; blocke
         them. Nothing here is shared with, or taken from, another company.
       </p>
       {blocked && <p style={{ ...note, background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-92400e)' }}>{blocked}</p>}
-      {!profiles.length && !blocked && (
-        <p style={{ ...note, background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-92400e)' }}>
-          None set up yet, so the printed text cannot be matched. Reading the barcode in the photo
-          still works, and so does typing the reference in.
-        </p>
-      )}
+      {/* A gap is never a dead end (§CORE-39): the shared notice carries the SERVER's own steps,
+          asks the server whether THIS viewer may close it, and offers to ask whoever can when they
+          may not. The wording lives in core/setup_fix.py and is never respelled here. A rep who
+          cannot add a label type still reads what is needed and can send it to their manager. */}
+      {!profiles.length && <FixItNotice fix={labelTypeFix} lead="Reading the barcode in the photo still works without this, and so does typing the reference in." />}
       {!!profiles.length && (
         <ul style={{ margin: '0 0 12px', paddingLeft: 18 }}>
           {profiles.map(p => (
