@@ -1662,7 +1662,31 @@ _all_routes = _flatten_routes(real_app.routes)
 # Cross-tenant negatives: every read is org-scoped, every category word is the tenant's OWN declared
 # catalog, and backend/tests/unit/test_incentive_shortfall_cross_tenant.py asserts that one tenant's
 # rule against another's catalog is BLOCKED rather than answered.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1854"))
+# 2026-11-18 (§STOREOPS-12, the owner's "the barcode does not work and the packages sit in the store")
+#   1854 -> 1863. NINE routes added and NONE removed, verified the house way:
+#     git diff origin/main..HEAD -- backend/ | grep -E '^[+-].*@router\.'
+#   shows exactly nine additions on this branch and nothing deleted.
+#     + /storeops/dropoff-label/profiles             GET     (the label types this tenant declares)
+#     + /storeops/dropoff-label/profiles             POST    (declare one)
+#     + /storeops/dropoff-label/profiles/{id}        DELETE  (retire one; sets active=false)
+#     + /storeops/dropoff-label/read                 POST    (read ONE photograph)
+#     + /storeops/dropoff-label/read-batch           POST    (read up to 25 in one go)
+#     + /storeops/dropoff-label/barcode              POST    (render one, and record the rescue)
+#     + /storeops/dropoff-label/barcodes             POST    (render the sheet)
+#     + /storeops/dropoff-label/barcode.svg          GET     (one code as an image, for printing)
+#     + /storeops/dropoff-label/scans                GET     (what was rescued, for the report)
+# GATE: `require_org` on all nine — the same gate every other /storeops route is behind — and the
+# three profile routes are additionally admin-gated. NO stored total, statement, GP, commission,
+# payable or tax figure can move: nothing here reaches a money table. The only writes are one
+# `storeops.dropoff_label_profile` row (a tenant declaring a label type) and one
+# `storeops.dropoff_label_scan` row per rescued package, which is an AUDIT record — who printed
+# which reference, read from what, and whether they corrected it by hand.
+# Cross-tenant negatives: every read and write is org-scoped, and the label types are the TENANT'S
+# OWN declarations with no house list behind them — `harness_dropoff_label.py` fails the build if a
+# caller can answer without asking the org, and
+# backend/tests/integration/test_dropoff_label_endpoints.py asserts one tenant cannot see or match
+# against another's declarations.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1863"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
