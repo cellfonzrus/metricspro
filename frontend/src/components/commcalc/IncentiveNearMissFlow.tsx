@@ -41,6 +41,18 @@ export type ShortfallItem = {
     steps: ShortfallStep[]
   }
 }
+/**
+ * ONE raw shortfall as the server folds it, carrying the plan item it renders as. The screen reads
+ * `plan_item` and never the raw figures: the sentence and the walkthrough have one home, server-side.
+ */
+export type RawShortfall = {
+  kind: string
+  employee: string | null
+  rule: string
+  rule_id: string
+  forgone: number
+  plan_item: ShortfallItem | null
+}
 export type NearMissPayload = {
   period?: string
   sentence?: string
@@ -53,7 +65,7 @@ export type NearMissPayload = {
     blocked: { rule: string; reason: string; date?: string }[]
     closest: ({ date?: string; store_code?: string } & ShortfallItem['incentive']) | null
   }
-  days?: { date: string; store_code: string; items: any[] }[]
+  days?: { date: string; store_code: string; items: RawShortfall[] }[]
 }
 
 const card: React.CSSProperties = {
@@ -214,7 +226,7 @@ export default function IncentiveNearMissFlow({ data, repFilter = '' }:
       if (raw?.kind === 'blocked') continue
       if (want && String(raw?.employee || '').toUpperCase() !== want) continue
       // The plan item shape is built server-side; the card reads that, not the raw shortfall.
-      const it = raw?.plan_item as ShortfallItem | undefined
+      const it = raw?.plan_item
       if (it) items.push({ date: d.date, store: d.store_code, item: it })
     }
   }
