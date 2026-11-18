@@ -220,6 +220,7 @@ Primary code homes:
 | COMMCALC-79 | **Where must the year land, and is it going to** | Every target figure here was a MONTH or a window over one, so a store could carry twelve monthly targets that each looked reasonable and summed to well under the year it was aiming at, with nothing saying so. And "a million in annual sale **including the commission earned**" means at least two different things for a shipping store. Who decides what counts toward a goal, and who may answer "what do I still need" — once? |
 | COMMCALC-76 | **A weekly review pack is one fold, read from the reports that own its figures** | The owner asked for the LuxeLink performance deck as an in-app report on the Management tile, admins only, one report per market plus a consolidated one, with inventory aging per carrier among its items, generated at the end of each week for the Monday review with the DMs — and on demand. It derives nothing: profit, commission, the accessory gap, growth, the reps behind, aging and payroll are each QUOTED from the surface that already owns them, and the fold is pure, so a second derivation cannot grow beside the report it quotes. An item nobody measured carries no figure and says why in words; a store no market claims gets its own named scope rather than vanishing between the market packs and the company one; and the market vocabulary is a required argument, so nothing declared means nothing identified. The gate is the server's on every door — a company-wide reporting scope is not an administrator. |
 | COMMCALC-80 | **Money we could not classify is still the day's revenue** | A day's revenue was the sum of the categories we could place — but whether WE can classify a line says nothing about whether the store sold it. $22,653.31 of one tenant's October sat on lines no declared category claimed, in a label-keyed bag with no date on it, so a revenue gate failed on days the store had in fact cleared. Does unclassified money count, and may it ever pay a category? |
+| COMMCALC-81 | **A missed gate is not a zero** | A day that missed its qualifying threshold rendered as $0.00 with no reason, so a day two sales short of a five-sale gate looked identical to a day that sold nothing. And a gate withholds the pay not on the units you were short of but on every unit you already sold. How far short was this day, what did the gate cost, and is that a coaching moment or an admin's unfinished rule? |
 | COMMCALC-76 | **A weekly review pack is one fold, read from the reports that own its figures** | The owner asked for the LuxeLink performance deck as an in-app report on the Management tile, admins only, one report per market plus a consolidated one, with inventory aging per carrier among its items, generated at the end of each week for the Monday review with the DMs — and on demand. It derives nothing: profit, commission, the accessory gap, growth, the reps behind, aging and payroll are each QUOTED from the surface that already owns them, and the fold is pure, so a second derivation cannot grow beside the report it quotes. An item nobody measured carries no figure and says why in words; a store no market claims gets its own named scope rather than vanishing between the market packs and the company one; and the market vocabulary is a required argument, so nothing declared means nothing identified. The gate is the server's on every door — a company-wide reporting scope is not an administrator. **Corrected 2026-11-17 (§COMMCALC-76.8):** profit now quotes the P&L's own `profit_by_store`, not the GP report (the two differed by $366k on one org in one month); aging quotes the whole shelf per carrier, not the owed>0 subset in which everything is already overdue; and a row the scope cannot match is kept on the consolidated pack and counted, never dropped — which is what had made October's commission read as nothing. Every item now carries the sentences that explain it, and the pack downloads as a deck (§COMMCALC-76.9) whose DESIGN has one home in `notify/render.build_pptx` — tone, stat cards, charts and banded tables, so every caller of the house file writer gets the same face (§COMMCALC-76.10). |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
@@ -7839,6 +7840,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /kpi-failing/{period}` (failing-KPI overview: /coaching target resolution + in-process `/dlar-store` store rows + `rep_commissions.kpi_values`; pure `kpi_failing.py`) | `commcalc/router.py` (`get_kpi_failing`, beside `/dlar-store`) | §10 failing-KPI report **DRILL-DOWN §CORE-17.3t:** the failing-store count, the failing-employee count and each metric's own slice of both open to the rows behind them at the TWO grains this report has — a door's actual out of the carrier's own per-door report, an employee's out of what the last calculation wrote down, never pooled (§CORE-17.3n). THREE STATES ARE TOLD APART: a metric the carrier published nothing for is shown WITHOUT a figure, a metric that was MET is a measured zero marked not counted, and a failing one is a counted 1. The mixed-grain `failing_cells` gets NO panel (§CORE-17.3k) and both halves of it are served; the two row-count denominators and 'worst KPI' get none either. The `drilldown` key is attached AFTER `in_keyset`. NARROWED through `lib/drill-narrow`, because this page folds its counts in the browser. Declaration `commcalc/performance_coaching_drilldown.py` (`kpi_failing_drilldowns`), proof `harness_batch20_drilldown.py` §E |
 | `GET /productivity/{period}` (output per hour worked per employee-at-a-store, against the store's own baseline; pure `productivity.compute_productivity`) | `commcalc/router.py` (`get_productivity`) | §10 — the productivity report. **DRILL-DOWN §CORE-17.3t:** the three figures in every store header open to the EMPLOYEE ROWS they were folded from — boxes and accessory dollars out of whichever sales relations the period's union actually read, hours out of the TIME CLOCK alone and never the schedule, which is the programme's first `UNIT_HOURS` panel and carries its own SCHEMA explicitly. An employee with no closed punch is shown WITHOUT a figure, names NO relation and is not counted (§CORE-17.3i), while still counted in the two sales panels, because the absence is of an hour and not of a sale. Every rate and index on the page is refused and the figures each divides are offered (§CORE-17.3h). Server-folded (every filter is a query parameter). Defect REPORTED: this endpoint carries no per-store RBAC scope at all. Declaration `commcalc/performance_coaching_drilldown.py` (`productivity_drilldowns`), proof `harness_batch20_drilldown.py` §B |
 | `GET /coaching/{period}` (`rep_coaching` — what a missed tier costs each employee, with the chargeback deductions and the ops penalty beside it; the per-rep fold is INLINE in the router and is pinned to its own source text by the harness) | `commcalc/router.py` (`rep_coaching`) | §6 / §COMMCALC-09 — the coaching card. **DRILL-DOWN §CORE-17.3t:** the four money figures and the tier count open to the EMPLOYEE ROWS behind them, separated by WHICH RELATION ANSWERED — the calculated pay snapshot, the recorded penalty ledger, and for the employee chargeback file, which no migration here creates, NOTHING NAMEABLE at all, stated and counted (§CORE-17.3i, defect 4). Three provenances on ONE row in ONE unit (§CORE-17.3n). Whether a stored pay breakdown is EVIDENCE at all is asked of `payout_slice_evidence`, never inferred from the stored column (§CORE-17.3j): an employee the run never itemised is withheld in that module's own basis word, never shown with nothing at risk. The employee COUNT, the tier percentage and the KPIs-met fraction get no panel (§CORE-17.3h). NARROWED through `lib/drill-narrow`, and each tile reads off its own narrowed panel. Declaration `commcalc/performance_coaching_drilldown.py` (`coaching_drilldowns`), proof `harness_batch20_drilldown.py` §C |
+| `GET /incentive-coaching/{period}` (which days nearly earned a GATED payout and what the gate cost — `incentive_shortfall` over `daily_incentive.compute_day`, the cost asked of the engine by re-running the day with that one qualifier opened) | `commcalc/router.py` (`get_incentive_coaching` → `_incentive_shortfall_payload`) | §COMMCALC-81 — the near-miss walkthrough on the Rep Coaching screen. COMPUTE-ONLY: nothing persisted, nobody paid, no migration. THREE VERDICTS told apart — `near_miss` (within a declared reach policy, and the rep is walked through it), `distant` (a real miss, never dressed up as nearly there) and `blocked` (the gate could not be verified, so it is an ADMIN's item and contributes no money to any coaching total). The ONE server-side reader of `incentive_shortfall`, so this screen and `GET /targets/{period}/action-plan` cannot coach different days or quote different money (§59.7). Every category word is the tenant's OWN declared catalog. Proof `harness_incentive_shortfall.py` (131 checks, armed against ten plants), cross-tenant `tests/unit/test_incentive_shortfall_cross_tenant.py` |
 | `GET /atu-opportunity` (card customers on a recurring recharge with no enrolment line — who was never asked; pure `atu_opportunity.fold_transactions` / `summarize` / `by_store`) | `commcalc/router.py` (`get_atu_opportunity`) | §16 ATU opportunity (mig `295`). **DRILL-DOWN §CORE-17.3t:** the unconverted recharge and the two activation counts open to the STORE ROWS behind them, out of the transaction-grain sales read whose provenance this endpoint had been discarding (defect 7). ALL SIX TILES ARE REFUSED, each for a stated reason — the customer counts are per mobile number and the per-store table carries none; the carry figures, the annualised figure and the customer saving are this fold times a rate typed into the assumptions and one has no rows at all (§CORE-17.3m); every attach percentage is a rate (§CORE-17.3h). Server-folded. Declaration `commcalc/performance_coaching_drilldown.py` (`atu_drilldowns`), proof `harness_batch20_drilldown.py` §D |
 | `GET /compliance-summary` (per-queue open counts over the existing flag/exception surfaces; failed probe = null, never 0; pure `compliance_summary.py`) | `commcalc/router.py` (`get_compliance_summary`, beside `/kpi-failing`) | §14 mig 948 Flags & Compliance |
 | `GET /account/liabilities-due` (owed-to-distributor + due-this-week payments/payroll/payroll-tax/rents/insurance per store; mig-434 + mig-946 gates fail closed; pure `account/liabilities_due.py`; distributor side = the SAME as-of-parameterized derivation the BS books, mig `954`) | `account/router.py` (`liabilities_due_endpoint` → `_liabilities_due_impl`) | §4 Current Monetary Liabilities |
@@ -26505,6 +26507,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-78 | commcalc |
 | COMMCALC-79 | commcalc |
 | COMMCALC-80 | commcalc |
+| COMMCALC-81 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -50653,6 +50656,224 @@ Files: `backend/app/modules/commcalc/revenue_scope.py` (**new**),
 `frontend/src/components/commcalc/DailyIncentiveRevenueNote.tsx` (**new**),
 `frontend/src/app/(platform)/commcalc/daily-incentive/page.tsx`,
 `database/migrations/1126_revenue_scope.sql` (**new**),
+`.github/workflows/carrier-vocab-guard.yml`, `docs/CI_GATES.md` (generated).
+
+---
+
+## §COMMCALC-81. A MISSED GATE IS NOT A ZERO (owner directive 2026-11-18)
+
+Owner, verbatim: *"Need to create a dynamic action plan based on the fact the reps have done
+shipments but not the overnight or second day. If they did one or two more shipments for overnight
+they would have gotten paid for all the overnights they have done, we need to drive that behavior
+with constant coaching, add that under the employee coaching module all across and make it a guided
+flow for them to understand which is in picture rather than simple boring lingo."*
+
+### COMMCALC-81.1 THE CLASS, NAMED RATHER THAN THE INSTANCE
+
+The wrong general fact:
+
+> **"A day that missed its qualifying threshold earned nothing, and that is the whole story."**
+
+A gate is binary. **A shortfall is not.** A day two sales short of a five-sale gate and a day that
+sold nothing both pay $0.00, and every surface here rendered them as the same zero — so the one that
+is a coachable near miss was indistinguishable from the one that is just a quiet day.
+
+And the second half, which is the part worth teaching: **a threshold gate does not withhold the pay
+on the units you were short of — it withholds it on every unit you already sold.** The work is done
+and unpaid. That is an argument a rep can act on tomorrow, and it is arithmetic rather than
+exhortation.
+
+| question | the old answer | the right answer |
+|---|---|---|
+| What did this day pay? | $0.00 | $0.00 — unchanged, and no money moves anywhere in this section |
+| Why? | *(a zero with no reason)* | 3 of 5 sold; 2 more would have paid for all 5 |
+| What did the gate cost? | not asked | **the pay on the 3 already sold**, from the engine itself |
+| Was it reachable? | not asked | a declared policy — near, distant, or unknowable |
+
+**HOW TO SPOT IT ELSEWHERE.** Look for a surface that renders the FAILING side of a threshold as a
+zero. If the threshold is declared and the measured value is known, the distance between them is
+knowable too, and a zero that hides it is a surface throwing away the only actionable thing it had.
+
+### COMMCALC-81.2 THE COST IS ASKED OF THE ENGINE, NEVER RE-DERIVED
+
+"What a failed gate cost" is *what this day would have paid with that one gate open*. So
+`incentive_shortfall` hands `daily_incentive.compute_day` the same store-day with that rule's
+qualifier replaced by `{"scope": "none"}` and takes the **difference of the two runs**.
+
+There is deliberately **no payout arithmetic in the module at all** — no rate, no cap, no split
+basis, no rule kind. A second copy of "what a rule pays" is the duplicate derivation the index rules
+forbid and would drift the first time a rule kind, a cap or a split basis changed.
+`harness_incentive_shortfall.py` §H fails the build if any of those literals appears in it.
+
+The dependency runs **one way only**: the engine is passed IN as a callable, so `daily_incentive`
+neither imports nor references this module, and §H pins both directions.
+
+### COMMCALC-81.3 THE THREE VERDICTS, AND WHY THE NEGATIVE HALF IS THE DESIGN
+
+| verdict | when | who it addresses |
+|---|---|---|
+| `near_miss` (`critical`) | within reach — one or two more sales was the whole difference | the rep, with the walkthrough |
+| `distant` (`warning`) | a real miss, nowhere near one more sale | reported, never dressed up as nearly there |
+| `blocked` | the gate could not be checked at all | **an admin**, and no rep is coached on it |
+
+Three things are **NOT** a near miss, and each is a defect this section exists to prevent:
+
+- **A gate that could not be verified.** `daily_incentive._gate` fails CLOSED when a qualifier names
+  a category the business does not declare. That is a CONFIGURATION defect, and coaching a rep for it
+  blames a person for an admin's unfinished setup. A verdict carrying BOTH a measured basis and an
+  undeclared category is also blocked, because the figure it measured is a PARTIAL one — so "two
+  more and you'd have been paid" is not knowable from it.
+- **A gate nobody could have cleared.** Saying "two more and you'd have been paid" when the truth is
+  forty more is the false encouragement that teaches reps to ignore the whole surface.
+- **A ceiling gate.** A qualifier that caps rather than floors (`lte` / `lt` / `eq`) is not missed by
+  doing too little, so "one or two more" is the wrong advice and the module declines to give it.
+
+A `blocked` item contributes **no money** to any coaching total. Its cost is unknown, and guessing it
+would put an admin's unfinished rule into a rep's figure; it is carried in its own list instead, so
+it stays visible.
+
+### COMMCALC-81.4 "WITHIN REACH" IS A POLICY, AND A HOUSE DEFAULT IS RIGHT FOR IT
+
+`REACH_UNITS_DEFAULT = 2` (the owner's own "one or two more") and
+`REACH_FRACTION_DEFAULT = 0.15`. **Either test carries a miss** — an absolute allowance, because
+"two more" is how a small gate is actually felt, and a proportional one, because two more is
+meaningless on a gate of four hundred.
+
+This is the 2026-10-30 directive applied correctly, not an exception to it. A window names no
+category, no carrier, no product and no tenant, so it is a **POLICY** and a house default stays
+legitimate. What that directive BANS is a default that is really one tenant's VOCABULARY — and there
+is none anywhere in this section: **every category word on screen is read off the tenant's own
+declared catalog** through `metric_catalog.by_key`, server-side.
+
+### COMMCALC-81.5 ONE ASSEMBLY, SO THE CARD AND THE PLAN CANNOT DISAGREE
+
+`router._incentive_shortfall_payload` is the **only** server-side reader of `incentive_shortfall`.
+The coaching card, the Daily Action Plan and any export are three readings of ONE object:
+
+- Every day item carries the **plan item it would render as** (`plan_item`), built server-side — so
+  the screen never re-derives the sentence or the walkthrough.
+- `_shortfall_plan_items` decides WHICH shortfalls reach a plan (the closest day, plus every blocked
+  rule), so the plan cannot widen or narrow that by accident. A plan is a short list of things to do;
+  thirty days of the same near miss would bury the one item somebody can act on.
+- A **store-scope** gate is the store's item; an **employee-scope** one is attached to the person.
+  Putting the latter on the store would ask a whole store to fix one person's day.
+- This is the §59.7 rule ("the screen and the plan cannot coach different stores") applied to this
+  question.
+
+**The per-day inputs are byte-for-byte the ones `GET /commcalc/daily-incentive/{close_date}` uses**,
+through the same one-homes: which source answers is `metric_authority`, whether unclassified money
+counts is `revenue_scope` (§COMMCALC-80) and the payout is `daily_incentive.compute_day`. If there
+were a second fold of a store-day anywhere in it, a shortfall could disagree with the payout it
+claims to explain.
+
+**THE RANGED READ WAS EXTRACTED, NOT COPIED.** `closing/router._declared_bags_by_store_day` is new
+and is now the one home for the ranged read and grouping of `daily_closing` + `closing_metric_line`;
+`_declared_by_store_day` (which folds to one figure per metric, as a target or a goal wants) is
+rebuilt on top of it. The incentive engine needs the WHOLE store-day bag — per-metric units and
+dollars, and the same split per employee — so it could not read the folded form, and a second
+grouping over a range would have been two readers of one question.
+`harness_metric_catalog_lock.py` still sees ONE read of `closing_metric_line`, because the extracted
+home dereferences `_metric_lines`' own range form. `_incentive_hours_for_day` gained a `date_to`
+range form for the same reason — a parameter, not a sibling, exactly as the two metric readers beside
+it already did. A by-hours pool whose hours were never read comes back UNALLOCATED, which on this
+surface would read as "the gate cost nothing".
+
+### COMMCALC-81.6 THE GUIDED FLOW IS DATA, NOT PROSE
+
+`incentive_shortfall.steps(item)` returns **one step per thing the rep has to understand**, in order,
+each carrying `figure`, `unit`, `of` and its own `line`:
+
+| # | step | what it shows |
+|---|---|---|
+| 1 | `did` | what was already sold, itemised in the tenant's own words |
+| 2 | `gate` | what the rule needed |
+| 3 | `gap` | how far short |
+| 4 | `cost` | what that cost — *and not on the part that was missing; on everything already sold* |
+| 5 | `next` | what to do tomorrow — **only when the miss is within reach** |
+
+Deliberately not prose with numbers glued in: the screen renders a figure as a figure, draws the bar
+and never parses a sentence. `frontend/src/components/commcalc/IncentiveNearMissFlow.tsx` computes
+NOTHING — no threshold, no subtraction, no money arithmetic — because a second arithmetic beside the
+engine's is how a screen comes to disagree with the payout it is describing. The sold segment of the
+bar is always drawn at FULL width of what it was, never scaled down to look like a failure, because
+the whole point is that the work was real and went unpaid.
+
+**An empty panel SAYS WHY** (`empty_reason`): a coaching surface blank because the month was never
+uploaded looks exactly like a store that missed nothing, and one of those is a data defect while the
+other is good news. A tenant that declares no gated rule gets no panel at all rather than a permanent
+unanswered question.
+
+### COMMCALC-81.7 WHAT CANNOT MOVE
+
+No money. The endpoint **computes only** — the same posture as the daily incentive screen. Nothing is
+persisted, nobody is paid, no rule is edited, no recompute is triggered, and there is no migration in
+this section at all. `_shortfall_items_for_plan` degrades to empty maps on ANY error, because an
+action plan that 500s over a coaching extra would take down a screen managers use daily.
+
+### COMMCALC-81.8 THE LOCK
+
+`backend/harness_incentive_shortfall.py` (131 checks) pins the shortfall unit and its rounding (part
+of a sale is one whole sale; a strict floor is not cleared by matching it); both reach tests and the
+house default; that the forgone figure is the pay on work ALREADY DONE and comes from the engine;
+that a ceiling gate, an unverifiable gate and an out-of-reach miss are each refused their own way;
+the five-step flow as figures; the action-plan item shape; the period fold; the one-way dependency;
+and RULE TWO in two scopes — no tenant or product word in the CODE at all, and none in the prose
+outside the owner's single quoted sentence, which is bounded by its own check.
+
+**VERIFIED ARMED** against ten planted defects: a ceiling gate read as a shortfall, a counterfactual
+that does not open the gate, a partial gate coached as a shortfall, an unverifiable gate blamed on the
+rep, everything called within reach, blocked money folded into the coaching total, a house word
+instead of the tenant's own, a part sale floored away, the widest miss coached instead of the
+tightest, and a forgone figure counting money the day was already paid. Each was caught.
+
+**THREE PLANTS WERE NOT CAUGHT FIRST TIME, and two were real defects in the module:**
+
+1. **A verdict with both a basis and `missing` was coached.** The check passed only because `_gate`
+   does not emit that pairing today — the two facts live on separate keys and nothing stops it. Fixed
+   in the module (§J1/§J2 feed the pathological verdict directly).
+2. **A "this rule paid, so there is nothing to coach" shortcut swallowed a real individual near
+   miss** — an employee-scope gate one person cleared and another missed, which is precisely what
+   this module is for. The shortcut is gone; `shortfall_of` is the single reader of "did this gate
+   fail" (§J3–§J10).
+3. **Nothing pinned that the TIGHTEST miss is the one coached.** Opening the walkthrough on the
+   person who was miles off is §81.3's false encouragement said to the wrong person (§J11–§J13).
+
+`backend/tests/unit/test_incentive_shortfall_cross_tenant.py` (12 tests) ships WITH the feature as the
+2026-10-30 directive requires: two tenants with opposite declarations — a unit gate paying per unit
+against a money gate paying a percentage — through one engine in one process, proving each one's
+answer is its own, that neither's words reach the other's coaching, and that one tenant's rule against
+the other's catalog is BLOCKED rather than answered.
+
+### §16–18 CROSS-REFERENCES
+
+Depends on: §COMMCALC-78 (what a day pays, and the qualifier verdict this reads), §COMMCALC-80
+(whether unclassified money counts toward a gate), §COMMCALC-77 / §COMMCALC-07 (which source answers
+a store-day, and the POS-report feed), §72 (the declared-metric catalog, mig 1072),
+§COMMCALC-49.10 (a tenant's vocabulary is a required argument — and why a POLICY is the exception),
+§COMMCALC-44 (an absence needs the right reason), §CORE-15 (the theme lock the new component is under).
+Neighbours: §59 / §59.7 (the peer gap — the action-plan item shape borrowed whole, and the rule that
+the screen and the plan cannot coach different stores), §CORE-17.3t (the performance-and-coaching
+family this panel sits above), §COMMCALC-09 (the coaching card's own tier figures, untouched).
+
+§17 (endpoints): New: **`GET /commcalc/incentive-coaching/{period}`** —
+`?store_code=&metric_source=&revenue_scope=&today=`, behind `require_org` (the same gate
+`/daily-incentive/{close_date}` is behind), compute-only, answering `days[]` (each item with its
+`plan_item`), `summary` (the period fold), `sentence`, `gated_rules` and `empty_reason`. Changed:
+**`GET /commcalc/targets/{period}/action-plan`** now carries the same shortfalls as
+`incentive_shortfall` items — store-scope ones on the store, employee-scope ones on the rep — out of
+the same assembly. `harness_db_resilience` route count **1853 → 1854** (one route added, none
+removed, re-verified the house way).
+
+§18 (tables): New: none. Changed: none. **No migration in this section.**
+
+Files: `backend/app/modules/commcalc/incentive_shortfall.py` (**new**),
+`backend/app/modules/commcalc/router.py` (`_incentive_shortfall_payload`, `_shortfall_plan_items`,
+`_shortfall_items_for_plan`, `get_incentive_coaching`, the plan wiring, the hours range form),
+`backend/app/modules/closing/router.py` (`_declared_bags_by_store_day` extracted — **see §81.5**),
+`backend/harness_incentive_shortfall.py` (**new**), `backend/harness_db_resilience.py` (re-pinned),
+`backend/tests/unit/test_incentive_shortfall_cross_tenant.py` (**new**),
+`frontend/src/components/commcalc/IncentiveNearMissFlow.tsx` (**new**),
+`frontend/src/app/(platform)/commcalc/coaching/page.tsx`,
 `.github/workflows/carrier-vocab-guard.yml`, `docs/CI_GATES.md` (generated).
 
 ---

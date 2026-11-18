@@ -33,6 +33,7 @@ from app.modules.commcalc import month_trend as _month_trend   # 2026-11-12 — 
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
 from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
 from app.modules.commcalc import daily_incentive as _daily_incentive   # 2026-10-10 — THE daily-incentive shapes (mig 1072); every rule is a config row (index §74)
+from app.modules.commcalc import incentive_shortfall as _incentive_shortfall   # 2026-11-18 — how close a day came to a gated payout, and what missing it cost (index §COMMCALC-81)
 from app.modules.commcalc import annual_goal as _annual_goal       # 2026-11-17 — WHERE a scope's YEAR must land, and whether it is going to (mig 1125, §COMMCALC-79)
 from app.modules.commcalc import metric_authority as _metric_authority  # 2026-11-17 — WHICH source answers a store-day: the declaration or the store's own report (§COMMCALC-77)
 from app.modules.commcalc import revenue_scope as _revenue_scope  # 2026-11-17 — does money no declared category claimed count toward the day's revenue (§COMMCALC-80)
@@ -38491,6 +38492,12 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
     tlines_by_store = _target_lines_by_store(_target_lines(client, org_id, period))
     declared_by_store = (_declared_by_store_day_for_targets(
         client, org_id, start, end - _timedelta(days=1), catalog) if catalog else {})
+    # THE GATED-PAYOUT NEAR MISS (§COMMCALC-81), dereferenced from the one assembly the coaching card
+    # reads — so the plan and the card cannot coach different days or quote different money, which is
+    # the same rule the peer gap above already follows (§59.7).
+    # `today` is a date by here, and `_period_bounds` takes the client's own date as a STRING.
+    shortfall_by_store, shortfall_by_rep = _shortfall_items_for_plan(client, org_id, period,
+                                                                     str(today))
 
     for s in stores:
         code = str(s.get('store_code', '') or '').strip()
@@ -38527,6 +38534,11 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
         peer_item = peer_items.get(code.upper())
         if peer_item:
             store_items.append(dict(peer_item))
+        # A STORE-SCOPE gate was missed by the store, so it is the store's item. An EMPLOYEE-scope one
+        # is attached to the person below instead: putting it here would ask a whole store to fix one
+        # person's day.
+        for _sf_item in (shortfall_by_store.get(code.upper()) or []):
+            store_items.append(dict(_sf_item))
 
         # Target-vs-achieved metrics per category (what's expected vs what they're doing).
         metrics = []
@@ -38561,6 +38573,10 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
             citem = commission_item(comm)
             if citem:
                 rep_items.append(citem)
+            # AN EMPLOYEE-SCOPE gate is this person's near miss, so it is this person's item — the
+            # same dereference as the store half above, keyed on the rep rather than the store.
+            for _sf_item in (shortfall_by_rep.get((rep_name or '').strip().upper()) or []):
+                rep_items.append(dict(_sf_item))
             _af = acc_flag_by_rep.get((rep_name or '').strip().upper())
             if _af and (_af.get('flags') or 0) > 0:
                 _o, _u = int(_af.get('over') or 0), int(_af.get('under') or 0)
@@ -50294,6 +50310,178 @@ def _declared_revenue_scope(client, org_id):
     return (str((rows[0] if rows else {}).get("declared_revenue_scope") or "").strip(), False)
 
 
+def _incentive_shortfall_payload(client, org_id, period, *, store_code="", metric_source="",
+                                 revenue_scope="", today=""):
+    """§COMMCALC-81 — ONE ASSEMBLY of "which days nearly earned a gated payout, and what it cost".
+
+    THE ONLY reader of `incentive_shortfall` on the server. The coaching card, the action plan and
+    the daily screen all come through here, so they cannot coach different days or quote different
+    money — the §59.7 rule applied to this question.
+
+    Every per-day input is the SAME one `/daily-incentive/{close_date}` uses, resolved through the
+    same one-homes: which source answers is `metric_authority`, whether unclassified money counts is
+    `revenue_scope`, and the payout itself is `daily_incentive.compute_day`. There is no second fold
+    of a store-day anywhere in this function; if there were, a shortfall could disagree with the
+    payout it claims to explain.
+
+    Degrades rather than failing: a tenant with no rules, no catalog or no declarations gets an empty
+    answer that SAYS it is empty, because a coaching surface showing nothing for a missing upload
+    looks exactly like a store that missed nothing."""
+    from app.modules.closing.router import (_metric_catalog, _declared_bags_by_store_day)
+    from app.modules.closing import metric_catalog as _mc
+    start, end, _today = _period_bounds(period, today)
+    d_from, d_to = str(start), str(end - _timedelta(days=1))
+    cat = _metric_catalog(client, org_id)
+    rules = _incentive_rules(client, org_id, active_only=True)
+    src_declared, src_pending = _declared_metric_authority(client, org_id)
+    source = _metric_authority.resolve(metric_source or src_declared)
+    scope_declared, scope_pending = _declared_revenue_scope(client, org_id)
+    scope = _revenue_scope.resolve(revenue_scope or scope_declared)
+    gated = [r for r in rules
+             if str(((r or {}).get("qualifier") or {}).get("scope") or "").strip().lower()
+             in ("store", "employee")]
+
+    bags: dict = {}
+    if source == _metric_authority.SOURCE_FEED:
+        feed_rows = _portal_metric_rows(client, org_id, store_code, d_from, date_to=d_to)
+        by_day: dict = {}
+        for r in (feed_rows or []):
+            key = (str(r.get("store_code") or "").strip(), str(r.get("business_date") or "")[:10])
+            if key[1]:
+                by_day.setdefault(key, []).append(r)
+        for key, rows in by_day.items():
+            # BOTH halves through `metric_authority`, exactly as the day endpoint reads them: which
+            # rows may pay, and which money no declared category claimed. Reaching past it to the
+            # feed module would be a second reader of the same question.
+            lines = _metric_authority.lines_from_feed(rows, business_date=key[1])
+            u = _metric_authority.unclassified_from_feed(rows, business_date=key[1]) or {}
+            bags[key] = {"declared_map": _mc.declared(cat, None, lines),
+                         "per_employee": _mc.by_employee(cat, lines),
+                         "unclassified": float(u.get("amount") or 0.0),
+                         "unclassified_by_employee": dict(u.get("by_employee") or {})}
+    else:
+        for key, bag in (_declared_bags_by_store_day(client, org_id, d_from, d_to,
+                                                     store_code=store_code, catalog=cat) or {}).items():
+            # A rep's declaration cannot carry an unclassified line — they declare INTO a category by
+            # construction — so the addend is nothing here, whatever the tenant's scope says.
+            bags[key] = {"declared_map": bag.get("declared_map") or {},
+                         "per_employee": bag.get("per_employee") or {},
+                         "unclassified": 0.0, "unclassified_by_employee": {}}
+
+    hours_by_date = _incentive_hours_for_day(client, org_id, store_code, d_from, date_to=d_to) or {}
+
+    days = []
+    for (store, day) in sorted(bags):
+        bag = bags[(store, day)]
+        hrs, roster = hours_by_date.get(day, ({}, []))
+        addend = _revenue_scope.unclassified_addend(scope, bag.get("unclassified"))
+        per_emp_addend = ({k: _revenue_scope.unclassified_addend(scope, v)
+                           for k, v in (bag.get("unclassified_by_employee") or {}).items()}
+                          if addend else {})
+        people = sorted(set(list(bag["per_employee"]) + list(roster) + list(per_emp_addend)))
+        items = _incentive_shortfall.day_shortfalls(
+            _daily_incentive.compute_day, cat, gated,
+            {"declared_map": bag["declared_map"], "per_employee": bag["per_employee"],
+             "hours_by_employee": hrs, "employees": people, "unclassified": addend,
+             "unclassified_by_employee": per_emp_addend})
+        if items:
+            # EVERY item carries the plan shape it would render as, so the coaching screen, the
+            # action plan and an export are three readings of ONE object. A screen that built this
+            # itself would be the second home of the sentence and the walkthrough.
+            days.append({"date": day, "store_code": store,
+                         "items": [{**i, "plan_item": _incentive_shortfall.action_item(i)}
+                                   for i in items]})
+    folded = _incentive_shortfall.fold_days(days)
+    return {"period": period, "store_code": store_code,
+            "date_from": d_from, "date_to": d_to,
+            "metric_source": source, "metric_source_declared": src_declared,
+            "metric_source_declaration_pending": src_pending,
+            "revenue_scope": scope, "revenue_scope_declared": scope_declared,
+            "revenue_scope_declaration_pending": scope_pending,
+            "gated_rules": [str((r or {}).get("label") or "") for r in gated],
+            "days": days, "summary": folded,
+            "sentence": _incentive_shortfall.period_sentence(folded),
+            "action_plan": [it for it in (_incentive_shortfall.action_item(i)
+                                          for i in _shortfall_plan_items(folded)) if it],
+            # WHY NOTHING IS SHOWN, when nothing is. A coaching surface that is empty because the
+            # month was never uploaded looks exactly like a store that missed nothing, and the one
+            # is a data defect while the other is good news.
+            "empty_reason": ("" if days else
+                             ("no rule this business declares is gated, so no day can miss one"
+                              if not gated else
+                              ("nothing is declared or uploaded for this period, so no day can be "
+                               "measured" if not bags else
+                               "every gated rule was either cleared or never due")))}
+
+
+def _shortfall_plan_items(folded):
+    """Which shortfalls reach the ACTION PLAN — the closest day, plus every blocked rule. PURE.
+
+    A plan is a short list of things to do. Putting thirty days of the same near miss on it buries
+    the one item somebody can act on, so the plan carries the day a single extra sale would most
+    nearly have rescued (which is the one to walk a rep through) and every rule whose gate could not
+    be checked at all (which is an admin's item and has no other home)."""
+    f = folded or {}
+    out = []
+    if f.get("closest"):
+        out.append(f["closest"])
+    out.extend(f.get("blocked") or [])
+    return out
+
+
+def _shortfall_items_for_plan(client, org_id, period, today=""):
+    """({STORE: [item]}, {REP: [item]}) for the action plan — a DEREFERENCE of the one assembly.
+
+    Keyed UPPER-CASE because the action plan keys on `store_code.upper()`, exactly as
+    `peer_comparison.peer_items_by_store` does for the same loop.
+
+    `_shortfall_plan_items` decides WHICH shortfalls reach a plan, so the plan cannot widen or narrow
+    that by accident, and the coaching card shows the same items with the same words.
+
+    NEVER FAILS THE PLAN. A tenant with no gated rule, no upload or no catalog gets empty maps, and
+    any error degrades to empty — an action plan that 500s because a coaching extra could not be
+    computed would take down a screen managers use daily."""
+    by_store: dict = {}
+    by_rep: dict = {}
+    try:
+        payload = _incentive_shortfall_payload(client, org_id, period, today=today)
+        for item in _shortfall_plan_items(payload.get("summary") or {}):
+            plan_item = _incentive_shortfall.action_item(item)
+            if not plan_item:
+                continue
+            who = str(item.get("employee") or "").strip().upper()
+            store = str(item.get("store_code") or "").strip().upper()
+            if who:
+                by_rep.setdefault(who, []).append(plan_item)
+            elif store:
+                by_store.setdefault(store, []).append(plan_item)
+    except Exception:
+        return {}, {}
+    return by_store, by_rep
+
+
+@router.get("/incentive-coaching/{period}")
+def get_incentive_coaching(period: str, store_code: str = "", metric_source: str = "",
+                           revenue_scope: str = "", today: str = "", org_id: str = ORG_ID,
+                           authorization: str = Header(default="")):
+    """WHICH DAYS NEARLY EARNED A GATED PAYOUT, WHAT MISSING IT COST, AND WHAT TO SAY ABOUT IT.
+
+    Owner, 2026-11-18: *"if they did one or two more shipments for overnight they would have gotten
+    paid for all the overnights they have done, we need to drive that behavior with constant
+    coaching."* A threshold gate does not withhold the pay on the units you were short of — it
+    withholds it on every unit you already sold, and that is an argument a rep can act on tomorrow.
+
+    COMPUTES ONLY. Nothing is persisted, nobody is paid and no rule is changed by calling this; it is
+    the same posture as `/daily-incentive/{close_date}`, whose inputs and one-homes it shares exactly.
+
+    Every item carries its own walkthrough as DATA (`incentive.steps`), so the screen draws the
+    picture and never re-derives the verdict."""
+    require_org(org_id)
+    return _incentive_shortfall_payload(sb(), org_id, period, store_code=store_code,
+                                        metric_source=metric_source, revenue_scope=revenue_scope,
+                                        today=today)
+
+
 def _portal_metric_rows(client, org_id, store_code, close_date, date_to=None):
     """`commcalc.portal_metric_day` rows for ONE store-day, org-scoped — or for a DATE RANGE when
     `date_to` is given. The read only — every rule about which of these rows may pay belongs to
@@ -50365,23 +50553,32 @@ async def upload_pos_report(file: UploadFile = File(...), source_id: str = Form(
     return out
 
 
-def _incentive_hours_for_day(client, org_id, store_code, close_date):
+def _incentive_hours_for_day(client, org_id, store_code, close_date, date_to=None):
     """(hours_by_employee, roster) for a store-day, from the schedule the workforce module already
     keeps. Actual clocked hours win where they exist; otherwise the scheduled hours, which is what the
     tenants here actually record. Absent is ABSENT — this returns {} rather than a guess, and
-    `daily_incentive.split_pool` reports the pool unallocated."""
-    hours, roster = {}, []
+    `daily_incentive.split_pool` reports the pool unallocated.
+
+    `date_to` answers a RANGE instead, as {date: (hours, roster)} — a parameter rather than a second
+    reader, the same choice `_metric_lines` and `_portal_metric_rows` beside it already made, and for
+    the same reason: a period caller that found only the single-day form would either loop thirty
+    round trips or query `storeops.shifts` itself. A by-hours pool whose hours were never read comes
+    back UNALLOCATED, which on a shortfall surface would read as "the gate cost nothing" — so a
+    period view that skipped this would under-report the money."""
+    hours, roster, by_date = {}, [], {}
     try:
-        q = (client.schema("storeops").table("shifts").select("*")
-             .eq("org_id", org_id).eq("shift_date", str(close_date))
+        q = (client.schema("storeops").table("shifts").select("*").eq("org_id", org_id)
              .neq("is_deleted", True))
+        if date_to is None:
+            q = q.eq("shift_date", str(close_date))
+        else:
+            q = q.gte("shift_date", str(close_date)).lte("shift_date", str(date_to)).limit(20000)
         if store_code:
             q = q.eq("store_code", str(store_code))
         for sh in (q.execute().data or []):
             who = str(sh.get("employee_name") or "").strip()
             if not who:
                 continue
-            roster.append(who)
             h = sh.get("actual_hours")
             if h in (None, "", 0):
                 h = sh.get("scheduled_hours")
@@ -50389,10 +50586,24 @@ def _incentive_hours_for_day(client, org_id, store_code, close_date):
                 h = float(h or 0)
             except (TypeError, ValueError):
                 h = 0.0
-            if h:
-                hours[who] = round(hours.get(who, 0.0) + h, 2)
+            if date_to is None:
+                roster.append(who)
+                if h:
+                    hours[who] = round(hours.get(who, 0.0) + h, 2)
+            else:
+                day = str(sh.get("shift_date") or "")[:10]
+                if not day:
+                    continue
+                slot = by_date.setdefault(day, [{}, []])
+                slot[1].append(who)
+                if h:
+                    slot[0][who] = round(slot[0].get(who, 0.0) + h, 2)
     except Exception:
-        return {}, []
+        # The single-day form's callers unpack a pair; the range form's read a map. Returning the
+        # wrong SHAPE here would turn a degraded read into a TypeError at the call site.
+        return {} if date_to is not None else ({}, [])
+    if date_to is not None:
+        return {d: (hrs, sorted(set(names))) for d, (hrs, names) in by_date.items()}
     return hours, sorted(set(roster))
 
 

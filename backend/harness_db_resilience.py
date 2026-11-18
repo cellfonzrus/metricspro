@@ -1649,7 +1649,20 @@ _all_routes = _flatten_routes(real_app.routes)
 # a rep and an unauthenticated caller. NO stored figure can move: the route reads the same pack
 # `GET /weekly-review` serves, folds it to slide content (`weekly_review_deck`, pure) and renders it
 # through `notify/render` — read-only end to end, no write, no recompute, no persistence.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1853"))
+# 2026-11-18 (§COMMCALC-81, the owner's "drive that behavior with constant coaching")
+#   1853 -> 1854. ONE route added and NONE removed, verified the house way:
+#     git diff origin/main..HEAD -- backend/ | grep -E '^[+-].*@router\.'
+#   shows exactly one addition on this branch and nothing deleted.
+#     + /commcalc/incentive-coaching/{period}  GET  (which days nearly earned a gated payout)
+# GATE: `require_org`, the same gate `/daily-incentive/{close_date}` is behind, whose inputs and
+# one-homes this route shares exactly. NO stored figure can move: it reads the catalog, the active
+# rules and the period's declarations or feed rows, runs `daily_incentive.compute_day` for the
+# counterfactual and persists NOTHING — the same compute-only posture as the daily screen. Nobody is
+# paid, no rule is edited and no recompute is triggered by calling it.
+# Cross-tenant negatives: every read is org-scoped, every category word is the tenant's OWN declared
+# catalog, and backend/tests/unit/test_incentive_shortfall_cross_tenant.py asserts that one tenant's
+# rule against another's catalog is BLOCKED rather than answered.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1854"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
