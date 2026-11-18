@@ -63,7 +63,12 @@ ok("Start B is symbol 104", PATTERNS[START_B] == "211214")
 
 # ── B. round trip ────────────────────────────────────────────────────────────────────────────────
 print("B. encode → widths → decode round trip")
-REAL_RMAS = ["DTHdkRH1RRMA", "DxJKPcHgRRMA", "D7jPDVHpRRMA", "Dv9SPqHmRRMA"]
+# Four from RED labels and three from GREEN ones — decoded from the photographs themselves. The
+# sort colour turns out to be irrelevant to the barcode: it tells the staff which bag a package goes
+# in, and both colours carry the same 12-character reference in the same symbology. That is a
+# MEASURED finding, which is why both colours are fixtures here.
+REAL_RMAS = ["DTHdkRH1RRMA", "DxJKPcHgRRMA", "D7jPDVHpRRMA", "Dv9SPqHmRRMA",
+             "DTdqPTHXRRMA", "D7Lm7CH2RRMA", "D55PMRHpRRMA"]
 for s in REAL_RMAS:
     ok(f"real RMA {s}", decode_widths(encode_widths(s)) == s)
 every_char = "".join(chr(c) for c in range(32, 127))

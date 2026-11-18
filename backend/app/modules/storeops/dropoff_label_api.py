@@ -247,7 +247,7 @@ def make_barcode(body: dict = Body(...), authorization: str = Header(default="")
         raise HTTPException(400, str(e))
 
     reading = body.get("reading") if isinstance(body.get("reading"), dict) else {}
-    recorded, record_error = None, None
+    recorded, note = None, None
     if body.get("record", True):
         row = _label.scan_row(
             org_id=org_id, store_code=body.get("store_code"), reading=reading,
@@ -257,9 +257,10 @@ def make_barcode(body: dict = Body(...), authorization: str = Header(default="")
             saved = sb().table("dropoff_label_scan").insert(row).execute().data or []
             recorded = (saved[0].get("id") if saved else None)
         except Exception as e:
-            record_error = f"not recorded — migration {MIGRATION} may not be applied ({str(e)[:140]})"
-    return {"reference": reference, "svg": svg, "recorded_id": recorded,
-            "record_error": record_error,
+            # Under the message key `note`, so the §19.36 boundary neutralises the migration name
+            # and the database's own words for a tenant, and keeps them whole for a platform admin.
+            note = f"not recorded — migration {MIGRATION} may not be applied ({str(e)[:140]})"
+    return {"reference": reference, "svg": svg, "recorded_id": recorded, "note": note,
             "corrected": bool(reading.get("reference") and reading.get("reference") != reference)}
 
 
