@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/client'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 
 // DROP-OFF BARCODE RESCUE (index §STOREOPS-12, mig 1127).
@@ -50,6 +51,26 @@ interface Row {
 }
 
 const BASE = '/api/v1/storeops/dropoff-label'
+
+// ONE DEFINITION OF EACH CELL, read three ways. `SCAN_COLS` is what the table renders, what the
+// Excel/PDF/Print/Send bar exports (RULE FOUR: exactly what you see) and what the sort compares —
+// so a column cannot say one thing on screen, another in the file and sort by a third. At module
+// scope because it depends on no state, which is also what `useTableSort` wants: a fresh closure
+// per render would re-run its memo every time.
+const sourceLabel = (x: Scan) =>
+  x.read_source === 'barcode' ? 'barcode' : x.read_source === 'text' ? 'printed text' : 'typed in'
+const SCAN_COLS: ExportColumn[] = [
+  { header: 'When', field: 'created_at', type: 'date', get: x => (x.created_at || '').replace('T', ' ').slice(0, 16) },
+  { header: 'Store', field: 'store_code', role: 'store', get: x => x.store_code || '' },
+  { header: 'Reference printed', field: 'confirmed_reference', get: x => x.confirmed_reference },
+  { header: 'Read from', field: 'read_source', get: x => sourceLabel(x) },
+  { header: 'What the platform read', field: 'read_reference', get: x => x.read_reference || '' },
+  { header: 'Corrected by hand', field: 'corrected', get: x => (x.corrected ? 'yes' : '') },
+  { header: 'Label type', field: 'label_name', get: x => x.label_name || '' },
+  { header: 'By', field: 'read_by', get: x => x.read_by || '' },
+]
+/** The sort reads the SAME column definition the table and the export read. */
+const scanCell = (r: Scan, f: string) => SCAN_COLS.find(c => c.field === f)?.get(r) ?? ''
 
 // The shapes the four endpoints answer with. Written out rather than left as `any` so that a field
 // renamed on the backend fails the type check here instead of rendering as `undefined` at a counter.
@@ -209,18 +230,9 @@ export default function DropoffBarcodePage() {
   const shown = useMemo(() => filterRows(scans, filt, {
     store: x => x.store_code || '', date: x => (x.created_at || '').slice(0, 10),
   }), [scans, filt])
-  const sourceLabel = (x: Scan) =>
-    x.read_source === 'barcode' ? 'barcode' : x.read_source === 'text' ? 'printed text' : 'typed in'
-  const cols: ExportColumn[] = [
-    { header: 'When', field: 'created_at', type: 'date', get: x => (x.created_at || '').replace('T', ' ').slice(0, 16) },
-    { header: 'Store', field: 'store_code', role: 'store', get: x => x.store_code || '' },
-    { header: 'Reference printed', field: 'confirmed_reference', get: x => x.confirmed_reference },
-    { header: 'Read from', field: 'read_source', get: x => sourceLabel(x) },
-    { header: 'What the platform read', field: 'read_reference', get: x => x.read_reference || '' },
-    { header: 'Corrected by hand', field: 'corrected', get: x => (x.corrected ? 'yes' : '') },
-    { header: 'Label type', field: 'label_name', get: x => x.label_name || '' },
-    { header: 'By', field: 'read_by', get: x => x.read_by || '' },
-  ]
+  // Click-a-header sorting through the shared hook (owner directive 2026-08-10, §CORE-26) rather
+  // than a sort of this page's own. It sorts what the filters LEFT, so the two compose.
+  const scanSort = useTableSort(shown, scanCell)
 
   return (
     <div style={{ padding: 24, maxWidth: 1100 }}>
@@ -343,16 +355,18 @@ export default function DropoffBarcodePage() {
       <section style={card}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <h2 style={{ ...h2, marginBottom: 0 }}>Packages rescued</h2>
-          <ReportExportBar title="Drop-off barcode rescues" columns={cols} rows={shown} />
+          <ReportExportBar title="Drop-off barcode rescues" columns={SCAN_COLS} rows={shown} />
         </div>
         <StandardFilterBar value={filt} onChange={setFilt} show={{ period: false, markets: false, reps: false }}
                            storeOptions={filtOpts.stores} />
         {!shown.length && <p style={{ color: 'var(--c-fg-6b7280)' }}>Nothing rescued yet.</p>}
         {!!shown.length && (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
-            <thead><tr>{cols.map(c => <th key={c.field} style={th}>{c.header}</th>)}</tr></thead>
+            <thead><tr>{SCAN_COLS.map(c => (
+              <SortableTh key={c.field} field={c.field!} sort={scanSort.sort} onSort={scanSort.toggle} style={th}>{c.header}</SortableTh>
+            ))}</tr></thead>
             <tbody>
-              {shown.map(s => (
+              {scanSort.sorted.map(s => (
                 <tr key={s.id}>
                   <td style={td}>{(s.created_at || '').replace('T', ' ').slice(0, 16)}</td>
                   <td style={td}>{s.store_code || '—'}</td>
