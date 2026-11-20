@@ -238,7 +238,14 @@ def from_upload(client, org_id, records, filename=None, store_code=None):
 def per_store_day(client, org_id, date_from, date_to, store_codes=None):
     """{(store_code, 'YYYY-MM-DD'): {'payment', 'fee', 'lines'}} over the ingested rows for the range —
     the portal side of the payment + fee recon. Rows with no resolved store are excluded (surfaced
-    separately via unmapped_terminals)."""
+    separately via unmapped_terminals).
+
+    **None means the read FAILED, and is deliberately not `{}`** (§COMMCALC-78). The two send a
+    caller to do opposite things: an empty map says "the feed holds nothing for these days", so a fee
+    recon flags every store-day against zero and a coverage grid tells a person to go and fetch 29
+    files that already landed. "I could not look" must be sayable. Every caller handles None: the fee
+    recon reports itself NOT MEASURED, and `feed_day_coverage` renders UNKNOWN rather than missing.
+    """
     try:
         q = (client.schema("commcalc").table("raw_epay_daily_tx")
              .select("store_code,settlement_date,retail,is_fee")
@@ -247,7 +254,7 @@ def per_store_day(client, org_id, date_from, date_to, store_codes=None):
             q = q.in_("store_code", list(store_codes))
         rows = q.limit(200000).execute().data or []
     except Exception:
-        return {}
+        return None                      # could not look — see the docstring; never {}
     return aggregate_store_day(rows)
 
 

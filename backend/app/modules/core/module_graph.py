@@ -539,6 +539,10 @@ FACTS: dict[str, dict] = {
             'app/modules/supply/api_credential.py': ('_psec',),
             # seals what was already stored, iterating the registry so it owns no table list
             'app/core/encryption_backfill.py': ('portal_secret',),
+            # SHOWING one to a person (§CORE-46, 2026-11-20): the audited reveal asks the registry
+            # WHICH columns are credentials — `is_secret_column` — so the one route that hands a
+            # stored credential back to a browser cannot carry a list of its own.
+            'app/modules/core/credential_reveal.py': ('_psec',),
         },
     },
     # ── §CORE-04 (measured 2026-10-12) — and the rows ALREADY stored ─────────────────────────────

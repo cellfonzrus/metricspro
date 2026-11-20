@@ -193,6 +193,25 @@ jobs:
         working-directory: backend
         run: python harness_portal_backfill.py
 
+  feed-day-coverage-lock:
+    # The design-fix lock for "which store-days do we have, and which are still to fetch"
+    # (index §COMMCALC-82, §CORE-45): three states not two, one home for the grid, one arrival door
+    # for a file a person fetched by hand, and no stored credential shown without a record of who
+    # saw it. Wired on the day the harness was written — a harness no workflow runs is a file, not
+    # a gate.
+    name: An unreadable feed is not an empty one (lock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: backend/requirements-dev.txt }
+      - name: install
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+      - name: harness_feed_day_coverage
+        working-directory: backend
+        run: python harness_feed_day_coverage.py
+
   test-discipline:
     # The lock: the framework above cannot quietly come undone. It RUNS conftest's network guard
     # against a production hostname rather than reading the source for it.

@@ -216,3 +216,26 @@ def test_two_tenants_each_get_their_own_declaration_and_never_each_others(monkey
     pbs.ingest_report(client, ORG_B, b, pbs.CONNECTOR, spec, TX_CSV, "tx.csv")
     rows = client.written["raw_epay_daily_tx"]
     assert {r["org_id"] for r in rows} == {ORG_B} and {r["store_code"] for r in rows} == {"L-200"}
+
+
+def test_a_hand_fetched_report_arrives_under_the_feeds_own_upload_type():
+    """§COMMCALC-82. The appliance refuses automated clients, so a person fetches the file — and it
+    must land where the pulled file lands, which means the SAME upload door."""
+    from app.modules.commcalc import epay_ingest as feed
+    from app.modules.commcalc import processor_backoffice_sweep as pbs
+    assert pbs.arrival_type("processor_daily_tx") == feed.UPLOAD_TYPE
+
+
+def test_a_target_with_no_arrival_door_answers_empty_rather_than_guessing_one():
+    """A screen must be able to say "this report cannot be uploaded yet" instead of offering a route
+    that silently drops the file."""
+    from app.modules.commcalc import processor_backoffice_sweep as pbs
+    assert pbs.arrival_type("some_target_this_version_does_not_know") == ""
+    assert pbs.arrival_type("") == "" and pbs.arrival_type(None) == ""
+
+
+def test_every_declared_landing_target_has_an_arrival_door():
+    """The lock: a new target that lands rows from a pull but has no hand-fetch door would make the
+    manual route silently narrower than the automated one."""
+    from app.modules.commcalc import processor_backoffice_sweep as pbs
+    assert set(pbs.TARGETS) == set(pbs._ARRIVAL_TYPES)

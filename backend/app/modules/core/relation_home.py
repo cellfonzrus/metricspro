@@ -300,6 +300,7 @@ SCHEMA_OF = {
     "auth_event": "core",
     "auth_otp": "core",
     "billing_statement": "core",
+    "credential_reveal_audit": "core",
     "crm_activity": "core",
     "crm_agency": "core",
     "crm_agency_contact": "core",

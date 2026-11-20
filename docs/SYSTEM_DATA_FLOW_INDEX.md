@@ -221,6 +221,7 @@ Primary code homes:
 | COMMCALC-76 | **A weekly review pack is one fold, read from the reports that own its figures** | The owner asked for the LuxeLink performance deck as an in-app report on the Management tile, admins only, one report per market plus a consolidated one, with inventory aging per carrier among its items, generated at the end of each week for the Monday review with the DMs — and on demand. It derives nothing: profit, commission, the accessory gap, growth, the reps behind, aging and payroll are each QUOTED from the surface that already owns them, and the fold is pure, so a second derivation cannot grow beside the report it quotes. An item nobody measured carries no figure and says why in words; a store no market claims gets its own named scope rather than vanishing between the market packs and the company one; and the market vocabulary is a required argument, so nothing declared means nothing identified. The gate is the server's on every door — a company-wide reporting scope is not an administrator. |
 | COMMCALC-80 | **Money we could not classify is still the day's revenue** | A day's revenue was the sum of the categories we could place — but whether WE can classify a line says nothing about whether the store sold it. $22,653.31 of one tenant's October sat on lines no declared category claimed, in a label-keyed bag with no date on it, so a revenue gate failed on days the store had in fact cleared. Does unclassified money count, and may it ever pay a category? |
 | COMMCALC-81 | **A missed gate is not a zero** | A day that missed its qualifying threshold rendered as $0.00 with no reason, so a day two sales short of a five-sale gate looked identical to a day that sold nothing. And a gate withholds the pay not on the units you were short of but on every unit you already sold. How far short was this day, what did the gate cost, and is that a coaching moment or an admin's unfinished rule? |
+| COMMCALC-82 | **"I could not look" is not "there is nothing there"** | The processor's back office refuses automated clients from every address tried, and offers no delivery of its own, so each store's file arrives because a PERSON fetched it — 29 logins, every day. That is only survivable if a screen says what is still outstanding, and the question nothing answered was the NEGATIVE one: the feed knew what had landed and nobody could ask what had not. Writing it exposed the worse half: both legs of the fee reconciliation answered `{}` when their read FAILED, which is the same answer they give for a genuinely empty table — so an unreadable feed flagged a variance on every store-day against zero, and a coverage grid would have sent a person to download 29 files a day that were already landed. Three states, not two: have, missing, unknown. |
 | COMMCALC-76 | **A weekly review pack is one fold, read from the reports that own its figures** | The owner asked for the LuxeLink performance deck as an in-app report on the Management tile, admins only, one report per market plus a consolidated one, with inventory aging per carrier among its items, generated at the end of each week for the Monday review with the DMs — and on demand. It derives nothing: profit, commission, the accessory gap, growth, the reps behind, aging and payroll are each QUOTED from the surface that already owns them, and the fold is pure, so a second derivation cannot grow beside the report it quotes. An item nobody measured carries no figure and says why in words; a store no market claims gets its own named scope rather than vanishing between the market packs and the company one; and the market vocabulary is a required argument, so nothing declared means nothing identified. The gate is the server's on every door — a company-wide reporting scope is not an administrator. **Corrected 2026-11-17 (§COMMCALC-76.8):** profit now quotes the P&L's own `profit_by_store`, not the GP report (the two differed by $366k on one org in one month); aging quotes the whole shelf per carrier, not the owed>0 subset in which everything is already overdue; and a row the scope cannot match is kept on the consolidated pack and counted, never dropped — which is what had made October's commission read as nothing. Every item now carries the sentences that explain it, and the pack downloads as a deck (§COMMCALC-76.9) whose DESIGN has one home in `notify/render.build_pptx` — tone, stat cards, charts and banded tables, so every caller of the house file writer gets the same face (§COMMCALC-76.10). |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
@@ -245,6 +246,7 @@ Primary code homes:
 | CORE-40 | **A money column that says a word is not saying zero** | Reported on the Cash Calendar: the day grid read "in: not measured" while the table directly beneath it read Expected in \$0.00, Net \$0.00 and TOTAL \$0.00. The report exists to never print a figure for money nobody measured, and its own table printed four. Nothing was wrong with the report: "how is a money value rendered" had SIX implementations, every one of them `Number(v) || 0`. How many states does a money cell have, and which of them is a claim about measurement rather than about money? |
 | CORE-41 | **Inheritance is not a decision — what each tenant is OFFERED** | "why is vidapay connector showing in boost ? we need to get these things under control before we roll out for outside customers — have an agent asses and create a dashboard for the super admin whereby these things can be gated out for the respective tenants right from the get go". Three mechanisms answered "is this on for this tenant" and all three answered by INHERITING a house row — on an org id that IS a real tenant, so that tenant could not be gated at all, and a new tenant arrived holding everything. Where does a human's decision about one tenant live, which mechanisms read it, and what stops one of them answering differently? |
 | CORE-44 | **The prefix is the address, and a missing route is not an answer** | "the targets are also not updating in target settings and daily targets, seem to be the same error" — and it was. `apiUrl()` prefixes nothing: in the browser the site proxies the path as given, so `/api/v1` IS the address. Two frontend calls omitted it, reached the Next app, got its 404, and had their `catch` answer for them. One of the two was the TARGET AXIS — "what does this tenant sell, so what can have a target" — which fell back to the four built-in categories. Every category a tenant had declared was therefore invisible on every target screen, no target for one could be typed, and `commcalc.target_line` held zero rows in the entire database: 13 categories for LuxeLink, 4 for the house, none of them ever targetable. The class is not the typo but that a MISSING ROUTE and a REAL ANSWER were indistinguishable to the caller, and that a lock on "only one copy of this fact exists" said nothing about "the one copy never arrives". |
+| CORE-46 | **A stored credential shown to a person is an audited event** | The owner asked that the per-store download screen SHOW each store's back-office password, because the portal refuses automated clients and a person has to type it. Legitimate — and the first route in the platform that hands a stored credential back to a browser, where every other read strips it. Granting it inside the screen's own endpoint would have made the decision a property of one screen, and the next screen would decide again. So the decision has one home, for every credential this platform stores: only a column the credential registry calls a credential, only a row of the asking organisation, and only after the row saying WHO looked is written — a reveal that cannot be recorded is refused rather than served unrecorded. |
 | CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
 | CORE-27 | **A report arrives with the standard filters and the send bar, or it does not arrive** | "Zero Sales does not have send notification bar, please note this also in teh indsex all reports must have the satandard filters and the send bar by default" — the sender and the filter bar each already had one home; what was missing was the content to send and anything that made either a default. What is a figure nobody can mail worth, and what fails the build when the 129th report ships without a toolbar? |
@@ -7707,6 +7709,8 @@ every store's record is a report (§STOREOPS-12, §CORE-33.1).
 | `POST /remediation/propose` (the auto-remediation console: describe an issue → AI triage picks a WHITELISTED playbook → human approval). Its AI diagnosis is GUARDED (purpose `remediation_diagnose`, mig `982`): authorized by the helpdesk module + market/company scope — **not** super-admin — then bounded input, rate limit, daily budget, and every attempt audited. A refusal ESCALATES to a human, never a 500 | `remediation/router.py` (`propose` / `_ai_diagnose`); shared guard `core/control_box.ai_guard_decision` via `core/ai_gate.py` | §20 AI guard (migs `972`/`982`) |
 | `POST /storeops/document-extract` (read an uploaded lease / policy / COI with AI into a REVIEWABLE draft). Gated `can_see_lease` (fail-closed 403), then GUARDED (purpose `lease_extraction`, mig `983`): same predicate, plus bounded subject (this org's own document id), rate limit, daily call + token budget and a full audit. No key / AI off ⇒ clean empty `not_extracted` draft; every other refusal ⇒ 403. `run_in_threadpool` (SEV-1 2026-07-30) | `storeops/router.py` (`post_document_extract` / `_extract_and_store` / `_persist_extraction`); `storeops/doc_intel_ai.extract_document` | §14 doc intel (mig `965`) + §20 AI guard (migs `972`/`983`) |
 | `POST /commcalc/data-sources/{sid}/live-login/submit-totp` | `router.py:live_login_submit_totp` | §12a authenticator-app code into the live session (never SMS/email OTP) |
+| `GET /commcalc/per-store-downloads` (`?connector=&date_from=&date_to=`) | `commcalc/router.per_store_downloads` → `_strip_source_pw` (the logins) + `commcalc/feed_day_coverage.coverage` (what landed) | §COMMCALC-82 — the per-store download console's ONE round trip: the logins this tenant declared a STORE on, each with its portal address and the upload door a hand-fetched report arrives through (`processor_backoffice_sweep.arrival_type`, dereferenced from the feed's `UPLOAD_TYPE` — never a sibling route), plus the store-by-day grid. Reads what landed through the feed's OWN `epay_ingest.per_store_day`, so this screen cannot disagree with the fee reconciliation about what arrived. A read that FAILED answers `measured: false` — never "no store declared", which would send an operator to re-enter 29 logins. No credential in the payload. Proof `harness_feed_day_coverage.py` + `tests/integration/test_per_store_download_console.py` |
+| `POST /commcalc/data-sources/{sid}/reveal-password` | `commcalc/router.reveal_source_password` → `core/credential_reveal.reveal` | §CORE-46 — SHOW one login's stored password and RECORD that it was shown. Gated on `_require_import_admin` (core's registered `import_health` settings area, FAIL-CLOSED), org-scoped on the ROW that came back, POST so no credential rides in a URL a proxy or access log would keep. The audit row (`core.credential_reveal_audit`, migration 1128) is written BEFORE the value is returned and carries no part of it; an un-run migration means the reveal is REFUSED with the migration named. Proof `tests/unit/test_credential_reveal.py` + §F of `harness_feed_day_coverage.py` |
 | `POST /calculate/{period}` | `router.py:8968` | §6 rep commission |
 | `GET /commissions/{period}` | `10222` | §6 — the Rep Incentive Report read; market stamped per row via §13a (2026-09-03 fix) |
 | `GET /commcalc/accessory-target-plan/{period}` (`?mode=&value=&basis=&stores=&markets=`) · `POST .../assign` | `commcalc/router.get_accessory_target_plan` → pure `commcalc/accessory_target_plan.plan` | §61 Accessory Target Allocation — one company goal split over the stores on each store's own accessories-per-box. READ-ONLY; the `/assign` sibling writes `accessories_monthly` through `_require_target_edit`.  Serves `drilldown` (§CORE-17.3o): four grains on one store row — the month's accessory sales, the target somebody typed, the share derived on this load and stored NOWHERE, and the extension that names both. The two goal-dependent panels are not served until a goal is entered (§CORE-17.3m). **Reported defect:** `current_target` coerces a NULL `accessories_monthly` on an EXISTING target row to $0.00, and `extension` then asks that store for the whole suggestion |
@@ -26515,6 +26519,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-79 | commcalc |
 | COMMCALC-80 | commcalc |
 | COMMCALC-81 | commcalc |
+| COMMCALC-82 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -26562,6 +26567,7 @@ status word rather than a blank that reads as nil.
 | CORE-43 | core |
 | CORE-44 | core |
 | CORE-45 | core, storeops, hr, commcalc |
+| CORE-46 | core, commcalc |
 | STOREOPS-08 | storeops |
 | STOREOPS-09 | storeops, account |
 | STOREOPS-10 | storeops, account |
@@ -45515,6 +45521,69 @@ dereferenced) · §COMMCALC-49.10 (a tenant's vocabulary is never a default — 
 is different) · §13e (two spellings of one store, which is why the option fold is filtered twice).
 
 
+## §CORE-46. A STORED CREDENTIAL SHOWN TO A PERSON IS AN AUDITED EVENT (owner decision 2026-11-20)
+
+Asked how the per-store download screen (§COMMCALC-82) should hand over each store's back-office
+password — a clipboard copy, or visible on screen — the owner chose **"Show it on screen"**. The ask is
+legitimate: the portal refuses automated clients, so a person logs in and types the password.
+
+It is also the first route in this platform that hands a stored credential back to a browser. Every
+other read strips it (`router._strip_source_pw`, `core/portal_secret`). Granting it inside the
+screen's own endpoint would have made the decision a property of ONE screen, and the next screen that
+needed it would decide again — the per-screen patchwork the house rules forbid.
+
+### CORE-46.1 THE DECISION HAS ONE HOME, FOR EVERY CREDENTIAL THIS PLATFORM STORES
+
+`backend/app/modules/core/credential_reveal.py`, with three rules that do not bend per screen:
+
+1. **A reveal that cannot be RECORDED does not happen.** The audit row is written BEFORE the secret is
+   returned, and a failed write refuses the reveal, naming the migration to apply. "Best effort" is the
+   wrong posture here: it would silently become the normal path the first time the migration lagged
+   the code, which is precisely what an audit trail exists to prevent.
+2. **Only a column the credential registry calls a credential** can be revealed, named explicitly by
+   the caller — `core/portal_secret.is_secret_column`, dereferenced, never a second list.
+3. **The row must belong to the asking organisation**, checked on the row that came BACK, not on a
+   filter the caller promises it applied.
+
+The module reads no table, so it cannot widen anybody's query: the caller passes the already-fetched,
+already-decrypted row. Each refusal carries the one sentence a screen can show.
+
+### CORE-46.2 WHAT THE TRAIL HOLDS, AND WHAT IT DELIBERATELY DOES NOT
+
+`core.credential_reveal_audit` (migration **1128**) records the relation, the column, the row id, who
+asked, which surface asked and when. It holds no part of the credential — not the value, not a hash,
+not a prefix. A table that stored the secret to prove it was shown would be a second copy of every
+password in the platform. The audit row is built by a pure function whose arguments do not include
+the value, so this is true by construction rather than by care.
+
+### CORE-46.3 THE ROUTE
+
+`POST /commcalc/data-sources/{sid}/reveal-password` — POST, not GET, so no credential rides in a URL
+that a proxy, a history list or an access log would keep. Gated on `_require_import_admin` (core's
+registered `import_health` settings area, FAIL-CLOSED: no token ⇒ 401, no membership ⇒ 403, membership
+store errored ⇒ 503), which is the same gate that gates CHANGING the login: anyone who may change it
+may see it, and nobody else. A refusal is 409 with the reason, never 403 — nothing is forbidden; the
+platform declines to answer in a way it will not stand behind. The console payload itself never
+carries a credential, under any key.
+
+The screen shows the password for one store, clears it when the store changes, and hides it again
+after a minute: a credential on screen is a credential someone can walk past.
+
+### CORE-46.4 WHERE IT LIVES
+
+| what | where |
+| --- | --- |
+| the decision + the recording | `backend/app/modules/core/credential_reveal.py` |
+| which columns are credentials | `backend/app/modules/core/portal_secret.py` (§CORE-03) — dereferenced |
+| the trail | `core.credential_reveal_audit`, `database/migrations/1128_credential_reveal_audit.sql` |
+| the route | `POST /commcalc/data-sources/{sid}/reveal-password` |
+| the lock | §F of `backend/harness_feed_day_coverage.py` |
+| tests | `tests/unit/test_credential_reveal.py`, `tests/integration/test_per_store_download_console.py` |
+
+Related: §CORE-03 (the credential registry) · §COMMCALC-82 (the screen that asked for this) ·
+§12a (the portal logins themselves).
+
+
 ## §COMMCALC-55. A SUCCESSFUL LOGIN IS RECOGNISED BY EVIDENCE, NEVER BY A GUESSED VOCABULARY (owner report 2026-11-05)
 
 The owner signed in to the carrier owners portal by hand, from his phone, and sent the screenshot.
@@ -50958,6 +51027,96 @@ Files: `backend/app/modules/commcalc/incentive_shortfall.py` (**new**),
 `.github/workflows/carrier-vocab-guard.yml`, `docs/CI_GATES.md` (generated).
 
 ---
+
+## §COMMCALC-82. "I COULD NOT LOOK" IS NOT "THERE IS NOTHING THERE" (owner directive 2026-11-20)
+
+Owner, verbatim: *"Build these into the system as a browser in browser to download manually so we pick
+each store from the drop down menu and then the browser opens up and we down load the file"*.
+
+### COMMCALC-82.1 WHY A SCREEN, AND WHY THE AUTOMATED ROUTE IS NOT REMOVED
+
+The processor's back office issues one login per store and is fronted by a security appliance that
+refuses automated clients from every address tried (§COMMCALC-74/75: this container by curl and by
+headless Chromium, a store computer by curl, and production at both an inside page and the front
+door), and the owner confirmed it offers no scheduled delivery of its own. So until it delivers, the
+file arrives because a PERSON fetched it — 29 logins, every day.
+
+Nothing of the automated route is deleted. The same logins, the same `store_code` / `history_from`
+declarations, the same backlog (§COMMCALC-59) and the same landing are used, so the day the appliance
+opens or a delivery route is granted, the pull resumes with nothing to re-declare.
+
+The portal opens in a TAB, not in an iframe: a back office sends the headers that forbid framing, so
+an `<iframe>` would render an empty box and read as a broken screen. The screen keeps the two things
+a tab cannot — which store is being worked, and which store-days are still outstanding.
+
+### COMMCALC-82.2 THE CLASS: THREE STATES, NOT TWO
+
+The question nothing answered was the NEGATIVE one. The feed knew what had landed; nobody could ask
+what had not. Writing that answer exposed the worse half of the same class:
+
+| state | meaning | what an operator does |
+| --- | --- | --- |
+| `have` | rows landed for that store and day | nothing |
+| `missing` | the feed is READABLE and holds nothing for that store-day | fetch that file |
+| `unknown` | the feed could not be READ | fix the read; fetch nothing |
+
+Collapsing `unknown` into `missing` sends a person to download 29 files a day that are already
+landed. Collapsing it into `have`, or into a figure, is worse: `epay_ingest.per_store_day` and
+`epay_fee_recon.system_fee_per_store_day` both answered `{}` when their read FAILED — the same answer
+they give for a genuinely empty table — and `build_recon` turned that into a flagged variance for
+every store-day against zero. A false alarm over money, on a read that never happened. Both legs now
+answer `None` on failure, `fee_recon` reports `measured: false` NAMING the leg it could not read, and
+`GET /commcalc/epay/recon` says its figures are unmeasured rather than returning zeroes. Same class as
+§PAYABLES-02's `can_date` (a row count is not a measurement) and `portal_backfill._rows` (no memory ⇒
+no backfill).
+
+### COMMCALC-82.3 ONE HOME, AND WHAT IT IS NOT ALLOWED TO BE
+
+`backend/app/modules/commcalc/feed_day_coverage.py` is the ONLY module that decides whether a
+store-day is had, owed or unknown. It is PURE apart from one call: it reads what landed through the
+feed's own `epay_ingest.per_store_day`, and adds NO second query over the settlement table — so the
+grid cannot disagree with the reconciliation about what arrived. `MAX_DAYS` clamps the grid (a year of
+columns is not a grid), a `missing` cell deliberately carries NO figures (a printed `0.00` reads as a
+measured zero), and `undeclared_stores` names store codes the feed holds rows for that nobody
+declared, because a file uploaded under a mis-keyed store must be visible rather than dropped.
+
+Its function is `days_in_range`, not `days_between`: three older modules already answer "HOW MANY days
+between two dates" with an int, which is a different question, and two functions with one name is how
+a caller reaches for the wrong one.
+
+### COMMCALC-82.4 THE SAME REPORT, ARRIVING BY HAND
+
+"A feed lands the same however its file arrives" (§COMMCALC-75) is already the house rule, so a
+hand-fetched export must reach the SAME landing as a pulled one. `processor_backoffice_sweep.
+arrival_type(target)` maps a declared landing target to the upload `file_type` it arrives under,
+dereferenced from the feed's own `UPLOAD_TYPE` and keyed exactly like `TARGETS` — the lock requires the
+two key sets to be equal, so the manual route can never be narrower than the automated one. A target
+with no door answers `""` and the screen says the report cannot be uploaded yet, rather than offering
+a route that would silently drop the file.
+
+### COMMCALC-82.5 ALL TENANTS, AND RULE TWO
+
+A login appears in the picker because its operator declared a STORE on it — not because of its
+connector's name. The portal address is `data_source.portal_url`, the report names and landing targets
+are `data_source.portal_reports`, the store is `data_source.store_code`, and the grid is drawn from the
+stores the caller was GIVEN, so one tenant's landed days can never fill another's grid. No vendor,
+carrier or tenant name appears in the module, the endpoint or the screen.
+
+### COMMCALC-82.6 WHERE IT LIVES
+
+| what | where |
+| --- | --- |
+| the rules (pure) | `backend/app/modules/commcalc/feed_day_coverage.py` |
+| the one round trip | `GET /commcalc/per-store-downloads` (`commcalc/router.per_store_downloads`) |
+| the screen | `frontend/src/app/(platform)/commcalc/per-store-downloads/page.tsx` — Configurations → Data Imports & Connectors → 🏧 Per-Store Report Download |
+| the arrival door | `processor_backoffice_sweep.arrival_type` → `POST /commcalc/upload/{file_type}?store_code=` (§COMMCALC-75) |
+| the lock | `backend/harness_feed_day_coverage.py` (48 checks, CI job "An unreadable feed is not an empty one") |
+| tests | `tests/unit/test_feed_day_coverage.py`, `tests/unit/test_fee_recon_says_when_it_could_not_look.py`, `tests/integration/test_per_store_download_console.py` |
+
+Related: §COMMCALC-74/75 (the refusal and the transport door) · §COMMCALC-59 (the per-store pull and
+the span it owes) · §COMMCALC-07 (the one pull loop) · §PAYABLES-02 (a row count is not a
+measurement) · §CORE-46 (the password this screen shows, and the record of who saw it).
+
 
 ## §ACCOUNT-06. WHICH SOURCE IS A TENANT'S SALARY AUTHORITY (owner ruling 2026-11-16)
 

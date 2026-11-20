@@ -41967,6 +41967,183 @@ def list_data_sources(org_id: str = ORG_ID):
             "scrapers_wired": sorted(_SOURCE_SCRAPERS.keys())}
 
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# PER-STORE DOWNLOAD CONSOLE (index §COMMCALC-82, owner 2026-11-20: "build these into the system as a
+# browser in browser to download manually so we pick each store from the drop down menu and then the
+# browser opens up and we download the file").
+#
+# WHY A SCREEN AND NOT A PULL. The back office this serves is fronted by a security appliance that
+# refuses automated clients from every address tried (§COMMCALC-74/75), and the owner confirmed it
+# offers no delivery of its own — so until it does, the file arrives because a PERSON fetched it, one
+# login per store. The automated route is NOT removed: the same logins, the same declarations and the
+# same landing are used, and the day the appliance or a delivery route opens, the pull resumes with
+# nothing to re-declare.
+#
+# ONE ROUND TRIP, TWO QUESTIONS, NEITHER OF THEM NEW: which per-store logins has this tenant declared
+# (the data_source read every connector surface already uses, through `_strip_source_pw`), and which
+# store-days have landed (`feed_day_coverage`, which reads the feed's OWN per-store-day home so this
+# screen cannot disagree with the fee reconciliation about what arrived).
+#
+# NO TENANT, CARRIER OR VENDOR NAME IS SPELLED HERE (RULE TWO). A login appears because the operator
+# declared a STORE on it; the portal's address is its own `portal_url`; the upload door a hand-fetched
+# report arrives through is the adapter's `arrival_type`, dereferenced from the feed's UPLOAD_TYPE.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_DOWNLOAD_LOGIN_FIELDS = ("id", "processor", "label", "store_code", "username", "portal_url",
+                          "enabled", "has_password", "has_session", "session_health",
+                          "route_policy", "connector_scope", "blocked", "block_headline",
+                          "last_run_at", "last_attempt_at")
+
+_NO_LOGIN_NOTE = ("No login declares a store yet, so there is nothing to pick. Add one login per "
+                  "store on the portal-logins screen and set its store code; this screen fills from "
+                  "those declarations.")
+_UNREADABLE_LOGINS_NOTE = ("The saved logins could not be read, so this screen cannot say which "
+                           "stores it can open. Nothing is reported as missing on a read that did "
+                           "not happen.")
+
+
+def _fdc():
+    from app.modules.commcalc import feed_day_coverage as _m
+    return _m
+
+
+def _download_reports(src_row):
+    """One login's DECLARED reports, each with the upload door its file arrives through by hand.
+
+    The declaration is read through the adapter that owns it (`report_specs`), so a report this
+    screen offers is exactly a report the automated pull would fetch. A report whose landing target
+    has no arrival door answers `arrival_type: ""`, and the screen says it cannot be uploaded yet
+    rather than offering a route that would drop the file.
+    """
+    try:
+        from app.modules.commcalc import processor_backoffice_sweep as _pbs
+        specs = _pbs.report_specs(src_row=src_row)
+    except Exception:
+        return []
+    out = []
+    for spec in specs:
+        atype = ""
+        try:
+            from app.modules.commcalc import processor_backoffice_sweep as _pbs
+            atype = _pbs.arrival_type(spec.get("target"))
+        except Exception:
+            atype = ""
+        out.append({"key": spec.get("key"), "label": spec.get("label"),
+                    "target": spec.get("target") or "", "arrival_type": atype,
+                    "upload_path": ("/api/v1/commcalc/upload/%s" % atype) if atype else ""})
+    return out
+
+
+def _download_login(public_row, raw_row):
+    """The picker entry for ONE login. Built from the ALREADY-STRIPPED public row, so no credential
+    can reach a screen through this route; `raw_row` is read only for its declared report list."""
+    entry = {k: public_row.get(k) for k in _DOWNLOAD_LOGIN_FIELDS}
+    entry["store_code"] = str(public_row.get("store_code") or "").strip()
+    entry["reports"] = _download_reports(raw_row)
+    return entry
+
+
+def _caller_label(authorization):
+    """WHO is asking, for an audit row: their email where the token resolves to one, else their id.
+
+    Resolved through core's OWN token reader, so the audit trail names people the same way every
+    other surface does. Unresolvable ⇒ "unidentified caller" — never a guess, and never blank, since
+    a blank would read as "nobody asked".
+    """
+    try:
+        from app.modules.core.router import _uid_from_token
+        uid = _uid_from_token(authorization)
+    except Exception:
+        uid = None
+    if not uid:
+        return "unidentified caller"
+    try:
+        from app.core.tenant_middleware import caller_app_user
+        u = caller_app_user(uid, "email,full_name") or {}
+    except Exception:
+        u = {}
+    return str(u.get("email") or u.get("full_name") or uid)[:200]
+
+
+class RevealPasswordIn(LaxModel):
+    context: Any = None
+
+
+@router.post("/data-sources/{sid}/reveal-password")
+def reveal_source_password(sid: str, body: RevealPasswordIn = Body(default=None),
+                           authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """SHOW one login's stored password to the person asking, and RECORD that it was shown.
+
+    Owner, 2026-11-20, choosing between a clipboard copy and a visible password for the per-store
+    download screen: "Show it on screen". The portal this serves refuses automated clients
+    (§COMMCALC-74/75), so a person has to type the password — and this is the first route in the
+    platform that hands a stored credential back to a browser.
+
+    The decision is NOT made here: `core/credential_reveal` owns "a stored credential shown to a
+    person is an audited event" for every credential this platform holds, and it refuses a reveal it
+    cannot record. This endpoint only fetches the row (org-scoped, through the one data_source read,
+    which decrypts) and asks. POST, not GET, because a credential must not ride in a URL that a
+    proxy, a history list or an access log would keep.
+    """
+    require_org(org_id)
+    # Same gate the other credential-editing routes use (core's registered 'import_health' settings
+    # area, FAIL-CLOSED): anyone allowed to CHANGE this login may see its password, and nobody else.
+    _require_import_admin(authorization, org_id)
+    from app.modules.core import credential_reveal as _cr
+    try:
+        rows = _ds_rows(sb().schema("commcalc").table("data_source").select("*")
+                        .eq("org_id", org_id).eq("id", sid).limit(1))
+    except Exception:
+        raise HTTPException(503, _cr.NOT_FOUND)
+    row = (rows or [None])[0]
+    who = _caller_label(authorization)
+    out = _cr.reveal(sb(), org_id, relation="data_source", column="password", row=row,
+                     who=who,
+                     context=str((body.context if body else "") or "per-store download screen"))
+    if not out["ok"]:
+        # 409, not 403: nothing is forbidden here — the platform cannot satisfy the request in a way
+        # it is willing to stand behind, and the sentence says which of the reasons it was.
+        return JSONResponse(status_code=409, content={"ok": False, "note": out["note"]})
+    return {"ok": True, "password": out["value"], "audited": True,
+            "note": "This view was recorded: who asked, for which login, and when."}
+
+
+@router.get("/per-store-downloads")
+def per_store_downloads(connector: str = "", date_from: str = "", date_to: str = "",
+                        org_id: str = ORG_ID):
+    """The per-store download console: the logins this tenant declared, and what has landed.
+
+    `connector` narrows to one connector slug when a screen wants only one feed's logins; omitted,
+    every login that declares a store is offered, which is what makes this screen a tenant's own and
+    not one feed's. `date_from`/`date_to` default to `feed_day_coverage.default_range`.
+    """
+    require_org(org_id)
+    client = sb()
+    try:
+        q = (client.schema("commcalc").table("data_source").select("*")
+             .eq("org_id", org_id).order("created_at"))
+        if str(connector or "").strip():
+            q = q.eq("processor", str(connector).strip())
+        raw = _ds_rows(q)
+    except Exception:
+        # A read that FAILED is not a tenant with no logins (§COMMCALC-82, §PAYABLES-02): saying
+        # "no store declared" here would send an operator to re-enter 29 logins that already exist.
+        return {"measured": False, "logins": [], "note": _UNREADABLE_LOGINS_NOTE,
+                "coverage": _fdc().grid((), (), None),
+                "date_from": date_from or "", "date_to": date_to or ""}
+    prows = _crp().load_rows(client, org_id)     # one read for the whole list (mig 998)
+    sctx = _connector_scope_ctx(client, org_id)  # one read for the whole list (mig 1014)
+    logins = [_download_login(_strip_source_pw(r, prows, sctx), r) for r in raw
+              if str(r.get("store_code") or "").strip()]
+    d_from, d_to = (str(date_from or "").strip(), str(date_to or "").strip())
+    if not (d_from and d_to):
+        d_from, d_to = _fdc().default_range()
+    stores = sorted({l["store_code"] for l in logins})
+    cov = _fdc().coverage(client, org_id, stores, d_from, d_to)
+    return {"measured": True, "logins": logins, "coverage": cov,
+            "date_from": d_from, "date_to": d_to,
+            "note": "" if logins else _NO_LOGIN_NOTE}
+
+
 class SaveDataSourceIn(LaxModel):
     id: Any = None
     distributor_id: Any = None
@@ -49176,8 +49353,15 @@ def epay_recon(date_from: str = "", date_to: str = "", org_id: str = ORG_ID):
     if not date_from:
         raise HTTPException(400, "date_from (YYYY-MM-DD) is required")
     m = _epay.per_store_day(get_supabase(), org_id, date_from, date_to or date_from)
+    if m is None:
+        # A read that FAILED is not a range with no transactions (§COMMCALC-82). Zeroes here would read
+        # as a measured zero on a feed nobody managed to look at.
+        return {"rows": [], "measured": False,
+                "note": ("The processor feed could not be read, so nothing is reported for this "
+                         "range. These are not zeroes: they are unmeasured."),
+                "totals": {"payment": 0.0, "fee": 0.0, "store_days": 0}}
     rows = [{"store_code": sc, "close_date": d, **vals} for (sc, d), vals in sorted(m.items())]
-    return {"rows": rows,
+    return {"rows": rows, "measured": True, "note": "",
             "totals": {"payment": round(sum(r["payment"] for r in rows), 2),
                        "fee": round(sum(r["fee"] for r in rows), 2),
                        "store_days": len(rows)}}
