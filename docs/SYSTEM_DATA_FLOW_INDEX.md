@@ -31230,6 +31230,50 @@ status maps (`cancelled: '#fee2e2'`) whose role is decided where the map is cons
 self-consistent pairs (a pale fill with its own dark ink), so they read as a light patch on black
 rather than as invisible text. The pin may only shrink.
 
+### §CORE-15.4 A TOKEN THAT DOES NOT EXIST PAINTS NOTHING (2026-11-20)
+
+**The instance.** A sales rep opened the drop-off barcode screen on his phone and the buttons and
+input boxes were bare floating text — no borders, nothing to tap at. The page asked for
+`var(--c-border-e5e7eb)`, which **nothing in this repository defines**: one file used it, no
+stylesheet declared it, so `border: 1px solid var(--c-border-e5e7eb)` was invalid at computed-value
+time and the browser dropped the border entirely. Fixed to the house token `--border`, which is
+defined for both themes.
+
+**Why every existing check missed it, which is the part worth keeping.** This lock hunts colour
+LITERALS, and an undefined token is invisible to it *precisely because it is not a literal*. §B2
+did claim "every token a page reads is defined" — but it reads through `P.TOKEN_REF`,
+`/--c-((?:bg|fg)-[0-9a-f]{6})\b/`, so it only ever saw the GENERATED family. **The claim was wider
+than the check**, and a token one letter outside that shape shipped unnoticed. B2 is now named for
+what it actually checks.
+
+**The class, not the instance.** Derived, not guessed: **9 tokens read 159 times** across the app
+resolve to nothing — `--text1` 59 times (the palette's token is `--text`), `--bg2` 30, `--muted` 20,
+`--warn` 13, `--danger` 10. Every one is a colour that silently does not apply.
+
+**The fix, in the existing lock rather than beside it** (the duplicate check: this question already
+had a home). New **§I** derives every `var(--x)` read with **no fallback** — a read with a fallback
+cannot go blank — against every `--x:` declaration AND every token published at RUNTIME through a
+quoted key, which is how `--tone` (`style={{ ['--tone']: … }}`) and next/font's `--font-inter`
+(`Inter({ variable: '--font-inter' })`) arrive. Both are real definitions, so neither needs a
+hand-written excuse that would go stale. CSS comments are stripped, so a token *named* in prose is
+not a definition.
+
+The 159 existing reads are REGISTERED in `frontend/theme_undefined_token_pending.txt` and **the
+register may only shrink**: a new undefined token fails the build today (proved red, then green),
+a registered one spreading to more call sites fails, and fixing some requires re-pinning with
+`node prove_theme_tokens.mjs --bless` so the number stays true. The backlog is paid down
+deliberately rather than in one 80-file sweep nobody can review.
+
+Six negative controls, including that a token named only inside a CSS comment is not a definition,
+that a `var(--x, fallback)` read is not counted, and that the control regex is built fresh rather
+than reusing the `/g` one the scan just ran (a `/g` regex carries `lastIndex` across `.test()`, so
+a control that reused it would pass or fail on where the scan happened to stop — a control that
+depends on state is not a control).
+
+Files: `frontend/prove_theme_tokens.mjs`, `frontend/theme_undefined_token_pending.txt` (**new**),
+`frontend/src/app/(platform)/storeops/dropoff-barcode/page.tsx`. No new CI job — §I rides the
+existing **Dark theme lock**.
+
 Files: `frontend/theme_palette.mjs`, `frontend/prove_theme_tokens.mjs`,
 `frontend/theme_ambiguous_pin.txt`, `frontend/src/lib/surface.ts` (**new**),
 `frontend/src/lib/__tests__/surface.test.ts` (**new**), `frontend/src/app/globals.css`,

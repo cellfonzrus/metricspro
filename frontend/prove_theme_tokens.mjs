@@ -5,11 +5,19 @@
 // So this fails the build when the one home stops being the one home — when globals.css drifts from
 // the generator, when a page spells a colour of its own, when a token is defined for one theme only,
 // or when a colour arrives on the dark theme that nobody could read.
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import * as P from './theme_palette.mjs'
 
 let pass = 0
+const PENDING_HEADER = `# TOKENS A PAGE READS THAT NOTHING DEFINES — the register §I holds to.
+# Each line is a token and how many times it is read with NO fallback, so the read paints nothing.
+# THE LIST MAY ONLY SHRINK. A new token fails the build; fix the reads, then re-pin with
+#   cd frontend && node prove_theme_tokens.mjs --bless
+# The house palette is in src/app/globals.css: --bg --surface --surface2 --border --border2
+# --accent --accent2 --green --amber --red --text --text2 --text3. Most of these are near-misses
+# of one of those (--text1 is --text, --bg2 is --surface2, --danger is --red).
+`
 const fails = []
 const check = (name, ok, detail) => {
   if (ok) { pass++; console.log('  ok  ' + name) }
@@ -39,7 +47,12 @@ const converted = allSites.filter(s => s.role)
 check('B1 no colour literal remains on a property whose role is declared', converted.length === 0, converted.length)
 const refs = new Set()
 for (const f of files) for (const m of readFileSync(f, 'utf8').matchAll(P.TOKEN_REF)) refs.add(m[1])
-check('B2 every token a page reads is defined', [...refs].every(r => lits.includes(r)),
+// NAMED FOR WHAT IT CHECKS (2026-11-20). This read "every token a page reads is defined", which was
+// wider than the check: `P.TOKEN_REF` only matches the GENERATED `--c-(bg|fg)-xxxxxx` family, so a
+// token one letter outside that shape was never looked at — and one shipped, invisible, for two
+// days. §I below now carries the general claim, over EVERY token and every source file.
+check('B2 every GENERATED token a page reads is defined (the general claim is §I)',
+  [...refs].every(r => lits.includes(r)),
   [...refs].filter(r => !lits.includes(r)).slice(0, 5))
 check('B3 no token is defined that nothing reads (a dead colour is a colour that will drift)',
   lits.every(k => refs.has(k)), lits.filter(k => !refs.has(k)).slice(0, 5))
@@ -141,6 +154,93 @@ check('F1 the dark theme names no token the light theme does not declare',
 check('F2 the page, the card and the lettering are all restated', ['bg', 'surface', 'text'].every(t => coreDark.includes(t)))
 check('F3 the rail is NOT restated — its accent contrast was measured against the navy (§CORE-14)',
   !css.includes(':root[data-theme="dark"] .mp-sidebar {'))
+
+// ——— §I EVERY TOKEN A PAGE READS RESOLVES — not only the generated ones ————————————————————————
+// THE HOLE §B2 LEFT, found 2026-11-20 on a sales rep's phone. The screen showed the buttons and the
+// input boxes as bare floating text: no borders, nothing to tap at. The page asked for
+// `var(--c-border-e5e7eb)`, which NOTHING in this repository defines — one file used it and no
+// stylesheet declared it — so `border: 1px solid var(--c-border-e5e7eb)` was invalid at computed
+// value time and the browser dropped the border entirely.
+//
+// WHY EVERY EXISTING CHECK MISSED IT, which is the part worth keeping. This lock hunts colour
+// LITERALS; an undefined token is invisible to it precisely because it is not a literal. §B2 does
+// say "every token a page reads is defined" — but it reads through `P.TOKEN_REF`,
+// `/--c-((?:bg|fg)-[0-9a-f]{6})\b/`, so it only ever saw the GENERATED family. A token one letter
+// outside that shape was never looked at. The claim was wider than the check. So the fix is here,
+// widening §B2's own promise, rather than in a second lock beside it.
+//
+// AND IT IS NOT ONE PAGE. Derived, not guessed: 9 tokens, 159 reads, across the app — `--text1` 59
+// times (the palette's token is `--text`), `--bg2` 30, `--muted` 20. Every one of those is a colour
+// that silently does not apply. They are REGISTERED in `theme_undefined_token_pending.txt` and the
+// register may only SHRINK: a new one fails the build today, and the backlog is paid down
+// deliberately rather than in one 80-file sweep nobody can review.
+console.log('§I every token a page reads resolves')
+// A token is DEFINED by a stylesheet (`--x:`) or at RUNTIME through a quoted key — which is how
+// `--tone` arrives (`style={{ ['--tone']: … }}`) and how next/font publishes `--font-inter`
+// (`Inter({ variable: '--font-inter' })`). Both are real definitions, so both count, and neither
+// needs a hand-written excuse that would go stale.
+const T_DEFN = /(--[A-Za-z0-9_-]+)\s*:/g
+const T_QUOTED = /['"](--[A-Za-z0-9_-]+)['"]/g
+// Only a read with NO FALLBACK can go blank: `var(--x, #fff)` paints `#fff` when `--x` is missing.
+const T_READ = /var\(\s*(--[A-Za-z0-9_-]+)\s*\)/g
+const noCssComments = t => t.replace(/\/\*[\s\S]*?\*\//g, '')
+function tokenFiles(dir, out = []) {
+  for (const e of readdirSync(dir)) {
+    const q = join(dir, e)
+    if (statSync(q).isDirectory()) tokenFiles(q, out)
+    else if (/\.(tsx?|css)$/.test(e)) out.push(q)
+  }
+  return out
+}
+const defs = new Set()
+const reads = new Map()
+for (const f of tokenFiles(P.SRC)) {
+  const t = noCssComments(readFileSync(f, 'utf8'))
+  for (const m of t.matchAll(T_DEFN)) defs.add(m[1])
+  for (const m of t.matchAll(T_QUOTED)) defs.add(m[1])
+  for (const m of t.matchAll(T_READ)) reads.set(m[1], (reads.get(m[1]) || 0) + 1)
+}
+const undefined_ = [...reads].filter(([t]) => !defs.has(t)).sort((a, b) => a[0] < b[0] ? -1 : 1)
+const PENDING = join(P.HERE, 'theme_undefined_token_pending.txt')
+const registered = new Map(readFileSync(PENDING, 'utf8').split('\n')
+  .filter(l => l.trim() && !l.startsWith('#'))
+  .map(l => { const [t, n] = l.split('\t'); return [t.trim(), Number(n)] }))
+if (process.argv.includes('--bless')) {
+  // Re-pins the register after some were fixed. It can only ever write what the code now says, so
+  // blessing cannot hide a NEW one — the check below runs first and the build is already red.
+  writeFileSync(PENDING, PENDING_HEADER + undefined_.map(([t, n]) => `${t}\t${n}`).join('\n') + '\n')
+  console.log('  blessed: ' + undefined_.length + ' token(s), ' +
+              undefined_.reduce((a, [, n]) => a + n, 0) + ' read(s)')
+}
+const arrived = undefined_.filter(([t]) => !registered.has(t)).map(([t]) => t)
+const grew = undefined_.filter(([t, n]) => registered.has(t) && n > registered.get(t))
+            .map(([t, n]) => `${t} ${registered.get(t)}→${n}`)
+const shrank = undefined_.filter(([t, n]) => registered.has(t) && n < registered.get(t))
+            .map(([t, n]) => `${t} ${registered.get(t)}→${n}`)
+const left = [...registered].filter(([t]) => !reads.has(t) || defs.has(t)).map(([t]) => t)
+check('I1 no NEW undefined token — a colour that resolves to nothing paints nothing', !arrived.length, arrived)
+check('I2 no registered token spread to more call sites', !grew.length, grew)
+check('I3 the register is current — re-pin it with `node prove_theme_tokens.mjs --bless` when you fix some',
+  !shrank.length && !left.length, { shrank, fixed: left })
+console.log(`    ${undefined_.length} undefined token(s), ${undefined_.reduce((a, [, n]) => a + n, 0)} read(s) — the list may only shrink`)
+check('I-G1 CONTROL a token named only inside a CSS comment is not a definition',
+  !/(--[A-Za-z0-9_-]+)\s*:/.test(noCssComments('/* --ghost: red; */ a{color:blue}')))
+check('I-G2 CONTROL a token set at runtime through a quoted key IS a definition',
+  // A FRESH regex, not T_QUOTED: a /g regex carries `lastIndex` across `.test()` calls, so reusing
+  // the one the scan just ran would make this control pass or fail on where that scan happened to
+  // stop. A control that depends on state is not a control.
+  /['"](--[A-Za-z0-9_-]+)['"]/.test("style={{ ['--tone']: x }}")
+  && defs.has('--tone') && defs.has('--font-inter'))
+check('I-G3 CONTROL a read WITH a fallback is not counted — it cannot go blank',
+  [...'border: 1px solid var(--nope, #fff)'.matchAll(/var\(\s*(--[A-Za-z0-9_-]+)\s*\)/g)].length === 0
+  && [...'color: var(--nope)'.matchAll(/var\(\s*(--[A-Za-z0-9_-]+)\s*\)/g)].length === 1)
+check('I-G4 CONTROL an unregistered undefined token would be caught',
+  [...reads.keys(), '--a-token-nobody-defined'].filter(t => !defs.has(t) && !registered.has(t))
+    .includes('--a-token-nobody-defined'))
+check('I-G5 CONTROL the palette this app actually ships is seen as defined',
+  ['--border', '--text', '--surface', '--bg', '--accent'].every(t => defs.has(t)))
+check('I-G6 CONTROL the token that started this is fixed, and its house replacement resolves',
+  !reads.has('--c-border-e5e7eb') && defs.has('--border'))
 
 // ——— §G negative controls ————————————————————————————————————————————————————————————————————
 console.log('§G negative controls')
