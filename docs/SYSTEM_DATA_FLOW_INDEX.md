@@ -11581,6 +11581,23 @@ SERVER computes from the uploaded photo's bytes, handed in as the only known key
 `registry_key` and the free-text pin remains at two purposes). A predicate is never a fallback chain: `lease_access` reads the lease
 capability ONLY, so a platform super-admin who does not hold it is refused on that purpose — a
 purpose is satisfied on its own predicate or not at all.
+**A REP-FACING PURPOSE IS AUTHORIZED BY REACHABILITY, NOT BY A MODULE (2026-11-20, corrected the
+same day it shipped).** `dropoff_label_transcribe` first used `module_scope` on `storeops`. That is
+wrong for any purpose a CONFINED employee uses: they reach the page as a rep-surface TILE, which is
+deliberately NOT module-gated, and NY LOGISTICS' `sales_rep` carries `storeops: false`. So the
+purpose authorized the managers who never photograph a label and refused the reps who do — a real
+rep was refused at a counter with the page open in front of him. The authorizer
+`reaches_surface` now asks the question the product asks: a scope-`self` caller is judged by
+`core.rep_surface.api_allowed(spec["surface_api"])` — THE declaration of what such an employee may
+call, dereferenced so that revoking the endpoint there closes this with it — and everyone else by
+`_auth_module_scope`, unchanged. A purpose that names no endpoint authorizes nobody. Per-TENANT
+spend stays separately in `core.ai_budget_config.enabled`; this answers "may this person", never
+"does this org pay". Pinned in `harness_ai_guard_purposes.py` §G2, whose rep fixture is now the REAL
+production role row — the invented `storeops: True` fixture is exactly how the broken rule passed
+its own harness. **A REFUSAL IS AUDITED** (`harness_dropoff_label.py` §I): the first production
+refusal left no row, so the cause had to be reconstructed from the refused person's role record
+instead of read from the trail.
+
 **ONE READER FOR THE VERDICT (2026-11-20, §20 AI path).** `control_box.decision_allows(decision)` is
 THE only place the verdict's field is spelled, and every call site asks it —
 `control_box_api`, `remediation/router`, `storeops/router`, `core/data_qa_agent`, `core/data_qa_api`,

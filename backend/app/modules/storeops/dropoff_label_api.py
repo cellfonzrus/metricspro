@@ -302,6 +302,16 @@ def _transcribe(raw: bytes, ext: str, *, authorization: str, org_id: str, declar
         decision, _cfg = _ai_gate.decide(client, org_id=org_id, purpose=AI_PURPOSE, caller=caller,
                                          subject=subject, known_keys=[subject])
         if not _cbx.decision_allows(decision):
+            # A REFUSAL IS AUDITED, like every other adopter of this guard. It was not, and that is
+            # why the first refusal in production could not be diagnosed from the trail at all: the
+            # reason had to be reconstructed from the refused person's role row. The module header
+            # above already says a wall of denials IS the signal; a denial nobody records is not a
+            # signal. Never fails the read — the person can still type the reference in.
+            try:
+                _ai_gate.audit(client, _cbx.ai_audit_row(org_id, caller, subject, decision,
+                                                         purpose=AI_PURPOSE), label="dropoff-label")
+            except Exception:
+                pass
             return "", {"skipped": f"ai_gate:{decision.get('code') or 'refused'}",
                         "refused_because": _cbx.decision_reason(decision)}
     except Exception as e:

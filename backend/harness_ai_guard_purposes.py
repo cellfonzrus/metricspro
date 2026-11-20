@@ -65,8 +65,12 @@ DATA_QA_STORE = {"super_admin": False, "org_id": "org-1", "id": "u-10",
 # scope the purpose registers — INCLUDING `self`, because the confined rep holding the package is
 # precisely who this exists for. DROPOFF_NO_MODULE below holds a broad scope but NOT the module, so
 # the refusal it proves is about the module and not about the scope.
+# MANAN'S REAL ROLE ROW, read from production 2026-11-20 after he was refused at the counter:
+# NY LOGISTICS `sales_rep` is scope `self` with **storeops: FALSE**. The fixture that used to sit
+# here invented `storeops: True` for a confined rep and so proved a shape that does not exist, which
+# is how a purpose gated on the module passed its harness and refused every actual user.
 DROPOFF_REP = {"super_admin": False, "org_id": "org-1", "id": "u-11",
-               "perms": {"modules": {"storeops": True}, "scope": "self"}}
+               "perms": {"modules": {"storeops": False, "targets": True}, "scope": "self"}}
 DROPOFF_MGR = {"super_admin": False, "org_id": "org-1", "id": "u-12",
                "perms": {"modules": {"storeops": True}, "scope": "store"}}
 DROPOFF_NO_MODULE = {"super_admin": False, "org_id": "org-1", "id": "u-13",
@@ -189,6 +193,43 @@ check("an EMPTY authorizer map authorizes nobody",
       cb.ai_guard_decision(SUPER, purpose="control_box_triage", subject="a_registered_subject",
                            known_keys=KNOWN, lamp="red", authorizers={}, **BASE)["code"]
       == "unknown_authorizer")
+
+print("\nG2. a rep-facing purpose is authorized by REACHABILITY, not by a module a tile bypasses")
+# THE DEFECT, pinned (2026-11-20). `dropoff_label_transcribe` was gated on the `storeops` MODULE.
+# A confined rep reaches that page as a rep-surface TILE, which is NOT module-gated, so NY LOGISTICS'
+# `sales_rep` (scope self, storeops FALSE) was refused while the page sat open in front of them —
+# the purpose authorized managers, who never photograph a label, and refused reps, who do.
+from app.core import rep_surface as _RS                                      # noqa: E402
+_DROPOFF_API = "/api/v1/storeops/dropoff-label/read-batch"
+
+check("★ the confined rep who was actually refused is now ALLOWED",
+      decide(DROPOFF_REP, "dropoff_label_transcribe")["allow"] is True)
+check("★ …and the role row really does lack the module, so it is not passing by accident",
+      DROPOFF_REP["perms"]["modules"]["storeops"] is False)
+check("a manager with the module is unchanged (the old rule still decides for them)",
+      decide(DROPOFF_MGR, "dropoff_label_transcribe")["allow"] is True)
+check("a login with neither the module nor a confined scope is refused",
+      decide(DROPOFF_NO_MODULE, "dropoff_label_transcribe")["code"] == "not_storeops_operator")
+check("a super-admin is allowed (platform operator acts for a tenant, as everywhere)",
+      decide(SUPER, "dropoff_label_transcribe")["allow"] is True)
+check("an anonymous caller is still refused", decide(None, "dropoff_label_transcribe")["allow"] is False)
+check("the purpose NAMES the endpoint whose reachability authorizes it",
+      cb.AI_PURPOSES["dropoff_label_transcribe"]["surface_api"] == _DROPOFF_API)
+check("…and that endpoint really is granted by rep_surface (no copy, no stale string)",
+      _RS.api_allowed(_DROPOFF_API, "POST") is True)
+check("★ REVOKING it in rep_surface closes this purpose too — the grant is dereferenced, not copied",
+      cb.ai_guard_decision(DROPOFF_REP, purpose="x", subject="k", known_keys=("k",),
+                           config={"enabled": True}, usage={}, has_key=True,
+                           purposes={"x": {**cb.AI_PURPOSES["dropoff_label_transcribe"],
+                                           "surface_api": "/api/v1/storeops/never-granted"}},
+                           authorizers=cb.AI_AUTHORIZERS)["allow"] is False)
+check("a purpose that forgets to name its endpoint authorizes NOBODY",
+      cb.ai_guard_decision(DROPOFF_REP, purpose="x", subject="k", known_keys=("k",),
+                           config={"enabled": True}, usage={}, has_key=True,
+                           purposes={"x": {k: v for k, v in
+                                           cb.AI_PURPOSES["dropoff_label_transcribe"].items()
+                                           if k != "surface_api"}},
+                           authorizers=cb.AI_AUTHORIZERS)["allow"] is False)
 
 print("\nE. every OTHER gate applies to EVERY purpose, whatever its predicate")
 HOLDERS = {"control_box_triage": SUPER, "remediation_diagnose": OPERATOR,
