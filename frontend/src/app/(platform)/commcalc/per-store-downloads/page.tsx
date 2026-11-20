@@ -4,6 +4,8 @@ import { api, apiUpload } from '@/lib/client'
 import DateField from '@/components/DateField'
 import { readUploadOutcome, type UploadOutcome } from '../_lib/uploadGuard'
 import { safeHref } from '@/lib/safe-url'
+import { usePosTerm } from '@/lib/report-labels'
+import { scopeState, connectorNotApplicableCopy, type ConnectorScope } from '@/lib/connectors'
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 // PER-STORE DOWNLOAD CONSOLE (index §COMMCALC-82).
@@ -37,6 +39,9 @@ interface ReportEntry { key: string; label: string; target: string; arrival_type
 interface Login {
   id: string; processor: string; label: string | null; store_code: string; username: string | null
   portal_url: string | null; enabled: boolean | null; has_password: boolean
+  // Whether this login's CONNECTOR is offered to this tenant at all (§CORE-41, mig 1014). The
+  // backend resolves it from the registry; this screen reads it and never decides it.
+  connector_scope: ConnectorScope | null
   reports: ReportEntry[]
 }
 interface Payload {
@@ -44,22 +49,25 @@ interface Payload {
   date_from: string; date_to: string; note: string
 }
 
+// Every colour here is a TOKEN (§CORE-15: one palette, defined for both themes). A literal would
+// read correctly in the light theme and be invisible in the dark one — and the build says so.
 const STATE_STYLE: Record<CellState, { bg: string; fg: string; mark: string; title: string }> = {
-  have:    { bg: 'var(--ok-bg, #e7f6ec)',   fg: 'var(--ok-fg, #1b6b36)',   mark: '●', title: 'Landed' },
-  missing: { bg: 'var(--warn-bg, #fdf0dd)', fg: 'var(--warn-fg, #8a5300)', mark: '○', title: 'Still to fetch' },
+  have:    { bg: 'var(--c-bg-d1fae5)', fg: 'var(--c-fg-15803d)', mark: '●', title: 'Landed' },
+  missing: { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', mark: '○', title: 'Still to fetch' },
   // "I could not look" is NOT "there is nothing there": the two send an operator to do opposite
   // things, so they never share a colour or a mark on this grid.
-  unknown: { bg: 'var(--muted-bg, #eceef1)', fg: 'var(--muted-fg, #5b6471)', mark: '?', title: 'Not measured — the feed could not be read' },
+  unknown: { bg: 'var(--surface2)', fg: 'var(--text3)', mark: '?', title: 'Not measured — the feed could not be read' },
 }
 
 /** The server's own sentence for a refusal, never a guess at one. */
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e || ''))
 
 const card: React.CSSProperties = {
-  background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 14,
+  background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 14,
 }
 
 export default function PerStoreDownloadsPage() {
+  const { pos, posDeclared } = usePosTerm()   // the tenant's own POS word, for the registry's sentence
   const [data, setData] = useState<Payload | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
@@ -111,6 +119,10 @@ export default function PerStoreDownloadsPage() {
   // door is the one this screen posts to, and a login whose reports have none says so instead.
   const report = useMemo(
     () => (login?.reports || []).find(r => r.upload_path) || null, [login])
+  // A connector the registry does not offer this tenant is not fed from here: the login is still
+  // listed (it exists, and hiding it would be its own kind of lie), but it carries the registry's
+  // own sentence and nothing to press. The decision is the registry's; this screen only reads it.
+  const withheld = login ? scopeState(login.connector_scope, true) === 'not_defined' : false
 
   // A password on screen belongs to the store it was asked for, so switching stores hides it. Done
   // in the ONE place the store changes rather than in an effect watching it: an effect that sets
@@ -176,16 +188,16 @@ export default function PerStoreDownloadsPage() {
   return (
     <div style={{ padding: 20, maxWidth: 1180, margin: '0 auto' }}>
       <h1 style={{ fontSize: 22, margin: '0 0 4px' }}>Per-store report download</h1>
-      <p style={{ color: 'var(--muted-fg, #5b6471)', fontSize: 13, margin: '0 0 16px', maxWidth: 860 }}>
+      <p style={{ color: 'var(--text3)', fontSize: 13, margin: '0 0 16px', maxWidth: 860 }}>
         Pick a store, open its back office in a new tab, download the day you need, then drop the file
         here. It lands exactly where an automatic pull would land it, so the reconciliation cannot tell
         the difference. The grid below shows which store-days have already arrived.
       </p>
 
-      {err && <div style={{ ...card, borderColor: '#c0392b', marginBottom: 14 }}>❌ {err}</div>}
+      {err && <div style={{ ...card, borderColor: 'var(--red)', marginBottom: 14 }}>❌ {err}</div>}
 
       {data && !data.measured && (
-        <div style={{ ...card, borderColor: '#8a5300', marginBottom: 14 }}>
+        <div style={{ ...card, borderColor: 'var(--c-fg-92400e)', marginBottom: 14 }}>
           ⚠️ {data.note}
         </div>
       )}
@@ -229,9 +241,9 @@ export default function PerStoreDownloadsPage() {
       {login && (
         <div style={{ ...card, marginBottom: 14 }}>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-            <button onClick={openPortal} disabled={!portalHref}
+            <button onClick={openPortal} disabled={!portalHref || withheld}
                     style={{ padding: '10px 16px', borderRadius: 8, border: 'none', cursor: 'pointer',
-                             background: 'var(--accent, #1d4ed8)', color: '#fff', fontSize: 14 }}>
+                             background: 'var(--accent)', color: 'var(--c-fg-ffffff)', fontSize: 14 }}>
               🌐 Open {login.store_code} back office in a new tab
             </button>
             {login.username && (
@@ -245,7 +257,7 @@ export default function PerStoreDownloadsPage() {
               shown && shownFor === login.store_code ? (
                 <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
                   <code style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)',
-                                 background: 'var(--muted-bg, #eceef1)', userSelect: 'all' }}>{shown}</code>
+                                 background: 'var(--surface2)', userSelect: 'all' }}>{shown}</code>
                   <button onClick={() => copy(shown, 'password')}
                           style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)',
                                    cursor: 'pointer', fontSize: 12 }}>
@@ -254,7 +266,7 @@ export default function PerStoreDownloadsPage() {
                   <button onClick={() => { setShown(''); setShownFor('') }}
                           style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)',
                                    cursor: 'pointer', fontSize: 12 }}>Hide</button>
-                  <span style={{ fontSize: 11, color: 'var(--muted-fg, #5b6471)' }}>
+                  <span style={{ fontSize: 11, color: 'var(--text3)' }}>
                     Recorded, and hidden again in a minute.
                   </span>
                 </span>
@@ -266,16 +278,21 @@ export default function PerStoreDownloadsPage() {
                 </button>
               )
             ) : (
-              <span style={{ fontSize: 12, color: 'var(--muted-fg, #5b6471)' }}>
+              <span style={{ fontSize: 12, color: 'var(--text3)' }}>
                 No password is stored for this login yet.
               </span>
             )}
           </div>
+          {withheld && (
+            <p style={{ fontSize: 13, color: 'var(--text2)', margin: '10px 0 0' }}>
+              🔌 {connectorNotApplicableCopy({ scope: login.connector_scope, pos, posDeclared })}
+            </p>
+          )}
           {revealErr && (
-            <p style={{ fontSize: 12, color: '#8a5300', margin: '10px 0 0' }}>⚠️ {revealErr}</p>
+            <p style={{ fontSize: 12, color: 'var(--c-fg-92400e)', margin: '10px 0 0' }}>⚠️ {revealErr}</p>
           )}
           {!portalHref && (
-            <p style={{ fontSize: 12, color: '#8a5300', margin: '10px 0 0' }}>
+            <p style={{ fontSize: 12, color: 'var(--c-fg-92400e)', margin: '10px 0 0' }}>
               {login.portal_url
                 ? 'This login’s portal address is not a web address this platform will open. Correct it on the portal-logins screen.'
                 : 'This login has no portal address declared, so there is nothing to open. Add it on the portal-logins screen.'}
@@ -295,18 +312,23 @@ export default function PerStoreDownloadsPage() {
       {login && (
         <div style={{ ...card, marginBottom: 18 }}>
           <h2 style={{ fontSize: 15, margin: '0 0 8px' }}>Drop the downloaded file here</h2>
-          {report ? (
+          {withheld ? (
+            <p style={{ fontSize: 13, color: 'var(--text2)', margin: 0 }}>
+              This login’s connector is not offered to this tenant, so a file dropped here would have
+              nowhere to land.
+            </p>
+          ) : report ? (
             <>
               <input ref={fileRef} type="file" accept=".csv,.xls,.xlsx,.txt"
                      disabled={!!busy}
                      onChange={e => { const f = e.target.files?.[0]; if (f) send(f) }} />
-              <p style={{ fontSize: 12, color: 'var(--muted-fg, #5b6471)', margin: '8px 0 0' }}>
+              <p style={{ fontSize: 12, color: 'var(--text3)', margin: '8px 0 0' }}>
                 Arrives as “{report.label}” for store {login.store_code}. Re-uploading the same day
                 adds nothing — each transaction lands once.
               </p>
             </>
           ) : (
-            <p style={{ fontSize: 13, color: '#8a5300', margin: 0 }}>
+            <p style={{ fontSize: 13, color: 'var(--c-fg-92400e)', margin: 0 }}>
               No report on this login declares where its rows land, so a file dropped here could not
               be stored. Declare the report (and its landing target) on the portal-logins screen
               first — then this box accepts the file.
@@ -315,7 +337,7 @@ export default function PerStoreDownloadsPage() {
           {busy && <p style={{ fontSize: 13 }}>Uploading {busy}…</p>}
           {msg && <p style={{ fontSize: 13, marginBottom: 0 }}>{msg}</p>}
           {outcome?.reason && (
-            <p style={{ fontSize: 12, color: '#8a5300', margin: '4px 0 0' }}>{outcome.reason}</p>
+            <p style={{ fontSize: 12, color: 'var(--c-fg-92400e)', margin: '4px 0 0' }}>{outcome.reason}</p>
           )}
         </div>
       )}
@@ -323,15 +345,15 @@ export default function PerStoreDownloadsPage() {
       <div style={card}>
         <h2 style={{ fontSize: 15, margin: '0 0 2px' }}>What has landed, per store and day</h2>
         {cov && !cov.measured ? (
-          <p style={{ fontSize: 13, color: '#8a5300' }}>{cov.note}</p>
+          <p style={{ fontSize: 13, color: 'var(--c-fg-92400e)' }}>{cov.note}</p>
         ) : (
-          <p style={{ fontSize: 12, color: 'var(--muted-fg, #5b6471)', margin: '0 0 10px' }}>
+          <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 10px' }}>
             {cov?.have ?? 0} store-day(s) landed, {cov?.missing ?? 0} still to fetch.
             Click a day to work that store.
           </p>
         )}
         {cov?.undeclared_stores?.length ? (
-          <p style={{ fontSize: 12, color: '#8a5300' }}>
+          <p style={{ fontSize: 12, color: 'var(--c-fg-92400e)' }}>
             Rows have landed for store code(s) no login declares: {cov.undeclared_stores.join(', ')}.
             A file uploaded under the wrong store code looks like this.
           </p>
@@ -342,7 +364,7 @@ export default function PerStoreDownloadsPage() {
               <thead>
                 <tr>
                   <th style={{ textAlign: 'left', padding: '6px 10px', position: 'sticky', left: 0,
-                               background: 'var(--card)' }}>Store</th>
+                               background: 'var(--surface)' }}>Store</th>
                   {cov.days.map(d => (
                     <th key={d} style={{ padding: '6px 4px', fontWeight: 500, whiteSpace: 'nowrap' }}>
                       {d.slice(5)}
@@ -353,9 +375,9 @@ export default function PerStoreDownloadsPage() {
               </thead>
               <tbody>
                 {cov.stores.map(s => (
-                  <tr key={s.store} style={{ background: s.store === storeCode ? 'var(--hover, #f3f5f8)' : undefined }}>
+                  <tr key={s.store} style={{ background: s.store === storeCode ? 'var(--surface2)' : undefined }}>
                     <td style={{ padding: '4px 10px', whiteSpace: 'nowrap', position: 'sticky', left: 0,
-                                 background: 'var(--card)' }}>
+                                 background: 'var(--surface)' }}>
                       <button onClick={() => pickStore(s.store)}
                               style={{ border: 'none', background: 'none', cursor: 'pointer',
                                        padding: 0, font: 'inherit', textDecoration: 'underline' }}>
@@ -385,7 +407,7 @@ export default function PerStoreDownloadsPage() {
             </table>
           </div>
         )}
-        <p style={{ fontSize: 11, color: 'var(--muted-fg, #5b6471)', marginBottom: 0 }}>
+        <p style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 0 }}>
           ● landed · ○ still to fetch · ? not measured (the feed could not be read, so no day is
           reported as missing)
         </p>
