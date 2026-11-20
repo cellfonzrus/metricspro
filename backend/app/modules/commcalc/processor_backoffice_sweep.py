@@ -244,6 +244,32 @@ def _land_processor_daily_tx(client, org_id, src_row, spec, payload, filename):
     return out
 
 
+# ── THE SAME REPORT, ARRIVING BY HAND (§COMMCALC-75, §COMMCALC-82) ──────────────────────────────
+# The appliance in front of this back office refuses automated clients (§COMMCALC-74/75), so for now
+# the file arrives because a PERSON fetched it. "A feed lands the same however its file arrives" is
+# already the house rule, so a hand-fetched export must reach the SAME landing as the pulled one —
+# which means the upload door needs the `file_type` that names this report's feed. That mapping is
+# the one fact a download screen needs and nothing else owned, so it lives beside TARGETS, keyed the
+# same way: one declared target, one landing, one arrival door. A target with no door answers "" and
+# the screen says the report cannot be uploaded yet, rather than offering a route that drops it.
+_ARRIVAL_TYPES = {"processor_daily_tx": lambda: _feed().UPLOAD_TYPE}
+
+
+def arrival_type(target):
+    """The upload `file_type` a report DECLARING this target arrives under by hand, or "".
+
+    Dereferenced from the feed's own UPLOAD_TYPE rather than spelled here, so the pulled file and the
+    hand-fetched file can never land in different places.
+    """
+    fn = _ARRIVAL_TYPES.get(str(target or "").strip().lower())
+    if fn is None:
+        return ""
+    try:
+        return str(fn() or "")
+    except Exception:
+        return ""
+
+
 # Which declared target lands where. A target this version does not know is REFUSED by name, never
 # guessed at — the same posture `derived_build_status` takes to an unknown build key.
 TARGETS = {"processor_daily_tx": _land_processor_daily_tx}

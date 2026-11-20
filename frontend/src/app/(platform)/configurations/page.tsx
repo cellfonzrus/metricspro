@@ -69,6 +69,7 @@ const GROUPS: Group[] = [
       { href: '/commcalc/connectors', icon: '🔌', label: 'Connectors', desc: 'Vendor portal registry, sweep status, credentials, run-now.' },
       { href: '/commcalc/ftp-imports', icon: '🔁', label: 'FTP Auto-Import', desc: 'Pull report files a vendor FTP-pushes; route each filename to its parser.' },
       { href: '/commcalc/email-imports', icon: '📧', label: 'Email Auto-Import', desc: 'Poll a mailbox a vendor emails reports to; route each attachment to its parser.' },
+      { href: '/commcalc/per-store-downloads', icon: '🏧', label: 'Per-Store Report Download', desc: 'Pick a store, open its back office in a new tab, drop the downloaded file back in — and see which store-days are still outstanding.' },
       { href: '/commcalc/upload', icon: '📁', label: 'Auto-Imports & Uploads', desc: 'Per-source schedules, last-loaded status, manual uploads.' },
       { href: '/commcalc/upload/wizard', icon: '🧭', label: 'Upload Wizard', desc: 'Guided per-report upload (exact report name + source link).' },
       { href: '/closing/imports', icon: '🔄', label: 'Closing Auto-Import', desc: 'Google Sheet closing import — sheet id, tab, schedule, service account.' },

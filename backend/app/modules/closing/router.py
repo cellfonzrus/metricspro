@@ -1373,7 +1373,11 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
     try:
         from app.modules.commcalc import epay_ingest as _epay_ing
         _epay_portal = {(_verified_overlay._norm(sc), d): v
-                        for (sc, d), v in _epay_ing.per_store_day(client, org_id, date, date).items()}
+                        # `or {}`: an unreadable feed answers None (§COMMCALC-82) and this overlay is
+                        # declared best-effort — it must degrade to "no portal figure", explicitly,
+                        # rather than by way of an AttributeError nobody meant to rely on.
+                        for (sc, d), v in (_epay_ing.per_store_day(client, org_id, date, date)
+                                           or {}).items()}
     except Exception:
         _epay_portal = {}
 

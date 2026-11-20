@@ -1224,6 +1224,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/carrier-comm-file', label: 'Carrier Comm File → Table', icon: '📑', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/ftp-imports', label: 'FTP Auto-Import', icon: '🔁', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/email-imports', label: 'Email & Portal Logins (2FA)', icon: '📨', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/per-store-downloads', label: 'Per-Store Report Download', icon: '🏧', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/epay/sweep', label: 'Payment Processor Sync', icon: '🧹', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/dlar/sweep', label: 'Metrics Rep/Store Sync', icon: '🧹', module: 'commissions', scopes: ['all'], tileOnly: true },
   ]},

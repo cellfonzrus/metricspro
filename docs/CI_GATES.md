@@ -29,11 +29,11 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `module-graph-guard.yml` | 2 | `pull_request`, `push`, `workflow_dispatch` |
 | `org-scope-guard.yml` | 19 | `pull_request`, `push`, `workflow_dispatch` |
 | `security.yml` | 15 | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
-| `tests.yml` | 16 | `pull_request`, `push`, `workflow_dispatch` |
+| `tests.yml` | 17 | `pull_request`, `push`, `workflow_dispatch` |
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 635 gates
+## Gated — 636 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -270,6 +270,7 @@ the Runs on column is how you can tell.
 | `harness_fakedb.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_feature_gate.py` | `org-scope-guard.yml` | What each tenant is offered (`tenant-gates`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_feature_gate_lock.py` | `org-scope-guard.yml` | What each tenant is offered (`tenant-gates`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_feed_day_coverage.py` | `tests.yml` | An unreadable feed is not an empty one (lock) (`feed-day-coverage-lock`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_feed_day_grain.py` | `carrier-vocab-guard.yml` | A feed window asks for the tenant's own day (one home, required at every caller) (`feed-window-tenant-day`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_feed_declared_metrics_lock.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_feed_gap_days.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |

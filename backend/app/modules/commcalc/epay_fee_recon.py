@@ -176,14 +176,18 @@ def _store_resolver(client, org_id):
 
 
 def system_fee_per_store_day(client, org_id, date_from, date_to, store_codes=None):
-    """{(store_code, date): fee$} from raw_sales 'epay service charge' lines in range."""
+    """{(store_code, date): fee$} from raw_sales 'epay service charge' lines in range.
+
+    **None means the read FAILED, never `{}`** — the same contract as
+    `epay_ingest.per_store_day`, for the same reason (§COMMCALC-78): an unreadable leg that reads as
+    empty flags the whole range against zero."""
     try:
         rows = (client.schema("commcalc").table("raw_sales")
                 .select("store,trans_date,product_desc,ext_price,voided")
                 .eq("org_id", org_id).gte("trans_date", date_from).lte("trans_date", date_to)
                 .limit(500000).execute().data) or []
     except Exception:
-        return {}
+        return None                      # could not look — see the docstring; never {}
     agg = aggregate_system_fee(rows, _store_resolver(client, org_id))
     if store_codes:
         keep = set(store_codes)
@@ -196,8 +200,25 @@ def fee_recon(client, org_id, date_from, date_to, store_codes=None, tolerance=1.
     from app.modules.commcalc import epay_ingest as _epay
     system = system_fee_per_store_day(client, org_id, date_from, date_to, store_codes=store_codes)
     portal = _epay.per_store_day(client, org_id, date_from, date_to, store_codes=store_codes)
+    # A LEG THAT COULD NOT BE READ IS NOT AN EMPTY LEG (§COMMCALC-78). Reconciling against it would
+    # flag every store-day in the range against zero — a false alarm over money, on a read that never
+    # happened. So the recon reports itself NOT MEASURED and names the leg, which is the one thing an
+    # operator can act on.
+    unread = [name for name, leg in (("system", system), ("portal", portal)) if leg is None]
+    if unread:
+        return {
+            "rows": [],
+            "totals": {"system_fee": 0.0, "portal_fee": 0.0, "var": 0.0,
+                       "flagged": 0, "store_days": 0},
+            "measured": False,
+            "note": ("The %s side of this reconciliation could not be read, so nothing is "
+                     "reconciled and nothing is flagged. The figures are not zero: they are "
+                     "unmeasured." % " and ".join(unread)),
+        }
     rows = build_recon(system, portal, tolerance=tolerance)
     return {
+        "measured": True,
+        "note": "",
         "rows": rows,
         "totals": {"system_fee": round(sum(r["system_fee"] for r in rows), 2),
                    "portal_fee": round(sum(r["portal_fee"] for r in rows), 2),
