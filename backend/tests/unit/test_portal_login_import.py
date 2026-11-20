@@ -118,7 +118,18 @@ def test_no_password_appears_in_any_line_verdict_reason_or_echo():
 
 def test_a_password_cell_is_quoted_back_as_its_length_only():
     out = parse("B-1115\tu\t%s" % PW)
-    assert out["lines"][0]["cells"] == ["B-1115", "u", "%d character password" % len(PW)]
+    assert out["lines"][0]["cells"] == ["B-1115", "u", "%d character value" % len(PW)]
+
+
+def test_a_cell_the_parser_cannot_name_is_redacted_too():
+    """A paste can hold more cells than the header declares — a password containing the separator,
+    or a header row that omits the password column — and then the credential sits under no name at
+    all. "Echo whatever we could not identify" is the one shape that puts a password back on
+    screen, so a cell is quoted only when it is a field known not to be a secret."""
+    out = parse("Store\tUsername\nB-1115\tu\t%s" % PW)
+    assert PW not in repr(out["lines"])
+    data = out["lines"][1]            # lines[0] is the header row's own account of itself
+    assert data["cells"] == ["B-1115", "u", "%d character value" % len(PW)]
 
 
 def test_the_rows_do_carry_the_password_because_they_are_what_gets_sealed():

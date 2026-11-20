@@ -109,13 +109,21 @@ def resolve_store(token, resolve):
 
 
 def redacted_line(n, cells, fields):
-    """PURE: how a line is quoted back to a human. The password cell is replaced by its LENGTH, so
-    an operator can tell a line apart and see that something was read, and no part of the value
-    exists in the answer."""
+    """PURE: how a line is quoted back to a human. A cell this parser cannot NAME is replaced by its
+    LENGTH, exactly as the password cell is — so an operator can tell a line apart and see that
+    something was read, and no part of a value that might be a credential exists in the answer.
+
+    WHY AN UNNAMED CELL IS REDACTED TOO, and not just the one called `password`. A paste can hold
+    more cells than the header declares — a password containing the separator, a header row that
+    omits the password column — and then the surplus cell holds the credential under no name at all.
+    Echoing "whatever we could not identify" is the one shape that would put a password back on
+    screen, so the rule is the other way round: a cell is quoted only when it is a field we know is
+    not a secret."""
     out = []
     for i, c in enumerate(cells or []):
         field = fields[i] if i < len(fields) else ""
-        out.append(("%d character password" % len(c)) if field == "password" and c else c)
+        out.append(c if (field and field != "password") else
+                   (("%d character value" % len(c)) if c else c))
     return {"line": n, "cells": out}
 
 

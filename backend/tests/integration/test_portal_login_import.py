@@ -115,7 +115,14 @@ def test_the_password_is_sealed_in_the_table_and_absent_from_the_answer(api_clie
 def test_each_line_is_quoted_back_with_the_password_replaced_by_its_length(api_client, wired):
     lines = _post(api_client, ORG_A, BLOCK).json()["lines"]
     assert [l["verdict"] for l in lines] == ["ready", "ready"]
-    assert all("%d character password" % len(PW) in " ".join(map(str, l["cells"])) for l in lines)
+    assert all("%d character value" % len(PW) in " ".join(map(str, l["cells"])) for l in lines)
+
+
+def test_a_paste_with_more_cells_than_the_header_declares_still_echoes_no_value(api_client, wired):
+    """The surplus cell holds the credential under NO name, which is exactly where an echo would
+    put a password back on screen."""
+    res = _post(api_client, ORG_A, "Store\tUsername\nB-1115\tstore1115\t%s" % PW)
+    assert PW not in res.text
 
 
 def test_a_second_paste_updates_a_stores_login_instead_of_giving_it_a_rival(api_client, wired):

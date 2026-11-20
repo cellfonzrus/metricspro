@@ -81,13 +81,20 @@ answer = repr({k: v for k, v in out.items() if k != "rows"})
 for sec in SECRETS:
     ck("(b) %r is absent from every verdict, reason and echo" % sec, sec not in answer)
 ck("(b) the password cell is quoted back as its LENGTH only",
-   any("character password" in " ".join(map(str, l.get("cells", []))) for l in out["lines"]))
-ck("(b) redacted_line replaces the password and keeps the rest",
+   any("character value" in " ".join(map(str, l.get("cells", []))) for l in out["lines"]))
+ck("(b) redacted_line replaces the password and keeps the named rest",
    pli.redacted_line(1, ["B-1115", "u", "abc"], ("store", "username", "password"))["cells"]
-   == ["B-1115", "u", "3 character password"])
-ck("(b) redacted_line with NO field map redacts nothing it cannot identify — and is never used "
-   "for a data line",
-   pli.redacted_line(1, ["a"], ())["cells"] == ["a"])
+   == ["B-1115", "u", "3 character value"])
+#: A cell the parser cannot NAME is redacted too. A paste can hold more cells than its header
+#: declares — a password containing the separator, a header that omits the password column — and
+#: then the credential sits under no name at all. "Echo what we could not identify" is the one
+#: shape that would put a password back on screen.
+ck("(b) a cell with NO field is redacted, not echoed",
+   pli.redacted_line(1, ["B-1115", "u", "abc"], ("store", "username"))["cells"]
+   == ["B-1115", "u", "3 character value"])
+ck("(b) …and an unnamed cell of a real paste carries no value either",
+   SECRETS[0] not in repr(pli.parse("Store\tUsername\nB-1115\tu\t" + SECRETS[0],
+                                    processor="epay", resolve=resolve)["lines"]))
 ck("(b) the rows DO carry the password (they are what gets sealed)",
    out["rows"][0].get("password") == SECRETS[0])
 
