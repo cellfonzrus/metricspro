@@ -1709,7 +1709,21 @@ _all_routes = _flatten_routes(real_app.routes)
 # backend/tests/integration/test_per_store_download_console.py asserts at the HTTP boundary that one
 # tenant's logins and landed days are invisible to another, that no payload carries a credential
 # under any key, and that one tenant cannot reveal another's login.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1865"))
+# 1865 -> 1866, 2026-11-20 (PR for §COMMCALC-83, the paste-once portal-login import).
+# RE-VERIFIED THE HOUSE WAY, not assumed: `git diff origin/main..HEAD -- backend/ | grep '@router\.'`
+# shows exactly ONE added route and none removed (the `PUT /data-sources` line moves because the
+# writer underneath it was factored out; the route itself is unchanged).
+# The one new route: POST /commcalc/data-sources/import — an admin pastes a block of per-store
+# portal logins and each is stored through `_save_source_row`, the SAME writer the settings form
+# uses, so the password is sealed by the credential registry here exactly as it is there.
+# Gate: `_require_import_admin`, the gate that already gates CHANGING a login — fail-closed.
+# Money: none. It stores no figure and moves none; no report reads it.
+# Cross-tenant negatives: org-scoped, and a store code resolves ONLY through the asking org's own
+# roster, so pasting another tenant's store is an `unresolved` line rather than a credential filed
+# under their store. backend/tests/integration/test_portal_login_import.py asserts that at the HTTP
+# boundary, plus that the stored password reads back through `portal_secret.open_row` (proving it
+# went through the sealing writer) and that no response carries the pasted value.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1866"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

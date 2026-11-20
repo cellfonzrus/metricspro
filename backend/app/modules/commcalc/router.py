@@ -42172,14 +42172,16 @@ class SaveDataSourceIn(LaxModel):
     history_chunk_days: Any = None
 
 
-@router.put("/data-sources")
-def save_data_source(body: SaveDataSourceIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
-    """Create/update one login. Omitting password on an update KEEPS the stored one."""
-    require_org(org_id)
-    _require_import_admin(authorization, org_id)
-    row = {k: getattr(body, k) for k in _SOURCE_FIELDS if k in body.model_fields_set}
-    if not (row.get("processor") or "").strip() and not body.id:
-        raise HTTPException(400, "processor is required (e.g. vidapay, total_access, epay)")
+def _save_source_row(client, org_id, row, sid=None):
+    """WRITE ONE LOGIN — the one home for that, dereferenced by every door that stores one
+    (§COMMCALC-83). The settings form posts one row through `PUT /data-sources`; the paste-once
+    import posts twenty-nine through `POST /data-sources/import`; both arrive HERE, so the sealing
+    of the password, the SSRF guard on the portal address and the "database is behind the code"
+    column drop cannot be true of one door and not the other. A second writer is the one place
+    "sealed" could silently stop being true, which is why there is not one.
+
+    `sid` set updates that login of THIS org; absent, inserts. Returns the `_saved()` answer.
+    """
     for k in ("distributor_id", "carrier_id"):
         if k in row and not (row[k] or "").strip():
             row[k] = None
@@ -42223,7 +42225,6 @@ def save_data_source(body: SaveDataSourceIn, org_id: str = ORG_ID, authorization
                              else _check(row[_fld]))
             except _url_guard.UnsafeUrlError as e:
                 raise HTTPException(400, e.message)
-    client = sb()
     # A SAVE MUST NOT FAIL BECAUSE THE DATABASE IS BEHIND THE CODE. `_SOURCE_FIELDS` has grown with
     # every additive migration since 083 and the form posts every field this build knows, so ONE
     # column whose migration has not been applied yet makes PostgREST refuse the WHOLE row
@@ -42248,16 +42249,125 @@ def save_data_source(body: SaveDataSourceIn, org_id: str = ORG_ID, authorization
         return out
 
     try:
-        if body.id:
+        if sid:
             client.schema("commcalc").table("data_source").update(_psec.seal_row("data_source", row))\
-                .eq("id", body.id).eq("org_id", org_id).execute()
-            return _saved(body.id)
+                .eq("id", sid).eq("org_id", org_id).execute()
+            return _saved(sid)
         row["org_id"] = org_id
         r = client.schema("commcalc").table("data_source").insert(
             _psec.seal_row("data_source", row)).execute()
         return _saved((r.data or [{}])[0].get("id"))
     except Exception as e:
         raise HTTPException(400, f"Could not save — is migration 083 applied? {e}")
+
+
+@router.put("/data-sources")
+def save_data_source(body: SaveDataSourceIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """Create/update one login. Omitting password on an update KEEPS the stored one."""
+    require_org(org_id)
+    _require_import_admin(authorization, org_id)
+    row = {k: getattr(body, k) for k in _SOURCE_FIELDS if k in body.model_fields_set}
+    if not (row.get("processor") or "").strip() and not body.id:
+        raise HTTPException(400, "processor is required (e.g. vidapay, total_access, epay)")
+    return _save_source_row(sb(), org_id, row, sid=body.id)
+
+
+class ImportDataSourcesIn(LaxModel):
+    processor: Any = None
+    portal_url: Any = None
+    text: Any = None
+    dry_run: Any = None
+
+
+def _pli():
+    from app.modules.commcalc import portal_login_import as _m
+    return _m
+
+
+@router.post("/data-sources/import")
+def import_data_sources(body: ImportDataSourcesIn, org_id: str = ORG_ID,
+                        authorization: str = Header(default="")):
+    """PASTE ONCE, 29 LOGINS (index §COMMCALC-83).
+
+    Owner, 2026-11-20, of the per-store ePay back-office logins: *"Enter those for me"*. Each one is
+    a credential for an outside system, so the only acceptable path from his clipboard to the sealed
+    column is ONE post that stores them — not a SQL file, not a commit, not a chat message, and not
+    twenty-nine visits to a form.
+
+    Every row is written by `_save_source_row`, the SAME writer the settings form uses, so the
+    password is sealed by the credential registry here exactly as it is there. Nothing in the
+    ANSWER carries a credential: a line is quoted back through `portal_login_import.redacted_line`,
+    which replaces the password cell with its length. Nothing is printed or logged.
+
+    `dry_run` reads the paste and reports what WOULD happen without writing — so an operator can
+    see 29 stores matched before committing 29 credentials.
+    """
+    require_org(org_id)
+    _require_import_admin(authorization, org_id)
+    processor = str(body.processor or "").strip()
+    if not processor:
+        raise HTTPException(400, "processor is required (e.g. epay, vidapay, total_access)")
+    if not str(body.text or "").strip():
+        raise HTTPException(400, "Nothing was pasted.")
+    client = sb()
+    # The platform's ONE store resolver (§13a), not a second opinion about which store a word means.
+    parsed = _pli().parse(body.text, processor=processor, portal_url=body.portal_url or "",
+                          resolve=_intake_store_resolver(client, org_id))
+    # Which logins this org ALREADY has for this connector, so a second paste UPDATES a store's
+    # login instead of giving it a rival one. Keyed on the declared store code, which is what the
+    # download console's grid is keyed on too.
+    existing = {}
+    try:
+        for r in (client.schema("commcalc").table("data_source").select("id,store_code")
+                  .eq("org_id", org_id).eq("processor", processor).execute().data) or []:
+            code = str((r or {}).get("store_code") or "").strip()
+            if code:
+                existing.setdefault(code, r.get("id"))
+    except Exception:
+        # A read that FAILED is not "this org has no logins" (§COMMCALC-82): inserting on that
+        # assumption would give every store a duplicate login. Refuse, and say why.
+        return JSONResponse(status_code=409, content={
+            "ok": False, "imported": 0, "updated": 0, "lines": parsed["lines"],
+            "note": ("The logins already stored could not be read, so importing now might give a "
+                     "store a second login. Nothing was written — try again.")})
+    if body.dry_run:
+        return {"ok": True, "dry_run": True, "imported": 0, "updated": 0,
+                "would_create": sum(1 for r in parsed["rows"] if r["store_code"] not in existing),
+                "would_update": sum(1 for r in parsed["rows"] if r["store_code"] in existing),
+                "ready": parsed["ready"], "skipped": parsed["skipped"],
+                "unresolved": parsed["unresolved"], "lines": parsed["lines"],
+                "note": "Nothing was written. Press Import to store these."}
+    created = updated = 0
+    failed = []
+    for row in parsed["rows"]:
+        sid = existing.get(row["store_code"])
+        try:
+            _save_source_row(client, org_id, dict(row), sid=sid)
+        except HTTPException as e:
+            # NAMED, never dropped: a store whose login did not land must not read as one that did.
+            # The store code, not the credential — this list goes back to the screen.
+            failed.append({"store_code": row["store_code"], "note": str(e.detail)})
+            continue
+        except Exception:
+            failed.append({"store_code": row["store_code"],
+                           "note": "Could not be stored. Nothing was saved for this store."})
+            continue
+        if sid:
+            updated += 1
+        else:
+            created += 1
+    note = "%d login(s) created, %d updated." % (created, updated)
+    if parsed["unresolved"]:
+        note += (" %d line(s) name a store this organisation has not declared and were NOT stored."
+                 % parsed["unresolved"])
+    if parsed["skipped"]:
+        note += " %d line(s) were skipped." % parsed["skipped"]
+    if failed:
+        note += " %d could not be stored." % len(failed)
+    return {"ok": not failed, "imported": created, "updated": updated,
+            "ready": parsed["ready"], "skipped": parsed["skipped"],
+            "unresolved": parsed["unresolved"], "failed": failed, "lines": parsed["lines"],
+            "note": note}
 
 
 @router.delete("/data-sources/{sid}")
