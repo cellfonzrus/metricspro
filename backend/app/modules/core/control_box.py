@@ -669,11 +669,45 @@ def _auth_module_scope(caller, spec=None):
     return bool(mods.get(want_module)) and str(perms.get("scope") or "") in want_scopes
 
 
+def _auth_reaches_surface(caller, spec=None):
+    """May this caller REACH the surface this purpose serves? Asked the way the PRODUCT asks it.
+
+    WHY `module_scope` IS WRONG FOR A REP-FACING PURPOSE (learned 2026-11-20, at a counter).
+    A confined employee reaches the drop-off page as a rep-surface TILE, and a tile is deliberately
+    NOT module-gated — that is the only reason the page is reachable by the person holding the
+    package. So a purpose gated on the MODULE authorizes the managers who never photograph a label
+    and refuses the reps who do: NY LOGISTICS' `sales_rep` carries `storeops: false`, and every rep
+    was refused `not_storeops_operator` while the page sat open in front of them.
+
+    So this predicate asks the question that actually decides it, from the homes that already answer
+    it, and copies neither:
+      · a CONFINED caller (scope `self`) — `core.rep_surface.api_allowed`, THE declaration of what
+        such an employee may call. If the surface already lets them call the endpoint, they may
+        spend on what that endpoint does; if it is ever revoked there, this closes with it.
+      · everyone else — `_auth_module_scope`, unchanged, so a manager is judged exactly as before.
+    A purpose that forgets to name its endpoint authorizes NOBODY, like every other mis-declaration.
+
+    Per-TENANT spend stays where it belongs: `core.ai_budget_config.enabled`. This answers "may this
+    person", never "does this org pay for it".
+    """
+    c = caller or {}
+    if c.get("super_admin"):
+        return True
+    if str((c.get("perms") or {}).get("scope") or "") == "self":
+        path = (spec or {}).get("surface_api")
+        if not path:
+            return False
+        from app.core import rep_surface as _rs      # pure declaration, no I/O, no cycle
+        return bool(_rs.api_allowed(path, (spec or {}).get("surface_method") or "POST"))
+    return _auth_module_scope(caller, spec)
+
+
 # The ONLY way a purpose becomes authorizable. Injectable for the harness; unknown name = refused.
 AI_AUTHORIZERS = {
     "super_admin": _auth_super_admin,
     "lease_access": _auth_lease_access,
     "module_scope": _auth_module_scope,
+    "reaches_surface": _auth_reaches_surface,
 }
 
 # ── THE PURPOSE REGISTRY ─────────────────────────────────────────────────────────────────────────
@@ -715,9 +749,12 @@ AI_PURPOSES = {
     },
     "dropoff_label_transcribe": {
         "label": "Reading a drop-off label's printed characters from a photo",
-        "authorizer": "module_scope",
+        "authorizer": "reaches_surface",
         "module": _DROPOFF_LABEL_MODULE,
         "scopes": _DROPOFF_LABEL_SCOPES,
+        # The endpoint whose reachability IS the authorization, for a confined employee. Dereferenced
+        # from `rep_surface`, never re-listed: revoking it there closes this with it.
+        "surface_api": "/api/v1/storeops/dropoff-label/read-batch",
         "deny_code": "not_storeops_operator",
         # NOT bounded_text, though the first draft reached for it. The caller supplies NO text to
         # this purpose: the subject is a digest the SERVER computes from the uploaded photo's own

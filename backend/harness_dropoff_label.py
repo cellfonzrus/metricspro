@@ -373,5 +373,26 @@ check("every reason the server can return has a sentence on the screen",
 check("CONTROL: the screen-copy scan actually found the reasons",
       "nothing_readable" in _named and "text_read_did_not_run" in _named)
 
+# ── I. a refusal leaves a record ─────────────────────────────────────────────────────────────────
+section("I. the guard's refusal is AUDITED — a denial nobody records is not a signal")
+# WHY (2026-11-20). The first real refusal in production left NO audit row, because `_transcribe`
+# returned early without one. The reason had to be reconstructed from the refused person's role row
+# instead of read from the trail. Every other adopter of the guard audits refusals, and this
+# module's own header says a wall of denials IS the signal that something is wrong.
+import inspect as _inspect                                                   # noqa: E402
+from app.modules.storeops import dropoff_label_api as _API                   # noqa: E402
+
+_src = _inspect.getsource(_API._transcribe)
+_refusal = _src[_src.index("decision_allows(decision)"):]
+check("the refusal branch audits before it returns",
+      "_ai_gate.audit(" in _refusal and _refusal.index("_ai_gate.audit(") < _refusal.index("return"))
+check("it audits through the SHARED row builder, not a shape of its own",
+      "ai_audit_row(" in _refusal)
+check("…carrying this purpose, so the row is findable by it", "purpose=AI_PURPOSE" in _refusal)
+check("a failing audit never costs the person their read (the typing path must survive)",
+      "except Exception:" in _refusal and "pass" in _refusal)
+check("CONTROL: the scan is reading the real refusal branch, not the whole file",
+      "transcribe_label(" not in _refusal.split("return")[0])
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)
