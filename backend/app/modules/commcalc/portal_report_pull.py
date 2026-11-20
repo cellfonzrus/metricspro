@@ -112,6 +112,62 @@ def connector(value):
     return str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
 
 
+def report_key(item):
+    """THE key of one declared report, whichever shape it was declared in. PURE.
+
+    One home, because the declaration is read in several places — to build the specs, to filter them,
+    to find a report's calibration entry, and (since §COMMCALC-48.13) to ask whether a report is
+    asked for at all. Two spellings of "which report is this" is how every declared report once
+    filtered itself out (§COMMCALC-39).
+
+    It lives HERE rather than in an adapter because this module is the one both the pull loop and
+    every adapter can see: `pos_report_sweep.spec_key` dereferences it and keeps its own name, so no
+    caller changed. Deliberately NOT `connector()` — that normalizes a `data_source.processor`, a
+    different fact that happens to need the same spelling rules, and folding the two together would
+    make a change to one silently change the other."""
+    if isinstance(item, dict):
+        raw = item.get("key")
+    elif isinstance(item, str):
+        raw = item
+    else:
+        return ""
+    return str(raw or "").strip().lower().replace(" ", "_").replace("-", "_")
+
+
+def declared_report(src_row, key):
+    """The DECLARED item for one report key, or {} — `data_source.portal_reports` is the column that
+    answers "which reports", so a fact about whether a report is wanted is read from there and not
+    from the calibration column that answers "how to run one". PURE."""
+    want = report_key(key)
+    if not want:
+        return {}
+    declared = (src_row or {}).get("portal_reports") or []
+    if isinstance(declared, dict):
+        declared = [declared]
+    for item in declared:
+        if report_key(item) == want:
+            return dict(item) if isinstance(item, dict) else {"key": want}
+    return {}
+
+
+def report_requested(src_row, key):
+    """Does the tenant want this report PULLED? DECLARED per report, absence meaning yes.
+
+    NOT DERIVED, and the contrast with `is_per_day` is the point. "Run this once per day" follows
+    from the declaration — a report whose filters mention `{date}` IS a per-day report — so a flag
+    beside it could only disagree with it. "We need this report" follows from nothing in the
+    declaration: a store may have fifteen reports declared, with their menu words and line maps
+    worth keeping, and want two of them pulled. Deriving it from completeness was considered and
+    rejected — it would stop pulling a report that works today the moment a field was cleared.
+
+    Absence is YES so that every declaration written before this field existed pulls exactly what it
+    pulled before."""
+    item = declared_report(src_row, key)
+    if PULL_FIELD not in item:
+        return True
+    return bool(item.get(PULL_FIELD))
+
+
 def adapter_for(processor):
     """The adapter that serves this connector, or None. Asking each adapter which keys it serves is
     what keeps the keys in ONE place per feed — this module re-spells none of them."""
@@ -260,6 +316,13 @@ def click_text(page, words, timeout_ms=15000):
 # So: the parameters are DECLARED per report (config, never code — RULE TWO), and a report whose
 # declared parameters could not be applied is NOT exported. Refusing is the honest outcome; an
 # unfiltered export is not.
+#: The declared "pull this report" field on a `portal_reports` item. Spelled ONCE (§COMMCALC-48.13).
+#: How many report names one status sentence spells out before it says "and N more". The COUNT is
+#: always stated, so a longer list can never read as a shorter failure.
+_NAMES_SHOWN = 4
+
+PULL_FIELD = "pull"
+
 PARAM_KINDS = ("fill", "select", "check", "uncheck", "click")
 # A declared value may name the day the run covers. Spelled once, here, and substituted by
 # `resolve_param_value` — the only place a date becomes a form value.
@@ -759,21 +822,34 @@ def pull_reports_on_page(client, org_id, src_row, page, should_stop=None):
             d_from, d_to, is_backfill = bf.window_for(client, org_id, src_row, (d_from, d_to))
         except Exception:
             d_from, d_to = date_range(src_row, proc)
-    results, total, unreachable = [], 0, []
+    results, total = [], 0
     with tempfile.TemporaryDirectory() as tmp:
         for spec in specs:
             if should_stop is not None and should_stop():
                 break
+            # A REPORT THE TENANT HAS NOT ASKED FOR IS NOT A FAILURE (§COMMCALC-48.13). It is not
+            # navigated to, so it cannot be "not reached", and it is carried in the answer under its
+            # own reason rather than left out — a report that silently stopped being pulled is how
+            # "my figures never arrive" becomes a mystery.
+            if not report_requested(src_row, spec["key"]):
+                results.append({"report": spec["key"], "label": spec["label"],
+                                "rows_ingested": 0, "delivered": False, "not_requested": True,
+                                "error": "Not pulled — this report is not switched on for this "
+                                         "login. Tick it on the Reports editor to pull it."})
+                continue
             # A report whose declared parameters name `{date}` is run ONCE PER DAY (§COMMCALC-37);
             # one that declares none is run once for the whole window, exactly as before.
             days = (pull_days(d_from, d_to) if is_per_day(src_row, spec["key"]) else (None,))
             res = pull_one_report(client, org_id, src_row, page, mod, proc, spec, tmp,
                                   d_from, d_to, days, should_stop)
-            if res.get("unreachable"):
-                unreachable.append(spec["label"])
             results.append(res)
             total += res.get("rows_ingested") or 0
-    out = summarize(results, total, d_from, d_to, unreachable)
+    # THE OUTCOME LISTS ARE DERIVED FROM THE RESULTS, never accumulated beside them. Each result
+    # already carries its own reason (`unreachable`, `not_requested`), so a loop that also kept
+    # tallies held the same fact twice and could put a report in the wrong one — which is how a
+    # report nobody asked for would have been reported as a report that could not be reached
+    # (§COMMCALC-48.13).
+    out = summarize(results, total, d_from, d_to)
     # RECORD WHAT HAPPENED TO A HISTORY WINDOW, so the next run asks for the next one and a window
     # that failed is retried rather than skipped. The state is DERIVED from this very answer, never
     # asserted beside it. Best-effort: a backlog that cannot be written must not fail landed rows.
@@ -825,11 +901,20 @@ def setup_hint(mod, src_row):
         return ""
 
 
-def summarize(results, total, d_from, d_to, unreachable):
+def summarize(results, total, d_from, d_to, unreachable=None, skipped=None):
     """The pull's answer. HONEST outcome: `delivered` only when rows actually landed — a zero-row pull
     is never a green tick, which is exactly how a dead connector used to look healthy. An adapter may
     attach `unresolved` items (anything a human must map before the rows count); they are carried up
     with the count, never swallowed."""
+    # DERIVED from the results unless a caller states them: a result says why it landed nothing, and
+    # that reason is the fact. An explicit list is still accepted so a caller holding labels the
+    # results do not carry can say so, but the loop passes none.
+    if unreachable is None:
+        unreachable = [r.get("label") or r.get("report") for r in (results or [])
+                       if r.get("unreachable")]
+    if skipped is None:
+        skipped = [r.get("label") or r.get("report") for r in (results or [])
+                   if r.get("not_requested")]
     unresolved = []
     for r in results:
         for u in (r.get("unresolved") or r.get("unresolved_merchants") or []):
@@ -838,12 +923,28 @@ def summarize(results, total, d_from, d_to, unreachable):
     status = ("Imported %d row(s) across %d report(s) for %s..%s."
               % (total, sum(1 for r in results if r.get("delivered")), d_from, d_to))
     if unreachable:
-        status += " Not reached: %s." % ", ".join(list(unreachable)[:4])
+        # THE COUNT FIRST, then the names it has room for. Naming four and dropping the rest in
+        # silence understates the failure by however many it hid: the owner's own pull reported four
+        # unreached reports out of fifteen attempted, and the one report that was fully mapped to his
+        # declared categories was among the eleven the sentence left out (§COMMCALC-48.13).
+        names = [str(n) for n in unreachable]
+        more = len(names) - _NAMES_SHOWN
+        status += (" Not reached: %d — %s%s."
+                   % (len(names), ", ".join(names[:_NAMES_SHOWN]),
+                      (" and %d more" % more) if more > 0 else ""))
+    if skipped:
+        names = [str(n) for n in skipped]
+        more = len(names) - _NAMES_SHOWN
+        status += (" Not asked for: %d — %s%s."
+                   % (len(names), ", ".join(names[:_NAMES_SHOWN]),
+                      (" and %d more" % more) if more > 0 else ""))
     if unresolved:
         status += (" %d item(s) are not mapped yet — map them in setup or their figures stay out of "
                    "the store totals." % len(unresolved))
     out = {"ok": True, "delivered": total > 0, "rows_ingested": total, "status": status,
            "date_from": d_from, "date_to": d_to, "reports": results,
+           "unreachable": [str(n) for n in unreachable],
+           "not_requested": [str(n) for n in (skipped or ())],
            "unresolved": unresolved[:50]}
     # The merchant feed's own spelling, kept so its UI and harness keep reading the same key. One
     # value, two names on ONE dict is not a second home — it is a rename with a migration path.

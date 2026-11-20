@@ -35,6 +35,11 @@ type Row = {
   // SIGN is a sale. Every one is blank by default and blank means "nothing declared" — the parser
   // then reads exactly as it did before any of this existed.
   column_bindings?: Record<string, string>; unit_basis?: string; amount_sign?: string
+  // IS THIS REPORT PULLED AT ALL (owner ask 2026-11-20: "pull the required reports"). Declared, not
+  // derived — a tenant may keep fifteen reports mapped and want two of them fetched, and a report
+  // mapped only so a hand-uploaded file can be read needs no address, no filters and no export
+  // button. Absent means yes, which is what every declaration written before this field meant.
+  pull?: boolean
   per_day?: boolean; problems?: string[]
 }
 type Loaded = {
@@ -279,6 +284,7 @@ export default function PortalReportEditor(
                   declaration as one view of it and lose what the order means. Nothing to sort. */}
               <tbody>
                 <tr style={{ fontSize: 11, color: 'var(--text3)', textAlign: 'left' }}>
+                  <td style={{ padding: '4px 6px', width: 46 }} title="Tick the reports the daily pull should fetch. An unticked report keeps everything you have mapped about it — it is simply not fetched, so it cannot fail.">Pull</td>
                   <td style={{ padding: '4px 6px' }}>Report name</td>
                   <td style={{ padding: '4px 6px' }}>Menu words that reach it</td>
                   <td style={{ padding: '4px 6px', width: 90 }}>Export</td>
@@ -289,6 +295,11 @@ export default function PortalReportEditor(
                 {rows.map((r, i) => (
                   <Fragment key={r.key || i}>
                     <tr style={{ borderTop: '1px solid var(--border)', fontSize: 12 }}>
+                      <td style={{ padding: '5px 6px', textAlign: 'center' }}>
+                        <input type="checkbox" aria-label={'Pull ' + (r.label || r.key)}
+                               checked={r.pull !== false}
+                               onChange={e => patch(i, { pull: e.target.checked })} />
+                      </td>
                       <td style={{ padding: '5px 6px' }}>
                         <input style={BOX} value={r.label}
                                onChange={e => patch(i, { label: e.target.value, key: r.key || e.target.value })} />
@@ -318,14 +329,14 @@ export default function PortalReportEditor(
                     </tr>
                     {(r.problems || []).length > 0 && (
                       <tr>
-                        <td colSpan={6} style={{ padding: '0 6px 5px 6px', fontSize: 11, color: 'var(--c-fg-b45309)' }}>
+                        <td colSpan={7} style={{ padding: '0 6px 5px 6px', fontSize: 11, color: 'var(--c-fg-b45309)' }}>
                           {(r.problems || []).join(' · ')}
                         </td>
                       </tr>
                     )}
                     {open === r.key && (
                       <tr>
-                        <td colSpan={6} style={{ padding: '0 6px 10px 6px' }}>
+                        <td colSpan={7} style={{ padding: '0 6px 10px 6px' }}>
                           <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 8 }}>
                             <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 6 }}>
                               What must be set on this report&apos;s page before the export is pressed. A filter

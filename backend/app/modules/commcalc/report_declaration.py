@@ -45,7 +45,7 @@ from app.modules.commcalc import report_columns as _rc
 # flag beside that could disagree with it), and `problems` is advice, never stored.
 ROW_FIELDS = ("key", "label", "nav", "export", "params", "line_map",
               "report_url", "run_selector", "export_selector",
-              "column_bindings", "unit_basis", "amount_sign")
+              "column_bindings", "unit_basis", "amount_sign", "pull")
 # THE CONTROLS THE PULL PRESSES, and the address it may go to instead of clicking menu words
 # (owner, 2026-11-04: "How to get the filters right"). `portal_report_pull` reads FOUR facts per
 # report off `portal_calibration` — `params`, `run_selector`, `export_selector` and one of
@@ -69,6 +69,12 @@ MAX_PARAMS = 24               # per report
 # pull cannot apply would be offering a filter that is silently ignored.
 PARAM_KINDS = _prp.PARAM_KINDS
 DATE_TOKENS = _prp.DATE_TOKENS
+
+# WHETHER THIS REPORT IS PULLED AT ALL (owner ask 2026-11-20: "pull the required reports"). The name
+# and the meaning of an absent value are `portal_report_pull`'s, dereferenced — the pull loop is the
+# reader, and an editor that invented its own spelling or its own default would be declaring a
+# different switch from the one that decides anything.
+PULL_FIELD = _prp.PULL_FIELD
 
 # HOW TO READ THIS REPORT once it has been downloaded (owner 2026-11-17). Three facts about a
 # tenant's own export that nothing could declare, so no export could answer a declared category:
@@ -162,6 +168,12 @@ def row_problems(row):
     out = []
     if not row.get("key"):
         out.append("give this report a name")
+    if not row.get("pull", True):
+        # EVERY problem below is about reaching and running the page. None of them is a problem for a
+        # report nobody pulls — and one such report is not a mistake: a tenant may map a report
+        # precisely so a file they export by hand can be read, which needs the reading fields and no
+        # address, no filters and no export button at all.
+        return out + ["not pulled — only files you upload by hand are read through this report"]
     if not (row.get("nav") or row.get("report_url")):
         # EITHER answer reaches the page: `navigate_to_report` tries the declared address before the
         # menu words, and on a portal whose reports all live on ONE page the address is the only one
@@ -209,6 +221,9 @@ def row(item, calibration=None):
         # should see the hint their declaration actually gives the navigation.
         nav = tuple(w for w in key.split("_") if len(w) > 2)
     out = {"key": key, "label": label, "nav": list(nav),
+           # Absence is YES, read through the pull's own reader so the tick box can never show one
+           # answer while the loop acts on another.
+           "pull": _prp.report_requested({"portal_reports": [item]}, key),
            "export": export if export in EXPORTS else "csv",
            "params": clean_params(cal.get("params")),
            "line_map": dict(line_map),
@@ -268,6 +283,12 @@ def columns(editor_rows, existing_calibration=None):
         export = str(item.get("export") or "csv").strip().lower()
         spec = {"key": key, "label": str(item.get("label") or key)[:120],
                 "nav": list(nav), "export": export if export in EXPORTS else "csv"}
+        # WRITTEN ONLY WHEN SWITCHED OFF. Absence already means "pull it", so storing `pull: true`
+        # on every report would rewrite every declaration written before this field existed — and
+        # `columns(rows(src))` being the identity is the property that makes this editor safe to
+        # open. Ticked on is the absence of a declaration, not a declaration of yes.
+        if not item.get(PULL_FIELD, True):
+            spec[PULL_FIELD] = False
         lm = item.get("line_map")
         if isinstance(lm, dict) and lm:
             spec["line_map"] = lm
