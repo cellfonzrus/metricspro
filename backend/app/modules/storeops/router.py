@@ -4114,7 +4114,7 @@ async def post_document_extract(body: dict, authorization: str = Header(default=
     # single event loop for every other request on the process.
     decision, _cfg = await _ai_gate.decide_async(client, org_id=org_id, purpose=AI_LEASE_PURPOSE, caller=caller,
                                      subject=subject, known_keys=[subject])
-    if not decision.get("allow"):
+    if not _cbx.decision_allows(decision):
         _ai_gate.audit(client, _cbx.ai_audit_row(org_id, caller, subject, decision,
                                                  purpose=AI_LEASE_PURPOSE), label="doc-intel")
         if decision.get("code") in _SOFT_AI_DENIALS:

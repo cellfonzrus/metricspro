@@ -6,7 +6,7 @@ DATABASE work every adopter of that decision needs, and it exists so that work i
     from app.modules.core import ai_gate as _gate
     caller   = _gate.resolve_caller(client, authorization, org_id)      # or your own capability dict
     decision, cfg = _gate.decide(client, org_id=org, purpose="…", caller=caller, subject=…)
-    if not decision["allow"]:
+    if not cbx.decision_allows(decision):          # the ONE reader — never spell the field here
         _gate.audit(client, cbx.ai_audit_row(org, caller, decision.get("subject_key"), decision,
                                              purpose="…"))
         …degrade…

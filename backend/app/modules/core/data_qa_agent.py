@@ -369,7 +369,7 @@ async def answer(app, *, org_id, question, history, tenant_name, enabled_modules
 
     decision, _cfg = await _gate.decide_async(client, org_id=org_id, purpose=PURPOSE,
                                               caller=caller, subject=question)
-    if not decision.get("allow"):
+    if not cbx.decision_allows(decision):
         _gate.audit(client, cbx.ai_audit_row(org_id, caller, decision.get("subject_key"), decision,
                                              purpose=PURPOSE))
         # `ai_guard_decision` returns the human sentence in `reason` — the ONE wording for every

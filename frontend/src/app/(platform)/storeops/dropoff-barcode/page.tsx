@@ -123,6 +123,13 @@ const REASONS: Record<string, string> = {
   no_reference_matched_a_declared_label_type:
     'Nothing on this photo matched the label types set up for your company.',
   nothing_readable: 'Nothing readable on this photo — check it shows the barcode or the reference line.',
+  // AN UNREAD PHOTO IS NOT AN EMPTY ONE. Said separately from `nothing_readable` because the two
+  // ask different things of the reader: one means take a better photograph, the other means do not
+  // bother — nobody looked. Printing the first when the second is true sends a store back to
+  // re-shoot a label that was never going to be read (2026-11-20). The server decides which it is,
+  // in ONE place (`dropoff_label_api.unread_reason`); this page only names them.
+  text_read_did_not_run:
+    'The barcode could not be read, and reading the printed characters did not run on this photo — so this is not a problem with your photograph. Type the reference in by hand to carry on, and tell your manager the photo reading is not switched on.',
   not_read_yet: 'Not read — the batch ran out of time. Send this one again on its own.',
 }
 

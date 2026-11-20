@@ -32,6 +32,7 @@ from fastapi import APIRouter, Body, Header, HTTPException, Response
 from app.core.config import settings
 from app.core.database import get_supabase
 from app.modules.core import ai_gate as _ai_gate
+from app.modules.core import control_box as _cbx  # the ONE reader of a gate verdict
 from app.modules.core.code128 import Code128Error
 from app.modules.storeops import dropoff_label as _label
 # THE one "draw this reference" home: which symbology a label type uses is the tenant's declaration,
@@ -229,6 +230,10 @@ def read_label(body: dict = Body(...), authorization: str = Header(default=""),
                                     declared=bool(profiles))
 
     reading = _label.resolve_reading(barcode=barcode, text=text, profiles=profiles)
+    if not reading.get("reference"):
+        reading = {**reading,
+                   "reason": unread_reason(profiles=profiles, ai_meta=ai_meta, text=text),
+                   "refused_because": (ai_meta or {}).get("refused_because")}
     return {
         "reading": reading,
         "barcode": {k: v for k, v in barcode.items() if k != "found"},
@@ -237,6 +242,45 @@ def read_label(body: dict = Body(...), authorization: str = Header(default=""),
         "declared_label_types": len(profiles),
         "blocker": blocker,
     }
+
+
+def unread_reason(*, profiles: list, ai_meta: dict, text: str) -> str:
+    """Why this photo yielded nothing — THE one home, asked by `/read` and `/read-batch` alike.
+
+    AN UNREAD PHOTO IS NOT AN EMPTY ONE. This exists because the screen used to print "Nothing
+    readable on this photo" in three different situations, only ONE of which was true:
+
+      · the bars did not decode and the text read RAN and found nothing     -> nothing_readable
+      · the bars did not decode and the text read was never attempted       -> it could not look
+      · the organisation has declared no label types                        -> nothing to match
+
+    The middle case is the one that cost a real afternoon (2026-11-20): the vision read was being
+    refused before it ran, and the screen reported that as a bad photograph, so the store retook
+    photos of a label that was never going to be read. A refusal rendered as an absence is the
+    same defect class the house already gates as "an unreadable feed is not an empty one".
+    """
+    if not profiles:
+        return "no_label_types_declared"
+    if text:
+        return "nothing_readable"
+    skipped = str((ai_meta or {}).get("skipped") or "")
+    if not skipped or skipped == "not_attempted":
+        # The bars decoded, or the caller asked for bars only. Nothing was wrong with the photo.
+        return "nothing_readable"
+    if skipped == "no_label_types_declared":
+        return "no_label_types_declared"
+    return "text_read_did_not_run"
+
+
+def _photo_subject(raw: bytes) -> str:
+    """The bounded SUBJECT for the guard: a short digest of the photo's own bytes.
+
+    Hashed here rather than handing the guard the image, because `bounded_text` would otherwise
+    stringify several megabytes of JPEG into the decision path on every single photo of every batch.
+    What the audit stores is this, so the trail says WHICH photo was read without ever holding it.
+    """
+    import hashlib as _h
+    return "photo:" + _h.sha256(raw or b"").hexdigest()[:32]
 
 
 def _transcribe(raw: bytes, ext: str, *, authorization: str, org_id: str, declared: bool):
@@ -251,11 +295,15 @@ def _transcribe(raw: bytes, ext: str, *, authorization: str, org_id: str, declar
     client = get_supabase()
     try:
         caller = _ai_gate.resolve_caller(client, authorization, org_id)
-        decision, _cfg = _ai_gate.decide(client, org_id=org_id, purpose=AI_PURPOSE, caller=caller)
-        if not getattr(decision, "allowed", decision.get("allowed") if isinstance(decision, dict) else False):
-            reason = (decision.get("reason") if isinstance(decision, dict)
-                      else getattr(decision, "reason", "refused"))
-            return "", {"skipped": f"ai_gate:{reason}"}
+        # The SUBJECT is a digest the SERVER computes from this photo's bytes, handed in as the one
+        # known key — the same shape `doc_intel` uses for a document id. The caller supplies nothing,
+        # so no free text can reach the guard or the audit; what is stored is the digest.
+        subject = _photo_subject(raw)
+        decision, _cfg = _ai_gate.decide(client, org_id=org_id, purpose=AI_PURPOSE, caller=caller,
+                                         subject=subject, known_keys=[subject])
+        if not _cbx.decision_allows(decision):
+            return "", {"skipped": f"ai_gate:{decision.get('code') or 'refused'}",
+                        "refused_because": _cbx.decision_reason(decision)}
     except Exception as e:
         # A guard that cannot decide must refuse — reading the text is a convenience, and the
         # person can always type the reference in.
@@ -319,8 +367,9 @@ def read_labels(body: dict = Body(...), authorization: str = Header(default=""),
         items.append({
             "name": name,
             "readings": readings,
-            "reason": None if readings else (
-                "no_label_types_declared" if not profiles else "nothing_readable"),
+            "reason": None if readings else unread_reason(
+                profiles=profiles, ai_meta=ai_meta, text=text),
+            "refused_because": None if readings else (ai_meta or {}).get("refused_because"),
             "skipped": False,
             "ai": {k: v for k, v in ai_meta.items() if k != "response"},
         })

@@ -11572,9 +11572,27 @@ budget, and an audit row for every attempt including refusals. Registered today:
 `control_box_triage` (predicate `super_admin`, subject = a key from the server-side check registry),
 `remediation_diagnose` (predicate `module_scope`: helpdesk module + scope all/market, mig `982`) and
 `lease_extraction` (predicate `lease_access` = `store_lease.can_see_lease`, subject = this org's own
-document id, mig `983`). A predicate is never a fallback chain: `lease_access` reads the lease
+document id, mig `983`), `data_qa` (mig `1055`) and `dropoff_label_transcribe` (predicate
+`module_scope`: the `storeops` module + scope all/market/company/store/**self**, 2026-11-20 — the
+scope list is WIDER than that page's nav row because the people it exists for are confined employees
+reaching it as a rep-surface TILE (§CORE-33.1), which is not module-gated; a scope list copied from
+the nav row would have authorized everyone except its actual users. Its subject is a digest the
+SERVER computes from the uploaded photo's bytes, handed in as the only known key, so it stays
+`registry_key` and the free-text pin remains at two purposes). A predicate is never a fallback chain: `lease_access` reads the lease
 capability ONLY, so a platform super-admin who does not hold it is refused on that purpose — a
 purpose is satisfied on its own predicate or not at all.
+**ONE READER FOR THE VERDICT (2026-11-20, §20 AI path).** `control_box.decision_allows(decision)` is
+THE only place the verdict's field is spelled, and every call site asks it —
+`control_box_api`, `remediation/router`, `storeops/router`, `core/data_qa_agent`, `core/data_qa_api`,
+`storeops/dropoff_label_api`, the audit row in `ai_audit_row`, and the usage recipe in
+`ai_gate.py`'s own docstring. It exists because the field is `allow` and one call site tested
+`allowed` behind a `getattr(decision, "allowed", …)` fallback that made the typo read as defensive
+code: `.get("allowed")` is `None`, `not None` is True, so that site took the refusal branch ALWAYS
+and silently never called the model, in every tenant, from the day it shipped. Anything that is not
+a verdict — `None`, a string, a dict without the field, a truthy `1` — reads as REFUSED, because a
+guard that cannot decide must refuse. Locked by `harness_ai_gate_one_reader.py` (30 checks, CI gate
+"the AI guard's verdict has one reader"), which DERIVES the call-site list by scanning for
+`.decide(`/`.decide_async(` so a new adopter is covered by the same scan that proves the old ones.
 **Fail-closed by construction:** an unknown/unregistered/missing purpose is REFUSED, a purpose naming
 a predicate that does not exist authorizes NOBODY (`unknown_authorizer`), and a predicate that raises
 denies. There is no "no check" fallback, so forgetting to register a purpose is a closed door.
@@ -51670,6 +51688,38 @@ the migration name for a tenant.
 
 Tests: `tests/unit/test_dropoff_label_rules.py`, `tests/integration/test_dropoff_label_endpoints.py`,
 `harness_code128.py` (40) and `harness_dropoff_label.py` (78), both run in CI.
+
+### READING THE PRINTED TEXT WAS REFUSED BEFORE IT EVER RAN (2026-11-20)
+
+**THE INSTANCE.** A sales rep photographed a stranded package and the screen said *"Nothing readable
+on this photo."* The photograph was fine. The tenant's declaration was fine. The vision read had
+been refused before it started, and had been since the feature shipped — for every caller, in every
+tenant. Three faults, each sufficient on its own:
+
+1. **The purpose was never registered.** `dropoff_label_transcribe` was metered in
+   `billing/ai_usage.py` but absent from `control_box.AI_PURPOSES`, so the guard refused it
+   `wrong_purpose` — correctly, by its own fail-closed design. A platform super-admin was refused
+   too. Registering a purpose in the METER and not in the REGISTRY is the registry-written-but-not-
+   wired failure (§19.18) in its newest costume.
+2. **The call site read the wrong field.** See §20, "one reader for the verdict": `allowed` for
+   `allow`, behind a `getattr`
+   fallback. Fixing only (1) would still have skipped every photo.
+3. **The screen reported a refusal as a bad photograph.** `/read` and `/read-batch` each collapsed
+   three situations into `nothing_readable`, so a store was sent back to re-shoot a label nothing
+   was ever going to read.
+
+**THE ONE HOME FOR (3):** `dropoff_label_api.unread_reason(profiles, ai_meta, text)` — asked by BOTH
+endpoints, so they cannot drift into telling a rep different stories about one photo. It separates
+*the text read RAN and found nothing* (`nothing_readable`) from *it never ran* (`text_read_did_not_run`,
+which the screen words as "this is not a problem with your photograph") from *nothing is declared*
+(`no_label_types_declared`). Same class the house already gates as "an unreadable feed is not an
+empty one": a refusal rendered as an absence. `harness_dropoff_label.py` §H pins every branch and
+asserts the screen carries a sentence for every reason the server can return — an unworded reason
+would land a rep on a bare fallback string.
+
+**WHAT NEVER BROKE,** and is why the feature was still usable: decoding the BARS needs no AI and no
+declaration, and typing a reference by hand always worked. Only the camera read of printed
+characters was dead.
 
 ### STILL OPEN, not coded around
 

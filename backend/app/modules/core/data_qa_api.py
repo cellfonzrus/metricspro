@@ -27,6 +27,7 @@ from app.core.config import settings
 from app.core.database import get_supabase
 from app.core.schemas import LaxModel
 from app.modules.core import ai_gate as _gate
+from app.modules.core import control_box as _cbx  # the ONE reader of a gate verdict
 from app.modules.core import data_qa_agent as _agent
 from app.modules.core import data_qa_registry as reg
 from app.modules.core import tenant_identity  # one home for the tenant's name (§POS-02)
@@ -101,8 +102,8 @@ def data_qa_status(org_id: str = ORG_ID, authorization: str = Header(default="")
                                   subject="status")
     return {"module_enabled": bool(enabled),
             "configured": bool(settings.ANTHROPIC_API_KEY),
-            "allowed": bool(decision.get("allow")),
-            "reason": None if decision.get("allow") else decision.get("reason"),
+            "allowed": _cbx.decision_allows(decision),
+            "reason": None if _cbx.decision_allows(decision) else decision.get("reason"),
             "model": settings.DATA_QA_MODEL,
             # A rep is shown only the questions whose report narrows to them, so the panel's
             # suggestions are the ones that will actually answer rather than the ones that would
