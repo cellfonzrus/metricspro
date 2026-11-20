@@ -4,6 +4,7 @@ import { api } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import { repConfined } from '@/lib/rbac'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import { exportCodeSheetToPDF } from '@/lib/export'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
 import { FixItNotice, useFixGuide } from '@/lib/fix-it'
@@ -218,6 +219,39 @@ export default function DropoffBarcodePage() {
     } catch (e: unknown) { setMsg('❌ ' + errText(e)) } finally { setBusy(false) }
   }
 
+  // SAVE, not print (owner 2026-11-20: *"How will they print from the phone, it should save as a
+  // pdf on their phone to be used when they re by the ups system"*). A store phone has no printer
+  // paired, and the print window below is a pop-up a phone browser blocks as often as it opens. A
+  // PDF download lands in the share sheet, and "Save to Files" keeps it on the device — which is
+  // what the job needs: the codes are shown at the UPS system later, possibly out of signal.
+  //
+  // PRINT IS KEPT BESIDE IT, not replaced: a store with a desktop and a label printer still wants
+  // paper in one tap. Both render from the SAME `made` array the screen is showing, so the two
+  // destinations cannot disagree about which packages are on the sheet.
+  async function savePdf() {
+    setBusy(true)
+    try {
+      const r = await exportCodeSheetToPDF({
+        report: 'Drop-off barcode rescue',
+        title: 'Drop-off barcodes',
+        subtitle: storeCode.trim() ? `Store ${storeCode.trim()}` : undefined,
+        filename: `dropoff-barcodes-${new Date().toISOString().slice(0, 10)}`,
+        items: made.map(m => ({
+          reference: m.reference,
+          svg: m.svg,
+          note: m.verified_symbology === false
+            ? 'rebuilt from the reference, not a proven copy' : undefined,
+        })),
+        footnote: 'Cut along the dashed lines. Check each code against its package before scanning it in.',
+      })
+      setMsg(r.saved
+        ? `Saved ${r.drawn} barcode${r.drawn === 1 ? '' : 's'} as a PDF.` +
+          (r.failed.length ? ` ${r.failed.length} could not be drawn: ${r.failed.join(', ')}.` : '') +
+          ' On a phone, choose Save to Files to keep it.'
+        : ('\u274c ' + (r.message || 'The PDF could not be made.')))
+    } catch (e: unknown) { setMsg('\u274c ' + errText(e)) } finally { setBusy(false) }
+  }
+
   function printSheet() {
     if (!made.length) return
     const w = window.open('', '_blank', 'width=820,height=900')
@@ -418,11 +452,17 @@ export default function DropoffBarcodePage() {
         <section className="dbr-card">
           <h2 style={h2}>3. Print the sheet and scan them in</h2>
           <p style={{ margin: '0 0 10px', fontSize: 14 }}>
-            Print this, cut along the dashed lines, stick each code on its package and scan it in the
-            usual way. What is on screen is what prints: the reference on the left, its code on the
-            right.
+            <b>On a phone:</b> press <b>Save as a PDF</b>, then choose <b>Save to Files</b> (or
+            Downloads). The sheet stays on the phone, so you can open it at the UPS system even
+            without signal. <b>On a computer</b> with a printer, <b>Print instead</b> is one tap.
+            Either way: the reference on the left, its code on the right, one package per row, cut
+            along the dashed lines.
           </p>
-          <button onClick={printSheet} className="dbr-btn" style={{ marginBottom: 12 }}>Print {made.length} barcode{made.length === 1 ? '' : 's'}</button>
+          {/* The PDF is FIRST and is the one that works everywhere; print is the desktop shortcut. */}
+          <button onClick={savePdf} disabled={busy} className="dbr-btn" style={{ marginBottom: 12 }}>
+            💾 Save {made.length} barcode{made.length === 1 ? '' : 's'} as a PDF
+          </button>
+          <button onClick={printSheet} className="dbr-btn" style={{ marginBottom: 12, marginLeft: 8 }}>Print instead</button>
           {made.map(m => (
             <div className="dbr-made" key={m.reference}>
               <div style={{ fontFamily: 'monospace', fontSize: 16 }}>

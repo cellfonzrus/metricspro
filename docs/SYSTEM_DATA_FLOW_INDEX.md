@@ -46251,6 +46251,29 @@ on a phone that table squeezed the one field a person must read character by cha
 refused, so a rep sees their job instead of a red box. There is no page list, no role name and no
 module test in the page.
 
+**The sheet SAVES, it does not only print** (owner, same day: *"How will they print from the phone,
+it should save as a pdf on their phone to be used when they re by the ups system"*). A store phone
+has no printer paired and blocks the print pop-up as often as it opens, so the primary action is a
+PDF download — on a phone that is the share sheet, and "Save to Files" keeps it on the device, which
+is what the job needs because the codes are shown at the carrier's system later, possibly out of
+signal. Print stays beside it for a desktop with a label printer, and both render from the SAME
+`made` array the screen is showing, so the two destinations cannot disagree about which packages are
+on the sheet.
+
+`lib/export.tsx` gains `exportCodeSheetToPDF` + `svgToPngDataUrl` — **in that file**, because jsPDF,
+the export-governance audit (`governExport`, Security Controls item 7) and the watermark footer are
+already its job and a page importing jsPDF itself would be a second home for "how this platform makes
+a PDF". The picture embedded is **the server's own SVG, re-drawn by nobody**: parsing the bars out of
+it, or re-deriving the geometry in the browser, would be a second answer to "what does this code look
+like" — the duplicate the house rules forbid, and the last thing you want on a barcode. It also means
+a symbology this file has never heard of (a QR from `segno`) needs no code here at all. The raster
+scale is load-bearing, not cosmetic: the source SVG is 3 px per barcode module, so at scale 4 a module
+is 12 device pixels and the bar EDGES land on exact pixel boundaries instead of being anti-aliased
+into grey, which is what a hand scanner rejects. A code that cannot be drawn is NAMED on the screen,
+never silently dropped from the sheet. `/api/v1/core/export-event` is granted to the surface so a
+rep's save is audited like anyone else's — `governExport` fails open, so without the grant the PDF
+would still save and simply go unlogged, which is the worst of both.
+
 ### Proofs and the lock
 
 - `backend/harness_rep_surface.py` (92) — the grammar, default-deny on the API, the REAL middleware

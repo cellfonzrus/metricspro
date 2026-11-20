@@ -153,7 +153,12 @@ SURFACES = (
         "api": ("/api/v1/storeops/dropoff-label/read",
                 "/api/v1/storeops/dropoff-label/read-batch",
                 "/api/v1/storeops/dropoff-label/barcode",
-                "/api/v1/storeops/dropoff-label/barcodes"),
+                "/api/v1/storeops/dropoff-label/barcodes",
+                # The EXPORT GOVERNANCE log (Security Controls item 7). Saving the sheet as a PDF
+                # on a phone is an export, and an export this platform does not record is the gap
+                # that control exists to close. `governExport` fails OPEN, so without this the PDF
+                # would still save and simply go unlogged — which is the worst of both.
+                "/api/v1/core/export-event"),
         # READ-ONLY: the tenant's declared label types, which the screen needs to match printed
         # text, and the renderer a print dialog reloads (it reads and writes nothing).
         "api_read": ("/api/v1/storeops/dropoff-label/profiles",

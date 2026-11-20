@@ -291,6 +291,134 @@ export async function exportToPDF(p: ExportPayload) {
   doc.save(`${p.filename}.pdf`)
 }
 
+// ---- A SHEET OF CODES, as a PDF the phone can keep ----
+// WHY THIS LIVES HERE AND NOT ON THE PAGE THAT NEEDED IT (owner 2026-11-20, of the drop-off barcode
+// rescue: *"How will they print from the phone, it should save as a pdf on their phone to be used
+// when they re by the ups system"*). jsPDF, the export-governance audit and the watermark footer are
+// THIS file's job; a page that imported jsPDF itself would be a second home for "how this platform
+// makes a PDF", and the next page wanting a sheet of codes would be a third. So the generic shape —
+// one row per item, a label on the left and a picture on the right — is a function here, and the
+// page passes what to put in it.
+//
+// THE PICTURE IS THE SERVER'S OWN ARTIFACT, re-drawn by nobody. The SVG that goes in is the one the
+// page is already showing and the one the print sheet already prints; it is rasterised and embedded
+// as-is. The alternative — parsing the bars out of the SVG, or re-deriving the geometry in the
+// browser — would be a SECOND answer to "what does this code look like", which is the duplicate the
+// house rules forbid and the last thing you want on a barcode: two renderers that agree until they
+// do not. It also means a symbology this file has never heard of (a QR from `segno`) needs no code
+// here at all.
+export type CodeSheetItem = {
+  reference: string
+  svg: string                 // the server's own SVG, embedded as-is
+  note?: string               // a caveat printed under the reference (e.g. "rebuilt, not a copy")
+}
+
+// An SVG string → a PNG data URL, at `scale` times the SVG's own pixel size.
+//
+// WHY RASTERISE AT ALL, AND WHY THIS MUCH. A PDF viewer on a phone will not render an embedded SVG
+// reliably, and `addSvgAsImage` needs a library this app does not carry. So: canvas. The scale is
+// not cosmetic — it decides whether the printed code SCANS. The source SVG uses 3 CSS px per
+// barcode module, so at scale 4 one module is 12 device pixels, and because the module boundaries
+// are integer multiples the bar EDGES land on exact pixel boundaries rather than being
+// anti-aliased into grey. A blurred edge is what a hand scanner rejects, and this whole feature
+// exists because a code failed to scan once already.
+export async function svgToPngDataUrl(svg: string, scale = 4):
+    Promise<{ url: string; w: number; h: number } | null> {
+  if (typeof window === 'undefined' || !svg) return null
+  const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
+  const im: HTMLImageElement = await new Promise((res, rej) => {
+    const i = new Image()
+    i.onload = () => res(i)
+    i.onerror = () => rej(new Error('the code could not be drawn'))
+    i.src = url
+  })
+  // The server's SVG carries explicit width/height, which is what makes `naturalWidth` reliable
+  // here — iOS Safari reports 0 for an SVG sized only by its viewBox.
+  const w = im.naturalWidth || 0, h = im.naturalHeight || 0
+  if (!w || !h) return null
+  const c = document.createElement('canvas')
+  c.width = Math.round(w * scale); c.height = Math.round(h * scale)
+  const ctx = c.getContext('2d')
+  if (!ctx) return null
+  // The SVG paints its own white background, but a canvas starts TRANSPARENT and a transparent
+  // PNG in a PDF prints as whatever is under it. Filled explicitly so a code is always black on
+  // white, whatever the viewer does.
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, c.width, c.height)
+  ctx.imageSmoothingEnabled = false
+  ctx.drawImage(im, 0, 0, c.width, c.height)
+  return { url: c.toDataURL('image/png'), w: c.width, h: c.height }
+}
+
+export async function exportCodeSheetToPDF(p: {
+  report: string                // what the governance audit records this as
+  title: string
+  subtitle?: string
+  filename: string              // base name, no extension
+  items: CodeSheetItem[]
+  footnote?: string
+}): Promise<{ saved: boolean; drawn: number; failed: string[]; message?: string }> {
+  if (!p.items.length) return { saved: false, drawn: 0, failed: [], message: 'Nothing to save yet.' }
+  const audit = await governExport(p.report, 'pdf', p.items.length)
+  if (audit.blocked) return { saved: false, drawn: 0, failed: [], message: capMessage(audit.max) }
+
+  const { jsPDF } = await import('jspdf')
+  // PORTRAIT, because the sheet is a column of packages and a phone shows a portrait page whole.
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' })
+  const pageW = doc.internal.pageSize.getWidth()
+  const pageH = doc.internal.pageSize.getHeight()
+  const M = 36                            // margin
+  const REF_W = 120                       // the reference column, on the LEFT as the owner asked
+  const CODE_W = pageW - M * 2 - REF_W - 10
+  const MAX_CODE_H = 120
+
+  doc.setFontSize(14); doc.setTextColor(15, 23, 42)
+  doc.text(p.title, M, 42)
+  if (p.subtitle) { doc.setFontSize(9); doc.setTextColor(100, 116, 139); doc.text(p.subtitle, M, 58) }
+  doc.setFontSize(8); doc.setTextColor(150, 163, 175)
+  doc.text(new Date().toLocaleString(), pageW - M, 42, { align: 'right' })
+  let y = p.subtitle ? 76 : 64
+
+  const failed: string[] = []
+  let drawn = 0
+  for (const it of p.items) {
+    let png: { url: string; w: number; h: number } | null = null
+    try { png = await svgToPngDataUrl(it.svg) } catch { png = null }
+    // A code that cannot be drawn is NAMED, never dropped: a sheet one package short is a package
+    // that stays on the shelf with nobody knowing which.
+    if (!png) { failed.push(it.reference); continue }
+    let cw = CODE_W, ch = cw * png.h / png.w
+    if (ch > MAX_CODE_H) { ch = MAX_CODE_H; cw = ch * png.w / png.h }
+    const rowH = Math.max(ch, 34) + 18
+    if (y + rowH > pageH - M) { doc.addPage(); y = M + 10 }
+    doc.setFontSize(12); doc.setTextColor(15, 23, 42)
+    doc.setFont('courier', 'normal')
+    doc.text(it.reference, M, y + 16)
+    doc.setFont('helvetica', 'normal')
+    if (it.note) {
+      doc.setFontSize(7); doc.setTextColor(146, 64, 14)
+      doc.text(doc.splitTextToSize(it.note, REF_W), M, y + 28)
+    }
+    doc.addImage(png.url, 'PNG', pageW - M - cw, y, cw, ch)
+    y += rowH
+    // The cut line, so a sheet becomes one slip per package.
+    doc.setDrawColor(203, 213, 225); doc.setLineDashPattern([2, 2], 0)
+    doc.line(M, y - 9, pageW - M, y - 9)
+    doc.setLineDashPattern([], 0)
+    drawn++
+  }
+  if (p.footnote) {
+    if (y + 30 > pageH - M) { doc.addPage(); y = M + 10 }
+    doc.setFontSize(8); doc.setTextColor(100, 116, 139)
+    doc.text(doc.splitTextToSize(p.footnote, pageW - M * 2), M, y + 12)
+  }
+  if (!drawn) return { saved: false, drawn: 0, failed, message: 'None of the codes could be drawn.' }
+  if (audit.watermark) stampPdfFooter(doc, audit.watermark)
+  // `save` is a download. On a phone that is the share sheet — "Save to Files" keeps the PDF on the
+  // device, which is the point: the person is at the UPS system later, possibly without signal.
+  doc.save(`${p.filename}.pdf`)
+  return { saved: true, drawn, failed }
+}
+
 // ---- Print ----
 function esc(s: any) {
   return String(s ?? '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch] as string))
