@@ -112,8 +112,14 @@ function errText(e: unknown): string {
 // What each reason means in words a store person can act on. The platform never prints a reason
 // code at somebody holding a package.
 const REASONS: Record<string, string> = {
+  // WRITTEN FOR WHOEVER IS READING IT, which after 2026-11-20 includes a sales rep who CANNOT add
+  // one — declaring a label type is an admin act (§CORE-33.1). The old wording told them to "add
+  // one below", which is a dead end dressed as an instruction, and a dead end is the thing
+  // §CORE-39 exists to stop. It now names the two ways that work for everybody and points at the
+  // notice further down, which already asks the SERVER whether this viewer may close the gap and
+  // offers to ask whoever can. One string, no role test on the page, right for both readers.
   no_label_types_declared:
-    'No label types have been set up for your company yet, so the printed text cannot be matched. Add one below — or type the reference in, which always works.',
+    'The printed text could not be matched, because no label types have been set up for your company yet. Reading the barcode in the photo still works, and so does typing the reference in by hand — and there is a note further down about getting this set up.',
   no_reference_matched_a_declared_label_type:
     'Nothing on this photo matched the label types set up for your company.',
   nothing_readable: 'Nothing readable on this photo — check it shows the barcode or the reference line.',
@@ -304,26 +310,26 @@ export default function DropoffBarcodePage() {
           what the dark-theme lock refuses and rightly. */}
       <style>{`
         .dbr { padding: 24px; max-width: 1100px; }
-        .dbr-card { border: 1px solid var(--c-border-e5e7eb); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+        .dbr-card { border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
         .dbr-steps { margin: 0 0 14px; padding-left: 22px; font-size: 14px; line-height: 1.55; }
         .dbr-steps li { margin-bottom: 6px; }
         .dbr-shoot { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
           min-height: 48px; padding: 0 20px; border-radius: 10px; font-size: 16px; font-weight: 600;
-          border: 1px solid var(--c-border-e5e7eb); cursor: pointer; }
+          border: 1px solid var(--border); cursor: pointer; }
         .dbr-shoot input { display: none; }
         .dbr-row { display: grid; grid-template-columns: 28px 1fr; gap: 10px; align-items: start;
-          padding: 12px 0; border-bottom: 1px solid var(--c-border-e5e7eb); }
+          padding: 12px 0; border-bottom: 1px solid var(--border); }
         .dbr-ref { font-family: monospace; font-size: 17px; width: 100%; max-width: 300px;
-          padding: 10px; border: 1px solid var(--c-border-e5e7eb); border-radius: 8px;
+          padding: 10px; border: 1px solid var(--border); border-radius: 8px;
           background: transparent; color: inherit; }
         .dbr-meta { font-size: 12px; color: var(--c-fg-6b7280); margin-top: 5px; }
         .dbr-made { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px;
-          align-items: center; padding: 12px 0; border-bottom: 1px dashed var(--c-border-e5e7eb); }
+          align-items: center; padding: 12px 0; border-bottom: 1px dashed var(--border); }
         .dbr-bc { text-align: right; }
         .dbr-bc svg { max-width: 100%; height: auto; }
         .dbr-scroll { overflow-x: auto; }
         .dbr-btn { min-height: 44px; padding: 0 18px; border-radius: 8px; font-size: 15px;
-          border: 1px solid var(--c-border-e5e7eb); background: transparent; color: inherit; cursor: pointer; }
+          border: 1px solid var(--border); background: transparent; color: inherit; cursor: pointer; }
         .dbr-btn[disabled] { opacity: .5; cursor: default; }
         /* A PHONE AT THE COUNTER is this screen's normal case, not its exception: the person holding
            the package is the person taking the photograph. So below 760px every tap target fills the
@@ -607,10 +613,10 @@ function LabelTypes({ profiles, blocked, reload, canDeclare }:
 const h2: React.CSSProperties = { fontSize: 16, fontWeight: 600, marginBottom: 10 }
 const note: React.CSSProperties = { padding: '8px 10px', borderRadius: 6, marginBottom: 10 }
 const input: React.CSSProperties = {
-  padding: '6px 8px', border: '1px solid var(--c-border-e5e7eb)', borderRadius: 6,
+  padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 6,
 }
 const button: React.CSSProperties = {
-  padding: '6px 14px', borderRadius: 6, border: '1px solid var(--c-border-e5e7eb)', cursor: 'pointer',
+  padding: '6px 14px', borderRadius: 6, border: '1px solid var(--border)', cursor: 'pointer',
 }
-const th: React.CSSProperties = { textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid var(--c-border-e5e7eb)' }
-const td: React.CSSProperties = { padding: '6px 8px', borderBottom: '1px solid var(--c-border-e5e7eb)' }
+const th: React.CSSProperties = { textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid var(--border)' }
+const td: React.CSSProperties = { padding: '6px 8px', borderBottom: '1px solid var(--border)' }

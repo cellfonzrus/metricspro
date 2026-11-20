@@ -1,0 +1,16 @@
+# TOKENS A PAGE READS THAT NOTHING DEFINES — the register §I holds to.
+# Each line is a token and how many times it is read with NO fallback, so the read paints nothing.
+# THE LIST MAY ONLY SHRINK. A new token fails the build; fix the reads, then re-pin with
+#   cd frontend && node prove_theme_tokens.mjs --bless
+# The house palette is in src/app/globals.css: --bg --surface --surface2 --border --border2
+# --accent --accent2 --green --amber --red --text --text2 --text3. Most of these are near-misses
+# of one of those (--text1 is --text, --bg2 is --surface2, --danger is --red).
+--bg1	5
+--bg2	30
+--blue	7
+--card	6
+--danger	10
+--line	9
+--muted	20
+--text1	59
+--warn	13
