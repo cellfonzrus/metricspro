@@ -6,6 +6,7 @@ import { readUploadOutcome, type UploadOutcome } from '../_lib/uploadGuard'
 import { safeHref } from '@/lib/safe-url'
 import { usePosTerm } from '@/lib/report-labels'
 import { scopeState, connectorNotApplicableCopy, type ConnectorScope } from '@/lib/connectors'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 // PER-STORE DOWNLOAD CONSOLE (index §COMMCALC-82).
@@ -58,6 +59,16 @@ const STATE_STYLE: Record<CellState, { bg: string; fg: string; mark: string; tit
   // things, so they never share a colour or a mark on this grid.
   unknown: { bg: 'var(--surface2)', fg: 'var(--text3)', mark: '?', title: 'Not measured — the feed could not be read' },
 }
+
+// The grid sorts by its header like every other report here (owner directive 2026-08-10), through
+// `useTableSort` and nothing of its own. Only the two columns that MEAN something across stores are
+// sortable: which store, and how many of its days are still outstanding — the per-day columns are
+// one day each, so sorting by one would be sorting by a single cell. The getter is module scope so
+// the memo does not recompute on every render.
+const F_STORE = 'store'
+const F_MISSING = 'missing'
+const sortCell = (r: StoreRow, field: string) =>
+  field === F_MISSING ? r.missing : r.store
 
 /** The server's own sentence for a refusal, never a guess at one. */
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e || ''))
@@ -185,6 +196,8 @@ export default function PerStoreDownloadsPage() {
   }
 
   const cov = data?.coverage
+  // "Still to fetch, most first" is what an operator opens this screen to do, so that is the seed.
+  const s = useTableSort<StoreRow>(cov?.stores || [], sortCell, { field: F_MISSING, dir: 'desc' })
   return (
     <div style={{ padding: 20, maxWidth: 1180, margin: '0 auto' }}>
       <h1 style={{ fontSize: 22, margin: '0 0 4px' }}>Per-store report download</h1>
@@ -363,33 +376,35 @@ export default function PerStoreDownloadsPage() {
             <table style={{ borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
                 <tr>
-                  <th style={{ textAlign: 'left', padding: '6px 10px', position: 'sticky', left: 0,
-                               background: 'var(--surface)' }}>Store</th>
+                  <SortableTh field={F_STORE} sort={s.sort} onSort={s.toggle}
+                    style={{ textAlign: 'left', padding: '6px 10px', position: 'sticky', left: 0,
+                             background: 'var(--surface)' }}>Store</SortableTh>
                   {cov.days.map(d => (
                     <th key={d} style={{ padding: '6px 4px', fontWeight: 500, whiteSpace: 'nowrap' }}>
                       {d.slice(5)}
                     </th>
                   ))}
-                  <th style={{ padding: '6px 10px' }}>To fetch</th>
+                  <SortableTh field={F_MISSING} sort={s.sort} onSort={s.toggle}
+                    style={{ padding: '6px 10px' }}>To fetch</SortableTh>
                 </tr>
               </thead>
               <tbody>
-                {cov.stores.map(s => (
-                  <tr key={s.store} style={{ background: s.store === storeCode ? 'var(--surface2)' : undefined }}>
+                {s.sorted.map(row => (
+                  <tr key={row.store} style={{ background: row.store === storeCode ? 'var(--surface2)' : undefined }}>
                     <td style={{ padding: '4px 10px', whiteSpace: 'nowrap', position: 'sticky', left: 0,
                                  background: 'var(--surface)' }}>
-                      <button onClick={() => pickStore(s.store)}
+                      <button onClick={() => pickStore(row.store)}
                               style={{ border: 'none', background: 'none', cursor: 'pointer',
                                        padding: 0, font: 'inherit', textDecoration: 'underline' }}>
-                        {s.store}
+                        {row.store}
                       </button>
                     </td>
-                    {s.days.map(c => {
+                    {row.days.map(c => {
                       const st = STATE_STYLE[c.state]
                       return (
                         <td key={c.day} style={{ padding: 2 }}>
-                          <button onClick={() => pickStore(s.store)}
-                                  title={`${s.store} ${c.day} — ${st.title}${c.lines ? ` (${c.lines} lines)` : ''}`}
+                          <button onClick={() => pickStore(row.store)}
+                                  title={`${row.store} ${c.day} — ${st.title}${c.lines ? ` (${c.lines} lines)` : ''}`}
                                   style={{ width: 26, height: 22, borderRadius: 4, cursor: 'pointer',
                                            border: '1px solid var(--border)', background: st.bg,
                                            color: st.fg, fontSize: 11 }}>
@@ -399,7 +414,7 @@ export default function PerStoreDownloadsPage() {
                       )
                     })}
                     <td style={{ padding: '4px 10px', textAlign: 'right' }}>
-                      {cov.measured ? s.missing : '—'}
+                      {cov.measured ? row.missing : '—'}
                     </td>
                   </tr>
                 ))}
