@@ -326,5 +326,52 @@ check("…with both readings kept",
       ("DTHdkRH1RRMA", "DTHdkRHlRRMA"))
 check("no store is None, never an empty string", fixed["store_code"], None)
 
+# ── H. an unread photo is not an empty one ───────────────────────────────────────────────────────
+section("H. WHY a photo yielded nothing — a refusal is never reported as a bad photograph")
+# THE DEFECT THIS PINS (2026-11-20). The screen printed "Nothing readable on this photo" in three
+# different situations, only one of which was about the photograph. The vision read was being
+# refused by the AI guard before it ran — the purpose was never registered and the call site read
+# the verdict off the wrong field — and a store re-took photos of a label nothing would ever read.
+# `unread_reason` is the ONE home both `/read` and `/read-batch` ask, so the two endpoints cannot
+# drift into telling a rep different stories about the same photo.
+from app.modules.storeops.dropoff_label_api import unread_reason as WHY      # noqa: E402
+
+check("no label types declared is said as itself",
+      WHY(profiles=[], ai_meta={"skipped": "no_label_types_declared"}, text=""),
+      "no_label_types_declared")
+check("…and still says itself when the guard is what reported it",
+      WHY(profiles=[], ai_meta={"skipped": "ai_gate:not_storeops_operator"}, text=""),
+      "no_label_types_declared")
+check("★ a photo the text read was REFUSED on is not called unreadable",
+      WHY(profiles=TENANT_A, ai_meta={"skipped": "ai_gate:not_storeops_operator"}, text=""),
+      "text_read_did_not_run")
+check("★ …nor when the guard itself could not be reached",
+      WHY(profiles=TENANT_A, ai_meta={"skipped": "ai_gate_unavailable:TimeoutError"}, text=""),
+      "text_read_did_not_run")
+check("★ …nor when no AI key is configured on the backend",
+      WHY(profiles=TENANT_A, ai_meta={"skipped": "ai_gate:no_key"}, text=""),
+      "text_read_did_not_run")
+check("★ but a photo that WAS read and yielded nothing IS called unreadable",
+      WHY(profiles=TENANT_A, ai_meta={"skipped": "not_attempted"}, text="RED Fri 11/13 no reference"),
+      "nothing_readable")
+check("a bars-only read that found nothing is the photo's own fault, not a refusal",
+      WHY(profiles=TENANT_A, ai_meta={"skipped": "not_attempted"}, text=""), "nothing_readable")
+check("an empty ai record is treated as 'nothing was refused'",
+      WHY(profiles=TENANT_A, ai_meta={}, text=""), "nothing_readable")
+check("CONTROL: the two answers really are different strings",
+      WHY(profiles=TENANT_A, ai_meta={"skipped": "ai_gate:x"}, text="")
+      != WHY(profiles=TENANT_A, ai_meta={}, text=""))
+# The screen must have a sentence for every reason this can return, or a rep sees a bare fallback.
+import re as _re                                                             # noqa: E402
+_page = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "frontend", "src", "app", "(platform)", "storeops",
+                          "dropoff-barcode", "page.tsx"), encoding="utf-8").read()
+_named = set(_re.findall(r"^\s{2}([a-z_]+):", _page[_page.index("const REASONS"):], _re.M))
+_returned = {"no_label_types_declared", "nothing_readable", "text_read_did_not_run"}
+check("every reason the server can return has a sentence on the screen",
+      sorted(_returned - _named), [])
+check("CONTROL: the screen-copy scan actually found the reasons",
+      "nothing_readable" in _named and "text_read_did_not_run" in _named)
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

@@ -61,6 +61,16 @@ DATA_QA_REP = {"super_admin": False, "org_id": "org-1", "id": "u-9",
                "perms": {"modules": {"ai_assistant": True}, "scope": "self"}}
 DATA_QA_STORE = {"super_admin": False, "org_id": "org-1", "id": "u-10",
                  "perms": {"modules": {"ai_assistant": True}, "scope": "store"}}
+# Reading a drop-off label's printed characters (index §STOREOPS-12): the `storeops` module plus any
+# scope the purpose registers — INCLUDING `self`, because the confined rep holding the package is
+# precisely who this exists for. DROPOFF_NO_MODULE below holds a broad scope but NOT the module, so
+# the refusal it proves is about the module and not about the scope.
+DROPOFF_REP = {"super_admin": False, "org_id": "org-1", "id": "u-11",
+               "perms": {"modules": {"storeops": True}, "scope": "self"}}
+DROPOFF_MGR = {"super_admin": False, "org_id": "org-1", "id": "u-12",
+               "perms": {"modules": {"storeops": True}, "scope": "store"}}
+DROPOFF_NO_MODULE = {"super_admin": False, "org_id": "org-1", "id": "u-13",
+                     "perms": {"modules": {"commissions": True}, "scope": "all"}}
 EVERYONE = {"anonymous": None, "super-admin": SUPER, "helpdesk operator": OPERATOR,
             "market manager": MARKET_MGR, "store manager": STORE_MGR, "sales rep": REP,
             "lease holder": LEASE_HOLDER}
@@ -182,7 +192,8 @@ check("an EMPTY authorizer map authorizes nobody",
 
 print("\nE. every OTHER gate applies to EVERY purpose, whatever its predicate")
 HOLDERS = {"control_box_triage": SUPER, "remediation_diagnose": OPERATOR,
-           "lease_extraction": LEASE_HOLDER, "data_qa": DATA_QA_USER}
+           "lease_extraction": LEASE_HOLDER, "data_qa": DATA_QA_USER,
+           "dropoff_label_transcribe": DROPOFF_REP}
 # For each purpose, somebody who is NOT authorized for it — used to prove the authorization gate is
 # decided BEFORE any other state is revealed. `lease_extraction`'s entry is a platform SUPER-ADMIN
 # without the lease capability: a purpose is satisfied on its OWN predicate or not at all.
@@ -190,7 +201,7 @@ HOLDERS = {"control_box_triage": SUPER, "remediation_diagnose": OPERATOR,
 # refusal is about the scope, not about the module being missing. (A SELF scope IS registered since
 # 2026-10-05 and is allowed here — see section G.)
 DENIED = {"control_box_triage": REP, "remediation_diagnose": STORE_MGR, "lease_extraction": SUPER,
-          "data_qa": DATA_QA_STORE}
+          "data_qa": DATA_QA_STORE, "dropoff_label_transcribe": DROPOFF_NO_MODULE}
 for name in sorted(cb.AI_PURPOSES):
     who = HOLDERS[name]
     check("[%s] the per-hour RATE LIMIT bites" % name,

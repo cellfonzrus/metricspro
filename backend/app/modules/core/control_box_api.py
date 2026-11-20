@@ -539,7 +539,7 @@ async def ai_triage(body: TriageIn, org_id: str = "", authorization: str = Heade
         lamp=(row or {}).get("lamp"), config=cfg, usage=usage,
         has_key=bool(settings.ANTHROPIC_API_KEY))
 
-    if not decision.get("allow"):
+    if not cbx.decision_allows(decision):
         _audit(client, cbx.ai_audit_row(org, caller, body.check_key, decision))
         # A refusal is a 403 with the REASON but never the internal state behind it.
         raise HTTPException(403, decision.get("reason") or "Refused.")

@@ -620,6 +620,19 @@ _REMEDIATION_SCOPES = ("all", "market")
 _DATA_QA_MODULE = "ai_assistant"
 _DATA_QA_SCOPES = ("all", "market", "company", "self")
 
+# Reading a drop-off label's PRINTED characters from a photograph (index §STOREOPS-12). Nav parity
+# with the surface itself (frontend `rbac.ts`: module `storeops`), and the scope list is WIDER than
+# that row's because the people this exists for are confined employees: the page reaches a scope
+# `self` rep as a rep-surface TILE (§CORE-33.1), which is not module-gated, so a scope list copied
+# from the nav row would authorize everyone EXCEPT its actual users.
+#
+# WHAT A `self` CALLER GETS HERE IS NOT WIDER THAN ANYONE ELSE'S. Unlike the data assistant, this
+# purpose exposes no tenant data to the caller at all: the subject is the photograph they are
+# holding, and what comes back is the characters on it. There is nothing here that a broader scope
+# could read and a narrower one could not.
+_DROPOFF_LABEL_MODULE = "storeops"
+_DROPOFF_LABEL_SCOPES = ("all", "market", "company", "store", "self")
+
 
 def _auth_super_admin(caller, spec=None):
     """Platform super-admin — the login-level flag, resolved server-side from the verified token."""
@@ -700,6 +713,21 @@ AI_PURPOSES = {
         "require_actionable": False,
         "call_site": "storeops/doc_intel_ai.py (extract_document)",
     },
+    "dropoff_label_transcribe": {
+        "label": "Reading a drop-off label's printed characters from a photo",
+        "authorizer": "module_scope",
+        "module": _DROPOFF_LABEL_MODULE,
+        "scopes": _DROPOFF_LABEL_SCOPES,
+        "deny_code": "not_storeops_operator",
+        # NOT bounded_text, though the first draft reached for it. The caller supplies NO text to
+        # this purpose: the subject is a digest the SERVER computes from the uploaded photo's own
+        # bytes, and the call site hands it in as the only known key. What goes to the model is the
+        # image plus a server-built prompt. The free-text rule is pinned to the two purposes whose
+        # feature IS "describe it in words" (harness_ai_guard_purposes §A), and this is not one.
+        "subject_rule": SUBJECT_REGISTRY_KEY,
+        "require_actionable": False,
+        "call_site": "storeops/dropoff_label_api.py (_transcribe)",
+    },
     "data_qa": {
         "label": "In-app data assistant (questions about this tenant's own reports)",
         "authorizer": "module_scope",
@@ -736,6 +764,8 @@ _DENY = {
     "not_lease_access": "Lease and insurance documents are restricted to management roles.",
     "not_data_qa_operator": "The data assistant needs the AI assistant module and a reporting scope. "
                             "Your reports are still on their own pages.",
+    "not_storeops_operator": "Reading a label's printed characters needs the store operations "
+                             "module. Reading the barcode, and typing the reference in, still work.",
     "unknown_authorizer": "This AI purpose declares no authorization rule, so it is refused.",
     "wrong_purpose": "This key is restricted to registered purposes and refuses any other.",
     "unknown_check": "That check is not in the registry, so there is nothing to triage.",
@@ -881,6 +911,33 @@ def ai_guard_decision(caller, *, purpose=None, check_key=None, subject=None, kno
     return out
 
 
+def decision_allows(decision) -> bool:
+    """THE one reader of an `ai_guard_decision` verdict. PURE.
+
+    Why this exists at all, stated once so nobody re-derives it. The verdict's field is `allow`.
+    One call site spelled it `allowed` — wrapped in a `getattr(decision, "allowed", ...)` fallback
+    that made the mistake unreachable to the eye — so it read `None`, treated that as a refusal, and
+    SILENTLY SKIPPED its AI call for every caller in every tenant from the day it shipped. The
+    feature looked switched off and nothing anywhere said so (2026-11-20, drop-off label reading).
+
+    A fact every caller needs is read through ONE function, never spelled out again at the call site.
+    `harness_ai_gate_one_reader.py` fails the build if a caller goes back to testing the key itself.
+
+    Anything that is not a verdict is NOT an allowance: a None, a string, an exception object or a
+    dict without the field all read as refused, because a guard that cannot decide must refuse.
+    """
+    if not isinstance(decision, dict):
+        return False
+    return decision.get("allow") is True
+
+
+def decision_reason(decision) -> str:
+    """The human sentence for a refusal, from the same one home. Empty when it was allowed."""
+    if decision_allows(decision) or not isinstance(decision, dict):
+        return "" if decision_allows(decision) else "refused"
+    return str(decision.get("reason") or decision.get("code") or "refused")
+
+
 def ai_audit_row(org_id, caller, check_key, decision, *, usage=None, model=None, error=None,
                  purpose=AI_PURPOSE, now=None):
     """The audit row for ONE attempted AI call — allowed or refused. Refusals are logged too: a wall
@@ -897,8 +954,8 @@ def ai_audit_row(org_id, caller, check_key, decision, *, usage=None, model=None,
         "subject_key": (check_key or "")[:80],
         "actor_uid": (caller or {}).get("id") or (caller or {}).get("uid"),
         "actor_email": (caller or {}).get("email"),
-        "allowed": bool((decision or {}).get("allow")),
-        "deny_code": None if (decision or {}).get("allow") else (decision or {}).get("code"),
+        "allowed": decision_allows(decision),
+        "deny_code": None if decision_allows(decision) else (decision or {}).get("code"),
         "model": (model or "")[:120] or None,
         "input_tokens": int(_num(u.get("input_tokens"), 0) or 0),
         "output_tokens": int(_num(u.get("output_tokens"), 0) or 0),
