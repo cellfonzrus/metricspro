@@ -1686,7 +1686,30 @@ _all_routes = _flatten_routes(real_app.routes)
 # caller can answer without asking the org, and
 # backend/tests/integration/test_dropoff_label_endpoints.py asserts one tenant cannot see or match
 # against another's declarations.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1863"))
+# 2026-11-20 (§COMMCALC-82 / §CORE-46, the owner's "pick each store from the drop down menu and then
+# the browser opens up and we down load the file")
+#   1863 -> 1865. TWO routes added and NONE removed, verified the house way:
+#     git diff origin/main..HEAD -- backend/ | grep -E '^[+-].*@router\.'
+#   shows exactly two additions on this branch and nothing deleted.
+#     + /commcalc/per-store-downloads                 GET   (the per-store logins this tenant
+#                                                            declared, and which store-days landed)
+#     + /commcalc/data-sources/{sid}/reveal-password   POST  (show ONE login's stored password, and
+#                                                            record that it was shown)
+# GATE: the console is behind `require_org`, the same gate `GET /commcalc/data-sources` is behind,
+# whose read and public-row stripper it reuses — it carries NO credential in any field. The reveal is
+# additionally behind `_require_import_admin` (core's registered `import_health` settings area,
+# FAIL-CLOSED: no token ⇒ 401, no membership ⇒ 403, membership store errored ⇒ 503), the same gate
+# that gates CHANGING the login, and POST so no credential can ride in a URL.
+# NO stored total, statement, GP, commission, payable or tax figure can move: the console only READS
+# (data_source rows and the feed's own per-store-day fold) and the reveal's ONLY write is one
+# `core.credential_reveal_audit` row — an audit record naming who looked, which holds no part of the
+# credential. A reveal whose audit row cannot be written is REFUSED rather than served unrecorded.
+# Cross-tenant negatives: both routes are org-scoped, and the reveal re-checks the org on the ROW it
+# fetched rather than trusting its own filter;
+# backend/tests/integration/test_per_store_download_console.py asserts at the HTTP boundary that one
+# tenant's logins and landed days are invisible to another, that no payload carries a credential
+# under any key, and that one tenant cannot reveal another's login.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1865"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
