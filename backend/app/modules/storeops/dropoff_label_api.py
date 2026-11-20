@@ -131,6 +131,7 @@ def create_profile(body: dict = Body(...), authorization: str = Header(default="
     moment it is made, with the regular-expression error quoted, rather than silently matching
     nothing later — which would read on the screen as "this label has no reference on it".
     """
+    _require_manager_act(authorization, org_id, "Declaring a label type")
     name = str(body.get("label_name") or "").strip()
     pattern = str(body.get("reference_pattern") or "").strip()
     if not name or not pattern:
@@ -151,15 +152,36 @@ def create_profile(body: dict = Body(...), authorization: str = Header(default="
 
 
 @router.delete("/dropoff-label/profiles/{profile_id}")
-def retire_profile(profile_id: str, org_id: str = ORG_ID):
+def retire_profile(profile_id: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Stop using a label type. It is deactivated, not deleted: scan rows point at it, and an audit
     trail whose declarations vanish answers nothing."""
+    _require_manager_act(authorization, org_id, "Retiring a label type")
     try:
         (sb().table("dropoff_label_profile").update({"active": False})
          .eq("id", profile_id).eq("org_id", org_id).execute())
     except Exception as e:
         raise HTTPException(400, f"could not retire that label type ({str(e)[:160]})")
     return {"retired": True, "id": profile_id}
+
+
+def _require_manager_act(authorization: str, org_id: str, what: str) -> None:
+    """The two writes above DECLARE this organisation's paperwork, and that is an admin act.
+
+    THE SECOND GATE, on purpose (2026-11-20, when the rescue itself was opened to a sales rep). The
+    declaration in `app.core.rep_surface` carves `/dropoff-label/profiles/**` out of what a confined
+    employee may call, so the middleware refuses them before this function runs. That carve-out must
+    not be the ONLY refusal — the module's own rule is that a grant made for one method on a
+    collection is not a grant on its members, and a handler whose authority lives entirely in
+    another file is one edit away from having none. So the authority is asked here as well, from THE
+    one home for "this act is a manager's" (`storeops.router.require_not_individual_contributor`,
+    itself asking `role_is_self_scoped` — §6j), and not re-derived: no role name is tested, so it
+    holds for every tenant.
+
+    Imported inside the function because `storeops.router` imports this module's router at startup;
+    a module-level import would close the circle.
+    """
+    from app.modules.storeops.router import require_not_individual_contributor
+    require_not_individual_contributor(authorization, org_id, what)
 
 
 def _symbology_for(reading: dict, profiles: list[dict], explicit: str | None = None) -> str:
