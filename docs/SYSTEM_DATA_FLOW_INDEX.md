@@ -31230,7 +31230,7 @@ status maps (`cancelled: '#fee2e2'`) whose role is decided where the map is cons
 self-consistent pairs (a pale fill with its own dark ink), so they read as a light patch on black
 rather than as invisible text. The pin may only shrink.
 
-### §CORE-15.4 A TOKEN THAT DOES NOT EXIST PAINTS NOTHING (2026-11-20)
+### §CORE-15.6 A TOKEN THAT DOES NOT EXIST PAINTS NOTHING (2026-11-20)
 
 **The instance.** A sales rep opened the drop-off barcode screen on his phone and the buttons and
 input boxes were bare floating text — no borders, nothing to tap at. The page asked for
