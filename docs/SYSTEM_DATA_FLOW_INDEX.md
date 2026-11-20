@@ -222,6 +222,7 @@ Primary code homes:
 | COMMCALC-80 | **Money we could not classify is still the day's revenue** | A day's revenue was the sum of the categories we could place — but whether WE can classify a line says nothing about whether the store sold it. $22,653.31 of one tenant's October sat on lines no declared category claimed, in a label-keyed bag with no date on it, so a revenue gate failed on days the store had in fact cleared. Does unclassified money count, and may it ever pay a category? |
 | COMMCALC-81 | **A missed gate is not a zero** | A day that missed its qualifying threshold rendered as $0.00 with no reason, so a day two sales short of a five-sale gate looked identical to a day that sold nothing. And a gate withholds the pay not on the units you were short of but on every unit you already sold. How far short was this day, what did the gate cost, and is that a coaching moment or an admin's unfinished rule? |
 | COMMCALC-82 | **"I could not look" is not "there is nothing there"** | The processor's back office refuses automated clients from every address tried, and offers no delivery of its own, so each store's file arrives because a PERSON fetched it — 29 logins, every day. That is only survivable if a screen says what is still outstanding, and the question nothing answered was the NEGATIVE one: the feed knew what had landed and nobody could ask what had not. Writing it exposed the worse half: both legs of the fee reconciliation answered `{}` when their read FAILED, which is the same answer they give for a genuinely empty table — so an unreadable feed flagged a variance on every store-day against zero, and a coverage grid would have sent a person to download 29 files a day that were already landed. Three states, not two: have, missing, unknown. |
+| COMMCALC-83 | **A credential may not travel through a file to reach the database** | Asked to ENTER the 29 per-store back-office logins himself, the owner's own route would have been a SQL script — which means 29 plaintext passwords in a project file, a commit and a chat message, the exact thing the credential registry exists to prevent. There was no door between "one login on a form" and "a script": a tenant whose every store has its own login could only be served 29 visits at a time. One POST now takes a pasted block and stores each row through the SAME writer the form uses, so the sealing cannot be true of one door and not the other, and a store this organisation has not declared is REPORTED rather than guessed at — "29 entered" must never mean 23. Nothing it answers carries a password: a line is quoted back with every cell it cannot NAME, and the password, replaced by its length. |
 | COMMCALC-76 | **A weekly review pack is one fold, read from the reports that own its figures** | The owner asked for the LuxeLink performance deck as an in-app report on the Management tile, admins only, one report per market plus a consolidated one, with inventory aging per carrier among its items, generated at the end of each week for the Monday review with the DMs — and on demand. It derives nothing: profit, commission, the accessory gap, growth, the reps behind, aging and payroll are each QUOTED from the surface that already owns them, and the fold is pure, so a second derivation cannot grow beside the report it quotes. An item nobody measured carries no figure and says why in words; a store no market claims gets its own named scope rather than vanishing between the market packs and the company one; and the market vocabulary is a required argument, so nothing declared means nothing identified. The gate is the server's on every door — a company-wide reporting scope is not an administrator. **Corrected 2026-11-17 (§COMMCALC-76.8):** profit now quotes the P&L's own `profit_by_store`, not the GP report (the two differed by $366k on one org in one month); aging quotes the whole shelf per carrier, not the owed>0 subset in which everything is already overdue; and a row the scope cannot match is kept on the consolidated pack and counted, never dropped — which is what had made October's commission read as nothing. Every item now carries the sentences that explain it, and the pack downloads as a deck (§COMMCALC-76.9) whose DESIGN has one home in `notify/render.build_pptx` — tone, stat cards, charts and banded tables, so every caller of the house file writer gets the same face (§COMMCALC-76.10). |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
@@ -7710,6 +7711,7 @@ every store's record is a report (§STOREOPS-12, §CORE-33.1).
 | `POST /storeops/document-extract` (read an uploaded lease / policy / COI with AI into a REVIEWABLE draft). Gated `can_see_lease` (fail-closed 403), then GUARDED (purpose `lease_extraction`, mig `983`): same predicate, plus bounded subject (this org's own document id), rate limit, daily call + token budget and a full audit. No key / AI off ⇒ clean empty `not_extracted` draft; every other refusal ⇒ 403. `run_in_threadpool` (SEV-1 2026-07-30) | `storeops/router.py` (`post_document_extract` / `_extract_and_store` / `_persist_extraction`); `storeops/doc_intel_ai.extract_document` | §14 doc intel (mig `965`) + §20 AI guard (migs `972`/`983`) |
 | `POST /commcalc/data-sources/{sid}/live-login/submit-totp` | `router.py:live_login_submit_totp` | §12a authenticator-app code into the live session (never SMS/email OTP) |
 | `GET /commcalc/per-store-downloads` (`?connector=&date_from=&date_to=`) | `commcalc/router.per_store_downloads` → `_strip_source_pw` (the logins) + `commcalc/feed_day_coverage.coverage` (what landed) | §COMMCALC-82 — the per-store download console's ONE round trip: the logins this tenant declared a STORE on, each with its portal address and the upload door a hand-fetched report arrives through (`processor_backoffice_sweep.arrival_type`, dereferenced from the feed's `UPLOAD_TYPE` — never a sibling route), plus the store-by-day grid. Reads what landed through the feed's OWN `epay_ingest.per_store_day`, so this screen cannot disagree with the fee reconciliation about what arrived. A read that FAILED answers `measured: false` — never "no store declared", which would send an operator to re-enter 29 logins. No credential in the payload. Proof `harness_feed_day_coverage.py` + `tests/integration/test_per_store_download_console.py` |
+| `POST /commcalc/data-sources/import` | `commcalc/router.import_data_sources` → `commcalc/portal_login_import.parse` (pure) → `router._save_source_row` (the one writer) | §COMMCALC-83 — paste once, many per-store portal logins. The parser is PURE and imports NOTHING: which store a pasted spelling means is answered by `router._intake_store_resolver` (§13a) over the asking org's own roster, so a store another tenant declared reads as `unresolved` and no credential is filed under it. Every row is stored by the same writer `PUT /data-sources` uses, which is what seals the password (`core/portal_secret`), runs the SSRF guard on the portal address and drops columns the database is behind on — a second writer here would be the one place "sealed" could silently stop being true. Gated on `_require_import_admin`. `dry_run` reports what WOULD happen and writes nothing. A failed read of the stored logins REFUSES the import rather than giving every store a duplicate. Proof `harness_portal_login_import.py` + `tests/integration/test_portal_login_import.py` |
 | `POST /commcalc/data-sources/{sid}/reveal-password` | `commcalc/router.reveal_source_password` → `core/credential_reveal.reveal` | §CORE-46 — SHOW one login's stored password and RECORD that it was shown. Gated on `_require_import_admin` (core's registered `import_health` settings area, FAIL-CLOSED), org-scoped on the ROW that came back, POST so no credential rides in a URL a proxy or access log would keep. The audit row (`core.credential_reveal_audit`, migration 1128) is written BEFORE the value is returned and carries no part of it; an un-run migration means the reveal is REFUSED with the migration named. Proof `tests/unit/test_credential_reveal.py` + §F of `harness_feed_day_coverage.py` |
 | `POST /calculate/{period}` | `router.py:8968` | §6 rep commission |
 | `GET /commissions/{period}` | `10222` | §6 — the Rep Incentive Report read; market stamped per row via §13a (2026-09-03 fix) |
@@ -26520,6 +26522,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-80 | commcalc |
 | COMMCALC-81 | commcalc |
 | COMMCALC-82 | commcalc |
+| COMMCALC-83 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -51160,6 +51163,86 @@ carrier or tenant name appears in the module, the endpoint or the screen.
 Related: §COMMCALC-74/75 (the refusal and the transport door) · §COMMCALC-59 (the per-store pull and
 the span it owes) · §COMMCALC-07 (the one pull loop) · §PAYABLES-02 (a row count is not a
 measurement) · §CORE-46 (the password this screen shows, and the record of who saw it).
+
+
+## §COMMCALC-83. A CREDENTIAL MAY NOT TRAVEL THROUGH A FILE TO REACH THE DATABASE (owner ask 2026-11-20)
+
+Owner, 2026-11-20, of the 29 per-store ePay back-office logins the download console (§COMMCALC-82)
+needs: **"Enter those for me"**.
+
+### COMMCALC-83.1 WHY THIS IS A MECHANISM AND NOT AN ERRAND
+
+The literal request could not be honoured and the near-miss was the dangerous part. There are only
+two ways to "enter them for someone": sign in as them, or hand them a SQL script. The script would
+put 29 plaintext portal passwords into a project file, a commit and a chat message — precisely what
+`core/portal_secret` (§CORE-03) exists to prevent, and a second copy of a leak that had already
+happened once when they were pasted into chat.
+
+The actual gap was in the platform, not in the errand: between **one login on a form** and **a
+script** there was no door at all. A tenant whose every store has its own login — 29 of them, which
+is the normal shape for a per-store processor back office — could only ever be served one visit at a
+time. So the answer is a door: ONE post that takes the block the operator already has and stores it.
+
+**The rule this establishes, for every credential this platform will ever hold.** A credential's
+path from the person who knows it to the sealed column may not pass through a file, a commit, a log
+line or a message. Where a bulk entry is needed, it is a POST, never an export.
+
+### COMMCALC-83.2 ONE WRITER, OR THE SEALING IS A COINCIDENCE
+
+`router._save_source_row` is now the ONE home for "write one portal login", and both doors
+dereference it: the settings form (`PUT /data-sources`) and the import (`POST
+/data-sources/import`). It is the only place `portal_secret.seal_row("data_source", …)` is called,
+and it also owns the SSRF guard on the portal address and the §PAYABLES-01 drop of columns the
+production schema is behind on.
+
+This is the whole design. A bulk importer with its own insert would be the one place "the password
+is encrypted at rest" could silently stop being true — and nothing about the screen would look
+different the day it did. `harness_portal_login_import.py` §C fails the build if the import writes
+the table itself, or if a second `seal_row("data_source", …)` call appears.
+
+### COMMCALC-83.3 NO SECOND OPINION ABOUT WHICH STORE A WORD MEANS
+
+`portal_login_import` is PURE and **imports nothing at all** — no store matcher, no client. "This
+spelling is that store" is already answered once for the whole platform by
+`router._intake_store_resolver` over the org's union roster (§13a: alias → address → code, `None`
+for anything that is not one of the org's own stores), and the parser takes that resolver as an
+argument. A store renamed in the roster therefore cannot mean one thing here and another everywhere
+else, and a pasted store code from ANOTHER tenant resolves to nothing rather than to their store.
+
+### COMMCALC-83.4 THREE STATES AGAIN, BECAUSE A SILENT DROP READS AS SUCCESS
+
+Each line is `ready`, `skipped` (naming the missing field, or the earlier line that already claimed
+that store) or `unresolved` (its store is a spelling this organisation has not declared). An
+unresolved line is neither guessed at nor dropped: guessing files a store's credentials under
+another store, and dropping makes **"29 entered" mean 23**. The counts an operator reads are of what
+was STORED, and every non-blank line is accounted for. Same class as §COMMCALC-82 and §PAYABLES-02.
+
+A read of the already-stored logins that FAILS refuses the whole import rather than inserting on the
+assumption that the tenant has none — which would give every store a second login.
+
+### COMMCALC-83.5 THE PASSWORD IS NEVER IN AN ANSWER
+
+By construction rather than by care: `redacted_line` is the only shape the endpoint echoes, and it
+quotes a cell back only when it is a field known NOT to be a secret — the password cell and any cell
+the parser cannot NAME are replaced by their LENGTH. That second half matters: a paste can hold more
+cells than its header declares (a password containing the separator, a header that omits the password
+column), and then the credential sits under no name at all, so "echo whatever we could not identify"
+is the one shape that would put a password back on screen. The parser calls no logger and no printer, and the lock
+asserts both from the AST. `dry_run` lets an operator see 29 stores matched before committing 29
+credentials.
+
+| what | where |
+| --- | --- |
+| the parser (pure, imports nothing) | `backend/app/modules/commcalc/portal_login_import.py` |
+| the one writer | `commcalc/router._save_source_row` — both doors dereference it |
+| the import door | `POST /commcalc/data-sources/import` (`commcalc/router.import_data_sources`) |
+| the screen | `frontend/src/app/(platform)/commcalc/email-imports/page.tsx` — Configurations → Data Imports & Connectors → 📡 Payment-processor sources → 📋 Import many logins at once |
+| the lock | `backend/harness_portal_login_import.py` (42 checks, CI job "A pasted credential reaches the sealed column and nothing else") |
+| tests | `tests/unit/test_portal_login_import.py`, `tests/integration/test_portal_login_import.py` |
+
+Related: §COMMCALC-82 (the console these logins feed) · §CORE-03 (the credential registry that
+seals them) · §CORE-46 (showing one back, and recording who looked) · §13a (the one store resolver)
+· §PAYABLES-01 (a save must not fail because the database is behind the code).
 
 
 ## §ACCOUNT-06. WHICH SOURCE IS A TENANT'S SALARY AUTHORITY (owner ruling 2026-11-16)

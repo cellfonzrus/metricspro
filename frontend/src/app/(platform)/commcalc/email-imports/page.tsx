@@ -87,6 +87,16 @@ const LIVE_FRAME_NUDGE_MS = 90   // right after an input, when the result is abo
 const providerOf = (host: string) =>
   Object.keys(PROVIDERS).find(k => PROVIDERS[k].imap_host && PROVIDERS[k].imap_host === (host || '')) || 'custom'
 
+/** What `POST /commcalc/data-sources/import` answers (§COMMCALC-83). `cells` is the line quoted
+ *  back with the password replaced by its LENGTH — there is no field here that could hold one. */
+interface ImportLine { line: number; verdict: 'ready' | 'skipped' | 'unresolved'; reason: string; cells: string[] }
+interface ImportResult {
+  ok?: boolean; dry_run?: boolean
+  imported?: number; updated?: number; would_create?: number; would_update?: number
+  ready?: number; skipped?: number; unresolved?: number
+  note?: string; lines?: ImportLine[]; failed?: { store_code: string; note: string }[]
+}
+
 export default function EmailImportsPage() {
   // THE REGISTRY (design §7): the declared POS standard's filename rules restricted to the kinds this
   // tenant may upload, the upload types a rule may route to, and the standard the preset applies.
@@ -116,6 +126,15 @@ export default function EmailImportsPage() {
   const [srcReady, setSrcReady] = useState(true)
   const [srcDraft, setSrcDraft] = useState<any>(null)   // add/edit form for a data-source login
   const [srcMsg, setSrcMsg] = useState('')
+  // PASTE-ONCE LOGIN IMPORT (§COMMCALC-83). A per-store portal credential may not travel through a
+  // file, a commit or a chat message, so a tenant with 29 stores pastes its block HERE, once, and
+  // the backend seals each password as it stores it. The paste never leaves this component.
+  const [impOpen, setImpOpen] = useState(false)
+  const [impProcessor, setImpProcessor] = useState('')
+  const [impPortal, setImpPortal] = useState('')
+  const [impText, setImpText] = useState('')
+  const [impBusy, setImpBusy] = useState('')
+  const [impResult, setImpResult] = useState<ImportResult | null>(null)
   const [proxyTest, setProxyTest] = useState<any>(null) // { proxy, direct, routed_through_proxy, is_us, summary }
   const [proxyBusy, setProxyBusy] = useState(false)
   // 🔧 What the pull saw — the per-report outcome + the portal's own report vocabulary (mig 242).
@@ -492,6 +511,31 @@ export default function EmailImportsPage() {
       const r: any = await api('/api/v1/commcalc/data-sources'); setSources(r.sources || [])
     } catch (e: any) { setSrcMsg('❌ ' + (e?.message || e)) }
   }
+  // `dry` reads the paste and reports what WOULD happen without writing — 29 credentials are worth
+  // seeing matched first. On a real import the pasted text is CLEARED on success, so the block does
+  // not sit in a browser tab behind the operator.
+  async function importSources(dry: boolean) {
+    setImpBusy(dry ? 'check' : 'import'); setImpResult(null)
+    try {
+      const r = (await api('/api/v1/commcalc/data-sources/import', {
+        method: 'POST',
+        body: JSON.stringify({ processor: impProcessor, portal_url: impPortal, text: impText,
+                               dry_run: dry }),
+      })) as ImportResult
+      setImpResult(r)
+      if (!dry && ((r?.imported ?? 0) > 0 || (r?.updated ?? 0) > 0)) {
+        setImpText('')
+        try {
+          const l = (await api('/api/v1/commcalc/data-sources')) as { sources?: unknown[] } | null
+          setSources(l?.sources || [])
+        } catch { /* keep list */ }
+      }
+    } catch (e: unknown) {
+      setImpResult({ ok: false, note: e instanceof Error ? e.message : 'The import failed.' })
+    }
+    setImpBusy('')
+  }
+
   async function delSource(s: any) {
     if (!confirm(`Delete login "${s.label || s.username || s.processor}"?`)) return
     try { await api(`/api/v1/commcalc/data-sources/${s.id}`, { method: 'DELETE' }); const r: any = await api('/api/v1/commcalc/data-sources'); setSources(r.sources || []) }
@@ -1132,6 +1176,96 @@ export default function EmailImportsPage() {
           above or the Data Imports page.
         </p>
         {!srcReady && <div style={{ padding: 10, marginBottom: 10, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', borderRadius: 8, fontSize: 13 }}>⚠️ <SetupNotice detail="083_total_processor_sources.sql" /></div>}
+
+        {/* ── PASTE ONCE, MANY LOGINS (§COMMCALC-83) ────────────────────────────────────────────
+            A tenant whose every store has its OWN portal login (29 of them, for the per-store
+            download console) cannot be asked to fill the form below 29 times. The password is
+            sealed by the same writer the form uses, and the answer quotes each line back with the
+            password replaced by its LENGTH — the value is never echoed, logged or stored anywhere
+            but the sealed column. */}
+        <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+          <button className="btn btn-secondary" style={{ fontSize: 12 }}
+                  onClick={() => setImpOpen(o => !o)}>
+            {impOpen ? '▾' : '▸'} 📋 Import many logins at once
+          </button>
+          {impOpen && (
+            <div style={{ marginTop: 10 }}>
+              <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 10px' }}>
+                For a connector where every store has its own login. Paste one store per line —
+                store code (or a store name this organisation has declared), username, password —
+                separated by tabs, commas or pipes. A header row is optional. Check first: nothing
+                is stored until you press Import. A store that already has a login for this
+                connector is updated rather than given a second one.
+              </p>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+                <label style={{ fontSize: 12 }}>Connector
+                  <select value={impProcessor} onChange={e => setImpProcessor(e.target.value)}
+                          style={{ display: 'block', minWidth: 200, padding: '6px 8px', marginTop: 4 }}>
+                    <option value="">— pick a connector —</option>
+                    {connectors.visible.map(r => (
+                      <option key={r.key} value={r.key}>{r.label || r.key}</option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ fontSize: 12, flex: 1, minWidth: 260 }}>Portal address (applied to every login)
+                  <input value={impPortal} onChange={e => setImpPortal(e.target.value)}
+                         placeholder="https://…"
+                         style={{ display: 'block', width: '100%', padding: '6px 8px', marginTop: 4 }} />
+                </label>
+              </div>
+              <textarea value={impText} onChange={e => setImpText(e.target.value)} rows={8}
+                        spellCheck={false} autoComplete="off"
+                        placeholder={'B-1115\tstore1115\t••••••••\nB-1598\tstore1598\t••••••••'}
+                        style={{ width: '100%', padding: 8, fontFamily: 'monospace', fontSize: 12,
+                                 borderRadius: 7, border: '1px solid var(--border)' }} />
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+                <button className="btn btn-secondary" style={{ fontSize: 12 }}
+                        disabled={!!impBusy || !impProcessor || !impText.trim()}
+                        onClick={() => importSources(true)}>
+                  {impBusy === 'check' ? 'Checking…' : 'Check without storing'}
+                </button>
+                <button className="btn" style={{ fontSize: 12 }}
+                        disabled={!!impBusy || !impProcessor || !impText.trim()}
+                        onClick={() => importSources(false)}>
+                  {impBusy === 'import' ? 'Importing…' : 'Import'}
+                </button>
+                <span style={{ fontSize: 11, color: 'var(--text3)' }}>
+                  Passwords are encrypted as they are stored, and never shown back to you here.
+                </span>
+              </div>
+              {impResult && (
+                <div style={{ marginTop: 10, fontSize: 13 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                    {impResult.ok === false ? '⚠️ ' : impResult.dry_run ? '👀 ' : '✅ '}
+                    {impResult.note || ''}
+                  </div>
+                  {impResult.dry_run && (
+                    <div style={{ marginBottom: 6 }}>
+                      {impResult.would_create ?? 0} to create, {impResult.would_update ?? 0} to update.
+                    </div>
+                  )}
+                  {/* Deliberately a LIST and not a table: it is a per-line account of one action,
+                      not data to sort or compare across rows. */}
+                  <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 260, overflowY: 'auto' }}>
+                    {(impResult.lines || []).map(l => (
+                      <li key={l.line} style={{ marginBottom: 2,
+                            color: l.verdict === 'ready' ? 'var(--text)' : 'var(--c-fg-92400e)' }}>
+                        Line {l.line}: {(l.cells || []).join(' · ')} — {l.reason}
+                      </li>
+                    ))}
+                  </ul>
+                  {(impResult.failed?.length ?? 0) > 0 && (
+                    <ul style={{ margin: '6px 0 0', paddingLeft: 18, color: 'var(--c-fg-92400e)' }}>
+                      {(impResult.failed || []).map(f => (
+                        <li key={f.store_code}>{f.store_code}: {f.note}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
         {srcMsg && <div style={{ fontSize: 13, marginBottom: 8 }}>{srcMsg}</div>}
 
         {sources.length > 0 && (

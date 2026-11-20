@@ -212,6 +212,25 @@ jobs:
         working-directory: backend
         run: python harness_feed_day_coverage.py
 
+  portal-login-import-lock:
+    # A credential may not travel through a file to reach the database (index §COMMCALC-83). The
+    # gate: both doors that store a portal login go through the ONE writer that seals it, the
+    # parser owns no second opinion about which store a pasted word means, and no answer anywhere
+    # carries the pasted password. Wired on the day the harness was written — a harness no workflow
+    # runs is a file, not a gate.
+    name: A pasted credential reaches the sealed column and nothing else (lock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: backend/requirements-dev.txt }
+      - name: install
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+      - name: harness_portal_login_import
+        working-directory: backend
+        run: python harness_portal_login_import.py
+
   test-discipline:
     # The lock: the framework above cannot quietly come undone. It RUNS conftest's network guard
     # against a production hostname rather than reading the source for it.
