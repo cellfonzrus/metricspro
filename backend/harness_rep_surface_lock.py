@@ -62,6 +62,7 @@ TM = read("backend", "app", "core", "tenant_middleware.py")
 SO = read("backend", "app", "modules", "storeops", "router.py")
 HR = read("backend", "app", "modules", "hr", "router.py")
 CORE = read("backend", "app", "modules", "core", "router.py")
+DL = read("backend", "app", "modules", "storeops", "dropoff_label_api.py")
 
 # ── 1. ONE DECLARATION ───────────────────────────────────────────────────────────────────────────
 print("\n1. the declaration is the only list")
@@ -146,9 +147,36 @@ check("4a the gate is defined ONCE", SO.count("def require_person_write") == 1
 check("4b it dereferences the §14w one home and derives no span of its own",
       "schedule_emp_ids(authorization, org_id)" in
       SO[SO.index("def person_write_allowed"):SO.index("def require_person_write")])
-check("4c manager authority is THE self-scope answer, not a role-name list",
-      "role_is_self_scoped(org_id," in SO[SO.index("def require_person_write"):
-                                          SO.index("def require_person_write") + 1200])
+# 4c THE ONE HOME for "this act is a manager's". Extracted 2026-11-20 from the `manager_only`
+# branch, because the first act that needed it was not about a person at all (a tenant DECLARING a
+# drop-off label type), and passing that through `require_person_write` would have refused managers
+# too — so a copy of the role test would have appeared beside it. Both halves are pinned: the one
+# home asks the self-scope answer, and `require_person_write` dereferences the one home.
+def body_of(src, name):
+    """One top-level function's text, from its `def` to the next one. A CHARACTER WINDOW was used
+    here before and it is the wrong tool: it silently stops at an arbitrary offset, so a docstring
+    that grows moves the thing being pinned out of view and the check goes red for no reason the
+    reader can see (it did, 2026-11-20). The function's own extent is the honest boundary, and a
+    stricter one — nothing from the NEXT function can satisfy a check about this one."""
+    i = src.index("def %s(" % name)
+    nxt = re.search(r"^(?:def |class |@)", src[i + 4:], re.M)
+    return src[i: i + 4 + nxt.start()] if nxt else src[i:]
+
+
+_RNIC = "def require_not_individual_contributor"
+check("4c manager authority is THE self-scope answer, not a role-name list, asked in ONE place",
+      SO.count(_RNIC) == 1
+      and "role_is_self_scoped(org_id," in body_of(SO, "require_not_individual_contributor"))
+check("4c2 require_person_write dereferences that one home rather than re-spelling the role test",
+      "require_not_individual_contributor(authorization, org_id, what)" in
+      body_of(SO, "require_person_write")
+      and "role_is_self_scoped" not in body_of(SO, "require_person_write"))
+check("4c3 the label-type writes ask it too, so the rep_surface carve-out is not the only gate",
+      "require_not_individual_contributor" in DL and _RNIC not in DL
+      and '_require_manager_act(authorization, org_id, "Declaring a label type")' in DL
+      and '_require_manager_act(authorization, org_id, "Retiring a label type")' in DL)
+check("4c4 …and the route that asks takes an authorization header to ask with",
+      "def retire_profile(profile_id: str, authorization: str = Header(default=\"\")" in DL)
 WIRED = {
     "add_manual_hours": (SO, 'require_person_write(authorization, org_id, employee_id, "Adjusting hours", manager_only=True)'),
     "delete_manual_hours": (SO, '"Removing an hours adjustment", manager_only=True'),
@@ -210,6 +238,9 @@ API_EXCEPT = {
     "/api/v1/storeops/shift-extensions/**",
     "/api/v1/helpdesk/config/**", "/api/v1/helpdesk/support/**",
     "/api/v1/closing/row/**", "/api/v1/chat/admin/**",
+    # 2026-11-20: a tenant's drop-off label DECLARATIONS. The rescue was opened to a confined
+    # employee; retiring one of the organisation's declarations was not.
+    "/api/v1/storeops/dropoff-label/profiles/**",
 }
 _ae = {m for grp in re.findall(r'"api_except":\s*\(([^)]*)\)', RS)
        for m in re.findall(r'"([^"]+)"', grp)}
@@ -253,6 +284,7 @@ DECLARED_PAGES = {
     "/helpdesk/settings",
     "/my/**",
     "/portal/**",
+    "/storeops/dropoff-barcode",
     "/storeops/swaps",
     "/storeops/timeoff",
     "/training/**",

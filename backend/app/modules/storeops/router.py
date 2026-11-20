@@ -9456,15 +9456,37 @@ def person_write_allowed(authorization: str, org_id: str = ORG_ID, employee_id=N
     return str(employee_id or "") in {str(e) for e in eids}
 
 
+def require_not_individual_contributor(authorization: str, org_id: str, what: str) -> None:
+    """Refuse an INDIVIDUAL CONTRIBUTOR a manager/admin action that is not ABOUT a person.
+
+    THE ONE HOME for "this act is a manager's", extracted 2026-11-20 from the `manager_only` branch
+    of `require_person_write` below — which still dereferences it, so there is one answer and not
+    two. It was extracted because the first act that needed it was not about an employee at all: a
+    tenant DECLARING a drop-off label type (`storeops/dropoff_label_api`). Passing that write
+    through `require_person_write` would have asked `person_write_allowed(..., employee_id=None)`,
+    which refuses a MANAGER too, so a copy of the role test would have appeared beside it — the
+    second copy the house rules forbid. `role_is_self_scoped` (§6j) is THE answer to who is an
+    individual contributor; no role NAME is tested here, so this holds for every tenant.
+
+    FAILS OPEN only where it cannot identify the caller at all: a request with no recognised
+    app_user row is not refused HERE, because that is the tenant boundary's job and refusing it here
+    would strand an in-process sweep or a tenant with logins off. The surface this guards is also
+    carved out of `app.core.rep_surface`, so a confined employee is refused before the handler runs
+    and neither gate is the only one.
+    """
+    au = _caller_app_user(authorization, org_id) or {}
+    if au and role_is_self_scoped(org_id, (au.get("role") or "").strip()):
+        raise HTTPException(403, f"{what} is a manager action. Your access does not include it.")
+
+
 def require_person_write(authorization: str, org_id: str, employee_id, what: str,
                          *, manager_only: bool = False) -> None:
     """Refuse a write about a person this caller may not write about. `manager_only` additionally
     refuses an INDIVIDUAL CONTRIBUTOR writing about themselves — adjusting payroll hours is a
-    manager's act, and a rep adjusting their own hours is the very thing the owner stopped."""
+    manager's act, and a rep adjusting their own hours is the very thing the owner stopped. That
+    half is DEREFERENCED from the one home above, never re-spelled here."""
     if manager_only:
-        au = _caller_app_user(authorization, org_id) or {}
-        if au and role_is_self_scoped(org_id, (au.get("role") or "").strip()):
-            raise HTTPException(403, f"{what} is a manager action. Your access does not include it.")
+        require_not_individual_contributor(authorization, org_id, what)
     if not person_write_allowed(authorization, org_id, employee_id):
         raise HTTPException(403, f"{what} is not available for this employee — they are not in your team.")
 

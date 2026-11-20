@@ -1,7 +1,10 @@
 'use client'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/client'
+import { useAuth } from '@/lib/auth-context'
+import { repConfined } from '@/lib/rbac'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import { exportCodeSheetToPDF } from '@/lib/export'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
 import { FixItNotice, useFixGuide } from '@/lib/fix-it'
@@ -20,6 +23,21 @@ import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterVa
 // So a text read arrives with its confusable characters highlighted and the Print button says what
 // it is about to commit to. A DECODED barcode (the bars themselves, check-verified) is not treated
 // that way, because it is a fact rather than a reading.
+//
+// WHO IS HOLDING THE PHONE (owner 2026-11-20: *"Grant the sales rep this and also give step by step
+// instructions on the page when the sales rep is ready to take a picture of the items"*). The person
+// who takes the return over the counter is the rep, so this screen is theirs — on a phone, standing
+// at the counter, with the package in one hand. Two things follow, and neither is a style choice:
+//
+//   · THE STEPS ARE ON THE SCREEN, beside the camera button, not in a manual nobody opens. A photo
+//     taken at an angle under a ceiling light is the single reason a read fails, and that is fixable
+//     by the person taking it IF they are told before they take it.
+//   · WHAT A CONFINED EMPLOYEE MAY REACH IS NOT DECIDED HERE. `backend/app/core/rep_surface.py` is
+//     THE declaration (index §CORE-33) and the API middleware refuses on it; this page READS the
+//     same fact off `/me` (`repConfined`) for one purpose only — not to ask for something it already
+//     knows will be refused, so a rep sees their job instead of a red box. A second opinion about
+//     who may do what is exactly the browser-side gate that declaration exists to kill, so there is
+//     no page list, no role name and no module test anywhere in this file.
 
 interface Reading {
   source: 'barcode' | 'text' | null
@@ -103,6 +121,10 @@ const REASONS: Record<string, string> = {
 }
 
 export default function DropoffBarcodePage() {
+  // THE declaration's answer, served by /me. `confined` is true for an individual contributor and
+  // false for everyone else, including a store manager — who is not confined and keeps the record.
+  const { permissions } = useAuth()
+  const confined = repConfined(permissions)
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [declaredBlocked, setDeclaredBlocked] = useState('')
   const [busy, setBusy] = useState(false)
@@ -122,7 +144,11 @@ export default function DropoffBarcodePage() {
   const loadScans = useCallback(() => {
     api(`${BASE}/scans?limit=200`).then((r: ScansResponse) => setScans(r.scans || [])).catch(() => setScans([]))
   }, [])
-  useEffect(() => { loadProfiles(); loadScans() }, [loadProfiles, loadScans])
+  // The organisation-wide rescue record is a REPORT and is not granted to a confined employee
+  // (`rep_surface`: `/dropoff-label/scans` is not in their surface). Not asked for, rather than
+  // asked for and refused: a 403 in the console at somebody holding a package teaches them that the
+  // screen is broken. Their own sheet is in step 3, which is the part of it that is theirs.
+  useEffect(() => { loadProfiles(); if (!confined) loadScans() }, [loadProfiles, loadScans, confined])
 
   async function onPhotos(files: FileList) {
     setBusy(true); setMsg(''); setMade([]); setRows([]); setUnread([])
@@ -193,6 +219,39 @@ export default function DropoffBarcodePage() {
     } catch (e: unknown) { setMsg('❌ ' + errText(e)) } finally { setBusy(false) }
   }
 
+  // SAVE, not print (owner 2026-11-20: *"How will they print from the phone, it should save as a
+  // pdf on their phone to be used when they re by the ups system"*). A store phone has no printer
+  // paired, and the print window below is a pop-up a phone browser blocks as often as it opens. A
+  // PDF download lands in the share sheet, and "Save to Files" keeps it on the device — which is
+  // what the job needs: the codes are shown at the UPS system later, possibly out of signal.
+  //
+  // PRINT IS KEPT BESIDE IT, not replaced: a store with a desktop and a label printer still wants
+  // paper in one tap. Both render from the SAME `made` array the screen is showing, so the two
+  // destinations cannot disagree about which packages are on the sheet.
+  async function savePdf() {
+    setBusy(true)
+    try {
+      const r = await exportCodeSheetToPDF({
+        report: 'Drop-off barcode rescue',
+        title: 'Drop-off barcodes',
+        subtitle: storeCode.trim() ? `Store ${storeCode.trim()}` : undefined,
+        filename: `dropoff-barcodes-${new Date().toISOString().slice(0, 10)}`,
+        items: made.map(m => ({
+          reference: m.reference,
+          svg: m.svg,
+          note: m.verified_symbology === false
+            ? 'rebuilt from the reference, not a proven copy' : undefined,
+        })),
+        footnote: 'Cut along the dashed lines. Check each code against its package before scanning it in.',
+      })
+      setMsg(r.saved
+        ? `Saved ${r.drawn} barcode${r.drawn === 1 ? '' : 's'} as a PDF.` +
+          (r.failed.length ? ` ${r.failed.length} could not be drawn: ${r.failed.join(', ')}.` : '') +
+          ' On a phone, choose Save to Files to keep it.'
+        : ('\u274c ' + (r.message || 'The PDF could not be made.')))
+    } catch (e: unknown) { setMsg('\u274c ' + errText(e)) } finally { setBusy(false) }
+  }
+
   function printSheet() {
     if (!made.length) return
     const w = window.open('', '_blank', 'width=820,height=900')
@@ -236,29 +295,88 @@ export default function DropoffBarcodePage() {
   const scanSort = useTableSort(shown, scanCell)
 
   return (
-    <div style={{ padding: 24, maxWidth: 1100 }}>
+    <div className="dbr">
+      {/* THE LAYOUT IS CSS, not a width this component measures. A hook that reads window width
+          renders the desktop shape first and then swaps, which on a phone at a counter is a visible
+          jump and, during the server render, the WRONG shape in the HTML. A media query has decided
+          before the first paint. The class names are prefixed so nothing here can reach another
+          screen, and every colour is a theme token or `currentColor` — never a literal, which is
+          what the dark-theme lock refuses and rightly. */}
+      <style>{`
+        .dbr { padding: 24px; max-width: 1100px; }
+        .dbr-card { border: 1px solid var(--c-border-e5e7eb); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+        .dbr-steps { margin: 0 0 14px; padding-left: 22px; font-size: 14px; line-height: 1.55; }
+        .dbr-steps li { margin-bottom: 6px; }
+        .dbr-shoot { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+          min-height: 48px; padding: 0 20px; border-radius: 10px; font-size: 16px; font-weight: 600;
+          border: 1px solid var(--c-border-e5e7eb); cursor: pointer; }
+        .dbr-shoot input { display: none; }
+        .dbr-row { display: grid; grid-template-columns: 28px 1fr; gap: 10px; align-items: start;
+          padding: 12px 0; border-bottom: 1px solid var(--c-border-e5e7eb); }
+        .dbr-ref { font-family: monospace; font-size: 17px; width: 100%; max-width: 300px;
+          padding: 10px; border: 1px solid var(--c-border-e5e7eb); border-radius: 8px;
+          background: transparent; color: inherit; }
+        .dbr-meta { font-size: 12px; color: var(--c-fg-6b7280); margin-top: 5px; }
+        .dbr-made { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px;
+          align-items: center; padding: 12px 0; border-bottom: 1px dashed var(--c-border-e5e7eb); }
+        .dbr-bc { text-align: right; }
+        .dbr-bc svg { max-width: 100%; height: auto; }
+        .dbr-scroll { overflow-x: auto; }
+        .dbr-btn { min-height: 44px; padding: 0 18px; border-radius: 8px; font-size: 15px;
+          border: 1px solid var(--c-border-e5e7eb); background: transparent; color: inherit; cursor: pointer; }
+        .dbr-btn[disabled] { opacity: .5; cursor: default; }
+        /* A PHONE AT THE COUNTER is this screen's normal case, not its exception: the person holding
+           the package is the person taking the photograph. So below 760px every tap target fills the
+           width, the reference list stops being two columns beside a checkbox, and the barcode sits
+           UNDER its reference rather than being squeezed next to it — a barcode narrowed to fit a
+           phone column is a barcode that will not scan, which is the whole point of printing it. */
+        @media (max-width: 760px) {
+          .dbr { padding: 14px 12px 36px; }
+          .dbr-card { padding: 12px; border-radius: 12px; }
+          .dbr-shoot, .dbr-btn { width: 100%; }
+          .dbr-btn { margin: 8px 0 0; }
+          .dbr-made { grid-template-columns: 1fr; }
+          .dbr-bc { text-align: left; }
+          .dbr-store { width: 100%; margin: 10px 0 0; }
+        }
+      `}</style>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Drop-off barcode rescue</h1>
       <p style={{ color: 'var(--c-fg-6b7280)', marginBottom: 20 }}>
         For return packages whose label barcode will not scan. Photograph the labels — as many as you
         like at once — check the references, then print one sheet and scan them in.
       </p>
 
-      {/* 1 — the photos */}
-      <section style={card}>
+      {/* 1 — the photos. THE STEPS ARE HERE, above the button, because they are only useful before
+          the photograph is taken. Each one names a thing the person can do differently, in the order
+          they would do it; none of them explains how the platform works, which is not their job. */}
+      <section className="dbr-card">
         <h2 style={h2}>1. Photograph the labels</h2>
-        <input type="file" accept="image/*" capture="environment" multiple disabled={busy}
-               onChange={e => { const f = e.target.files; if (f && f.length) onPhotos(f) }} />
-        <input value={storeCode} onChange={e => setStoreCode(e.target.value)} placeholder="Store (optional)"
-               style={{ ...input, width: 180, marginLeft: 12 }} />
+        <p style={{ margin: '0 0 8px', fontSize: 14 }}><b>With the package in your hand:</b></p>
+        <ol className="dbr-steps">
+          <li>Put the package on the counter with the label facing up, and smooth the label flat if it is creased or curled.</li>
+          <li>Stand so the ceiling light is <b>behind you</b>, not bouncing off the label. Glare across the barcode is the most common reason a photo cannot be read.</li>
+          <li>Hold the phone <b>square to the label</b>, not at an angle, and fill the frame with it. Both the barcode and the line of printed characters need to be in the shot.</li>
+          <li>Tap the screen to focus, wait until it looks sharp, then take the photo. One package per photo is best — several labels laid out flat in one photo works too.</li>
+          <li>Do every stranded package, then press <b>Take photos of the labels</b> and pick them all at once. Up to 25 in one go.</li>
+          <li>On the next step, <b>read each reference against the label</b> before you print. A highlighted character is one a camera often gets wrong.</li>
+        </ol>
+        <label className="dbr-shoot">
+          📷 Take photos of the labels
+          <input type="file" accept="image/*" capture="environment" multiple disabled={busy}
+                 onChange={e => { const f = e.target.files; if (f && f.length) onPhotos(f) }} />
+        </label>
+        <input className="dbr-store" value={storeCode} onChange={e => setStoreCode(e.target.value)}
+               placeholder="Store (optional)" style={{ ...input, width: 180, marginLeft: 12 }} />
         {busy && <span style={{ marginLeft: 12 }}>Reading…</span>}
-        <p style={{ color: 'var(--c-fg-6b7280)', marginTop: 8, marginBottom: 0, fontSize: 13 }}>
-          Up to 25 photos at a time. One photo with several labels in it is fine too.
+        <p style={{ color: 'var(--c-fg-6b7280)', marginTop: 10, marginBottom: 0, fontSize: 13 }}>
+          Nothing is printed until you have checked it. If a photo cannot be read at all, you can
+          always type the reference in by hand.
         </p>
       </section>
 
       {/* 2 — check */}
       {(rows.length > 0 || unread.length > 0) && (
-        <section style={card}>
+        <section className="dbr-card">
           <h2 style={h2}>2. Check the references</h2>
           {needsEyes && (
             <p style={{ ...note, background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-92400e)' }}>
@@ -267,42 +385,49 @@ export default function DropoffBarcodePage() {
               ones a camera gets wrong.
             </p>
           )}
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
-            <thead><tr>
-              <th style={th}>Print</th><th style={th}>Reference</th><th style={th}>Read from</th>
-              <th style={th}>Label type</th><th style={th}>Photo</th>
-            </tr></thead>
-            <tbody>
-              {rows.map(r => (
-                <tr key={r.key}>
-                  <td style={td}><input type="checkbox" checked={r.include} onChange={() => toggle(r.key)} /></td>
-                  <td style={td}>
-                    <input value={r.reference} onChange={e => setRef(r.key, e.target.value)}
-                           style={{ ...input, fontFamily: 'monospace', fontSize: 15, width: 220 }} />
-                    {r.source === 'text' && !!r.ambiguous.length && (
-                      <div style={{ fontFamily: 'monospace', fontSize: 13, letterSpacing: 2, marginTop: 2 }}>
-                        {r.original.split('').map((c, i) => (
-                          <span key={i} style={r.ambiguous.includes(i)
-                            ? { background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-92400e)', borderRadius: 3 }
-                            : undefined}>{c}</span>
-                        ))}
-                      </div>
-                    )}
-                    {r.original && r.reference.trim() !== r.original && (
-                      <div style={{ fontSize: 12, color: 'var(--c-fg-92400e)' }}>
-                        edited — the original reading is kept on the record
-                      </div>
-                    )}
-                  </td>
-                  <td style={td}>{r.source === 'barcode'
-                    ? <span style={{ color: 'var(--c-fg-166534)' }}>barcode ✓</span>
-                    : r.source === 'text' ? 'printed text' : 'typed in'}</td>
-                  <td style={td}>{r.label_name || '—'}</td>
-                  <td style={{ ...td, color: 'var(--c-fg-6b7280)' }}>{r.photo}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {/* ONE CARD PER PACKAGE, not a row of a seven-column table. The columns that table had
+              — where the reading came from, which label type matched, which photo it came off — are
+              facts ABOUT the reference, so they read as one line under it and need no header. On a
+              phone the table version put a 220px monospace input in a column roughly 90px wide,
+              which is the one field on this screen a person must be able to read character by
+              character before they commit to it. */}
+          <div>
+            {rows.map(r => (
+              <div className="dbr-row" key={r.key}>
+                <div>
+                  <input type="checkbox" checked={r.include} onChange={() => toggle(r.key)}
+                         style={{ width: 20, height: 20 }}
+                         aria-label={`Print ${r.reference || 'this reference'}`} />
+                </div>
+                <div>
+                  <input className="dbr-ref" value={r.reference} onChange={e => setRef(r.key, e.target.value)}
+                         spellCheck={false} autoCapitalize="characters" aria-label="Reference to print" />
+                  {r.source === 'text' && !!r.ambiguous.length && (
+                    <div style={{ fontFamily: 'monospace', fontSize: 14, letterSpacing: 2, marginTop: 4 }}>
+                      {r.original.split('').map((c, i) => (
+                        <span key={i} style={r.ambiguous.includes(i)
+                          ? { background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-92400e)', borderRadius: 3 }
+                          : undefined}>{c}</span>
+                      ))}
+                    </div>
+                  )}
+                  {r.original && r.reference.trim() !== r.original && (
+                    <div style={{ fontSize: 12, color: 'var(--c-fg-92400e)' }}>
+                      edited — the original reading is kept on the record
+                    </div>
+                  )}
+                  <div className="dbr-meta">
+                    {r.source === 'barcode'
+                      ? <span style={{ color: 'var(--c-fg-166534)' }}>read from the barcode ✓</span>
+                      : r.source === 'text' ? 'read from the printed text — check it against the label'
+                      : 'typed in by hand'}
+                    {r.label_name ? ` · ${r.label_name}` : ''}
+                    {r.photo ? ` · ${r.photo}` : ''}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
           {!!unread.length && (
             <div style={{ ...note, background: 'var(--c-bg-fee2e2)', color: 'var(--c-fg-991b1b)', marginTop: 10 }}>
               <b>Not read:</b>
@@ -314,46 +439,70 @@ export default function DropoffBarcodePage() {
             </div>
           )}
           <div style={{ marginTop: 12 }}>
-            <button onClick={makeAll} disabled={busy || !chosenCount} style={button}>
+            <button onClick={makeAll} disabled={busy || !chosenCount} className="dbr-btn">
               Make {chosenCount || ''} barcode{chosenCount === 1 ? '' : 's'}
             </button>
-            <button onClick={addBlank} style={{ ...button, marginLeft: 8 }}>Add one by hand</button>
+            <button onClick={addBlank} className="dbr-btn" style={{ marginLeft: 8 }}>Add one by hand</button>
           </div>
         </section>
       )}
 
       {/* 3 — the sheet */}
       {!!made.length && (
-        <section style={card}>
+        <section className="dbr-card">
           <h2 style={h2}>3. Print the sheet and scan them in</h2>
-          <button onClick={printSheet} style={{ ...button, marginBottom: 12 }}>Print {made.length} barcode{made.length === 1 ? '' : 's'}</button>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <tbody>
-              {made.map(m => (
-                <tr key={m.reference} style={{ borderBottom: '1px dashed var(--c-border-e5e7eb)' }}>
-                  <td style={{ ...td, fontFamily: 'monospace', fontSize: 15, whiteSpace: 'nowrap', width: '1%' }}>
-                    {m.reference}
-                    {m.verified_symbology === false && (
-                      <div style={{ fontFamily: 'system-ui', fontSize: 11, color: 'var(--c-fg-92400e)' }}>
-                        rebuilt from the reference, not a proven copy
-                      </div>
-                    )}
-                  </td>
-                  <td style={{ ...td, textAlign: 'right' }} dangerouslySetInnerHTML={{ __html: m.svg }} />
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <p style={{ margin: '0 0 10px', fontSize: 14 }}>
+            <b>On a phone:</b> press <b>Save as a PDF</b>, then choose <b>Save to Files</b> (or
+            Downloads). The sheet stays on the phone, so you can open it at the UPS system even
+            without signal. <b>On a computer</b> with a printer, <b>Print instead</b> is one tap.
+            Either way: the reference on the left, its code on the right, one package per row, cut
+            along the dashed lines.
+          </p>
+          {/* The PDF is FIRST and is the one that works everywhere; print is the desktop shortcut. */}
+          <button onClick={savePdf} disabled={busy} className="dbr-btn" style={{ marginBottom: 12 }}>
+            💾 Save {made.length} barcode{made.length === 1 ? '' : 's'} as a PDF
+          </button>
+          <button onClick={printSheet} className="dbr-btn" style={{ marginBottom: 12, marginLeft: 8 }}>Print instead</button>
+          {made.map(m => (
+            <div className="dbr-made" key={m.reference}>
+              <div style={{ fontFamily: 'monospace', fontSize: 16 }}>
+                {m.reference}
+                {m.verified_symbology === false && (
+                  <div style={{ fontFamily: 'system-ui', fontSize: 11, color: 'var(--c-fg-92400e)' }}>
+                    rebuilt from the reference, not a proven copy
+                  </div>
+                )}
+              </div>
+              <div className="dbr-bc" dangerouslySetInnerHTML={{ __html: m.svg }} />
+            </div>
+          ))}
         </section>
       )}
 
       {msg && <p style={{ margin: '12px 0' }}>{msg}</p>}
 
-      {/* label types — the tenant's own declarations */}
-      <LabelTypes profiles={profiles} blocked={declaredBlocked} reload={loadProfiles} />
+      {/* label types — the tenant's own declarations. A confined employee READS them (the screen
+          matches printed text with them) and does not declare or retire one: that is an admin act,
+          carved out of their surface and separately refused by the two handlers. `canDeclare` is
+          not a second opinion about their reach — it is the SAME fact off /me, used to show them
+          the list instead of a form that would 403. */}
+      <LabelTypes profiles={profiles} blocked={declaredBlocked} reload={loadProfiles} canDeclare={!confined} />
 
-      {/* the record */}
-      <section style={card}>
+      {/* the record — the whole organisation's rescues, across every store. Not an employee's:
+          `/dropoff-label/scans` is not in their surface, so there is nothing to render and nothing
+          was asked for. They are told their work IS recorded, because the alternative reading of a
+          missing section is that it was not. */}
+      {confined && (
+        <section className="dbr-card">
+          <h2 style={h2}>Your rescues are recorded</h2>
+          <p style={{ color: 'var(--c-fg-6b7280)', margin: 0, fontSize: 14 }}>
+            Every code you print is saved with the reference you confirmed, what the platform read
+            before you confirmed it, and your name. Your manager can see the record for the store.
+          </p>
+        </section>
+      )}
+      {!confined && (
+      <section className="dbr-card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <h2 style={{ ...h2, marginBottom: 0 }}>Packages rescued</h2>
           <ReportExportBar title="Drop-off barcode rescues" columns={SCAN_COLS} rows={shown} />
@@ -362,6 +511,7 @@ export default function DropoffBarcodePage() {
                            storeOptions={filtOpts.stores} />
         {!shown.length && <p style={{ color: 'var(--c-fg-6b7280)' }}>Nothing rescued yet.</p>}
         {!!shown.length && (
+          <div className="dbr-scroll">
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
             <thead><tr>{SCAN_COLS.map(c => (
               <SortableTh key={c.field} field={c.field!} sort={scanSort.sort} onSort={scanSort.toggle} style={th}>{c.header}</SortableTh>
@@ -381,8 +531,10 @@ export default function DropoffBarcodePage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </section>
+      )}
     </div>
   )
 }
@@ -393,7 +545,8 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
-function LabelTypes({ profiles, blocked, reload }: { profiles: Profile[]; blocked: string; reload: () => void }) {
+function LabelTypes({ profiles, blocked, reload, canDeclare }:
+                    { profiles: Profile[]; blocked: string; reload: () => void; canDeclare: boolean }) {
   // Asked for ONLY while the gap is open, so a company that has declared its labels fetches nothing.
   const labelTypeFix = useFixGuide(profiles.length ? null : 'dropoff_label_types', 'Drop-off Barcode Rescue')
   const [name, setName] = useState('')
@@ -412,7 +565,7 @@ function LabelTypes({ profiles, blocked, reload }: { profiles: Profile[]; blocke
   }
 
   return (
-    <section style={card}>
+    <section className="dbr-card">
       <h2 style={h2}>Your label types</h2>
       <p style={{ color: 'var(--c-fg-6b7280)', marginBottom: 10 }}>
         These describe YOUR paperwork, and only yours. They are what lets the platform find the
@@ -430,24 +583,27 @@ function LabelTypes({ profiles, blocked, reload }: { profiles: Profile[]; blocke
           {profiles.map(p => (
             <li key={p.id} style={{ marginBottom: 4 }}>
               <b>{p.label_name}</b> <code style={{ fontSize: 12 }}>{p.reference_pattern}</code>
-              <button onClick={() => retire(p.id)} style={{ ...button, marginLeft: 10, padding: '2px 8px', fontSize: 12 }}>Remove</button>
+              {canDeclare && (
+                <button onClick={() => retire(p.id)} style={{ ...button, marginLeft: 10, padding: '2px 8px', fontSize: 12 }}>Remove</button>
+              )}
             </li>
           ))}
         </ul>
       )}
-      <input value={name} onChange={e => setName(e.target.value)} placeholder="What you call this label"
-             style={{ ...input, width: 240 }} />
-      <input value={pattern} onChange={e => setPattern(e.target.value)} placeholder="What its reference looks like, e.g. D[A-Za-z0-9]{7}RRMA"
-             style={{ ...input, width: 340, marginLeft: 8, fontFamily: 'monospace' }} />
-      <button onClick={add} disabled={!name.trim() || !pattern.trim()} style={{ ...button, marginLeft: 8 }}>Add</button>
-      {msg && <span style={{ marginLeft: 10 }}>{msg}</span>}
+      {canDeclare && (
+        <>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="What you call this label"
+                 style={{ ...input, width: 240 }} />
+          <input value={pattern} onChange={e => setPattern(e.target.value)} placeholder="What its reference looks like, e.g. D[A-Za-z0-9]{7}RRMA"
+                 style={{ ...input, width: 340, marginLeft: 8, fontFamily: 'monospace' }} />
+          <button onClick={add} disabled={!name.trim() || !pattern.trim()} style={{ ...button, marginLeft: 8 }}>Add</button>
+          {msg && <span style={{ marginLeft: 10 }}>{msg}</span>}
+        </>
+      )}
     </section>
   )
 }
 
-const card: React.CSSProperties = {
-  border: '1px solid var(--c-border-e5e7eb)', borderRadius: 10, padding: 16, marginBottom: 16,
-}
 const h2: React.CSSProperties = { fontSize: 16, fontWeight: 600, marginBottom: 10 }
 const note: React.CSSProperties = { padding: '8px 10px', borderRadius: 6, marginBottom: 10 }
 const input: React.CSSProperties = {

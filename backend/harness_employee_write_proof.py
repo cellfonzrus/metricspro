@@ -237,7 +237,11 @@ _load_into(SO.__dict__, ("storeops", "router.py"),
            ["gate_pay_write", "_require_manager", "create_employee", "bulk_create_employees",
             "update_employee", "bulk_payscale", "_ensure_employee_id", "_log_payroll_change",
             "_who_for_log", "set_employee_lunch_config", "_log_shift_edit", "delete_manual_hours",
-            "require_person_write", "person_write_allowed"])
+            # `require_person_write` dereferences the one home for "this act is a manager's"
+            # (extracted 2026-11-20), so the real function is loaded here rather than stubbed —
+            # the stubs above already answer the two I/O seams it asks.
+            "require_person_write", "person_write_allowed",
+            "require_not_individual_contributor"])
 sys.modules["app.modules.storeops.router"] = SO
 
 HR = {"HTTPException": HTTPException, "Header": _fastapi.Header, "ORG_ID": ORG, "_payvis": _payvis,

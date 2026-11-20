@@ -7515,7 +7515,9 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 ## 17. Cross-reference: by ENDPOINT (high-value)
 
 
-- `POST /storeops/dropoff-label/read-batch` · `POST …/barcodes` — up to 25 label photos → every reference each one yields, each with its provenance; then the confirmed references → a printable code each and one audit row each. A decoded barcode is a FACT (Code 128 carries its own check symbol) and needs no declaration from the tenant; a reference read off the printed text is a SUGGESTION, always `confirm_required`, with its look-alike characters named. An unread photo is NAMED, never folded into a total. Singular siblings `…/read` and `…/barcode`; `GET …/barcode.svg` is the renderer alone; `GET …/scans` is org-scoped at the query (§STOREOPS-12).
+- `POST /storeops/dropoff-label/read-batch` · `POST …/barcodes` — up to 25 label photos → every reference each one yields, each with its provenance; then the confirmed references → a printable code each and one audit row each. A decoded barcode is a FACT (Code 128 carries its own check symbol) and needs no declaration from the tenant; a reference read off the printed text is a SUGGESTION, always `confirm_required`, with its look-alike characters named. An unread photo is NAMED, never folded into a total. Singular siblings `…/read` and `…/barcode`; `GET …/barcode.svg` is the renderer alone; `GET …/scans` is org-scoped at the query, and is the one
+route here NOT granted to a confined employee — a rep rescues the package in front of them, reading
+every store's record is a report (§STOREOPS-12, §CORE-33.1).
 | endpoint | code | what it is the one home of |
 | --- | --- | --- |
 | `GET /core/filter-options` | the org-scoped option source behind the shared `StandardFilterBar` — stores (+markets) from `storeops.stores` ∪ `commcalc.store_mapping`, reps from `storeops.employees` ∪ `storeops.app_users`. **ACTIVE-ONLY since 2026-11-14** through `core/roster_visibility`, with `include_inactive=1` and an `inactive_hidden` count so hiding is never silent | `core/router.filter_options` → `StandardFilterBar` `optionsUrl` | §CORE-45 · §3d |
@@ -46198,6 +46200,79 @@ OWN onboarding paperwork (the `/hr/onboarding/me*` family, which resolves the pe
 the daily closing submission reps already make from the kiosk, chat, and training. Each is named with
 its reason; removing one is a one-line edit of that tuple and nothing else. `/reports` and
 `/commcalc/kpi`, which the deleted `SELF_ALLOWED` literal used to admit, are NOT declared.
+
+### CORE-33.1 A sixth surface: the barcode rescue (owner 2026-11-20)
+
+Owner: *"Grant the sales rep this and also give step by step instructions on the page when the sales
+rep is ready to take a picture of the items."* Said of **§STOREOPS-12**, the drop-off barcode rescue.
+The person who takes a return over the counter and finds the carrier barcode unscannable IS the rep; a
+rescue only a manager can run is a package that stays on the shelf.
+
+**What was granted is the RESCUE, not the module.** `SURFACES` gains one entry, `dropoff` — the page
+`/storeops/dropoff-barcode` and four exact routes (`…/read`, `…/read-batch`, `…/barcode`,
+`…/barcodes`), plus two read-only ones (`…/profiles`, so the screen can match printed text against the
+tenant's own declarations, and `…/barcode.svg`, the renderer a print dialog reloads). Writing an audit
+row is the grant working, not a hole in it: the row exists to say which employee confirmed which
+reference.
+
+**Two things were deliberately NOT granted, and they are refused in different ways** — which is the
+point worth carrying forward:
+
+- `DELETE /dropoff-label/profiles/{id}` and `POST /dropoff-label/profiles` DECLARE a tenant's own
+  paperwork, which is an admin act. `profiles` is a COLLECTION and this surface's grant on it is
+  read-only, so the member write is already refused BY METHOD — and it is **carved out as well**
+  (`api_except`), so the refusal does not rest on that one fact and a later widening of the prefix
+  cannot quietly carry it. This is §CORE-33's own collection rule applied to a READ grant.
+- `GET /dropoff-label/scans` — the whole organisation's rescue record, every store — is **not granted
+  at all**, so default deny refuses it. A carve-out of something never granted would be a comment
+  pretending to be a gate, and `harness_rep_surface.py` B2g fails the build over exactly that.
+
+**The handlers now carry their own authority**, because a declaration in another file is one edit away
+from being the only gate. `storeops.router.require_not_individual_contributor` is THE one home for
+"this act is a manager's", extracted from the `manager_only` branch of `require_person_write` (which
+now dereferences it, so there is one answer and not two). It was extracted rather than reused in place
+because the first act that needed it was **not about a person at all**: passing a label-type
+declaration through `require_person_write` asks `person_write_allowed(..., employee_id=None)`, which
+refuses a MANAGER too — so a copy of the role test would have appeared beside it. No role NAME is
+tested, so it holds for every tenant.
+
+**A read grant has members too.** `harness_rep_surface.py` B2g checked that every carve-out sits below
+a granted prefix, but computed "granted" from `api` alone — so the carve above was reported as fake
+when it is nothing of the kind. B2g now reads `api_read` as well, with a negative control showing a
+genuinely vacuous carve is still caught. The check found this itself, on the first run.
+
+**The screen.** The steps are ON the page, above the camera button, because a photograph taken at an
+angle under a ceiling light is the one failure the person holding the phone can prevent — and only
+before they take it. The layout is a media query, not a measured window width: a hook that reads the
+viewport renders the desktop shape first and swaps, which during the server render puts the wrong
+shape in the HTML. The reference list is a card per package rather than a seven-column table, because
+on a phone that table squeezed the one field a person must read character by character into ~90px.
+`repConfined` off `/me` is used for one purpose only — not to ASK for the surfaces already known to be
+refused, so a rep sees their job instead of a red box. There is no page list, no role name and no
+module test in the page.
+
+**The sheet SAVES, it does not only print** (owner, same day: *"How will they print from the phone,
+it should save as a pdf on their phone to be used when they re by the ups system"*). A store phone
+has no printer paired and blocks the print pop-up as often as it opens, so the primary action is a
+PDF download — on a phone that is the share sheet, and "Save to Files" keeps it on the device, which
+is what the job needs because the codes are shown at the carrier's system later, possibly out of
+signal. Print stays beside it for a desktop with a label printer, and both render from the SAME
+`made` array the screen is showing, so the two destinations cannot disagree about which packages are
+on the sheet.
+
+`lib/export.tsx` gains `exportCodeSheetToPDF` + `svgToPngDataUrl` — **in that file**, because jsPDF,
+the export-governance audit (`governExport`, Security Controls item 7) and the watermark footer are
+already its job and a page importing jsPDF itself would be a second home for "how this platform makes
+a PDF". The picture embedded is **the server's own SVG, re-drawn by nobody**: parsing the bars out of
+it, or re-deriving the geometry in the browser, would be a second answer to "what does this code look
+like" — the duplicate the house rules forbid, and the last thing you want on a barcode. It also means
+a symbology this file has never heard of (a QR from `segno`) needs no code here at all. The raster
+scale is load-bearing, not cosmetic: the source SVG is 3 px per barcode module, so at scale 4 a module
+is 12 device pixels and the bar EDGES land on exact pixel boundaries instead of being anti-aliased
+into grey, which is what a hand scanner rejects. A code that cannot be drawn is NAMED on the screen,
+never silently dropped from the sheet. `/api/v1/core/export-event` is granted to the surface so a
+rep's save is audited like anyone else's — `governExport` fails open, so without the grant the PDF
+would still save and simply go unlogged, which is the worst of both.
 
 ### Proofs and the lock
 

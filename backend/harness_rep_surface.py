@@ -76,8 +76,14 @@ check("A11 a query string never changes the answer",
       RS.page_allowed("/helpdesk?tab=mine") and not RS.page_allowed("/storeops/timeclock?d=1"))
 check("A12 a trailing slash never changes the answer",
       RS.page_allowed("/helpdesk/") and not RS.page_allowed("/storeops/timeclock/"))
-check("A13 every one of the owner's five has a tile, in his order",
-      [t["key"] for t in RS.tiles()] == ["clock", "commissions", "schedule", "action_plan", "helpdesk"],
+# DECLARED, not counted. "dropoff" is the sixth, added 2026-11-20 on the owner's *"Grant the sales
+# rep this"* — AFTER his original five, which keep their order. A tile is how a confined employee
+# finds a surface at all (they have no menu row), so a surface arriving here is a deliberate act and
+# names itself in this list rather than sliding under a count.
+check("A13 every one of the owner's five has a tile, in his order — and nothing else has one "
+      "without saying so here",
+      [t["key"] for t in RS.tiles()] == ["clock", "commissions", "schedule", "action_plan",
+                                         "helpdesk", "dropoff"],
       [t["key"] for t in RS.tiles()])
 check("A14 every tile's page is a page the gate admits",
       all(RS.page_allowed(t["page"]) for t in RS.tiles()), [t["page"] for t in RS.tiles()])
@@ -102,6 +108,28 @@ ALLOWED = [("/api/v1/storeops/timeclock/clock-in", "POST"), ("/api/v1/storeops/t
            ("/api/v1/closing/row", "POST"), ("/api/v1/core/me", "GET"), ("/api/v1/core/bootstrap", "GET")]
 for p, m in ALLOWED:
     check(f"B+ {m} {p} is allowed", RS.api_allowed(p, m), "refused")
+# ── The barcode rescue, opened to a confined employee 2026-11-20. The three facts that matter: the
+#    rescue works, the tenant's DECLARATIONS cannot be touched, and the organisation-wide record
+#    cannot be read. The last two are the ones a widening would quietly take with it.
+check("B19a the rescue itself works — read a photo, print a confirmed reference",
+      all(RS.api_allowed(p, "POST") for p in (
+          "/api/v1/storeops/dropoff-label/read", "/api/v1/storeops/dropoff-label/read-batch",
+          "/api/v1/storeops/dropoff-label/barcode", "/api/v1/storeops/dropoff-label/barcodes")))
+check("B19b the declared label types are READABLE (the screen matches printed text with them) "
+      "and the renderer reloads for a print dialog",
+      RS.api_allowed("/api/v1/storeops/dropoff-label/profiles", "GET")
+      and RS.api_allowed("/api/v1/storeops/dropoff-label/barcode.svg", "GET"))
+check("B19c DECLARING a label type is an admin act and is refused",
+      not RS.api_allowed("/api/v1/storeops/dropoff-label/profiles", "POST"))
+check("B19d RETIRING one is refused twice over — by method, and by the member carve-out",
+      not RS.api_allowed("/api/v1/storeops/dropoff-label/profiles/abc", "DELETE")
+      and not RS.api_allowed("/api/v1/storeops/dropoff-label/profiles/abc", "GET"))
+check("B19e the organisation's whole rescue record is a report, and is NOT granted",
+      not RS.api_allowed("/api/v1/storeops/dropoff-label/scans", "GET"))
+check("B19f the module PREFIX itself is not granted — only the named routes are",
+      not RS.api_allowed("/api/v1/storeops/dropoff-label", "GET")
+      and not RS.api_allowed("/api/v1/storeops/dropoff-label/anything-new", "POST"))
+
 check("B20 a read-only lookup is refused for a WRITE method",
       RS.api_allowed("/api/v1/storeops/stores", "GET") and not RS.api_allowed("/api/v1/storeops/stores", "POST"))
 check("B21 the employee roster is readable (already narrowed server-side) and never writable",
@@ -154,14 +182,38 @@ check("B2e a carve-out refuses every method, a READ included — it is not a met
       not RS.api_allowed("/api/v1/storeops/time-off/41", "GET"))
 check("B2f …and a trace names no surface for a carved route, so nothing can report it as granted",
       RS.surface_for_api("/api/v1/storeops/time-off/41", "PATCH") is None)
-check("B2g every carved entry really is below a granted prefix — a carve-out of something never "
-      "granted is a comment pretending to be a gate",
-      all(any(_g == e.split("/**")[0].rstrip("/") or e.startswith(_g.rstrip("/") + "/")
-              for s in RS.SURFACES for _g in s["api"])
-          for e in RS.api_exceptions()),
-      [e for e in RS.api_exceptions()
-       if not any(_g == e.split("/**")[0].rstrip("/") or e.startswith(_g.rstrip("/") + "/")
-                  for s in RS.SURFACES for _g in s["api"])])
+# A READ-ONLY grant is a grant, and its members are reachable too. This check used to read only
+# `s["api"]`, so a carve-out below an `api_read` prefix was reported as a comment pretending to be a
+# gate when it is nothing of the kind: `api_read` on a collection admits GET on its members, and a
+# member of a collection of the TENANT'S OWN DECLARATIONS is exactly what must not be reachable
+# (found 2026-11-20 by this check firing on the drop-off label types, correctly complaining about
+# an incomplete notion of "granted"). Widening what counts as granted does not blunt the check —
+# the control below shows a carve-out of something genuinely ungranted is still caught.
+def _granted_prefixes():
+    return [g for s in RS.SURFACES for key in ("api", "api_read") for g in s[key]]
+
+
+def _vacuous(entries):
+    """Which carve-out entries sit below NO granted prefix at all, for any method."""
+    out = []
+    for e in entries:
+        base = e.split("/**")[0].rstrip("/")
+        if not any(g.rstrip("/") == base or base.startswith(g.rstrip("/") + "/")
+                   for g in _granted_prefixes()):
+            out.append(e)
+    return out
+
+
+check("B2g every carved entry really is below a granted prefix — for ANY method, reads included — "
+      "because a carve-out of something never granted is a comment pretending to be a gate",
+      not _vacuous(RS.api_exceptions()), _vacuous(RS.api_exceptions()))
+check("CONTROL B2g still catches a carve-out of something nobody was ever granted",
+      _vacuous(("/api/v1/storeops/payroll/approvals/**",)) == ["/api/v1/storeops/payroll/approvals/**"])
+check("B2g2 the drop-off label DECLARATIONS are carved below a READ grant, and the carve bites for "
+      "the read as well as the write — a member of that collection is the tenant's own paperwork",
+      "/api/v1/storeops/dropoff-label/profiles/**" in RS.api_exceptions()
+      and RS.api_allowed("/api/v1/storeops/dropoff-label/profiles", "GET")
+      and not RS.api_allowed("/api/v1/storeops/dropoff-label/profiles/abc", "GET"))
 
 check("B24 every declared API prefix resolves to a surface (its own, or the universal set it is "
       "also in — the own-password path is deliberately both)",

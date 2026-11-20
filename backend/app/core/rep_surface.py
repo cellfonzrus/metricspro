@@ -138,6 +138,44 @@ SURFACES = (
         "api_read": (),
         "what": "raising and following their own tickets",
     },
+    {
+        "key": "dropoff", "tile": True, "label": "Barcode rescue", "icon": "🏷",
+        # OWNER 2026-11-20: *"Grant the sales rep this and also give step by step instructions on
+        # the page when the sales rep is ready to take a picture of the items."* The person who
+        # takes a return over the counter and finds the carrier barcode unscannable IS the rep; a
+        # rescue only a manager can run is a package that stays on the shelf. A sixth tile, after
+        # the owner's original five, because a confined employee has no menu row to find it by.
+        "pages": ("/storeops/dropoff-barcode",),
+        # The rescue itself: read a photograph, and draw a barcode for a reference a PERSON has
+        # confirmed. Each is an EXACT route with nothing below it in the router, and each writes
+        # only its own audit row — whose whole purpose is to say which employee confirmed which
+        # reference, so a rep writing one is the feature working, not a hole in it.
+        "api": ("/api/v1/storeops/dropoff-label/read",
+                "/api/v1/storeops/dropoff-label/read-batch",
+                "/api/v1/storeops/dropoff-label/barcode",
+                "/api/v1/storeops/dropoff-label/barcodes",
+                # The EXPORT GOVERNANCE log (Security Controls item 7). Saving the sheet as a PDF
+                # on a phone is an export, and an export this platform does not record is the gap
+                # that control exists to close. `governExport` fails OPEN, so without this the PDF
+                # would still save and simply go unlogged — which is the worst of both.
+                "/api/v1/core/export-event"),
+        # READ-ONLY: the tenant's declared label types, which the screen needs to match printed
+        # text, and the renderer a print dialog reloads (it reads and writes nothing).
+        "api_read": ("/api/v1/storeops/dropoff-label/profiles",
+                     "/api/v1/storeops/dropoff-label/barcode.svg"),
+        # `profiles` is a COLLECTION, and this module's own rule is that a grant on a collection is
+        # not a grant on its members: `DELETE /profiles/{id}` retires one of the tenant's
+        # declarations, which is an admin act. The read-only grant already refuses it by METHOD;
+        # carved anyway so the refusal does not rest on that single fact, and so a later widening
+        # of this prefix cannot quietly carry it. Both handlers behind it ALSO ask their own
+        # authority (`dropoff_label_api._require_manager_act`), so neither gate is the only one.
+        "api_except": ("/api/v1/storeops/dropoff-label/profiles/**",),
+        # NOT GRANTED, and so refused by default deny rather than by a carve-out: `/scans`, the
+        # whole organisation's rescue record across every store. A rep rescues the package in front
+        # of them; reading what every other store took in is a report, and reports are a manager's.
+        "what": "rescuing a drop-off package whose carrier barcode will not scan — photograph the "
+                "label, confirm the reference, print a code that scans",
+    },
     # ── Surfaces an employee already has that the owner did not list, kept DELIBERATELY and named
     #    here so the keeping is a decision on the record rather than an omission. Each is reported to
     #    the owner with the PR; removing one is a one-line edit of this tuple and nothing else.
