@@ -37013,6 +37013,72 @@ carries the same fields as a stored one. `harness_report_declaration.py` §F rai
 load-bearing), §COMMCALC-39 (the capture and `spec_key`), §COMMCALC-44 (an absence needs the right
 reason), §COMMCALC-48.9 (the fold this completes).
 
+### COMMCALC-48.13 FIFTEEN REPORTS DECLARED, FOURTEEN ATTEMPTED DAILY, ONE NEEDED — a report is asked for or it is skipped (owner ask 2026-11-20)
+
+> Owner, 2026-11-20: *"We need to assign the filters and the reports in team portal to the ones in
+> our system so the system can map them properly and pull the required reports"*.
+
+**THE CLASS. A declaration of WHAT EXISTS was being read as a declaration of WHAT IS WANTED.**
+`data_source.portal_reports` answers "which reports does this portal have, and how is each one
+reached and read". The pull loop read it as "fetch all of these, every run". Those are two different
+facts, and the only way to stop pulling a report was to DELETE it — along with its menu words, its
+column bindings and its line map, which are the work. So a tenant with fifteen reports mapped and one
+needed paid for fourteen navigation failures a day, and the report mapped only so a hand-uploaded
+file could be read was attempted on every run and could never succeed, because it has no address by
+design.
+
+**THE SWITCH IS DECLARED, NOT DERIVED — and the contrast with `is_per_day` is the design.**
+"Run this once per day" FOLLOWS from the declaration (§COMMCALC-37: a report whose filters mention
+`{date}` IS a per-day report), so a flag beside it could only disagree with it. "We need this report"
+follows from nothing in the declaration: which reports a business wants is not a property of the
+portal. Deriving it from how COMPLETE a report's calibration is was considered and rejected — it
+would stop pulling a working report the moment a field was cleared, silently.
+
+- One field, `portal_report_pull.PULL_FIELD`, on the `portal_reports` item — the column that already
+  answers "which reports", not the calibration column that answers "how to run one".
+- **Absence means yes**, so every declaration written before this field existed pulls exactly what it
+  pulled before. The editor therefore writes the key ONLY when the answer is no: ticked on is the
+  absence of a declaration, which is what keeps `columns(rows(src))` the identity (§COMMCALC-48.3).
+- `report_requested(src_row, key)` is the one reader, and the loop asks it **before** it navigates —
+  a report nobody asked for costs no page load and cannot fail.
+- A skipped report is carried in the answer under `not_requested` with its own sentence, never left
+  out: a report that silently stopped being pulled is how "my figures never arrive" becomes a
+  mystery (§COMMCALC-44, an absence needs the right reason).
+- `row_problems` says nothing about addresses, filters or export controls for a report that is not
+  pulled. Every one of those is about reaching and running a page, and a report mapped for a
+  hand-uploaded file needs none of them.
+
+**THE KEY RULE MOVED DOWN, it did not multiply.** The loop had to answer "which declared item is this
+spec" and could not import `pos_report_sweep` without a cycle. So the rule lives in
+`portal_report_pull.report_key`, the one module the loop and every adapter can see;
+`pos_report_sweep.spec_key` keeps its name and DEREFERENCES it, so `report_declaration`, the router
+and `processor_backoffice_sweep.spec_key` are unchanged. It is deliberately NOT `connector()`, which
+normalizes a `data_source.processor` — a different fact that happens to need the same spelling rules
+today, and folding the two together would make a change to one silently change the other.
+
+**A STATUS SENTENCE THAT NAMED FOUR AND DROPPED THE REST.** `summarize` printed
+`", ".join(list(unreachable)[:4])`, so *"Not reached: A, B, C, D."* was the same sentence whether four
+reports failed or fifteen. Measured on the owner's own login, 2026-11-20: four names printed, and the
+one report fully mapped to his declared categories was among the eleven the sentence left out. The
+COUNT is now always stated first — *"Not reached: 15 — A, B, C, D and 11 more."* — and the full list
+rides the answer under `unreachable`.
+
+**AND THE OUTCOME LISTS ARE NOW DERIVED FROM THE RESULTS.** The loop used to accumulate `unreachable`
+beside results that already carried `unreachable: True`: the same fact in two places, and the loop
+could file a report under the wrong one. `summarize` reads the results; the loop keeps no tally.
+
+**Locked** — `backend/tests/unit/test_a_report_is_asked_for_or_skipped.py`, 31 tests, nine armed
+negative controls. Two of them run the REAL loop with `page=None`, so if the skip ever stopped
+happening before the page is used the test could not run at all. `harness_report_declaration.py`
+(73) and `harness_pos_report_feed.py` (116) unchanged and green.
+
+### COMMCALC-48.14 Cross-references (48.13)
+
+§COMMCALC-07 (the pull loop), §COMMCALC-37 (`is_per_day` is derived — the contrast this switch is
+named against), §COMMCALC-39 (`spec_key`, whose rule this moves down), §COMMCALC-44 (an absence needs
+the right reason), §COMMCALC-48.11 (the controls, which a skipped report no longer needs),
+§COMMCALC-77 (the reading fields a skipped report still uses for a hand-uploaded file).
+
 ### COMMCALC-48.10 Cross-references (48.9)
 
 §COMMCALC-39 (`spec_key`, the one rule for "which report is this", and the capture itself),

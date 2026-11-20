@@ -69,12 +69,15 @@ def portal_descriptor(connector=None):
 def spec_key(item):
     """THE key of one declared report, whichever shape it was declared in. One home, because the
     declaration is read twice — once to build the specs and once to filter them — and two spellings
-    of "which report is this" is how every declared report filtered itself out."""
-    if isinstance(item, dict):
-        return str(item.get("key") or "").strip().lower().replace(" ", "_").replace("-", "_")
-    if isinstance(item, str):
-        return item.strip().lower().replace(" ", "_").replace("-", "_")
-    return ""
+    of "which report is this" is how every declared report filtered itself out.
+
+    DEREFERENCED since §COMMCALC-48.13: the rule now lives in `portal_report_pull.report_key`, the
+    one module both the pull loop and every adapter can see, because the loop had to ask the same
+    question ("which declared item is this spec") and could not import this one without a cycle. The
+    name stays here and the answer is byte-identical, so every caller — this module's own
+    `report_specs`, `report_declaration`, the router, `processor_backoffice_sweep.spec_key` — is
+    unchanged. A second copy of the rule is what §COMMCALC-39 exists to forbid."""
+    return prp.report_key(item)
 
 
 def report_specs(connector=None, enabled_keys=None, src_row=None):
