@@ -26569,7 +26569,6 @@ status word rather than a blank that reads as nil.
 | ACCOUNT-06 | account, commcalc |
 | STOREOPS-11 | storeops, account |
 | STOREOPS-12 | storeops, core |
-| CORE-33.1 | core, storeops |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
