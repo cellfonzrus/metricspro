@@ -12,6 +12,40 @@ import type { ExpoConfig, ConfigContext } from 'expo/config'
 // EAS project id — the anchor for both build attribution and the OTA (EAS Update) URL below.
 const projectId = process.env.EAS_PROJECT_ID || 'a3ab84a6-1706-473b-9046-f66dbf2c8b9a'
 
+// ── What the app tells a person when it asks for a permission — ONE HOME ─────────────────────────
+// Each of these sentences is declared here ONCE and dereferenced wherever iOS or Android needs it.
+// It has to be one home because the same sentence is required in two places: `ios.infoPlist` sets
+// the usage-description key directly, and the config plugins (`expo-location`, `expo-image-picker`)
+// set the SAME key during prebuild. Two copies means the one that happens to win is whichever the
+// plugin pipeline writes last, and on 2026-11-20 they had already diverged:
+//
+//   · LOCATION — infoPlist carried the both-ends wording the owner asked for on 2026-11-01
+//     ("when you clock in and when you clock out"), while the expo-location plugin still carried
+//     the older clock-in-only sentence. A permission string that names one end while the app reads
+//     both is asking for something broader than it admits, which is the exact thing the
+//     2026-11-01 change existed to stop.
+//   · CAMERA — infoPlist promised "a verification selfie when you clock in". The app does not
+//     capture one: `ClockInBody.selfie`, `face_match_pct` and `TimeEntry.selfie_url` exist in
+//     src/api/timeclock.ts, but no screen fills them, and expo-image-picker is reached only from
+//     closing/submit.tsx and pos/receipt-import.tsx. So the app asked for the camera partly for a
+//     feature that was never built.
+//
+// Locked by backend/harness_running_bundle_lock.py §R9: a second literal copy of any of these
+// sentences fails the build, a usage-description key that does not dereference this object fails
+// the build, and the camera sentence may mention a selfie only once a screen actually captures one.
+const PERMISSION_COPY = {
+  faceId:
+    'MetricsPro uses Face ID to unlock the app and protect store, sales and payroll data.',
+  // Both ENDS of a punch, stated plainly. One reading at each tap; never a background position.
+  location:
+    'MetricsPro records your location when you clock in and when you clock out, to confirm the punch was made at your store. It is read only at that moment and never in the background.',
+  // Only what the app actually does with the camera.
+  camera:
+    "MetricsPro uses the camera to photograph a receipt for import and to record the day's closing.",
+  photoLibrary:
+    'MetricsPro lets you choose a receipt photo from your library to import it as a sale.',
+} as const
+
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: 'MetricsPro',
@@ -42,17 +76,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     buildNumber: '1',
     // The app talks only to your own HTTPS backend + Supabase — keep ATS on (no arbitrary loads).
     infoPlist: {
-      NSFaceIDUsageDescription:
-        'MetricsPro uses Face ID to unlock the app and protect store, sales and payroll data.',
-      // Both ENDS of a punch, stated plainly: the clock-out is the one the owner asked for
-      // (2026-11-01) and a permission string that named only the clock-in would be asking for
-      // something broader than it admitted. One reading at each tap; never a background position.
-      NSLocationWhenInUseUsageDescription:
-        'MetricsPro records your location when you clock in and when you clock out, to confirm the punch was made at your store. It is read only at that moment and never in the background.',
-      NSCameraUsageDescription:
-        'MetricsPro uses the camera to capture a verification selfie when you clock in and to photograph a receipt for import.',
-      NSPhotoLibraryUsageDescription:
-        'MetricsPro lets you choose a receipt photo from your library to import it as a sale.',
+      NSFaceIDUsageDescription: PERMISSION_COPY.faceId,
+      NSLocationWhenInUseUsageDescription: PERMISSION_COPY.location,
+      NSCameraUsageDescription: PERMISSION_COPY.camera,
+      NSPhotoLibraryUsageDescription: PERMISSION_COPY.photoLibrary,
       ITSAppUsesNonExemptEncryption: false,
     },
   },
@@ -102,10 +129,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     'expo-local-authentication',
     [
       'expo-location',
-      {
-        locationWhenInUsePermission:
-          'MetricsPro records the store location of a clock-in punch for attendance verification.',
-      },
+      { locationWhenInUsePermission: PERMISSION_COPY.location },
     ],
     [
       'expo-splash-screen',
@@ -114,10 +138,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     [
       'expo-image-picker',
       {
-        photosPermission:
-          'MetricsPro lets you choose a receipt photo from your library to import it as a sale.',
-        cameraPermission:
-          'MetricsPro uses the camera to photograph a receipt for import.',
+        photosPermission: PERMISSION_COPY.photoLibrary,
+        cameraPermission: PERMISSION_COPY.camera,
       },
     ],
   ],

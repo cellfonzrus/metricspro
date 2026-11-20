@@ -1763,6 +1763,11 @@ on:
       - "backend/app/**/*.py"   # index §19.36 — the setup-internals lock scans every backend string + the boundary
       - "database/migrations/**"   # index §19.39 — the infra-names lock derives its table / schema registry from them
       - "backend/app/modules/commcalc/report_kinds.py"
+      # index §CORE-29 — the RUNNING-BUNDLE lock, which also owns §R9: a permission sentence has one
+      # home and the plugin option that WINS over ios.infoPlist dereferences it. In the push filter
+      # as well as the pull_request one, so main cannot drift on a direct push.
+      - "backend/harness_running_bundle_lock.py"
+      - "mobile/app.config.ts"
   workflow_dispatch:
 
 permissions:
