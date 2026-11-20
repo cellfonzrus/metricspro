@@ -517,6 +517,118 @@ else:
     control("R8.11", _run("2620", "iphoneos26.2", _pinned_major) == 1)
 
 
+# ── R9 · a permission sentence has ONE home, and it is the one that actually ships ───────────────
+# MEASURED 2026-11-20 by prebuilding both versions of app.config.ts and reading the generated
+# ios/MetricsPro/Info.plist. THE CONFIG PLUGIN WINS. `ios.infoPlist` sets a usage-description key,
+# and then `expo-location` / `expo-image-picker` OVERWRITE that same key during prebuild. So an
+# infoPlist value for a key a plugin also writes is DEAD TEXT — it is what the repository says and
+# not what the phone shows.
+#
+# That had already cost something real. On 2026-11-01 the owner asked for the location permission to
+# admit that a punch is read at BOTH ends, and the sentence was duly changed — in infoPlist, the copy
+# that loses. The app shipped asking only about the clock-in while reading the clock-out too, which is
+# precisely the "broader than it admitted" problem that change existed to fix, left in place for
+# nineteen days by a second copy nobody knew was authoritative.
+#
+# One fact, one home, dereferenced. PERMISSION_COPY is declared once and read by both the infoPlist
+# key and the plugin option, so they cannot disagree and it no longer matters which writer wins.
+PERMISSION_KEYS = ("faceId", "location", "camera", "photoLibrary")
+
+# Every iOS usage-description key the app sets, and the plugin option that writes the same key.
+# A key with a plugin twin may NEVER carry a literal, because the literal is the copy that loses.
+USAGE_TWINS = {
+    "NSLocationWhenInUseUsageDescription": "locationWhenInUsePermission",
+    "NSCameraUsageDescription": "cameraPermission",
+    "NSPhotoLibraryUsageDescription": "photosPermission",
+    "NSFaceIDUsageDescription": None,   # no plugin writes it; infoPlist is the only writer
+}
+
+check("R9.1 the permission copy has one home",
+      "const PERMISSION_COPY = {" in config_src,
+      "app.config.ts must declare PERMISSION_COPY — the single home for what the app tells a "
+      "person when it asks for a permission")
+
+_copy_block = re.search(r"const PERMISSION_COPY = \{(.*?)\n\} as const", config_src, re.S)
+check("R9.2 the permission copy is frozen", _copy_block is not None,
+      "PERMISSION_COPY must be declared `as const` so a caller cannot reassign a sentence")
+
+_block = _copy_block.group(1) if _copy_block else ""
+for _k in PERMISSION_KEYS:
+    check(f"R9.3 the copy declares {_k}", re.search(rf"\n\s+{_k}:", _block) is not None,
+          f"PERMISSION_COPY must carry {_k} — a permission the app asks for with no declared "
+          "sentence is a permission prompt with nothing to say")
+control("R9.3", re.search(r"\n\s+camera:", "  faceId: 'x',\n") is not None)
+
+# The sentences themselves, read out of the declaration, so the checks below compare against what
+# the repository actually says rather than against a copy in this file.
+_sentences = dict(re.findall(r"\n\s+(\w+):\s*\n?\s*['\"](.+?)['\"],", _block, re.S))
+
+for _k in PERMISSION_KEYS:
+    _text = _sentences.get(_k, "")
+    check(f"R9.4 {_k} says something", len(_text.strip()) > 20,
+          f"{_k}'s sentence is {_text!r} — iOS shows this to a person at the moment it asks, and a "
+          "blank or near-blank string is a prompt that explains nothing")
+control("R9.4", len("".strip()) > 20)
+
+# No second literal copy. The whole defect is a sentence written twice and diverging, so a sentence
+# that appears more than once in app.config.ts fails the build even if the two copies still agree —
+# agreeing today is what every divergence looked like the day before it diverged.
+for _k, _text in _sentences.items():
+    _n = config_src.count(_text)
+    check(f"R9.5 {_k} appears exactly once", _n == 1,
+          f"the sentence for {_k} appears {_n} times in app.config.ts. It must be declared once in "
+          "PERMISSION_COPY and dereferenced; a second copy is the divergence this section exists to "
+          "stop, and the copy in infoPlist is the one that LOSES to the plugin.")
+control("R9.5", "abc".count("abc") == 2)
+
+# Every writer dereferences. Both halves: the infoPlist key and the plugin option.
+for _key, _option in USAGE_TWINS.items():
+    _m = re.search(rf"{_key}:\s*([^,\n]+)", config_src)
+    check(f"R9.6 {_key} dereferences the one home",
+          _m is not None and "PERMISSION_COPY." in _m.group(1),
+          f"{_key} must read PERMISSION_COPY.<key>, not a literal; found "
+          f"{(_m.group(1).strip() if _m else 'nothing')!r}")
+    if _option:
+        _o = re.search(rf"{_option}:\s*([^,\n]+)", config_src)
+        check(f"R9.6 {_option} dereferences the one home",
+              _o is not None and "PERMISSION_COPY." in _o.group(1),
+              f"the {_option} plugin option must read PERMISSION_COPY.<key> — it is the writer that "
+              f"WINS over infoPlist's {_key}, so a literal here is what the phone actually shows")
+control("R9.6", "PERMISSION_COPY." in " 'MetricsPro uses the camera to take a selfie.'")
+
+# A key and its plugin twin must read the SAME entry of the one home. Dereferencing two different
+# entries would restore the divergence through the front door.
+for _key, _option in USAGE_TWINS.items():
+    if not _option:
+        continue
+    _a = re.search(rf"{_key}:\s*PERMISSION_COPY\.(\w+)", config_src)
+    _b = re.search(rf"{_option}:\s*PERMISSION_COPY\.(\w+)", config_src)
+    check(f"R9.7 {_key} and {_option} read the same sentence",
+          _a is not None and _b is not None and _a.group(1) == _b.group(1),
+          f"{_key} reads {(_a.group(1) if _a else None)!r} while {_option} reads "
+          f"{(_b.group(1) if _b else None)!r} — the plugin option wins, so two different entries "
+          "means the repository states one promise and the phone shows another")
+control("R9.7", "camera" == "faceId")
+
+# ── The honesty check ────────────────────────────────────────────────────────────────────────────
+# The camera sentence once promised "a verification selfie when you clock in". The app has never
+# captured one: ClockInBody.selfie, face_match_pct and TimeEntry.selfie_url all exist, and no screen
+# fills them. The sentence may name a selfie again the day a screen actually takes one, and not
+# before — so this check is keyed to the CODE, not to a list of forbidden words.
+_screens = sorted((MOBILE / "app").rglob("*.tsx")) + sorted((MOBILE / "src").rglob("*.ts"))
+_captures_selfie = any(
+    re.search(r"selfie\s*[:=]\s*(?!undefined|null)", read(f)) and "launchCameraAsync" in read(f)
+    for f in _screens
+)
+_claims_selfie = "selfie" in _sentences.get("camera", "").lower()
+check("R9.8 the camera sentence claims a selfie only if a screen captures one",
+      _claims_selfie <= _captures_selfie,
+      "the camera permission sentence names a selfie, but no screen both captures an image and "
+      "sends it as `selfie` — iOS shows that sentence to a person to justify the camera, so it may "
+      "not describe a feature the app does not have. Narrow the sentence, or build the capture.")
+control("R9.8", True <= False)
+
+
 
 if failures:
     print(f"FAIL — {len(failures)} of {checks} checks failed\n")

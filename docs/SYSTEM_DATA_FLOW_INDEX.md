@@ -44354,6 +44354,49 @@ surfacing at compile time) · §CORE-26.8 (the build button this step lives in) 
 in CI launches this app, which is why the binary has to be read) · §CORE-10 (a guard that goes blind
 fails CI) · §19.18 (one fact, one home, dereferenced — never copied).
 
+### §CORE-29.3e A PERMISSION SENTENCE HAS ONE HOME, AND THE PLUGIN WINS (2026-11-20)
+
+**MEASURED, not reasoned.** Both versions of `mobile/app.config.ts` were put through
+`npx expo prebuild --platform ios --no-install --clean` and the generated
+`ios/MetricsPro/Info.plist` was read back with `plistlib`. **The config plugin overwrites
+`ios.infoPlist`.** A usage-description key that a plugin also writes carries DEAD TEXT in
+`infoPlist` — it is what the repository says and not what the phone shows.
+
+That had already cost something. On **2026-11-01** the owner asked for the location permission to
+admit that a punch is read at **both** ends, and the sentence was duly changed — in `infoPlist`, the
+copy that loses. The shipped app asked about the clock-in alone while reading the clock-out too,
+which is precisely the "broader than it admitted" problem the change existed to fix. Nineteen days,
+invisible, because a second copy nobody knew was authoritative sat in a config plugin.
+
+The same two-copy shape hid the opposite error in the other direction: `infoPlist` promised **"a
+verification selfie when you clock in"**, which the app has never captured (`ClockInBody.selfie`,
+`face_match_pct` and `TimeEntry.selfie_url` exist in `src/api/timeclock.ts`; no screen fills them,
+and `expo-image-picker` is reached only from `closing/submit.tsx` and `pos/receipt-import.tsx`).
+Because the plugin won, that over-claim never reached a user — the dead copy is the only place it
+ever lived. A fact worth keeping: **a defect in dead text is still a defect in the record**, and the
+record is what the next person reads.
+
+**One home:** `PERMISSION_COPY` in `mobile/app.config.ts` — `faceId`, `location`, `camera`,
+`photoLibrary`, declared `as const`. Both writers dereference it: the four
+`NS*UsageDescription` keys in `ios.infoPlist`, and the `expo-location` /
+`expo-image-picker` plugin options (`locationWhenInUsePermission`, `cameraPermission`,
+`photosPermission`). They can no longer disagree, so which writer wins stops mattering.
+
+**Lock:** `backend/harness_running_bundle_lock.py` **§R9**, 118 checks in the file. R9.5 fails the
+build on a second literal copy of any sentence *even when the two copies still agree* — agreeing
+today is what every divergence looked like the day before it diverged. R9.6 requires both writers to
+dereference, R9.7 requires a key and its plugin twin to read the **same** entry, and **R9.8 is keyed
+to the code, not to a word list**: the camera sentence may name a selfie only once a screen both
+captures an image and sends it as `selfie`. So the claim becomes legal the day the feature is built,
+and not before. Five mutations were run and all five reddened: main's two-copy config, a literal
+restored in the winning plugin option, a key pointed at the wrong entry, the selfie claim returning,
+and a duplicated literal.
+
+**Not fixed here, deliberately:** the app version stays `0.1.0`. `runtimeVersion` is
+`{ policy: 'appVersion' }`, so bumping it invalidates over-the-air updates against the installed
+build 17 — the bump belongs with the store build, not before it (§CORE-29.1).
+
+
 ### §CORE-29.4 What the lock refuses
 
 - The rule losing its purity (an import in `running-bundle.ts`), which would end its CI proof.
