@@ -41919,7 +41919,8 @@ curl: `/mnt/project-files/security-review-2026-10-28/SET_TRUSTED_PROXY_HOPS.md`.
 | harness | checks | what fails the build |
 |---|---|---|
 | `harness_public_allowlist_lock.py` | 80 | a parameterised route reachable through the sweep rule — asserted against the **real 1805-route table**, with a pre-fix control proving all 249 were |
-| `harness_client_ip.py` | 45 | a FIFTH copy of the leftmost-`X-Forwarded-For` parse anywhere in `app/`, or a wired call site that stops dereferencing the one home; plus the hop arithmetic for chains shorter, equal and longer than N |
+| `harness_client_ip.py` | 45 | a FIFTH copy of the leftmost-`X-Forwarded-For` parse anywhere in `app/`, or a wired call site that stops dereferencing the one home; plus the hop arithmetic for chains shorter, equal and longer than N. Its `trusted_entry` selector is dereferenced by `forwarded_tls` too (§CORE-47) |
+| `harness_forwarded_tls.py` | 40 | the app forgetting it sits behind a TLS-terminating edge, so a redirect tells a signed-in caller to resend the request over plaintext — the forwarded-proto trust at the root, the outbound backstop, no second copy of either rule (§CORE-47) |
 | `harness_anonymous_write_surface.py` | 43 | any audit/diagnostic write (`failure_log`, `access_log`, `log`, `auth_event`, `impersonation_action`) that takes its `org_id` from the query string; plus the login-record cap's existence, tier separation and bite |
 
 All three are **enforcing** jobs in `.github/workflows/security.yml` (not `continue-on-error`), so the
@@ -45773,6 +45774,99 @@ after a minute: a credential on screen is a credential someone can walk past.
 
 Related: §CORE-03 (the credential registry) · §COMMCALC-82 (the screen that asked for this) ·
 §12a (the portal logins themselves).
+
+
+## §CORE-47. WE NEVER TELL A CALLER TO RESEND A REQUEST OFF TLS (measured 2026-11-22)
+
+Found by the adversarial access probe (§CORE-42), run 326, module `platform` — the first defect that
+pass has found from outside, and one no in-process harness could have seen, because the RULE was
+right and nothing applied it.
+
+### §CORE-47.1 The measurement
+
+```
+$ curl -s -o /dev/null -w '%{http_code} %{redirect_url}' https://api.metricspro.tech/api/v1/core/me/
+307 http://api.metricspro.tech/api/v1/core/me
+
+$ curl -s -o /dev/null -w '%{http_code} %{redirect_url}' https://api.metricspro.tech/docs/
+307 http://api.metricspro.tech/docs
+```
+
+`/api/v1/core/me` is the token-verified whoami. A client that reached it over TLS with one extra
+trailing slash was told, by us, to resend that request — `Authorization: Bearer <session token>`
+included — over PLAINTEXT http. The edge then 301s plaintext back to https, but the cleartext
+request has already crossed the wire by then, and that is the leak: anyone positioned on the
+client's network reads the session token and can act as that person until it expires.
+
+Mitigations that were already present, and why they do not close it: HSTS is stamped on every
+response (§ the `HardeningMiddleware` block in `app/main.py`), so a BROWSER that has been here
+before upgrades the URL itself — but `preload` is deliberately omitted, so a browser's FIRST contact
+is unprotected, and no non-browser client (a script, a mobile app, an integration, `curl`) implements
+HSTS at all.
+
+### §CORE-47.2 The class
+
+The app did not know its own scheme. `Dockerfile` ran `gunicorn -k uvicorn.workers.UvicornWorker`
+with no `--forwarded-allow-ips`, so uvicorn's default of `127.0.0.1` discarded the edge's
+`x-forwarded-proto: https`, `scope["scheme"]` stayed `"http"`, and **every absolute URL the framework
+builds** named http:// — the router's trailing-slash 307, any `RedirectResponse`, `url_for`. The
+instance was one route; the class is every redirect generator in the app. Repairing the two paths
+that happened to be noticed would have left the rest downgrading.
+
+### §CORE-47.3 The one home, and the sibling it extends
+
+| the fact | where it lives | who asks |
+|---|---|---|
+| "what scheme did this request really arrive on" | **`app/core/forwarded_tls.effective_scheme`** | `HardeningMiddleware` |
+| "a Location we generated must stay on that scheme" | **`app/core/forwarded_tls.secure_location`** — PURE; rewrites `http://`→`https://` only when the client arrived over https AND the Location names the SAME host, so it can never point a caller somewhere new | `HardeningMiddleware` |
+| **"which entry of an appended `X-Forwarded-*` header may be believed"** | **`app/core/client_ip.trusted_entry`** — the §41906 one home, GENERALISED here rather than copied. Every `X-Forwarded-*` header is a list each proxy appends to, so its leftmost entry is always whatever the client chose to send, whatever the header means | `client_ip.from_xff` (addresses) **and** `forwarded_tls.effective_scheme` (scheme) |
+
+**Duplicate check (CLAUDE.md build gate).** Searched this index for an existing mechanism answering
+"what did the edge tell us about this request": found §41906 / `app/core/client_ip.py`, the one home
+for the forwarded ADDRESS. `x-forwarded-proto` is the same shape of header with the same forgeable
+leftmost entry, so the hop arithmetic was FACTORED OUT of `from_xff` into `trusted_entry` and both
+readers dereference it. No second rule was written, and `effective_scheme` defaults `hops`/`legacy`
+to that module's own switches (`TRUSTED_PROXY_HOPS`, `CLIENT_IP_LEGACY_XFF`) so a scheme can never be
+believed on terms the address is not.
+
+### §CORE-47.4 Two layers, because the root cause lives outside Python
+
+- **ROOT** — `backend/Dockerfile` passes `--forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-*}`, so
+  `scope["scheme"]` is correct and every generator is fixed at once, with nothing to remember.
+  Trusting the edge is safe here: the container is reachable only through it, and a LIE in either
+  direction is harmless — claiming https only keeps a redirect on TLS, and no authorization decision
+  anywhere reads this scheme.
+- **OUTBOUND BACKSTOP** — `HardeningMiddleware` (which already owns HSTS) asks `secure_location` on
+  the way out, so a deploy that loses the flag cannot silently restore the downgrade. Defence in
+  depth, not a second copy: both layers read the one home. Break-glass `FORCE_HTTPS_LOCATION=0`.
+
+### §CORE-47.5 The siblings, checked
+
+| path | verdict |
+|---|---|
+| the router's trailing-slash 307 on every route | FIXED at the root; pinned on `/docs/`, `/redoc/`, `/api/v1/core/me/` |
+| `storeops/router.py` → `RedirectResponse(signed_doc_url)` | EXCUSED — a Supabase signed-storage URL, already https, on a THIRD-PARTY host that `secure_location` never touches by construction |
+| `closing/router.py` → `RedirectResponse(_signed_envelope(...))` | EXCUSED — same shape |
+
+### §CORE-47.6 NO LOCKOUT
+
+A request that genuinely arrived over plain http is left on http. A plain-HTTP staging box, a local
+`uvicorn app.main:app` and a private-network health probe behave exactly as before. Pinned as a test
+in both directions, because taking a screen away is a defect of equal weight to the leak.
+
+### §CORE-47.7 The lock
+
+| what | checks | fails the build when |
+|---|---|---|
+| `backend/harness_forwarded_tls.py` (CI job **"We never redirect a caller off TLS"**, `security.yml`) | 40 | the Dockerfile stops granting the forwarded-proto trust; `HardeningMiddleware` stops dereferencing the one home; a second reader of `x-forwarded-proto` or a second `http://` rewrite appears under `app/`; a host or tenant literal reaches the one home's CODE. Negative controls: disabling the backstop must restore the downgrade, and the purity check must still be able to see a planted literal |
+| `backend/tests/unit/test_forwarded_tls.py` (`pytest -m unit`) | 29 | the rule changes — scheme selection, the hop arithmetic, the rewrite's host/relative/third-party refusals, the break-glass default |
+| `backend/tests/integration/test_forwarded_tls_endpoint.py` (`pytest -m integration`) | 4 | a real redirect out of the real middleware stack downgrades, or a genuine plain-http caller is forced to https |
+
+### §CORE-47.8 Still the owner's to rule on
+
+`FORWARDED_ALLOW_IPS` may be narrowed from `*` to the edge's own ranges at any time with one
+environment change and no code change. It is left wide because Railway does not publish stable
+egress ranges for its proxy, and because narrowing it wrongly would re-open the downgrade silently.
 
 
 ## §COMMCALC-55. A SUCCESSFUL LOGIN IS RECOGNISED BY EVIDENCE, NEVER BY A GUESSED VOCABULARY (owner report 2026-11-05)
