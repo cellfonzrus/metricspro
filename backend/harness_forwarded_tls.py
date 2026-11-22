@@ -164,38 +164,32 @@ check("the trust is overridable by env, never a bare literal only",
 
 # RULE TWO applies to CODE. The docstrings here quote the production request that was measured, and
 # that evidence must survive; it is the executable lines that must carry no host or tenant name. So
-# strip every docstring and comment with the parser, then look at what is left.
-import ast, io, tokenize  # noqa: E402
+# drop every docstring with the PARSER and render the rest back to source — which also drops the
+# comments, and never reads a string token by hand (the PEP 701 blindness §C of
+# harness_carrier_vocab_guard.py ratchets against: from 3.12 an f-string is not one STRING token).
+import ast  # noqa: E402
 
 
 def _code_only(src: str) -> str:
+    """The module's executable source with every docstring removed. Comments go with the render."""
     try:
         tree = ast.parse(src)
     except SyntaxError:
         return src
-    docs = set()
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            d = ast.get_docstring(node, clean=False)
-            if d is not None:
-                docs.add(d)
-    out = []
-    for tok in tokenize.generate_tokens(io.StringIO(src).readline):
-        if tok.type == tokenize.COMMENT:
+        if not isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             continue
-        if tok.type == tokenize.STRING:
-            try:
-                if ast.literal_eval(tok.string) in docs:
-                    continue
-            except Exception:
-                pass
-        out.append(tok.string)
-    return "\n".join(out)
-
+        body = getattr(node, "body", None)
+        if (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            node.body = body[1:] or [ast.Pass()]
+    try:
+        return ast.unparse(ast.fix_missing_locations(tree))
+    except Exception:
+        return src
 
 
 print("── E. one home, dereferenced — no second copy (RULE: one fact, one home) ────────")
-APP = HERE / "app"
 readers, rewriters = [], []
 RAW = re.compile(r"""x-forwarded-proto""", re.I)
 REWRITE = re.compile(r"""replace\s*\(\s*["']http://["']""")
