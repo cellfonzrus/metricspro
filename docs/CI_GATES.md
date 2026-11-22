@@ -28,12 +28,12 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `mobile-ota-update.yml` | 1 | `push`, `workflow_dispatch` |
 | `module-graph-guard.yml` | 2 | `pull_request`, `push`, `workflow_dispatch` |
 | `org-scope-guard.yml` | 19 | `pull_request`, `push`, `workflow_dispatch` |
-| `security.yml` | 15 | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
+| `security.yml` | 16 | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
 | `tests.yml` | 18 | `pull_request`, `push`, `workflow_dispatch` |
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 638 gates
+## Gated — 639 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -285,6 +285,7 @@ the Runs on column is how you can tell.
 | `harness_fix_pipeline.py` | `tests.yml` | Proof harnesses, group 4 of 4 (`harness-suite-4`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_flag_registry_lock.py` | `watchdog-guard.yml` | One registry, one severity scale, and both detectors proved (`watchdog-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_flag_store_resolver.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_forwarded_tls.py` | `security.yml` | We never redirect a caller off TLS (`forwarded-tls`) | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
 | `harness_frontend_dep_floor.py` | `security.yml` | A fixed dependency advisory stays fixed (frontend version floor) (`frontend-dep-floor`) | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
 | `harness_frontend_lint_lock.py` | `carrier-vocab-guard.yml` | Frontend lint (eslint over the whole frontend, ratcheted) (`frontend-lint`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_frontend_typecheck_lock.py` | `carrier-vocab-guard.yml` | Frontend type check (tsc --noEmit over the whole frontend) (`frontend-typecheck`) | `pull_request`, `push`, `workflow_dispatch` |

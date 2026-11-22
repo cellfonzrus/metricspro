@@ -78,6 +78,37 @@ def _parts(xff):
     return [v for v in (raw.strip() for raw in xff.split(",")) if v]
 
 
+def trusted_entry(value, *, hops=0, legacy=False) -> str:
+    """PURE. The entry of an APPENDED forwarded header that a proxy we trust actually wrote.
+
+    Factored out of `from_xff` 2026-11-22 so that `x-forwarded-proto` is read by the SAME arithmetic
+    as `x-forwarded-for` instead of a second rule (index §CORE-47). The generalisation is the whole
+    point: EVERY `X-Forwarded-*` header is a list each proxy appends to, so the leftmost entry is
+    always whatever the client chose to send, whatever the header means. One home for "which entry
+    may be believed", dereferenced by every reader.
+
+      • `legacy` ⇒ the leftmost entry (the pre-2026-10-28 behaviour).
+      • `hops <= 0` ⇒ "" — no proxy is trusted, so no entry of a client-writable header is believed.
+      • otherwise ⇒ the `hops`-th entry from the END, i.e. `parts[len(parts) - hops]`. Forged entries
+        all sit to the LEFT of it and are never read. A chain SHORTER than `hops` means the chain is
+        not what the configuration says, and "" is returned rather than a client claim.
+
+    Returns "" (never None) when there is nothing trustworthy to answer with. Never raises."""
+    try:
+        parts = _parts(value)
+        if not parts:
+            return ""
+        if legacy:
+            return parts[0]
+        n = int(hops or 0)
+        if n <= 0:
+            return ""
+        idx = len(parts) - n
+        return parts[idx] if idx >= 0 else ""
+    except Exception:
+        return ""
+
+
 def from_xff(xff, peer="", hops=0, legacy=False) -> str:
     """The client address for this request. PURE — the whole decision, with nothing read from env.
 
@@ -95,18 +126,20 @@ def from_xff(xff, peer="", hops=0, legacy=False) -> str:
     try:
         peer = str(peer or "")[:MAX_LEN]
         parts = _parts(xff)
-        if legacy:
-            return (parts[0][:MAX_LEN] if parts else peer)
-        n = int(hops or 0)
-        if n <= 0 or not parts:
+        # The SELECTION is `trusted_entry` (the one arithmetic); what to do when it cannot answer is
+        # this function's own business, because only an ADDRESS has an unforgeable fallback.
+        pick = trusted_entry(xff, hops=hops, legacy=legacy)
+        if pick:
+            return pick[:MAX_LEN]
+        if legacy or not parts:
             return peer
-        idx = len(parts) - n
-        if idx < 0:
+        idx = len(parts) - int(hops or 0)
+        if int(hops or 0) > 0 and idx < 0:
             # The chain is shorter than the configured hop count, so no entry in it was necessarily
             # written by a proxy we trust. Prefer the unforgeable peer; fall back to the leftmost
             # claim only when there is no peer at all (a test harness, a unix socket).
             return peer or parts[0][:MAX_LEN]
-        return parts[idx][:MAX_LEN]
+        return peer
     except Exception:
         try:
             return str(peer or "")[:MAX_LEN]

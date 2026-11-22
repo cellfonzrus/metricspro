@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+from app.core import forwarded_tls
 from app.core.body_limit import BodySizeLimitMiddleware
 from app.core.tenant_middleware import TenantScopeMiddleware
 from app.modules.commcalc.router import router as commcalc_router
@@ -143,6 +144,21 @@ class HardeningMiddleware(BaseHTTPMiddleware):
                 content={"detail": f"A system error occurred. Reference: {ref}"})
         for k, v in _SECURITY_HEADERS.items():
             response.headers.setdefault(k, v)
+        # NEVER REDIRECT A CALLER OFF TLS (access probe run 326, index §CORE-43). The root fix is the
+        # Dockerfile's --forwarded-allow-ips, which makes scope["scheme"] correct for every URL the
+        # framework builds. This is the outbound backstop, so a deploy that loses that flag cannot
+        # silently restore the downgrade. The RULE lives in app/core/forwarded_tls.py; this asks it.
+        if forwarded_tls.outbound_rewrite_enabled():
+            loc = response.headers.get("location")
+            if loc:
+                fixed = forwarded_tls.secure_location(
+                    loc,
+                    scheme=forwarded_tls.effective_scheme(
+                        request.url.scheme,
+                        request.headers.get(forwarded_tls.FORWARDED_PROTO_HEADER)),
+                    host=request.headers.get("host"))
+                if fixed != loc:
+                    response.headers["location"] = fixed
         return response
 
 

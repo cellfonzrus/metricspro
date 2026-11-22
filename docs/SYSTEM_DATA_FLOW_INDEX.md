@@ -248,6 +248,7 @@ Primary code homes:
 | CORE-41 | **Inheritance is not a decision — what each tenant is OFFERED** | "why is vidapay connector showing in boost ? we need to get these things under control before we roll out for outside customers — have an agent asses and create a dashboard for the super admin whereby these things can be gated out for the respective tenants right from the get go". Three mechanisms answered "is this on for this tenant" and all three answered by INHERITING a house row — on an org id that IS a real tenant, so that tenant could not be gated at all, and a new tenant arrived holding everything. Where does a human's decision about one tenant live, which mechanisms read it, and what stops one of them answering differently? |
 | CORE-44 | **The prefix is the address, and a missing route is not an answer** | "the targets are also not updating in target settings and daily targets, seem to be the same error" — and it was. `apiUrl()` prefixes nothing: in the browser the site proxies the path as given, so `/api/v1` IS the address. Two frontend calls omitted it, reached the Next app, got its 404, and had their `catch` answer for them. One of the two was the TARGET AXIS — "what does this tenant sell, so what can have a target" — which fell back to the four built-in categories. Every category a tenant had declared was therefore invisible on every target screen, no target for one could be typed, and `commcalc.target_line` held zero rows in the entire database: 13 categories for LuxeLink, 4 for the house, none of them ever targetable. The class is not the typo but that a MISSING ROUTE and a REAL ANSWER were indistinguishable to the caller, and that a lock on "only one copy of this fact exists" said nothing about "the one copy never arrives". |
 | CORE-46 | **A stored credential shown to a person is an audited event** | The owner asked that the per-store download screen SHOW each store's back-office password, because the portal refuses automated clients and a person has to type it. Legitimate — and the first route in the platform that hands a stored credential back to a browser, where every other read strips it. Granting it inside the screen's own endpoint would have made the decision a property of one screen, and the next screen would decide again. So the decision has one home, for every credential this platform stores: only a column the credential registry calls a credential, only a row of the asking organisation, and only after the row saying WHO looked is written — a reveal that cannot be recorded is refused rather than served unrecorded. |
+| CORE-47 | **We never tell a caller to resend a request off TLS** | Found from OUTSIDE by the adversarial access probe (§CORE-42, run 326) and reproducible by hand: `GET /api/v1/core/me/` — the token-verified whoami, one extra trailing slash — answered `307 Location: http://…`, so a client that had arrived over TLS was told by us to resend the request, Authorization header included, in the clear. The instance was two paths; the class was that the app did not know it sat behind a TLS-terminating edge, so EVERY absolute URL it built downgraded the caller. Fixed at the root (the server now believes the edge) with an outbound backstop that cannot un-wire, and the "which entry of an appended `X-Forwarded-*` header may be believed" arithmetic FACTORED OUT of the address one home rather than copied for the scheme. |
 | CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
 | CORE-27 | **A report arrives with the standard filters and the send bar, or it does not arrive** | "Zero Sales does not have send notification bar, please note this also in teh indsex all reports must have the satandard filters and the send bar by default" — the sender and the filter bar each already had one home; what was missing was the content to send and anything that made either a default. What is a figure nobody can mail worth, and what fails the build when the 129th report ships without a toolbar? |
@@ -26606,6 +26607,7 @@ status word rather than a blank that reads as nil.
 | CORE-44 | core |
 | CORE-45 | core, storeops, hr, commcalc |
 | CORE-46 | core, commcalc |
+| CORE-47 | core |
 | STOREOPS-08 | storeops |
 | STOREOPS-09 | storeops, account |
 | STOREOPS-10 | storeops, account |
@@ -41919,7 +41921,8 @@ curl: `/mnt/project-files/security-review-2026-10-28/SET_TRUSTED_PROXY_HOPS.md`.
 | harness | checks | what fails the build |
 |---|---|---|
 | `harness_public_allowlist_lock.py` | 80 | a parameterised route reachable through the sweep rule — asserted against the **real 1805-route table**, with a pre-fix control proving all 249 were |
-| `harness_client_ip.py` | 45 | a FIFTH copy of the leftmost-`X-Forwarded-For` parse anywhere in `app/`, or a wired call site that stops dereferencing the one home; plus the hop arithmetic for chains shorter, equal and longer than N |
+| `harness_client_ip.py` | 45 | a FIFTH copy of the leftmost-`X-Forwarded-For` parse anywhere in `app/`, or a wired call site that stops dereferencing the one home; plus the hop arithmetic for chains shorter, equal and longer than N. Its `trusted_entry` selector is dereferenced by `forwarded_tls` too (§CORE-47) |
+| `harness_forwarded_tls.py` | 40 | the app forgetting it sits behind a TLS-terminating edge, so a redirect tells a signed-in caller to resend the request over plaintext — the forwarded-proto trust at the root, the outbound backstop, no second copy of either rule (§CORE-47) |
 | `harness_anonymous_write_surface.py` | 43 | any audit/diagnostic write (`failure_log`, `access_log`, `log`, `auth_event`, `impersonation_action`) that takes its `org_id` from the query string; plus the login-record cap's existence, tier separation and bite |
 
 All three are **enforcing** jobs in `.github/workflows/security.yml` (not `continue-on-error`), so the
@@ -45773,6 +45776,99 @@ after a minute: a credential on screen is a credential someone can walk past.
 
 Related: §CORE-03 (the credential registry) · §COMMCALC-82 (the screen that asked for this) ·
 §12a (the portal logins themselves).
+
+
+## §CORE-47. WE NEVER TELL A CALLER TO RESEND A REQUEST OFF TLS (measured 2026-11-22)
+
+Found by the adversarial access probe (§CORE-42), run 326, module `platform` — the first defect that
+pass has found from outside, and one no in-process harness could have seen, because the RULE was
+right and nothing applied it.
+
+### §CORE-47.1 The measurement
+
+```
+$ curl -s -o /dev/null -w '%{http_code} %{redirect_url}' https://api.metricspro.tech/api/v1/core/me/
+307 http://api.metricspro.tech/api/v1/core/me
+
+$ curl -s -o /dev/null -w '%{http_code} %{redirect_url}' https://api.metricspro.tech/docs/
+307 http://api.metricspro.tech/docs
+```
+
+`/api/v1/core/me` is the token-verified whoami. A client that reached it over TLS with one extra
+trailing slash was told, by us, to resend that request — `Authorization: Bearer <session token>`
+included — over PLAINTEXT http. The edge then 301s plaintext back to https, but the cleartext
+request has already crossed the wire by then, and that is the leak: anyone positioned on the
+client's network reads the session token and can act as that person until it expires.
+
+Mitigations that were already present, and why they do not close it: HSTS is stamped on every
+response (§ the `HardeningMiddleware` block in `app/main.py`), so a BROWSER that has been here
+before upgrades the URL itself — but `preload` is deliberately omitted, so a browser's FIRST contact
+is unprotected, and no non-browser client (a script, a mobile app, an integration, `curl`) implements
+HSTS at all.
+
+### §CORE-47.2 The class
+
+The app did not know its own scheme. `Dockerfile` ran `gunicorn -k uvicorn.workers.UvicornWorker`
+with no `--forwarded-allow-ips`, so uvicorn's default of `127.0.0.1` discarded the edge's
+`x-forwarded-proto: https`, `scope["scheme"]` stayed `"http"`, and **every absolute URL the framework
+builds** named http:// — the router's trailing-slash 307, any `RedirectResponse`, `url_for`. The
+instance was one route; the class is every redirect generator in the app. Repairing the two paths
+that happened to be noticed would have left the rest downgrading.
+
+### §CORE-47.3 The one home, and the sibling it extends
+
+| the fact | where it lives | who asks |
+|---|---|---|
+| "what scheme did this request really arrive on" | **`app/core/forwarded_tls.effective_scheme`** | `HardeningMiddleware` |
+| "a Location we generated must stay on that scheme" | **`app/core/forwarded_tls.secure_location`** — PURE; rewrites `http://`→`https://` only when the client arrived over https AND the Location names the SAME host, so it can never point a caller somewhere new | `HardeningMiddleware` |
+| **"which entry of an appended `X-Forwarded-*` header may be believed"** | **`app/core/client_ip.trusted_entry`** — the §41906 one home, GENERALISED here rather than copied. Every `X-Forwarded-*` header is a list each proxy appends to, so its leftmost entry is always whatever the client chose to send, whatever the header means | `client_ip.from_xff` (addresses) **and** `forwarded_tls.effective_scheme` (scheme) |
+
+**Duplicate check (CLAUDE.md build gate).** Searched this index for an existing mechanism answering
+"what did the edge tell us about this request": found §41906 / `app/core/client_ip.py`, the one home
+for the forwarded ADDRESS. `x-forwarded-proto` is the same shape of header with the same forgeable
+leftmost entry, so the hop arithmetic was FACTORED OUT of `from_xff` into `trusted_entry` and both
+readers dereference it. No second rule was written, and `effective_scheme` defaults `hops`/`legacy`
+to that module's own switches (`TRUSTED_PROXY_HOPS`, `CLIENT_IP_LEGACY_XFF`) so a scheme can never be
+believed on terms the address is not.
+
+### §CORE-47.4 Two layers, because the root cause lives outside Python
+
+- **ROOT** — `backend/Dockerfile` passes `--forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-*}`, so
+  `scope["scheme"]` is correct and every generator is fixed at once, with nothing to remember.
+  Trusting the edge is safe here: the container is reachable only through it, and a LIE in either
+  direction is harmless — claiming https only keeps a redirect on TLS, and no authorization decision
+  anywhere reads this scheme.
+- **OUTBOUND BACKSTOP** — `HardeningMiddleware` (which already owns HSTS) asks `secure_location` on
+  the way out, so a deploy that loses the flag cannot silently restore the downgrade. Defence in
+  depth, not a second copy: both layers read the one home. Break-glass `FORCE_HTTPS_LOCATION=0`.
+
+### §CORE-47.5 The siblings, checked
+
+| path | verdict |
+|---|---|
+| the router's trailing-slash 307 on every route | FIXED at the root; pinned on `/docs/`, `/redoc/`, `/api/v1/core/me/` |
+| `storeops/router.py` → `RedirectResponse(signed_doc_url)` | EXCUSED — a Supabase signed-storage URL, already https, on a THIRD-PARTY host that `secure_location` never touches by construction |
+| `closing/router.py` → `RedirectResponse(_signed_envelope(...))` | EXCUSED — same shape |
+
+### §CORE-47.6 NO LOCKOUT
+
+A request that genuinely arrived over plain http is left on http. A plain-HTTP staging box, a local
+`uvicorn app.main:app` and a private-network health probe behave exactly as before. Pinned as a test
+in both directions, because taking a screen away is a defect of equal weight to the leak.
+
+### §CORE-47.7 The lock
+
+| what | checks | fails the build when |
+|---|---|---|
+| `backend/harness_forwarded_tls.py` (CI job **"We never redirect a caller off TLS"**, `security.yml`) | 40 | the Dockerfile stops granting the forwarded-proto trust; `HardeningMiddleware` stops dereferencing the one home; a second reader of `x-forwarded-proto` or a second `http://` rewrite appears under `app/`; a host or tenant literal reaches the one home's CODE. Negative controls: disabling the backstop must restore the downgrade, and the purity check must still be able to see a planted literal |
+| `backend/tests/unit/test_forwarded_tls.py` (`pytest -m unit`) | 29 | the rule changes — scheme selection, the hop arithmetic, the rewrite's host/relative/third-party refusals, the break-glass default |
+| `backend/tests/integration/test_forwarded_tls_endpoint.py` (`pytest -m integration`) | 4 | a real redirect out of the real middleware stack downgrades, or a genuine plain-http caller is forced to https |
+
+### §CORE-47.8 Still the owner's to rule on
+
+`FORWARDED_ALLOW_IPS` may be narrowed from `*` to the edge's own ranges at any time with one
+environment change and no code change. It is left wide because Railway does not publish stable
+egress ranges for its proxy, and because narrowing it wrongly would re-open the downgrade silently.
 
 
 ## §COMMCALC-55. A SUCCESSFUL LOGIN IS RECOGNISED BY EVIDENCE, NEVER BY A GUESSED VOCABULARY (owner report 2026-11-05)
