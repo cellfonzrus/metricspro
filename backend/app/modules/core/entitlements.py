@@ -17,7 +17,15 @@ seed_tenant_defaults() changes. /core/me compares the tenant's storeops.tenants.
 SEED_VERSION and re-runs sync_tenant() when it is behind — so every existing tenant self-provisions
 the new feature on its next login, with no further migration or manual step.
 """
-from fastapi import HTTPException, Request
+try:
+    from fastapi import HTTPException, Request
+except ImportError:                      # a stdlib-only proof harness stubs `fastapi` with
+    from fastapi import HTTPException    # HTTPException alone; `Request` is only ever needed for
+    Request = None                       # the annotation FastAPI injects on, and FastAPI is real
+                                         # wherever that matters. §F of
+                                         # harness_router_gate_dereference.py asserts this resolves
+                                         # to the REAL fastapi.Request whenever fastapi is installed,
+                                         # so a silently un-injected gate cannot ship.
 
 from app.core.database import get_supabase
 from app.core import router_gate as _router_gate

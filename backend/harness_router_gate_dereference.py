@@ -211,6 +211,35 @@ for dotted, label in MODULES:
     check(f"{label}: the stand-down widened NOTHING a gated route could reach ({gated} gated)",
           not widened, "; ".join(widened[:3]))
 
+print("\n§F  the gate really receives a request, and router_gate stays import-light\n")
+import typing                                                  # noqa: E402
+
+import fastapi                                                 # noqa: E402
+
+from app.modules.core import entitlements as _ent              # noqa: E402
+
+# `entitlements` guards its `Request` import so four stdlib-only proof harnesses, which replace
+# `fastapi` with a stub carrying HTTPException alone, can still import it. Wherever fastapi is REAL
+# the annotation must resolve to the real thing, or FastAPI injects nothing, `stand_down` is handed
+# None, it fails closed, and the lockout comes back SILENTLY. So the guard is measured, not trusted.
+check("entitlements.Request resolved to the REAL fastapi.Request (not the stub fallback)",
+      getattr(_ent, "Request", None) is fastapi.Request,
+      f"resolved to {getattr(_ent, 'Request', None)!r}")
+_closure = _ent.require_module("account")
+_hints = typing.get_type_hints(_closure)
+check("the entitlement gate's `request` parameter is annotated fastapi.Request, so it is injected",
+      _hints.get("request") is fastapi.Request, f"hints: {_hints}")
+for _name, _fn in (("pos", __import__("app.modules.pos.router", fromlist=["x"])._require_pos_access),
+                   ("approvals",
+                    __import__("app.modules.approvals.router", fromlist=["x"])._require_member),
+                   ("chat", __import__("app.modules.chat.router", fromlist=["x"])._require_member)):
+    check(f"{_name}'s gate takes an injected fastapi.Request",
+          typing.get_type_hints(_fn).get("request") is fastapi.Request,
+          str(typing.get_type_hints(_fn)))
+_rg_code = open(os.path.join(APP_DIR, "core", "router_gate.py")).read().split('"""')[-1]
+check("router_gate imports nothing from fastapi (a gate that cannot be imported never stands down)",
+      "from fastapi import" not in _rg_code and "import fastapi" not in _rg_code)
+
 check("at least one declared-public route sits under a gated router (the lock is ARMED, not vacuous)",
       total_declared >= 1, f"{total_declared} found — if this is 0 the §C checks prove nothing")
 

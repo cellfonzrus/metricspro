@@ -31,12 +31,17 @@ global enforce-login flag), prefixes match at a segment boundary, and everything
 the gate. The paths that stand down authenticate by their own mechanism inside the handler — a
 one-use link token, an HMAC capability, a cron secret, a verified JWT in `/core/me`.
 """
-from fastapi import Request
 
-from app.core.tenant_middleware import public_surface_allows
+# IMPORT-LIGHT ON PURPOSE. This module is imported by `modules/core/entitlements`, which four
+# stdlib-only proof harnesses import with `fastapi` replaced by a stub carrying `HTTPException` and
+# nothing else. A `from fastapi import Request` here made every one of them die on
+# `ImportError: cannot import name 'Request'` — a gate that cannot be imported is worse than one
+# that does not stand down. So: no fastapi import, and `tenant_middleware` is imported INSIDE the
+# function, where a caller that never gates a request never pays for it. `request` is duck-typed
+# because only two attributes are ever read.
 
 
-def stand_down(request: Request | None) -> bool:
+def stand_down(request) -> bool:
     """True when a router-level auth gate must NOT refuse: the platform declared this path public
     for this method, and the handler carries its own auth.
 
@@ -46,6 +51,8 @@ def stand_down(request: Request | None) -> bool:
     if request is None:
         return False
     try:
+        from app.core.tenant_middleware import public_surface_allows
+
         path = request.url.path
         method = request.method
     except Exception:

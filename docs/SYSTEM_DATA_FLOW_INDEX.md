@@ -41925,7 +41925,7 @@ curl: `/mnt/project-files/security-review-2026-10-28/SET_TRUSTED_PROXY_HOPS.md`.
 | `harness_public_allowlist_lock.py` | 80 | a parameterised route reachable through the sweep rule — asserted against the **real 1805-route table**, with a pre-fix control proving all 249 were |
 | `harness_client_ip.py` | 45 | a FIFTH copy of the leftmost-`X-Forwarded-For` parse anywhere in `app/`, or a wired call site that stops dereferencing the one home; plus the hop arithmetic for chains shorter, equal and longer than N. Its `trusted_entry` selector is dereferenced by `forwarded_tls` too (§CORE-47) |
 | `harness_forwarded_tls.py` | 40 | the app forgetting it sits behind a TLS-terminating edge, so a redirect tells a signed-in caller to resend the request over plaintext — the forwarded-proto trust at the root, the outbound backstop, no second copy of either rule (§CORE-47) |
-| `harness_router_gate_dereference.py` | 25 | a router-level `APIRouter(dependencies=…)` auth gate that cannot ask whether the platform declared a path public — the §CORE-48 W-9 lockout. Derives the gates from the AST, measures both directions under TestClient (no declared-public route refused; the stand-down widened nothing, proved by disarming it), and refuses a second copy of the allowlist inside `core/router_gate` |
+| `harness_router_gate_dereference.py` | 31 | a router-level `APIRouter(dependencies=…)` auth gate that cannot ask whether the platform declared a path public — the §CORE-48 W-9 lockout. Derives the gates from the AST, measures both directions under TestClient (no declared-public route refused; the stand-down widened nothing, proved by disarming it), and refuses a second copy of the allowlist inside `core/router_gate` |
 | `harness_anonymous_write_surface.py` | 43 | any audit/diagnostic write (`failure_log`, `access_log`, `log`, `auth_event`, `impersonation_action`) that takes its `org_id` from the query string; plus the login-record cap's existence, tier separation and bite |
 
 All three are **enforcing** jobs in `.github/workflows/security.yml` (not `continue-on-error`), so the
@@ -45956,13 +45956,18 @@ module pos: 123 probes, 1 finding(s), 28 unprobed, measured=False
 
 ### §CORE-48.5 Locked
 
-`backend/harness_router_gate_dereference.py` (25 checks, DB-free, CI job *"We never lock a caller out
+`backend/harness_router_gate_dereference.py` (31 checks, DB-free, CI job *"We never lock a caller out
 of a declared-public path"*) fails the build on all three ways this comes back: a router-level
 `dependencies=[Depends(f)]` naming a gate that does not ask `router_gate.stand_down` (derived from
 the AST, so a router added tomorrow is checked tomorrow); a second copy of the allowlist appearing
 inside `router_gate`; and, measured under TestClient, a declared-public route refused by a gate or a
-gated route the stand-down widened. Proven armed: un-wiring `_require_pos_access` turns 25/0 into
-22/3. Regressions `tests/unit/test_public_path_gate_standdown.py` (7) and
+gated route the stand-down widened. Proven armed: un-wiring `_require_pos_access` turns 31/0 into a
+named failure. §F additionally measures that each gate's `request` parameter really resolves to
+`fastapi.Request`: `entitlements` GUARDS that import so the four stdlib-only proof harnesses that
+stub `fastapi` can still import it (one of them, `harness_tenant_vertical`, died on the unguarded
+version), and an annotation that failed to resolve would mean FastAPI injects nothing, `stand_down`
+is handed None and fails closed, and the lockout returns SILENTLY. `router_gate` imports nothing
+from fastapi at all, and that too is locked. Regressions `tests/unit/test_public_path_gate_standdown.py` (7) and
 `tests/integration/test_public_path_reaches_its_handler.py` (3, the composition on the assembled
 app); the probe's own blind spot is pinned by 11 new checks in `harness_security_probe.py` (138).
 
