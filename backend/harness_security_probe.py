@@ -31,6 +31,7 @@ WHAT IS PROVED
 Run from backend/:   python3 harness_security_probe.py
 Exit 0 = every claim holds.  Exit 1 = the probe cannot be trusted; fix it before believing a report.
 """
+import json
 import os
 import re
 import sys
@@ -55,6 +56,9 @@ def ok(cond, msg):
 def section(name):
     print(f"\n{name}")
 
+
+SRC_FOR_LOCK = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "security_probe.py")).read()
 
 # A fake route table in the real shape. Deliberately includes a write-only path, a path outside the
 # API prefix, and a path rep_surface really grants, so the dereference is measurable.
@@ -324,6 +328,109 @@ ok(all(not any(e.lower().endswith("password") and os.environ.get(e) for e in p["
 for p in sp.PERSONAS.values():
     ok(all(isinstance(c, str) and c.isupper() for c in p["creds"]),
        "a credential is an ENV VAR NAME, never a literal value")
+
+
+# ── §L  whose rows came back is asked of EVERY answered body ──────────────────────────────────────
+section("§L  the employee's OWN surface is checked for another tenant's rows")
+ok(sp.verdict({"expect": sp.EXPECT_REACH}, 200, '{"rows":[{"store":"FOREIGN-1"}]}',
+              foreign_markers=("FOREIGN-1",)) == sp.FOREIGN_ROWS,
+   "★ a surface a rep MAY reach, answering with another tenant's row, is a leak — not OK")
+ok(sp.verdict({"expect": sp.EXPECT_REACH}, 200, '{"rows":[{"store":"MINE-1"}]}',
+              foreign_markers=("FOREIGN-1",)) == sp.OK,
+   "negative control: its own rows are still a clean answer (no false leak)")
+ok(sp.verdict({"expect": sp.EXPECT_REACH}, 403, "{}", foreign_markers=("FOREIGN-1",)) == sp.LOCKED_OUT,
+   "★ NO LOCKOUT ★ is still measured first — the marker rule did not eat it")
+ok(sp.verdict({"expect": sp.EXPECT_REACH}, 200, "{}") == sp.OK,
+   "with nothing declared the employee's own surface is not reported as a leak")
+ok(SRC_FOR_LOCK.count("def _foreign_in") == 1,
+   "ONE home for 'is another tenant's content in this body'")
+ok(len(re.findall(r'for marker in foreign_markers', SRC_FOR_LOCK)) == 0,
+   "no second copy of the marker loop — the branch that forgot to check is how this got missed")
+for br in ("EXPECT_REACH", "EXPECT_NO_FOREIGN_ROWS"):
+    ok(re.search(br + r'.{0,900}?_foreign_in', SRC_FOR_LOCK, re.S),
+       f"the {br} branch DEREFERENCES the one home rather than deciding for itself")
+
+
+# ── §I  ACCOUNTS — many tenants, many reps, declared in the environment ───────────────────────────
+section("§I  the accounts are DECLARED, never coded")
+ENV_ONE = {
+    "PROBE_ACCOUNTS": json.dumps([
+        {"tenant": "t1", "email": "a@x.test", "password_env": "PW_A", "markers": ["AAA-1"]},
+        {"tenant": "t1", "email": "b@x.test", "password_env": "PW_B"},
+        {"tenant": "t2", "email": "c@x.test", "password_env": "PW_C", "markers": ["CCC-9"]},
+    ]),
+    "PW_A": "x", "PW_B": "x", "PW_C": "x",
+}
+accts = sp.probe_accounts(ENV_ONE)
+ok(len(accts) == 3, "every declared account is returned")
+ok(all(a["kind"] == sp.REP for a in accts), "a declared account is an employee persona")
+ok(len({a["label"] for a in accts}) == 3, "each account gets its OWN persona label")
+ok(all(a["label"] != sp.REP for a in accts),
+   "an account label is never the bare kind — two reps in one tenant must be distinguishable")
+ok([a["tenant"] for a in accts].count("t1") == 2,
+   "TWO reps in ONE tenant are both kept — the rep-vs-rep question needs a victim")
+
+# ★ the foreign-marker set is the OTHER tenants', derived, never the account's own
+f1 = sp.foreign_markers(accts, accts[0]["label"])
+ok("CCC-9" in f1, "another tenant's marker is foreign to this account")
+ok("AAA-1" not in f1, "★ an account's OWN tenant marker is NEVER treated as foreign (a false leak)")
+ok(sp.foreign_markers(accts, accts[1]["label"]) == f1,
+   "two accounts in one tenant share one foreign set — derived from the tenant, not the person")
+
+# a tenant that declared no marker cannot be read as clean
+ok(not sp.foreign_markers(accts, accts[2]["label"]) or "AAA-1" in sp.foreign_markers(accts, accts[2]["label"]),
+   "a tenant with no declared marker still sees the others'")
+
+ok(sp.probe_accounts({}) == (), "no declaration means no account — never a guess")
+ok(sp.probe_accounts({"PROBE_ACCOUNTS": "not json"}) == (),
+   "a malformed declaration yields NO account rather than a half-read one")
+ok(sp.probe_accounts({"PROBE_ACCOUNTS": json.dumps(
+    [{"tenant": "t1", "email": "a@x.test", "password_env": "MISSING_PW"}])}) == (),
+   "an account whose password secret is absent is DROPPED, so the run reports it unmeasured")
+
+# the legacy single-rep declaration must keep working through the SAME home — no second reader
+legacy = sp.probe_accounts({"PROBE_REP_EMAIL": "r@x.test", "PROBE_REP_PASSWORD": "x",
+                            "PROBE_FOREIGN_MARKERS": "ZZZ-1"})
+ok(len(legacy) == 1 and legacy[0]["kind"] == sp.REP,
+   "the original PROBE_REP_* pair is read by the SAME one home")
+
+# ★ A CREDENTIAL MUST NEVER REACH A REPORT ★
+section("§J  ★ no credential can reach a report ★")
+ok(all("password" not in a for a in accts), "an account row carries no password VALUE")
+ok(all(a.get("password_env", "").isupper() for a in accts),
+   "it carries the NAME of the secret that holds one")
+plan = sp.plan_for_module(SCHEMA, "storeops", personas=tuple(a["label"] for a in accts),
+                          base_url="https://api.example.test")
+blob = json.dumps(plan, default=str)
+for secret in ("a@x.test", "b@x.test", "c@x.test", "PW_A"):
+    ok(secret not in blob, f"no credential or email appears in the plan ({secret!r})")
+
+# ── §K  a BLINDED persona is a gap, never a pass ──────────────────────────────────────────────────
+section("§K  a persona that could not ask is never a pass")
+ok(sp.blinded_verdict("two-factor authentication required") == sp.NOT_MEASURED,
+   "★ a 2FA challenge means the probe never reached the gate — NOT a refusal that passes")
+ok(sp.blinded_verdict('{"code":"2fa_required"}') == sp.NOT_MEASURED,
+   "the machine-readable form is caught too")
+ok(sp.blinded_verdict('{"detail":"authentication required"}') is None,
+   "an ordinary refusal is NOT blinded — it is a real measurement")
+blind = sp.verdict({"expect": sp.EXPECT_REFUSE}, 401, '{"code":"2fa_required"}')
+ok(blind == sp.NOT_MEASURED,
+   "★ a 2FA-blinded answer on a refuse-expectation reports as a GAP, not OK")
+reach = sp.verdict({"expect": sp.EXPECT_REACH}, 403, '{"code":"2fa_required"}')
+ok(reach == sp.NOT_MEASURED,
+   "and it is not read as LOCKED_OUT either — the probe simply never got in")
+ok(sp.verdict({"expect": sp.EXPECT_REFUSE}, 401, '{"detail":"authentication required"}') == sp.OK,
+   "negative control: the ordinary refusal still passes, so the rule did not disarm the probe")
+
+# coverage must name every account, and stay unmeasured while one is missing
+cov_a = sp.coverage(SCHEMA, "storeops", [{"persona": sp.ANON, "verdict": sp.OK}], accounts=accts)
+ok(all(cov_a["personas"][a["label"]]["state"] == "skipped" for a in accts),
+   "an account that did not run is reported skipped BY NAME")
+ok(cov_a["measured"] is False, "★ and the run is not measured")
+ran = [{"persona": sp.ANON, "verdict": sp.OK}] + \
+      [{"persona": a["label"], "verdict": sp.OK} for a in accts]
+ok(sp.coverage(SCHEMA, "storeops", ran, accounts=accts)["measured"] is False,
+   "★ still NOT measured while the cross-tenant ADMIN persona has no account — reps are not admins")
 
 
 # ── §H  no second copy of any declaration ─────────────────────────────────────────────────────────

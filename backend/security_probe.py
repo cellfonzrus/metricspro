@@ -167,6 +167,86 @@ def rotation_pick(schema, run_index):
     return order[int(run_index) % len(order)]
 
 
+# ── 1b. THE ACCOUNTS — the ONE home for "who may this run sign in as" ────────────────────────────
+# Sanjot's 2026-11-23 directive: two sales reps from three tenants. That shape is DECLARED in the
+# environment, never in code, so a fourth tenant or a third rep needs no edit here (RULE TWO: no
+# tenant name, no count, no role literal below).
+#
+# WHY TWO REPS IN ONE TENANT. One rep per tenant can only ask the Manan question — does a confined
+# employee reach a manager's URL. It cannot ask the SECOND leak's question (§STOREOPS-07.65): can
+# rep A read rep B's hours? That needs a victim in the same company, so a tenant's accounts are kept
+# as a LIST and never collapsed to one.
+#
+# WHY A ROW HOLDS NO PASSWORD. Every row is serialised into the report. A row therefore carries the
+# NAME of the secret that holds the password and never the password, and `probe_accounts` is the only
+# code that resolves a name to a value. §J of the harness fails the build if a credential or an email
+# can be found in a plan.
+ACCOUNTS_ENV = "PROBE_ACCOUNTS"          # a JSON list: tenant, email, password_env, markers
+LEGACY_REP = ("PROBE_REP_EMAIL", "PROBE_REP_PASSWORD", "PROBE_FOREIGN_MARKERS")
+
+
+def _account_row(kind, tenant, email, password_env, markers, seq):
+    return {"label": f"{kind}:{tenant}#{seq}", "kind": kind, "tenant": str(tenant),
+            "email": str(email), "password_env": str(password_env),
+            "markers": tuple(str(m).strip() for m in (markers or ()) if str(m).strip())}
+
+
+def probe_accounts(env=None):
+    """Every signed-in identity this run may use. DEFAULT NONE — an absent, malformed or
+    half-configured declaration yields NO account, so the run reports the persona unmeasured instead
+    of guessing. Never raises: a broken secret must not stop the stranger's pass from running."""
+    env = os.environ if env is None else env
+    rows, seq = [], {}
+    raw = str(env.get(ACCOUNTS_ENV, "") or "").strip()
+    declared = []
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            declared = parsed if isinstance(parsed, list) else []
+        except Exception:
+            declared = []          # a half-read declaration is no declaration
+    for item in declared:
+        if not isinstance(item, dict):
+            continue
+        tenant, email = str(item.get("tenant", "") or "").strip(), str(item.get("email", "") or "").strip()
+        pw_env = str(item.get("password_env", "") or "").strip()
+        # The secret must EXIST. An account whose password is not configured is dropped, because a
+        # sign-in that cannot happen must appear as a gap and never as a persona that "ran".
+        if not (tenant and email and pw_env and env.get(pw_env)):
+            continue
+        seq[tenant] = seq.get(tenant, 0) + 1
+        rows.append(_account_row(REP, tenant, email, pw_env, item.get("markers"), seq[tenant]))
+    if not rows:
+        # The original single-rep declaration, read by this SAME home so there is no second reader.
+        e_env, p_env, m_env = LEGACY_REP
+        if env.get(e_env) and env.get(p_env):
+            rows.append(_account_row(REP, "legacy", env[e_env], p_env,
+                                     str(env.get(m_env, "")).split("|"), 1))
+    return tuple(rows)
+
+
+def foreign_markers(accounts, label):
+    """What a marker in THIS account's answer would prove. DERIVED from the other tenants' own
+    declarations — an account's own tenant marker is never foreign, or every honest answer would
+    read as a leak. Empty means nothing was declared, which `verdict` reports as `unknown`, never
+    as clean (owner 2026-10-30: nothing declared means nothing identified)."""
+    mine = next((a["tenant"] for a in accounts if a["label"] == label), None)
+    out = []
+    for a in accounts:
+        if a["tenant"] == mine:
+            continue
+        out.extend(m for m in a["markers"] if m not in out)
+    return tuple(out)
+
+
+def kind_of(persona):
+    """Which of the three questions this persona label asks. A label is `<kind>:<tenant>#<n>`, so a
+    hundred accounts still dispatch on three kinds and no caller grows a per-account branch."""
+    p = str(persona or "")
+    head = p.split(":", 1)[0]
+    return head if head in PERSONAS else p
+
+
 # ── 2. WHAT A CORRECTLY-GATED PLATFORM MUST ANSWER ────────────────────────────────────────────────
 def _is_public(method, path):
     """Dereferenced from the middleware's OWN allowlist, never copied. `public_methods_for` scopes a
@@ -180,10 +260,13 @@ def _is_public(method, path):
 
 
 def expectation(persona, method, path):
-    """What this persona must be told. DEFAULT REFUSE — the same default as the gate itself."""
+    """What this persona must be told. DEFAULT REFUSE — the same default as the gate itself.
+    Dispatches on the persona's KIND, so a second rep in the same tenant is held to the identical
+    declared standard as the first and no account can acquire a standard of its own."""
     m = str(method).upper()
     if _is_public(m, path):
         return EXPECT_PUBLIC
+    persona = kind_of(persona)
     if persona == ANON:
         return EXPECT_REFUSE
     if persona == REP:
@@ -294,6 +377,28 @@ def _discloses_shape(path):
                ((m, pp) for m, pp in UNPUBLISHED_PLATFORM_OPS))
 
 
+# A persona can be stopped by a door that is NOT the gate under test. Two-factor enforcement is the
+# live one: the middleware answers `2fa_required` before any module gate is consulted, so the probe
+# never reaches the question it came to ask. Read as a refusal that is a measurement, a tenant turning
+# 2FA on would silently convert every module to "no leak found" — the exact shape of the accident this
+# tool exists to prevent. It is therefore a GAP. No tenant has such a policy configured today, which
+# is why this is a lock and not a fix.
+BLINDED_MARKS = ("2fa_required", "two-factor authentication required")
+
+
+def blinded_verdict(body=""):
+    """NOT_MEASURED when the answer proves a different door stopped us; None when it does not."""
+    text = (body if isinstance(body, str) else json.dumps(body, default=str)).lower()
+    return NOT_MEASURED if any(mark in text for mark in BLINDED_MARKS) else None
+
+
+def _foreign_in(text, markers):
+    """Is another tenant's content in this body? ONE home, so every expectation that can receive a
+    body asks the same question the same way — a second copy of this loop is how one branch ends up
+    checking and another not (which is exactly what happened before 2026-11-23)."""
+    return any(m and str(m) in text for m in (markers or ()))
+
+
 def verdict(probe, status, body="", foreign_markers=()):
     """What the answer means. Pure: no network, no clock, no state.
 
@@ -303,6 +408,12 @@ def verdict(probe, status, body="", foreign_markers=()):
     expect = probe.get("expect")
     code = int(status or 0)
     text = body if isinstance(body, str) else json.dumps(body, default=str)
+
+    # Asked FIRST, before any expectation: if a different door stopped the probe, nothing about the
+    # gate under test was measured, whatever the status code happens to be.
+    blinded = blinded_verdict(text)
+    if blinded:
+        return blinded
 
     if expect == EXPECT_UNPROBED:
         # A gap, reported as a gap. It is deliberately NOT `ok`: a write this run could not measure
@@ -335,6 +446,14 @@ def verdict(probe, status, body="", foreign_markers=()):
     if expect == EXPECT_REACH:
         if code == 403:
             return LOCKED_OUT
+        # ★ THE EMPLOYEE'S OWN SURFACE IS WHERE A CROSS-TENANT LEAK HIDES BEST ★ — found by the
+        # integration test on 2026-11-23. This branch used to return OK for any answer under 500,
+        # so a schedule or time-clock screen a rep is SUPPOSED to reach could hand back another
+        # tenant's rows and the probe would call it clean. Whose rows came back is a separate
+        # question from whether the door opened, and every answered body is now asked both.
+        leak = _foreign_in(text, foreign_markers)
+        if leak:
+            return FOREIGN_ROWS
         return OK if code < 500 else UNKNOWN
 
     if expect == EXPECT_NO_FOREIGN_ROWS:
@@ -342,10 +461,7 @@ def verdict(probe, status, body="", foreign_markers=()):
             return OK
         if not foreign_markers:
             return UNKNOWN
-        for marker in foreign_markers:
-            if marker and str(marker) in text:
-                return FOREIGN_ROWS
-        return OK
+        return FOREIGN_ROWS if _foreign_in(text, foreign_markers) else OK
 
     return UNKNOWN
 
@@ -366,18 +482,31 @@ def gaps(results):
                         key=lambda r: (str(r.get("path")), str(r.get("declared_method")))))
 
 
-def coverage(schema, module, results):
+def coverage(schema, module, results, accounts=()):
     """What this run actually measured, and what it did NOT — stated, never implied. A persona with
-    no credential is reported as `skipped`, so a run with no test accounts can never read as a pass."""
+    no credential is reported as `skipped`, so a run with no test accounts can never read as a pass.
+
+    Every declared account is named SEPARATELY. Two reps in one tenant are two measurements, and
+    rolling them into one "rep: ran" would hide the case where only one of them could sign in."""
     ops = modules_from_schema(schema).get(module, ())
     seen = {(r.get("persona")) for r in results}
+    # The three kinds are always listed, present or not; each declared account is listed as well, so
+    # a reader can see WHICH identity was blind rather than only that something was.
+    names = list(PERSONAS) + [a["label"] for a in accounts if a["label"] not in PERSONAS]
     per = {}
-    for persona in PERSONAS:
+    for persona in names:
         rows = [r for r in results if r.get("persona") == persona]
         sent = [r for r in rows if r.get("verdict") != NOT_MEASURED]
+        ran = persona in seen
+        if persona == REP and accounts:
+            # With accounts declared, the bare kind is satisfied by its accounts rather than by a
+            # persona of its own — otherwise a fully measured multi-tenant run could never read
+            # as measured.
+            ran = ran or any(a["label"] in seen for a in accounts if a["kind"] == REP)
         per[persona] = {"probes": len(sent), "unprobed": len(rows) - len(sent),
-                        "state": "ran" if persona in seen else "skipped"}
+                        "state": "ran" if ran else "skipped"}
     return {"module": module, "operations": len(ops), "personas": per,
+            "accounts": tuple(a["label"] for a in accounts),
             "unprobed": len(gaps(results)),
             "measured": all(v["state"] == "ran" for v in per.values())}
 
@@ -411,14 +540,18 @@ def fetch_schema(base_url):
     return json.loads(body)
 
 
-def sign_in(persona):
-    """A real sign-in, the way the browser does it — Supabase Auth, email + password → JWT. Returns
-    None (never raises, never guesses) when the credential is not configured, and the run reports
-    that persona as `skipped`."""
-    email_env, pw_env = PERSONAS[persona]["creds"][:2] if PERSONAS[persona]["creds"] else (None, None)
-    if not email_env:
-        return None
-    email, password = os.environ.get(email_env), os.environ.get(pw_env)
+def sign_in(account):
+    """A real sign-in, the way the browser does it — Supabase Auth, email + password → JWT. Takes an
+    ACCOUNT ROW and resolves its password from the named secret here, at the last possible moment, so
+    the value never travels through the plan or the report. Returns None (never raises, never
+    guesses) when the credential is not configured, and the run reports that persona as `skipped`."""
+    if isinstance(account, str):      # a bare persona kind: the original single-identity form
+        creds = PERSONAS.get(account, {}).get("creds") or ()
+        if not creds:
+            return None
+        email, password = os.environ.get(creds[0]), os.environ.get(creds[1])
+    else:
+        email, password = account.get("email"), os.environ.get(account.get("password_env", ""))
     sb_url, sb_key = os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_ANON_KEY")
     if not (email and password and sb_url and sb_key):
         return None
@@ -435,17 +568,32 @@ def sign_in(persona):
         return None
 
 
+def _markers_for(accounts, persona):
+    """The foreign set for one persona. The stranger carries none (it is refused before any body),
+    the admin persona falls back to the original single declaration."""
+    if persona == ANON:
+        return ()
+    if persona == CROSS:
+        return tuple(m for m in str(os.environ.get(LEGACY_REP[2], "")).split("|") if m.strip())
+    return foreign_markers(accounts, persona)
+
+
 def run(base_url, module, run_index=None, workers=4):
     import concurrent.futures as cf
     schema = fetch_schema(base_url)
     if module is None:
         module = rotation_pick(schema, run_index or 0)
     tokens = {ANON: ""}
-    for persona in (REP, CROSS):
-        tok = sign_in(persona)
+    accounts = probe_accounts()
+    for account in accounts:
+        tok = sign_in(account)
         if tok:
-            tokens[persona] = tok
-    markers = tuple(m for m in str(os.environ.get("PROBE_FOREIGN_MARKERS", "")).split("|") if m.strip())
+            tokens[account["label"]] = tok
+    # The cross-tenant ADMIN persona is a different question from a rep of another tenant, and only
+    # its own credential can ask it. Reps never stand in for it.
+    cross_tok = sign_in(CROSS)
+    if cross_tok:
+        tokens[CROSS] = cross_tok
     plan = [p for p in plan_for_module(schema, module, personas=tuple(tokens), base_url=base_url)]
 
     def one(p):
@@ -456,14 +604,16 @@ def run(base_url, module, run_index=None, workers=4):
         send_guard(p, base_url)
         headers = {"Authorization": f"Bearer {tokens[p['persona']]}"} if tokens.get(p["persona"]) else {}
         status, body = _http(p["method"], base_url.rstrip("/") + p["path"], headers)
-        v = verdict(p, status, body, foreign_markers=markers if p["persona"] == CROSS else ())
+        # EVERY signed-in answer is checked for another tenant's content, not only the admin's: a
+        # rep of tenant A receiving tenant B's store code is the same leak wearing a smaller hat.
+        v = verdict(p, status, body, foreign_markers=_markers_for(accounts, p["persona"]))
         return {**p, "status": status, "verdict": v, "severity": SEVERITY.get(v, "low"),
                 "body": body[:300] if v != OK else ""}
 
     results = []
     with cf.ThreadPoolExecutor(workers) as ex:
         results.extend(ex.map(one, plan))
-    cov = coverage(schema, module, results)
+    cov = coverage(schema, module, results, accounts=accounts)
     return {"base_url": base_url, "module": module, "run_index": run_index, "coverage": cov,
             "findings": findings(results), "gaps": gaps(results),
             "probes": len(results) - cov["unprobed"]}
