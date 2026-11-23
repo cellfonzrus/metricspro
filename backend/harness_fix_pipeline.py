@@ -896,10 +896,19 @@ CFG = _src("app/core/config.py")
 check("G5d FIX_PIPELINE_SECRET is declared and DEFAULTS EMPTY (agent door closed until set)",
       re.search(r'FIX_PIPELINE_SECRET: str = ""', CFG) is not None)
 MW = _src("app/core/tenant_middleware.py")
-check("G5e the middleware allowlist entry is the ONLY change to that file's behaviour "
-      "(one prefix added, boundary-matched)",
-      MW.count('"/api/v1/core/fix-pipeline"') == 1
-      and 'path == p or path.startswith(p + "/")' in MW)
+# SCOPED TO THE ALLOWLIST BLOCK, not the whole file (2026-11-23). A file-wide count of the literal
+# was standing in for "declared once in `_PUBLIC_PREFIXES`", and the two parted company the moment
+# another declaration in the same file named the same prefix for a different reason: §CORE-48 added
+# `_PUBLIC_SELF_IDENTIFYING`, which lists the public paths whose HANDLER verifies a caller — and
+# fix-pipeline's dual-auth `_authorize` is exactly that, so it belongs in both. Counting mentions
+# instead of entries made a correct addition look like a regression. The PROPERTY is unchanged and
+# still enforced: one entry in the allowlist, matched at a segment boundary.
+_PREFIX_BLOCK = re.search(r"_PUBLIC_PREFIXES = \((.*?)\n\)", MW, re.S)
+check("G5e the fix-pipeline allowlist entry is declared ONCE in _PUBLIC_PREFIXES, boundary-matched",
+      bool(_PREFIX_BLOCK)
+      and _PREFIX_BLOCK.group(1).count('"/api/v1/core/fix-pipeline"') == 1
+      and 'path == p or path.startswith(p + "/")' in MW,
+      None if _PREFIX_BLOCK else "_PUBLIC_PREFIXES block not found")
 
 print("\n══ H. LOGIN / SEED PATH SAFETY (the SEED_VERSION bump is a login-path change) ══")
 import app.modules.core.entitlements as ent      # noqa: E402

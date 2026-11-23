@@ -20,7 +20,7 @@ import re as _re
 import datetime as _dt
 from datetime import datetime as _datetime, timezone as _timezone
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile, Request
 
 from app.core.config import settings
 from app.core.database import get_supabase
@@ -29,6 +29,7 @@ from app.modules.pos import held_sale as _held
 from app.modules.pos import stock_landing as _stock
 from app.modules.pos import working_store as _wstore
 from app.modules.pos import tax_precedence as _taxrule
+from app.core import router_gate as _router_gate
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -39,7 +40,8 @@ def _utcnow() -> str:
     return _datetime.now(_timezone.utc).isoformat()
 
 
-def _require_pos_access(authorization: str = Header(default=""), org_id: str = ORG_ID):
+def _require_pos_access(request: Request = None, authorization: str = Header(default=""),
+                        org_id: str = ORG_ID):
     """Router-wide gate: every POS endpoint requires a signed-in member of the org.
 
     Applied as an APIRouter dependency rather than per-endpoint on purpose. 34 of this module's
@@ -51,6 +53,12 @@ def _require_pos_access(authorization: str = Header(default=""), org_id: str = O
 
     Finer-grained rights (PII reveal, void, settings writes, inventory adjust/receive, activation
     cancel) still gate individually on top of this via _require_pos_perm."""
+    # A router-level dependency runs BEFORE the endpoint body, for every route this router
+    # mounts -- the DECLARED-PUBLIC ones too. Ask the one home (app/core/router_gate) and
+    # stand down where the platform said this path authenticates by its own mechanism; a
+    # declared-public path refused here is the 2026-11-23 W-9 lockout (index §CORE-48).
+    if _router_gate.stand_down(request):
+        return
     _require_member(authorization, org_id)
 
 

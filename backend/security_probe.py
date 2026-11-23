@@ -169,14 +169,12 @@ def rotation_pick(schema, run_index):
 
 # ── 2. WHAT A CORRECTLY-GATED PLATFORM MUST ANSWER ────────────────────────────────────────────────
 def _is_public(method, path):
-    """Dereferenced from the middleware's OWN allowlist, never copied. `public_methods_for` scopes a
-    path that is public for one method only, exactly as the middleware scopes it."""
-    if not tm._is_public(path):
-        return False
-    allowed = tm._PUBLIC_METHODS.get(path)
-    if allowed is None:
-        return True
-    return str(method).upper() in {str(m).upper() for m in allowed}
+    """Dereferenced from the middleware's OWN answer, never copied. `public_surface_allows` is the
+    one home for "declared public for this path AND this method" — the same single call the
+    middleware's dispatch makes, so this probe cannot drift from what the platform actually does.
+    (Until 2026-11-23 this function re-combined `_is_public` and `_PUBLIC_METHODS` itself: a second
+    copy of the answer, which is what the house rule against copies exists to prevent.)"""
+    return tm.public_surface_allows(path, str(method).upper())
 
 
 def expectation(persona, method, path):
@@ -317,6 +315,26 @@ def verdict(probe, status, body="", foreign_markers=()):
         # mislabelled a leak.
         if 200 <= code < 300 and _discloses_shape(probe.get("path")):
             return PUBLIC_RECON
+        # ★ THE BLIND SPOT THIS BRANCH USED TO HAVE (closed 2026-11-23, run 327). Any non-2xx on a
+        # declared-public path returned OK, so a public surface that refused EVERY caller was
+        # reported as a pass. That is how `/api/v1/pos/public/w9/{token}` — the link a wholesale
+        # customer is emailed to return their Form W-9 — answered `401 {"detail":"sign in to perform
+        # this action"}` on production through 325 clean runs: the `pos` router's own router-level
+        # gate refused it before the handler, and this probe called that fine. NO LOCKOUT is a defect
+        # of equal weight to a leak (the agent doc says so and `LOCKED_OUT` already existed); it was
+        # simply never reachable for an anonymous caller.
+        #
+        # Which 401s are correct is asked of the DECLARATION, not guessed from the path: a public
+        # path that verifies a caller of its own may refuse a stranger; one that authenticates by a
+        # capability it is handed (a link token, an HMAC, a cron secret) must not, because an
+        # anonymous caller IS its intended caller.
+        if (code in REFUSAL_CODES
+                and not tm.public_path_verifies_its_own_caller(probe.get("path"))
+                and not _discloses_shape(probe.get("path"))):
+            return LOCKED_OUT
+        # `_discloses_shape` is exempt on purpose: gating /openapi.json, /docs and /redoc is the
+        # very change this probe reports PUBLIC_RECON to ask for, so the day the owner makes it the
+        # finding must CLEAR — not turn into a lockout accusing the fix.
         return OK
 
     if expect == EXPECT_REFUSE:
