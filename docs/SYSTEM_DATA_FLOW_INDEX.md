@@ -49294,7 +49294,7 @@ screen is a defect, so both directions of the employee's reach are measured (★
 
 | when | what | personas | fails the build |
 |---|---|---|---|
-| every PR (`security.yml`, job "The attacker's pass is trustworthy") | `harness_security_probe.py`, 127 checks | — | yes |
+| every PR (`security.yml`, job "The attacker's pass is trustworthy") | `harness_security_probe.py`, 174 checks | — | yes |
 | daily 07:40 UTC (`access-probe-rotation.yml`), one module by day number | the live probe, no secrets needed | `anon` | yes, on a reachable surface |
 | the scheduled agent session (`.claude/agents/security-testing-agent.md`) | the live probe + human judgement | all three | reported to the owner |
 
@@ -49320,6 +49320,57 @@ route it reached — the allowlist this dereferences) · §CORE-19.6 (the anon D
 question asked of the database) · §19.18 (one fact, one home, dereferenced) · §22 (★ NO LOCKOUT ★) ·
 §CORE-34/35 (the gate index listing these jobs) · §19.25 (a failing harness fails CI).
 
+
+### §CORE-42.7 Many tenants, many reps — the accounts are declared (2026-11-23)
+
+SANJOT (2026-11-23): *"You need to get 2 test accounts as sales reps from 3 different tenants"*.
+
+The probe understood exactly ONE rep and ONE cross-tenant admin, read from four fixed environment
+variable names. That shape cannot ask the second leak's question. `/storeops/payroll/actual-hours-detail`
+(§STOREOPS-07.65) applied the pay gate correctly and never asked *whose* employee id was passed — to
+measure that you need a VICTIM in the same company, so a tenant's accounts are a list, never one.
+
+**`security_probe.probe_accounts()` is the ONE home for "who may this run sign in as."** The shape is
+declared in `PROBE_ACCOUNTS`, a JSON list of `{tenant, email, password_env, markers}`, so a fourth
+tenant or a third rep needs no code edit (RULE TWO: no tenant name, no count, no role literal in the
+source — pinned by §H of the harness). The original `PROBE_REP_*` pair is read by that same home, so
+there is no second reader. An account whose password secret is absent is **dropped**, and therefore
+reported as a skipped identity rather than one that passed.
+
+- **A persona label is `<kind>:<tenant>#<n>`**, and `kind_of` dispatches the three questions, so a
+  hundred accounts never grow a hundred branches. `coverage` names every account separately: a run
+  where only one of a tenant's two reps could sign in says so instead of reporting "rep: ran".
+- **A row carries the NAME of the password secret, never the password.** Every row is serialised into
+  the report, and a security report holding the probe's own credentials is a new leak, not a control.
+  `sign_in` resolves the secret at the moment of sending. §J of the harness and
+  `tests/integration/test_security_probe_accounts.py` fail the build if an email, a password or a
+  token can be found anywhere in a plan or a report.
+- **`foreign_markers` is DERIVED from the other tenants' declarations.** An account's own tenant
+  marker is never foreign, or every honest answer would read as a leak; two reps in one tenant share
+  one foreign set, because it belongs to the tenant and not the person.
+- **★ The hole this found: the employee's OWN surface was never checked for whose rows came back. ★**
+  The `EXPECT_REACH` branch returned `ok` for any answer under 500, so a time-clock or schedule screen
+  a rep is *supposed* to reach could hand back another tenant's rows and the probe would call it
+  clean — and the rep's own surface is precisely where such a leak hides best, because the door
+  opening is correct and only the row owner distinguishes it. `_foreign_in` is now the ONE home for
+  "is another tenant's content in this body", dereferenced by **both** branches that can receive one;
+  §L of the harness fails the build if either stops asking or a second copy of the loop appears.
+  Found by the integration test, not by review.
+- **★ A persona stopped by a different door is a GAP, not a pass. ★** The middleware answers
+  `2fa_required` *before* any module gate is consulted, so a tenant turning two-factor on would
+  silently convert every module to "no leak found" — the exact shape of accident this tool exists to
+  prevent. `blinded_verdict` is asked first, before any expectation, and returns `not_measured`
+  whatever the status code. No tenant has such a policy configured today (all four `twofa_policy`
+  rows are null, read 2026-11-23), which is why this is a lock and not a fix.
+- **Reps are not admins.** Three rep identities still leave `cross_tenant` — an admin of tenant B
+  carrying tenant A's ids — unmeasured, and a run with no such account reports `measured: false`.
+
+Tests: `harness_security_probe.py` 138 → **174** checks; new
+`tests/integration/test_security_probe_accounts.py` (7 tests, `-m integration`) drives the real
+`run()` over a throw-away HTTP server playing both the platform and Supabase Auth — the live half the
+pure harness cannot reach. Account recipe for the owner:
+`/mnt/project-files/security-probe/TEST_ACCOUNTS_2026-11-23.md`. The six logins are the owner's to
+create; nothing here creates or alters an account.
 
 ## §ACCOUNT-02. A FROZEN COPY OF A MEASUREMENT MUST NOT OUTRANK IT IN SILENCE (reported 2026-11-12)
 
