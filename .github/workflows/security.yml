@@ -257,3 +257,22 @@ jobs:
       - run: pip install -r backend/requirements.txt
       - name: harness_security_probe
         run: python backend/harness_security_probe.py
+
+  router-gate-standdown:
+    # A path the platform DECLARES public must not be refused by a router-level auth gate. The POS
+    # router's gate refused /api/v1/pos/public/w9/{token} — the link a wholesale customer is emailed
+    # to return their Form W-9 — on production, so every return link was dead (index §CORE-48, found
+    # by the outside probe 2026-11-23). NO LOCKOUT is a defect of the same weight as a leak, and the
+    # lock measures BOTH directions: the gate stands down where the declaration says public, and the
+    # stand-down widens nothing a gated route could reach.
+    name: We never lock a caller out of a declared-public path
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r backend/requirements.txt
+      - name: harness_router_gate_dereference
+        run: cd backend && python harness_router_gate_dereference.py
+      - name: the regression and the end-to-end composition
+        run: cd backend && python -m pytest tests/unit/test_public_path_gate_standdown.py tests/integration/test_public_path_reaches_its_handler.py -q

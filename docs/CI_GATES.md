@@ -28,12 +28,12 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `mobile-ota-update.yml` | 1 | `push`, `workflow_dispatch` |
 | `module-graph-guard.yml` | 2 | `pull_request`, `push`, `workflow_dispatch` |
 | `org-scope-guard.yml` | 19 | `pull_request`, `push`, `workflow_dispatch` |
-| `security.yml` | 16 | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
+| `security.yml` | 17 | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
 | `tests.yml` | 18 | `pull_request`, `push`, `workflow_dispatch` |
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 639 gates
+## Gated — 640 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -546,6 +546,7 @@ the Runs on column is how you can tell.
 | `harness_roster_reach.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_roster_visibility.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_round_trip_ratchet.py` | `org-scope-guard.yml` | Round-trip ratchet (no page load queries once per item; the backlog only shrinks) (`round-trip-ratchet`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_router_gate_dereference.py` | `security.yml` | We never lock a caller out of a declared-public path (`router-gate-standdown`) | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
 | `harness_row_save_lock.py` | `org-scope-guard.yml` | One row, one save (employee-record editors) (`row-save-lock`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_royalty.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_royalty_lock.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
@@ -684,6 +685,7 @@ the Runs on column is how you can tell.
 | `npm:typecheck` | `carrier-vocab-guard.yml` | Frontend type check (tsc --noEmit over the whole frontend) (`frontend-typecheck`) | `pull_request`, `push`, `workflow_dispatch` |
 | `pytest` | `org-scope-guard.yml` | What each tenant is offered (`tenant-gates`) | `pull_request`, `push`, `workflow_dispatch` |
 | `pytest` | `org-scope-guard.yml` | The employee's reach (`employee-reach`) | `pull_request`, `push`, `workflow_dispatch` |
+| `pytest` | `security.yml` | We never lock a caller out of a declared-public path (`router-gate-standdown`) | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
 | `pytest:integration` | `tests.yml` | Backend integration tests (`backend-integration`) | `pull_request`, `push`, `workflow_dispatch` |
 | `pytest:unit` | `tests.yml` | Backend unit tests (`backend-unit`) | `pull_request`, `push`, `workflow_dispatch` |
 

@@ -10,17 +10,19 @@ clients poll GET /messages.
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, Request
 
 from app.core.database import get_supabase
 from app.modules.approvals import engine
 from app.modules.chat import push, realtime
+from app.core import router_gate as _router_gate
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 BUCKET = "chat-attachments"   # Supabase Storage bucket, private (signed-url access), same as helpdesk
 
 
-def _require_member(authorization: str = Header(default=""), org_id: str = ORG_ID):
+def _require_member(request: Request = None, authorization: str = Header(default=""),
+                    org_id: str = ORG_ID):
     """Router-wide gate: every chat endpoint is for a signed-in member of the tenant.
 
     This import used to name a `_require_member` that had never been defined in storeops.router. A
@@ -33,6 +35,11 @@ def _require_member(authorization: str = Header(default=""), org_id: str = ORG_I
     The call is unchanged: storeops now DEFINES the shared gate the approvals router imports the same
     way, so both modules resolve membership through one implementation instead of a private copy
     each."""
+    # Router-level gates run BEFORE the endpoint body, for every route this router mounts --
+    # the DECLARED-PUBLIC ones too. Ask the one home and stand down where the platform said
+    # this path authenticates by its own mechanism (index §CORE-48).
+    if _router_gate.stand_down(request):
+        return
     from app.modules.storeops.router import _require_member as sm
     sm(authorization, org_id)
 

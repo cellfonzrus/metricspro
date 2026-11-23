@@ -17,9 +17,10 @@ seed_tenant_defaults() changes. /core/me compares the tenant's storeops.tenants.
 SEED_VERSION and re-runs sync_tenant() when it is behind — so every existing tenant self-provisions
 the new feature on its next login, with no further migration or manual step.
 """
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from app.core.database import get_supabase
+from app.core import router_gate as _router_gate
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"   # house org (middleware rewrites the query param)
 
@@ -213,7 +214,12 @@ def require_module(key: str):
     tenant. Carrier-/tenant-neutral: it only reads the entitlement, never branches on a tenant name."""
     canon = canonical_module_key(key)
 
-    async def _guard(org_id: str = ORG_ID):
+    async def _guard(request: Request = None, org_id: str = ORG_ID):
+        # Adopted as an APIRouter-level dependency by several modules, so it runs before EVERY
+        # route they mount -- the declared-public ones too. Ask the one home and stand down where
+        # the platform said this path authenticates by its own mechanism (index §CORE-48).
+        if _router_gate.stand_down(request):
+            return
         assert_module_enabled(org_id, canon)
 
     _guard.__name__ = f"require_module_{canon}"

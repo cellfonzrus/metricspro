@@ -661,6 +661,51 @@ def _public_method_ok(path: str, method: str) -> bool:
     return True if allowed is None else (method or "").upper() in allowed
 
 
+# A declared-public path whose HANDLER verifies a caller identity of its own, so refusing an
+# ANONYMOUS request is the correct answer there and not a lockout. Allowlisting these skips the
+# middleware's JWT requirement and the org_id rewrite for a reason stated beside each entry above —
+# a multi-tenant login with no active org must still be able to list its companies — but the handler
+# then verifies the token itself. Every OTHER public path authenticates by a CAPABILITY it is given
+# (a one-use link token, an HMAC download token, a QR capability, a cron secret): an anonymous caller
+# IS the intended caller there, so a 401 on one of those is the lockout
+# `security_probe.LOCKED_OUT` reports. Read by the outside probe (§CORE-42) — never copied into it.
+_PUBLIC_SELF_IDENTIFYING = (
+    "/api/v1/core/me",                    # token-verified whoami
+    "/api/v1/core/bootstrap",             # the caller's own memberships
+    "/api/v1/core/my-tenants",            # the caller's own tenant list
+    "/api/v1/core/fix-pipeline",          # DUAL-AUTH: least-privilege secret OR a super-admin JWT
+)
+
+
+def public_path_verifies_its_own_caller(path: str) -> bool:
+    """PURE. Is this declared-public path one whose handler verifies a caller itself, so that a 401
+    to an anonymous request is correct rather than a lockout? Boundary-matched, like the prefixes."""
+    p = str(path or "")
+    return any(p == q or p.startswith(q + "/") for q in _PUBLIC_SELF_IDENTIFYING)
+
+
+def public_surface_allows(path: str, method: str, cron_paths=None) -> bool:
+    """★ THE ONE HOME for "has the platform declared this path public for this method". PURE.
+
+    `_is_public` answers the PATH and `_public_method_ok` the METHOD; asking only one of them is
+    asking half the question. This function is the whole answer, and it is what the middleware's own
+    dispatch branch asks — so a caller that dereferences it cannot drift from what the middleware
+    actually does.
+
+    WHY IT IS PUBLIC (2026-11-23, access probe run 327). A router-level `APIRouter(
+    dependencies=[...])` auth gate runs BEFORE the endpoint body, for EVERY route the router mounts
+    — including the ones declared public here. The POS router's gate had no way to ask this question
+    and so asked for a signed-in member on `/api/v1/pos/public/w9/{token}`, the link a wholesale
+    customer is emailed to return their Form W-9. Measured on production: every anonymous caller got
+    `401 {"detail":"sign in to perform this action"}`, the token never read. A declaration nobody can
+    dereference is not a declaration, and a lockout is a defect of the same weight as a leak.
+
+    Every router-level auth gate therefore ASKS this (see `app/core/router_gate.stand_down`), and
+    `harness_router_gate_dereference.py` fails the build if one stops asking or a second copy of the
+    answer appears."""
+    return bool(_is_public(path, cron_paths=cron_paths)) and bool(_public_method_ok(path, method))
+
+
 def _fetch_memberships(client, uid):
     """Every app_users row for this auth_id, earliest first. The rows carry role + twofa_enabled (used
     by the 2FA gate) when those columns exist. ANY SUBSET OF COLUMNS (index §4b.1, 2026-09-22): the
@@ -1195,15 +1240,15 @@ class TenantScopeMiddleware:
         _imp_raw = _raw_header(scope, _IMPERSONATE_HEADER)
         if _imp_raw:
             return await self._handle_impersonated(scope, receive, send, path, method, _imp_raw)
-        if _is_public(path, cron_paths=cron_paths_for_app(scope.get("app"))):
+        if public_surface_allows(path, method,
+                                 cron_paths=cron_paths_for_app(scope.get("app"))):
             # Allowlisting skips BOTH the auth requirement and the org_id rewrite, so a path that only
             # needs ONE public method must not hand every method away. `_PUBLIC_METHODS` scopes those:
             # /core/auth-config is public for GET only (the PUT flips the global enforce-login flag and
             # must never be anonymous), and the Meta webhook for GET+POST only. Any other method on a
             # scoped path falls through to the normal auth path + the handler's own gate.
             # (2026-08-05 security hardening.)
-            if _public_method_ok(path, method):
-                return await self.app(scope, receive, send)
+            return await self.app(scope, receive, send)
         headers = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
         auth = headers.get("authorization", "")
         token = auth.split(" ", 1)[1].strip() if auth.lower().startswith("bearer ") else ""
