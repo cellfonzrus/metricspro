@@ -49294,7 +49294,7 @@ screen is a defect, so both directions of the employee's reach are measured (★
 
 | when | what | personas | fails the build |
 |---|---|---|---|
-| every PR (`security.yml`, job "The attacker's pass is trustworthy") | `harness_security_probe.py`, 163 checks | — | yes |
+| every PR (`security.yml`, job "The attacker's pass is trustworthy") | `harness_security_probe.py`, 174 checks | — | yes |
 | daily 07:40 UTC (`access-probe-rotation.yml`), one module by day number | the live probe, no secrets needed | `anon` | yes, on a reachable surface |
 | the scheduled agent session (`.claude/agents/security-testing-agent.md`) | the live probe + human judgement | all three | reported to the owner |
 
@@ -49365,7 +49365,7 @@ reported as a skipped identity rather than one that passed.
 - **Reps are not admins.** Three rep identities still leave `cross_tenant` — an admin of tenant B
   carrying tenant A's ids — unmeasured, and a run with no such account reports `measured: false`.
 
-Tests: `harness_security_probe.py` 127 → **163** checks; new
+Tests: `harness_security_probe.py` 138 → **174** checks; new
 `tests/integration/test_security_probe_accounts.py` (7 tests, `-m integration`) drives the real
 `run()` over a throw-away HTTP server playing both the platform and Supabase Auth — the live half the
 pure harness cannot reach. Account recipe for the owner:
