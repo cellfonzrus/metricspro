@@ -42,6 +42,23 @@ APP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app")
 # every gate asks. An entry here is a decision somebody wrote down, never a silence.
 EXCUSED = {}
 
+# ★ THE DECLARED SUBJECT SET (index §CORE-10). Every router-level `APIRouter(dependencies=[...])`
+# gate in the tree, as `<path under app/>::<the Depends() expression>`. §A derives the same set from
+# the AST and compares BOTH WAYS, because a bare `len(derived) >= N` tolerates a subject LEAVING the
+# scan: a gate whose router stopped declaring its dependency, or whose file the walk stopped
+# reaching, would take its own assertion with it and the harness would still read green. A gate that
+# leaves now NAMES ITSELF; a gate that arrives has to be declared here by a person, who at that
+# moment has to decide whether it asks the public declaration.
+DECLARED_GATES = {
+    "modules/account/royalty_router.py::require_module('royalty')",
+    "modules/approvals/router.py::_require_member",
+    "modules/chat/router.py::_require_member",
+    "modules/marketing/router.py::require_module('marketing')",
+    "modules/pos/inventory_integrity_router.py::_pr._require_pos_access",
+    "modules/pos/router.py::_require_pos_access",
+    "modules/supply/router.py::require_module('supply_ordering')",
+}
+
 
 def check(name, ok, detail=""):
     (PASSED if ok else FAILED).append(name)
@@ -95,8 +112,13 @@ def _source_of(expr, path):
 
 print("\n§A  every router-level gate ASKS the public declaration\n")
 gates = _router_level_gates()
-check("router-level gates were found at all (the derivation still works)",
-      len(gates) >= 4, f"found {len(gates)}")
+_derived = {f"{os.path.relpath(path, APP_DIR)}::{expr}" for path, expr in gates}
+_left = sorted(DECLARED_GATES - _derived)
+_arrived = sorted(_derived - DECLARED_GATES)
+check("the derived gates are EXACTLY the declared set (a gate that leaves names itself)",
+      not _left and not _arrived,
+      (("no longer derived: " + ", ".join(_left) + " ") if _left else "")
+      + (("undeclared: " + ", ".join(_arrived)) if _arrived else ""))
 seen = set()
 for path, expr in gates:
     key = (os.path.relpath(path, APP_DIR), expr)
