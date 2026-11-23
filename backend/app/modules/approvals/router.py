@@ -5,16 +5,23 @@ Reads are member-scoped to the caller's store span (the same scope_keyset every 
 decisions require a manager who is an eligible approver for the request's scope AND passes the type's
 own approver_predicate. Identity is resolved from the caller's token — never trusted from the body.
 """
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.modules.approvals import engine
+from app.core import router_gate as _router_gate
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
 
-def _require_member(authorization: str = Header(default=""), org_id: str = ORG_ID):
+def _require_member(request: Request = None, authorization: str = Header(default=""),
+                    org_id: str = ORG_ID):
     # Router-wide gate: every approvals endpoint requires a signed-in member of the org. Reuses the
     # storeops membership check (super-admins pass on any org, same as elsewhere).
+    # Router-level gates run BEFORE the endpoint body, for every route this router mounts --
+    # the DECLARED-PUBLIC ones too. Ask the one home and stand down where the platform said
+    # this path authenticates by its own mechanism (index §CORE-48).
+    if _router_gate.stand_down(request):
+        return
     from app.modules.storeops.router import _require_member as sm
     sm(authorization, org_id)
 

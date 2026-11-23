@@ -289,6 +289,30 @@ for surface in ("/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect"):
        f"{surface} answering a stranger is surfaced as reconnaissance")
 ok(sp.verdict({"expect": sp.EXPECT_PUBLIC, "path": "/openapi.json"}, 401) == sp.OK,
    "… and once it is gated, it is a pass — the finding clears by being fixed")
+
+# ★ THE BLIND SPOT, closed 2026-11-23 (access probe run 327). Until then EVERY non-2xx on a
+# declared-public path returned OK, so a public surface refusing every caller read as a pass — which
+# is how the W-9 return link `/api/v1/pos/public/w9/{token}` answered 401 on production through 325
+# clean runs. NO LOCKOUT is a defect of equal weight to a leak. Which 401s are CORRECT is asked of
+# the declaration (`tenant_middleware.public_path_verifies_its_own_caller`), never guessed.
+ok(sp.verdict({"expect": sp.EXPECT_PUBLIC, "path": "/api/v1/pos/public/w9/abc"}, 401)
+   == sp.LOCKED_OUT,
+   "a capability-token public path refusing a stranger is a LOCKOUT, never a pass")
+ok(sp.verdict({"expect": sp.EXPECT_PUBLIC, "path": "/api/v1/notify/dl/abc"}, 403) == sp.LOCKED_OUT,
+   "403 on a capability-token public path is a lockout too")
+ok(sp.verdict({"expect": sp.EXPECT_PUBLIC, "path": "/api/v1/pos/public/w9/abc"}, 404) == sp.OK,
+   "a dead token answering 404 is the declared behaviour, not a lockout")
+for selfgated in ("/api/v1/core/me", "/api/v1/core/me/password-changed", "/api/v1/core/bootstrap",
+                  "/api/v1/core/my-tenants", "/api/v1/core/fix-pipeline/feed"):
+    ok(sp.verdict({"expect": sp.EXPECT_PUBLIC, "path": selfgated}, 401) == sp.OK,
+       f"{selfgated} verifies its own caller, so 401 to a stranger is correct")
+ok(sp.verdict({"expect": sp.EXPECT_PUBLIC, "path": "/api/v1/core/members"}, 401) == sp.LOCKED_OUT,
+   "the self-identifying excuse is BOUNDARY-matched — /core/members is not /core/me")
+ok(sp.SEVERITY[sp.LOCKED_OUT] == "medium", "a lockout is reported with a severity, not silently")
+import inspect as _inspect  # noqa: E402
+_probe_is_public_src = _inspect.getsource(sp._is_public).split('"""')[-1]  # code, not the docstring
+ok("_PUBLIC_METHODS" not in _probe_is_public_src and "public_surface_allows(" in _probe_is_public_src,
+   "the probe keeps NO copy of the method scoping — it asks the one home for the whole answer")
 ok(sp.verdict({"expect": sp.EXPECT_PUBLIC, "path": "/api/v1/core/auth-config"}, 200) == sp.OK,
    "a public path that is NOT the platform's map is not reconnaissance")
 ok(sp.verdict({"expect": sp.EXPECT_PUBLIC, "path": "/openapi.json.bak"}, 200) == sp.OK,

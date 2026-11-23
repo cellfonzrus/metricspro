@@ -248,6 +248,8 @@ Primary code homes:
 | CORE-41 | **Inheritance is not a decision — what each tenant is OFFERED** | "why is vidapay connector showing in boost ? we need to get these things under control before we roll out for outside customers — have an agent asses and create a dashboard for the super admin whereby these things can be gated out for the respective tenants right from the get go". Three mechanisms answered "is this on for this tenant" and all three answered by INHERITING a house row — on an org id that IS a real tenant, so that tenant could not be gated at all, and a new tenant arrived holding everything. Where does a human's decision about one tenant live, which mechanisms read it, and what stops one of them answering differently? |
 | CORE-44 | **The prefix is the address, and a missing route is not an answer** | "the targets are also not updating in target settings and daily targets, seem to be the same error" — and it was. `apiUrl()` prefixes nothing: in the browser the site proxies the path as given, so `/api/v1` IS the address. Two frontend calls omitted it, reached the Next app, got its 404, and had their `catch` answer for them. One of the two was the TARGET AXIS — "what does this tenant sell, so what can have a target" — which fell back to the four built-in categories. Every category a tenant had declared was therefore invisible on every target screen, no target for one could be typed, and `commcalc.target_line` held zero rows in the entire database: 13 categories for LuxeLink, 4 for the house, none of them ever targetable. The class is not the typo but that a MISSING ROUTE and a REAL ANSWER were indistinguishable to the caller, and that a lock on "only one copy of this fact exists" said nothing about "the one copy never arrives". |
 | CORE-46 | **A stored credential shown to a person is an audited event** | The owner asked that the per-store download screen SHOW each store's back-office password, because the portal refuses automated clients and a person has to type it. Legitimate — and the first route in the platform that hands a stored credential back to a browser, where every other read strips it. Granting it inside the screen's own endpoint would have made the decision a property of one screen, and the next screen would decide again. So the decision has one home, for every credential this platform stores: only a column the credential registry calls a credential, only a row of the asking organisation, and only after the row saying WHO looked is written — a reveal that cannot be recorded is refused rather than served unrecorded. |
+| CORE-47 | **We never tell a caller to resend a request off TLS** | Found from OUTSIDE by the adversarial access probe (§CORE-42, run 326) and reproducible by hand: `GET /api/v1/core/me/` — the token-verified whoami, one extra trailing slash — answered `307 Location: http://…`, so a client that had arrived over TLS was told by us to resend the request, Authorization header included, in the clear. The instance was two paths; the class was that the app did not know it sat behind a TLS-terminating edge, so EVERY absolute URL it built downgraded the caller. Fixed at the root (the server now believes the edge) with an outbound backstop that cannot un-wire, and the "which entry of an appended `X-Forwarded-*` header may be believed" arithmetic FACTORED OUT of the address one home rather than copied for the scheme. |
+| CORE-48 | **A path we declare public must not be refused by a router-level gate** | Found from OUTSIDE by the adversarial access probe (§CORE-42, run 327) and reproducible by hand: `GET /api/v1/pos/public/w9/{token}` — the link a wholesale customer is EMAILED to return their Form W-9, where the one-use token IS the auth — answered `401 "sign in to perform this action"` to every caller, the token never read, so every return link ever sent was dead. Neither component was wrong alone: the middleware allowlisted the path and the `pos` router's router-level gate refused unauthenticated callers, and nothing owned the composition. The class is that "is this path public" had one home and a router-level auth gate was a second gate that did not read it; every gate now dereferences `router_gate.stand_down`. The probe had called this a pass for 325 runs — `LOCKED_OUT` was unreachable for an anonymous caller — and that half is fixed too. |
 | CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
 | CORE-27 | **A report arrives with the standard filters and the send bar, or it does not arrive** | "Zero Sales does not have send notification bar, please note this also in teh indsex all reports must have the satandard filters and the send bar by default" — the sender and the filter bar each already had one home; what was missing was the content to send and anything that made either a default. What is a figure nobody can mail worth, and what fails the build when the 129th report ships without a toolbar? |
@@ -26606,6 +26608,8 @@ status word rather than a blank that reads as nil.
 | CORE-44 | core |
 | CORE-45 | core, storeops, hr, commcalc |
 | CORE-46 | core, commcalc |
+| CORE-47 | core |
+| CORE-48 | core, pos |
 | STOREOPS-08 | storeops |
 | STOREOPS-09 | storeops, account |
 | STOREOPS-10 | storeops, account |
@@ -41919,7 +41923,9 @@ curl: `/mnt/project-files/security-review-2026-10-28/SET_TRUSTED_PROXY_HOPS.md`.
 | harness | checks | what fails the build |
 |---|---|---|
 | `harness_public_allowlist_lock.py` | 80 | a parameterised route reachable through the sweep rule — asserted against the **real 1805-route table**, with a pre-fix control proving all 249 were |
-| `harness_client_ip.py` | 45 | a FIFTH copy of the leftmost-`X-Forwarded-For` parse anywhere in `app/`, or a wired call site that stops dereferencing the one home; plus the hop arithmetic for chains shorter, equal and longer than N |
+| `harness_client_ip.py` | 45 | a FIFTH copy of the leftmost-`X-Forwarded-For` parse anywhere in `app/`, or a wired call site that stops dereferencing the one home; plus the hop arithmetic for chains shorter, equal and longer than N. Its `trusted_entry` selector is dereferenced by `forwarded_tls` too (§CORE-47) |
+| `harness_forwarded_tls.py` | 40 | the app forgetting it sits behind a TLS-terminating edge, so a redirect tells a signed-in caller to resend the request over plaintext — the forwarded-proto trust at the root, the outbound backstop, no second copy of either rule (§CORE-47) |
+| `harness_router_gate_dereference.py` | 31 | a router-level `APIRouter(dependencies=…)` auth gate that cannot ask whether the platform declared a path public — the §CORE-48 W-9 lockout. Derives the gates from the AST, measures both directions under TestClient (no declared-public route refused; the stand-down widened nothing, proved by disarming it), and refuses a second copy of the allowlist inside `core/router_gate` |
 | `harness_anonymous_write_surface.py` | 43 | any audit/diagnostic write (`failure_log`, `access_log`, `log`, `auth_event`, `impersonation_action`) that takes its `org_id` from the query string; plus the login-record cap's existence, tier separation and bite |
 
 All three are **enforcing** jobs in `.github/workflows/security.yml` (not `continue-on-error`), so the
@@ -45774,6 +45780,196 @@ after a minute: a credential on screen is a credential someone can walk past.
 Related: §CORE-03 (the credential registry) · §COMMCALC-82 (the screen that asked for this) ·
 §12a (the portal logins themselves).
 
+
+## §CORE-47. WE NEVER TELL A CALLER TO RESEND A REQUEST OFF TLS (measured 2026-11-22)
+
+Found by the adversarial access probe (§CORE-42), run 326, module `platform` — the first defect that
+pass has found from outside, and one no in-process harness could have seen, because the RULE was
+right and nothing applied it.
+
+### §CORE-47.1 The measurement
+
+```
+$ curl -s -o /dev/null -w '%{http_code} %{redirect_url}' https://api.metricspro.tech/api/v1/core/me/
+307 http://api.metricspro.tech/api/v1/core/me
+
+$ curl -s -o /dev/null -w '%{http_code} %{redirect_url}' https://api.metricspro.tech/docs/
+307 http://api.metricspro.tech/docs
+```
+
+`/api/v1/core/me` is the token-verified whoami. A client that reached it over TLS with one extra
+trailing slash was told, by us, to resend that request — `Authorization: Bearer <session token>`
+included — over PLAINTEXT http. The edge then 301s plaintext back to https, but the cleartext
+request has already crossed the wire by then, and that is the leak: anyone positioned on the
+client's network reads the session token and can act as that person until it expires.
+
+Mitigations that were already present, and why they do not close it: HSTS is stamped on every
+response (§ the `HardeningMiddleware` block in `app/main.py`), so a BROWSER that has been here
+before upgrades the URL itself — but `preload` is deliberately omitted, so a browser's FIRST contact
+is unprotected, and no non-browser client (a script, a mobile app, an integration, `curl`) implements
+HSTS at all.
+
+### §CORE-47.2 The class
+
+The app did not know its own scheme. `Dockerfile` ran `gunicorn -k uvicorn.workers.UvicornWorker`
+with no `--forwarded-allow-ips`, so uvicorn's default of `127.0.0.1` discarded the edge's
+`x-forwarded-proto: https`, `scope["scheme"]` stayed `"http"`, and **every absolute URL the framework
+builds** named http:// — the router's trailing-slash 307, any `RedirectResponse`, `url_for`. The
+instance was one route; the class is every redirect generator in the app. Repairing the two paths
+that happened to be noticed would have left the rest downgrading.
+
+### §CORE-47.3 The one home, and the sibling it extends
+
+| the fact | where it lives | who asks |
+|---|---|---|
+| "what scheme did this request really arrive on" | **`app/core/forwarded_tls.effective_scheme`** | `HardeningMiddleware` |
+| "a Location we generated must stay on that scheme" | **`app/core/forwarded_tls.secure_location`** — PURE; rewrites `http://`→`https://` only when the client arrived over https AND the Location names the SAME host, so it can never point a caller somewhere new | `HardeningMiddleware` |
+| **"which entry of an appended `X-Forwarded-*` header may be believed"** | **`app/core/client_ip.trusted_entry`** — the §41906 one home, GENERALISED here rather than copied. Every `X-Forwarded-*` header is a list each proxy appends to, so its leftmost entry is always whatever the client chose to send, whatever the header means | `client_ip.from_xff` (addresses) **and** `forwarded_tls.effective_scheme` (scheme) |
+
+**Duplicate check (CLAUDE.md build gate).** Searched this index for an existing mechanism answering
+"what did the edge tell us about this request": found §41906 / `app/core/client_ip.py`, the one home
+for the forwarded ADDRESS. `x-forwarded-proto` is the same shape of header with the same forgeable
+leftmost entry, so the hop arithmetic was FACTORED OUT of `from_xff` into `trusted_entry` and both
+readers dereference it. No second rule was written, and `effective_scheme` defaults `hops`/`legacy`
+to that module's own switches (`TRUSTED_PROXY_HOPS`, `CLIENT_IP_LEGACY_XFF`) so a scheme can never be
+believed on terms the address is not.
+
+### §CORE-47.4 Two layers, because the root cause lives outside Python
+
+- **ROOT** — `backend/Dockerfile` passes `--forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-*}`, so
+  `scope["scheme"]` is correct and every generator is fixed at once, with nothing to remember.
+  Trusting the edge is safe here: the container is reachable only through it, and a LIE in either
+  direction is harmless — claiming https only keeps a redirect on TLS, and no authorization decision
+  anywhere reads this scheme.
+- **OUTBOUND BACKSTOP** — `HardeningMiddleware` (which already owns HSTS) asks `secure_location` on
+  the way out, so a deploy that loses the flag cannot silently restore the downgrade. Defence in
+  depth, not a second copy: both layers read the one home. Break-glass `FORCE_HTTPS_LOCATION=0`.
+
+### §CORE-47.5 The siblings, checked
+
+| path | verdict |
+|---|---|
+| the router's trailing-slash 307 on every route | FIXED at the root; pinned on `/docs/`, `/redoc/`, `/api/v1/core/me/` |
+| `storeops/router.py` → `RedirectResponse(signed_doc_url)` | EXCUSED — a Supabase signed-storage URL, already https, on a THIRD-PARTY host that `secure_location` never touches by construction |
+| `closing/router.py` → `RedirectResponse(_signed_envelope(...))` | EXCUSED — same shape |
+
+### §CORE-47.6 NO LOCKOUT
+
+A request that genuinely arrived over plain http is left on http. A plain-HTTP staging box, a local
+`uvicorn app.main:app` and a private-network health probe behave exactly as before. Pinned as a test
+in both directions, because taking a screen away is a defect of equal weight to the leak.
+
+### §CORE-47.7 The lock
+
+| what | checks | fails the build when |
+|---|---|---|
+| `backend/harness_forwarded_tls.py` (CI job **"We never redirect a caller off TLS"**, `security.yml`) | 40 | the Dockerfile stops granting the forwarded-proto trust; `HardeningMiddleware` stops dereferencing the one home; a second reader of `x-forwarded-proto` or a second `http://` rewrite appears under `app/`; a host or tenant literal reaches the one home's CODE. Negative controls: disabling the backstop must restore the downgrade, and the purity check must still be able to see a planted literal |
+| `backend/tests/unit/test_forwarded_tls.py` (`pytest -m unit`) | 29 | the rule changes — scheme selection, the hop arithmetic, the rewrite's host/relative/third-party refusals, the break-glass default |
+| `backend/tests/integration/test_forwarded_tls_endpoint.py` (`pytest -m integration`) | 4 | a real redirect out of the real middleware stack downgrades, or a genuine plain-http caller is forced to https |
+
+### §CORE-47.8 Still the owner's to rule on
+
+`FORWARDED_ALLOW_IPS` may be narrowed from `*` to the edge's own ranges at any time with one
+environment change and no code change. It is left wide because Railway does not publish stable
+egress ranges for its proxy, and because narrowing it wrongly would re-open the downgrade silently.
+
+
+## §CORE-48. A PATH WE DECLARE PUBLIC MUST NOT BE REFUSED BY A ROUTER-LEVEL GATE (measured 2026-11-23)
+
+Found by the adversarial access probe (§CORE-42), run 327, module `pos` — the SECOND defect that
+pass has found from outside, and like §CORE-47 one no in-process harness could have seen, because
+the rule was right everywhere and the COMPOSITION was wrong. It is also the first finding the probe
+could not report at the time it was measured: the probe itself called it a pass. Both halves are
+fixed here.
+
+### §CORE-48.1 The measurement
+
+```
+$ curl -s -w ' <- %{http_code}\n' https://api.metricspro.tech/api/v1/pos/public/w9/<any-token>
+{"detail":"sign in to perform this action"} <- 401
+```
+
+`/api/v1/pos/public/w9/{token}` is the link a WHOLESALE CUSTOMER is emailed to send back their
+completed Form W-9 (§POS-16). The customer has no login and never will; the one-use token IS the
+auth. It is declared public in `tenant_middleware._PUBLIC_PREFIXES`, and that declaration promises a
+uniform `404` on an unknown, expired or already-used token so a probe learns nothing. What came back
+instead was a flat `401`, with the token never read — the SAME answer for every token, valid ones
+included. **Every W-9 return link the platform has ever emailed was dead**, and the exemption
+workflow that depends on the form arriving could never complete.
+
+### §CORE-48.2 The class: a declaration nobody can dereference is not a declaration
+
+The `pos` APIRouter carries `dependencies=[Depends(_require_pos_access)]`. A router-level dependency
+runs BEFORE the endpoint body, for EVERY route the router mounts — the declared-public ones too —
+and that gate asked for a signed-in member without any way to ask whether the platform had declared
+the path public. Neither component was wrong on its own. The middleware allowlisted the path
+correctly; the gate refused unauthenticated callers correctly. Nothing owned the composition.
+
+The instance was one route. The class is that **"is this path public" had one home and a
+router-level auth gate was a second, independent gate that did not read it** — so every router
+carrying a router-level gate had the same hole, for every public path mounted under it today and
+every one added tomorrow (`approvals`, `chat`, `marketing`, `supply`, `account/royalty`,
+`pos/inventory_integrity`, and `entitlements.require_module` wherever it is adopted).
+
+### §CORE-48.3 The fix: one home, asked by every gate
+
+- `core/tenant_middleware.public_surface_allows(path, method)` is **the one home** for "declared
+  public for this path AND this method". `_is_public` answered the path and `_public_method_ok` the
+  method; asking one of them was asking half the question. The middleware's own dispatch branch now
+  IS this call, so a caller that dereferences it cannot drift from what the platform does.
+- `core/router_gate.stand_down(request)` is the single dereference a router-level gate makes. It
+  holds no copy of the allowlist, no path literal, and **fails closed** with no request.
+- Every router-level gate asks it: `pos._require_pos_access`, `approvals._require_member`,
+  `chat._require_member`, `entitlements.require_module`'s closure (which is what `marketing`,
+  `supply` and `account/royalty` install), and `pos/inventory_integrity_router` through the shared
+  POS gate.
+- **Not a hole.** The stand-down is exactly as wide as the declaration: method scoping is honoured
+  (`/core/auth-config` is public for GET, never for the PUT that flips the global enforce-login
+  flag), prefixes match at a segment boundary, and the negative control in the lock disarms the
+  stand-down and proves every gated route answers IDENTICALLY either way.
+
+### §CORE-48.4 The probe called it a pass for 325 runs
+
+`security_probe.verdict`'s `EXPECT_PUBLIC` branch returned `ok` for ANY non-2xx answer. `LOCKED_OUT`
+existed as a verdict and carried a severity, but an anonymous caller could never reach it — so a
+public surface that refused EVERY caller read as clean. **NO LOCKOUT is a defect of equal weight to
+a leak** (`.claude/agents/security-testing-agent.md`), and that is exactly the direction the control
+could not see.
+
+Which `401`s are CORRECT is now asked of the declaration, never guessed from the path:
+`tenant_middleware.public_path_verifies_its_own_caller` names the public paths whose handler
+verifies a caller of its own (`/core/me`, `/core/bootstrap`, `/core/my-tenants`,
+`/core/fix-pipeline`), where refusing a stranger IS the answer. Every other public path
+authenticates by a CAPABILITY it is handed — a one-use link token, an HMAC download token, a QR
+capability, a cron secret — so an anonymous caller IS its intended caller and a refusal is a
+lockout. `_discloses_shape` (`/openapi.json`, `/docs`, `/redoc`) is exempt, because gating those is
+the very change the probe reports `public_recon` to ask for: the day the owner makes it, the finding
+must clear rather than turn into a lockout accusing the fix.
+
+The fixed probe, run against production before the fix deployed, reports the defect it had been
+walking past:
+
+```
+module pos: 123 probes, 1 finding(s), 28 unprobed, measured=False
+  [medium] locked_out: anon GET /api/v1/pos/public/w9/{token} -> HTTP 401
+```
+
+### §CORE-48.5 Locked
+
+`backend/harness_router_gate_dereference.py` (31 checks, DB-free, CI job *"We never lock a caller out
+of a declared-public path"*) fails the build on all three ways this comes back: a router-level
+`dependencies=[Depends(f)]` naming a gate that does not ask `router_gate.stand_down` (derived from
+the AST, so a router added tomorrow is checked tomorrow); a second copy of the allowlist appearing
+inside `router_gate`; and, measured under TestClient, a declared-public route refused by a gate or a
+gated route the stand-down widened. Proven armed: un-wiring `_require_pos_access` turns 31/0 into a
+named failure. §F additionally measures that each gate's `request` parameter really resolves to
+`fastapi.Request`: `entitlements` GUARDS that import so the four stdlib-only proof harnesses that
+stub `fastapi` can still import it (one of them, `harness_tenant_vertical`, died on the unguarded
+version), and an annotation that failed to resolve would mean FastAPI injects nothing, `stand_down`
+is handed None and fails closed, and the lockout returns SILENTLY. `router_gate` imports nothing
+from fastapi at all, and that too is locked. Regressions `tests/unit/test_public_path_gate_standdown.py` (7) and
+`tests/integration/test_public_path_reaches_its_handler.py` (3, the composition on the assembled
+app); the probe's own blind spot is pinned by 11 new checks in `harness_security_probe.py` (138).
 
 ## §COMMCALC-55. A SUCCESSFUL LOGIN IS RECOGNISED BY EVIDENCE, NEVER BY A GUESSED VOCABULARY (owner report 2026-11-05)
 
