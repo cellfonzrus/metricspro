@@ -49726,6 +49726,13 @@ async def _run_epay_discrepancy_alerts(org_id_filter=None, respect_enabled=True,
         stores = {f["store_code"] for f in flags if f.get("store_code")}
         hierarchy = {s: _managers_above_dm(oid, s) for s in stores}
         plan = _ea.plan_emails(flags, hierarchy, today)
+        # ONE spelling of "what is this finding called", used by the dry-run preview and by the name
+        # of the company inbox item (index §CORE-49) — a finding reads identically wherever it is
+        # shown. It is the STORE-DAY and the kind, never today's date, so the same unresolved gap
+        # tomorrow OVERWRITES its item instead of filing a second one.
+        def _label(i):
+            return f"{i['store_code']} {i['close_date']} {i['kind']}"
+
         # Dedup per (store, date, kind) for THIS recipient ON THIS CHANNEL — a discrepancy escalates
         # once a day, a NEW gap found later the same day still sends, and a channel that failed is
         # still owed it. One home: notify/digest_delivery.py.
@@ -49733,7 +49740,7 @@ async def _run_epay_discrepancy_alerts(org_id_filter=None, respect_enabled=True,
             so, oid, "epay_discrepancy", plan["digests"], build=_ea.build_digest,
             wa_filename="epay-discrepancies.txt",
             channels_ok={"email": email_ok, "whatsapp": False}, dry_run=dry_run,
-            preview_item=lambda i: f"{i['store_code']} {i['close_date']} {i['kind']}")
+            preview_item=_label, item_label=_label, deep_link="/closing/epay-recon")
         if not dry_run:
             _epay_mark_run(so, oid, today,
                            f"sent {sent}, skipped {skipped}, {len(flags)} flagged store-day(s)")

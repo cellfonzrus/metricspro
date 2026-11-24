@@ -15,6 +15,10 @@ WHAT IS HERE
                         and record THAT channel. One channel failing never marks another's work
                         done, and never marks its own.
   `deliver_digests`     the fan-out loop over `manager_digest.plan_digests` output.
+  `company_item`        PURE — the ONE company-level notification a scope's findings add up to, for
+                        the declared `inbox` route (index §CORE-49). A per-manager digest is
+                        ADDRESSED and a company item is not, so this is a different shape of the
+                        same findings, derived here once rather than per calling scope.
 
 WHAT IS NOT PARAMETERISED
   That a channel is only spoken to when it is configured AND the recipient has an address on it;
@@ -138,15 +142,88 @@ async def deliver_recipient(client, org_id, scope, *, addresses, items, carried,
     return row
 
 
+def company_item(scope, digests, item_label):
+    """PURE. The ONE company-level notification this scope's findings add up to, or None.
+
+    A per-manager digest answers "what does THIS manager owe attention to"; a company inbox item
+    answers "what does this COMPANY owe attention to". The second is the first's findings, deduped
+    across recipients and stated once — so a finding two managers were both emailed about is one
+    line here, and the same findings tomorrow produce a byte-identical item that OVERWRITES rather
+    than nags (owner 2026-11-24).
+
+      item_label(item) -> the stable label of one finding, e.g. "S1 2026-08-20 fee".
+
+    WHY THE LABEL IS REQUIRED and the `ref_key` is not used in its place: a ref_key carries the
+    dedup DATE, so a body built from ref_keys would differ every midnight and re-nag every single
+    day — the exact defect this mechanism exists to remove. A caller that cannot name its findings
+    cannot take this route (`deliver_digests` then sends the messages and says why), which is the
+    safe direction.
+
+    The inbox identity is the (scope, company) pair, NOT the findings: one open item per scope, whose
+    content moves as the findings move. That is what "overwrite if it is the same message" asks for.
+    """
+    seen, labels = set(), []
+    for dg in (digests or []):
+        for it in (dg.get("items") or []):
+            lab = str(item_label(it) or "").strip()
+            if not lab or lab in seen:
+                continue
+            seen.add(lab)
+            labels.append(lab)
+    if not labels:
+        return None
+    labels.sort()      # the body must not depend on recipient order, or it would "change" at random
+    n = len(labels)
+    return {
+        "inbox_key": f"digest:{scope}",
+        "title": f"{n} open {scope.replace('_', ' ')} finding{'' if n == 1 else 's'}",
+        "body": ("These are open now. This item is updated in place while they stay open, and closes "
+                 "itself once the check reports none.\n\n" + "\n".join(labels)),
+        "affected": labels,
+    }
+
+
 async def deliver_digests(client, org_id, scope, digests, *, build, wa_filename,
-                          channels_ok, dry_run=False, preview_item=None, detail=None):
+                          channels_ok, dry_run=False, preview_item=None, detail=None,
+                          item_label=None, deep_link=None, severity=None):
     """The fan-out: every planned digest from `manager_digest.plan_digests`, delivered per channel.
 
     Returns (sent, skipped, planned). `sent` counts recipients who were carried something on at
     least one channel; `skipped` counts recipients every channel was already square with.
     `preview_item(item)` lets a caller keep its own structured dry-run row shape — the view owns
     presentation, so a planned row never ships pre-joined display text.
+
+    THE ROUTE (index §CORE-49). A company whose `storeops.alert_route` row sends this scope to the
+    `inbox` gets ONE overwriting company item instead of the addressed mail; `both` gets the item AND
+    the mail; an undeclared scope behaves exactly as it always has. `item_label` is what makes the
+    inbox route AVAILABLE to a scope at all — without it the item cannot be named, so the messages go
+    out as before and the planned rows say `inbox_unnameable`. Nothing is ever silenced: a route that
+    says `inbox` but whose item could not be written (the migration un-run, the table unreachable)
+    also falls back to sending.
     """
+    from app.modules.core import notification_inbox as _inbox
+    route, filed, item = _inbox.DEFAULT_ROUTE, None, None
+    try:
+        route = _inbox.route_for(_inbox.routes(client, org_id=org_id), scope, org_id)
+    except Exception as e:                                              # pragma: no cover - I/O guard
+        print(f"WARN {scope} route read failed for {org_id}: {e} — sending as a message")
+    if route in ("inbox", "both"):
+        item = company_item(scope, digests, item_label) if item_label else None
+        if item and not dry_run:
+            filed = _inbox.file_item(client, org_id, scope, item["inbox_key"], item["title"],
+                                     item["body"], severity or _inbox.DEFAULT_SEVERITY,
+                                     deep_link=deep_link, affected=item["affected"])
+            if (filed or {}).get("state") in ("created", "changed"):
+                _log.record_sent(client, org_id, scope, item["inbox_key"], _inbox.CHANNEL,
+                                 _inbox.CHANNEL, detail=detail)
+        if item_label and not dry_run:
+            # SELF-CLEARING, on every path including the one where nothing is open: the item is this
+            # scope's whole answer for this company, so an empty answer closes it.
+            _inbox.resolve_missing(client, org_id, scope,
+                                   [f"digest:{scope}"] if item else [],
+                                   prefix=f"digest:{scope}")
+    if _inbox.suppresses_message(route, (item or {}).get("inbox_key"), filed):
+        return 0, 0, [{"route": route, "inbox": filed, "recipients": len(digests or [])}]
     carried = _log.sent_pairs(client, org_id, scope)
     sent = skipped = 0
     planned = []
@@ -166,4 +243,11 @@ async def deliver_digests(client, org_id, scope, digests, *, build, wa_filename,
         elif row.get("items"):
             row["items"] = len(row["items"])
         planned.append(row)
+    if route != _inbox.DEFAULT_ROUTE or item_label:
+        note = {"route": route, "inbox": filed}
+        if route in ("inbox", "both") and not item_label:
+            note["inbox_unnameable"] = True     # the caller named no labels; see `company_item`
+        elif route == "inbox" and (filed or {}).get("state") not in _inbox.FILED_STATES and item:
+            note["inbox_unavailable"] = True     # nothing silenced: the mail above went out
+        planned.append(note)
     return sent, skipped, planned
