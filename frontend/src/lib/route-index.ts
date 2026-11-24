@@ -308,6 +308,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/marketing/settings' },
   { path: '/my' },
   { path: '/notify' },
+  { path: '/notify/notifications' },
   { path: '/notify/report-recipients' },
   { path: '/onboarding/intake' },
   { path: '/operator' },

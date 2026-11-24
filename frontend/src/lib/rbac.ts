@@ -1259,6 +1259,10 @@ export const NAV: NavGroup[] = [
     { href: '/hub/notify', label: 'Notify Dashboard', icon: '📤', module: 'notify' },
     { href: '/notify', label: 'Notify', icon: '📤', module: 'notify', tileOnly: true },
     { href: '/notify/report-recipients', label: 'Report Recipients', icon: '📬', module: 'notify', tileOnly: true },
+    // The company's notification inbox (mig 1129, owner 2026-11-24, index §CORE-49). The data-feed
+    // alerts that used to be mailed daily land here instead, one item per standing problem. Gated
+    // server-side by the import-health entitlement, which is who already hears about broken feeds.
+    { href: '/notify/notifications', label: 'Notifications', icon: '🔔', module: 'notify' },
   ]},
   { group: 'Helpdesk', icon: '🛟', module: 'helpdesk', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled

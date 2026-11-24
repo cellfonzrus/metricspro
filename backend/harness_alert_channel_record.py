@@ -347,8 +347,8 @@ for bad in (None, "", "sms", "EMAIL "):
     else:
         check(f"E2 record_sent REFUSES {bad!r} — there is deliberately no default channel",
               refused)
-check("E3 only the two channels the code can actually speak are allowed",
-      L.CHANNELS == ("email", "whatsapp"))
+check("E3 only the channels the code can actually speak are allowed — and no more",
+      L.CHANNELS == ("email", "whatsapp", "inbox"))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════
@@ -444,10 +444,18 @@ check("H14 control: the RULE TWO scan can fail — a word that IS in the modules
       "channel" in low)
 
 check("H15 LOCK: the channel vocabulary has ONE home, so a caller cannot invent a channel",
-      "CHANNELS = _log.CHANNELS" in DEL_CODE
+      "CHANNELS = _log.MESSAGE_CHANNELS" in DEL_CODE
       and all("CHANNELS = (" not in t for t in SWEEPS.values()))
 check("H16 control: the H15 scan can fail — the definition IS in the one home",
-      'CHANNELS = ("email", "whatsapp")' in LOG_CODE)
+      'MESSAGE_CHANNELS = ("email", "whatsapp")' in LOG_CODE)
+# 2026-11-24 (mig 1129, index §CORE-49): the send record gained a THIRD channel, the company
+# notification inbox. It is a delivery, not a message — it has no address — so the delivery LADDER
+# must keep offering only the addressed two while `record_sent` accepts all three. Pinned here
+# because this is the harness that owns the channel vocabulary.
+check("H17 LOCK: the delivery ladder offers only the ADDRESSED channels",
+      L.MESSAGE_CHANNELS == ("email", "whatsapp") and L.INBOX_CHANNEL not in L.MESSAGE_CHANNELS)
+check("H18 LOCK: the send record accepts the inbox as a channel it can RECORD",
+      L.INBOX_CHANNEL in L.CHANNELS and len(L.CHANNELS) == 3)
 
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")

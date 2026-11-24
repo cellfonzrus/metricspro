@@ -40,8 +40,15 @@ Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §15.1.
 
 TABLE = "alert_log"
 
-#: Every channel a message can be carried on. A new channel is added HERE and nowhere else.
-CHANNELS = ("email", "whatsapp")
+#: Every channel a message can be carried on TO AN ADDRESS. This is the delivery LADDER: a
+#: recipient is offered each of these in turn, so a channel belongs here only if it has an address.
+MESSAGE_CHANNELS = ("email", "whatsapp")
+#: The company's own notification inbox (core.notification_inbox, mig 1129). A delivery, not a
+#: message: it is addressed to the COMPANY, nobody is mailed, and the next sighting of the same
+#: finding overwrites the item instead of adding one. Never part of the ladder above.
+INBOX_CHANNEL = "inbox"
+#: Every channel a DELIVERY can be recorded on. A new channel is added HERE and nowhere else.
+CHANNELS = MESSAGE_CHANNELS + (INBOX_CHANNEL,)
 
 
 def _s(v):

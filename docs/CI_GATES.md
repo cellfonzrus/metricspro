@@ -33,7 +33,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 640 gates
+## Gated — 641 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -401,6 +401,7 @@ the Runs on column is how you can tell.
 | `harness_nav_deep_link_lock.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_nav_perf.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_navigate_away_one_home.py` | `security.yml` | The app hands a destination to the browser in one place (navigate-away lock) (`navigate-away-one-home`) | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
+| `harness_notification_inbox.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_notify_failure_leads.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_notify_send_identity.py` | `carrier-vocab-guard.yml` | Notify history names the report sent (DB-free, the real module) (`notify-send-identity-proof`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_notify_send_outcome.py` | `carrier-vocab-guard.yml` | A failed send names who, why and the fix (DB-free, the real module) (`notify-send-outcome-proof`) | `pull_request`, `push`, `workflow_dispatch` |

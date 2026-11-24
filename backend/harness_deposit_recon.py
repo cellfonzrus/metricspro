@@ -293,7 +293,7 @@ store["daily_closing"].append({"org_id": HOUSE, "store_code": "S1", "close_date"
 # convention of asserting on a captured call, not on a live send, when recipients aren't the point)
 alert_calls = []
 _real_send_alert = cr._send_alert
-async def _spy_send_alert(client, org_id, scope, subject, text, ref_key, store_code=None, force=False):
+async def _spy_send_alert(client, org_id, scope, subject, text, ref_key, store_code=None, force=False, **kw):
     alert_calls.append({"scope": scope, "ref_key": ref_key})
     return {"sent": 0, "detail": "spy"}
 cr._send_alert = _spy_send_alert

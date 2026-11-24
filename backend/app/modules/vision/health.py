@@ -305,6 +305,16 @@ def alert_ref(org_id, findings, day):
     return "vision_health:%s:%s:%s" % (org_id, day, codes)
 
 
+def inbox_key(org_id):
+    """The STABLE identity of this company's camera-health item (index §CORE-49).
+
+    Deliberately NOT keyed on the day or on the finding codes, unlike `alert_ref`: an inbox item is
+    overwritten rather than re-sent, so "this company's cameras" is one standing item whose body is
+    the latest summary. A code set in the key would leave yesterday's set behind as a second item.
+    """
+    return "vision_health:%s" % (org_id,)
+
+
 def summarise(findings):
     """The alert body: what is wrong, and what to do about it, in that order.
 

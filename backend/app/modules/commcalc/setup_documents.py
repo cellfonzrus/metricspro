@@ -447,16 +447,31 @@ async def run_reminders(client, send_alert, org_ids=None):
         except Exception as e:                                          # pragma: no cover - I/O guard
             print(f"WARN setup reminders skipped for {org}: {e}")
             continue
+        due_keys = []
         for d in p["documents"]:
             fr = by_key.get(feed_key(d["key"]))
             checked += 1
             ref = reminder_ref(fr, fr, now)
             if not ref:
                 continue
+            due_keys.append(f"{ALERT_SCOPE}:{org}:{d['key']}")
             subject, body = reminder_text(d, p.get("company") or "")
             try:
-                await send_alert(client, org, ALERT_SCOPE, subject, body, ref)
+                # The inbox identity is the DOCUMENT, with neither the due date nor the cycle number
+                # in it (index §CORE-49): a document that is still missing next period overwrites its
+                # own item instead of filing a second one, and the body carries the latest wording.
+                await send_alert(client, org, ALERT_SCOPE, subject, body, ref,
+                                 inbox_key=f"upload_due:{org}:{d['key']}",
+                                 severity="warning", deep_link=WIZARD_PATH,
+                                 affected=[d.get("label") or d["key"]])
                 sent += 1
             except Exception as e:                                      # pragma: no cover - I/O guard
                 print(f"WARN setup reminder failed ({org}/{d['key']}): {e}")
+        # SELF-CLEARING: a document that has since been uploaded (or that the tenant muted, or
+        # un-scheduled) produces no `reminder_ref`, so its item is closed rather than left standing.
+        try:
+            from app.modules.core import notification_inbox as _inbox
+            _inbox.resolve_missing(client, org, ALERT_SCOPE, due_keys, prefix=f"{ALERT_SCOPE}:{org}:")
+        except Exception as e:                                          # pragma: no cover - I/O guard
+            print(f"WARN upload-due inbox reconcile failed for {org}: {e}")
     return {"tenants": len(org_ids), "checked": checked, "sent": sent}

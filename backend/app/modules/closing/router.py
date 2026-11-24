@@ -5481,7 +5481,8 @@ def _org_admin_recipients(client, org_id):
     return out
 
 
-async def _send_alert(client, org_id, scope, subject, text, ref_key, store_code=None, force=False):
+async def _send_alert(client, org_id, scope, subject, text, ref_key, store_code=None, force=False,
+                      inbox_key=None, severity=None, deep_link=None, affected=None):
     """Send an alert to the scope's recipients on email + WhatsApp, DEDUPED per recipient and per
     CHANNEL through the one send record (`storeops/alert_log.py`, migration 1051). Best-effort;
     never raises; returns a summary dict.
@@ -5494,11 +5495,50 @@ async def _send_alert(client, org_id, scope, subject, text, ref_key, store_code=
     AN ALERT THAT REACHED NOBODY IS NOT "ALREADY ALERTED" (2026-09-20) — kept, and now exact: only
     a channel that actually carried the message to a given address suppresses a re-send to that
     address on that channel.
+
+    THE ROUTE IS DECLARED, AND THIS IS THE ONE PLACE THAT ASKS (owner 2026-11-24, index §CORE-49).
+    A company+scope declared `inbox` in `storeops.alert_route` FILES the finding in that company's
+    notification inbox — one row per finding, UPDATED when the same finding recurs — and carries no
+    email and no WhatsApp. `both` does both. An undeclared scope behaves exactly as it did before.
+    Because every data-feed sender in the platform already comes through this door, declaring the
+    route fixes all of them at once instead of one sender at a time.
+
+    `inbox_key` is the finding's STABLE identity (no date in it). Without one there is nothing to
+    overwrite, so the message goes out as before and the answer says `inbox_key_missing` — a
+    finding is never dropped silently to make an inbox look tidy.
     """
     from app.modules.notify import digest_delivery as _delivery
     from app.modules.storeops import alert_log as _alert_log
     from app.modules.notify.channels import email_resend, whatsapp_meta
+    from app.modules.core import notification_inbox as _inbox
     so = client.schema("storeops")
+    route = _inbox.route_for(_inbox.routes(client, org_id=org_id), scope, org_id)
+    filed = None
+    if route in ("inbox", "both") and (inbox_key or "").strip():
+        filed = _inbox.file_item(client, org_id, scope, inbox_key, subject, text,
+                                 severity=severity or _inbox.DEFAULT_SEVERITY,
+                                 deep_link=deep_link, affected=affected)
+        # An inbox item IS a delivery, recorded in the ONE send record (mig 1051) as channel
+        # `inbox` — no second audit table. Only a NEW or CHANGED finding is a delivery: recording
+        # an unchanged daily sighting would rebuild the noise this change removes, one row at a time.
+        if filed.get("state") in ("created", "changed"):
+            _alert_log.record_sent(so, org_id, scope, ref_key, _inbox.CHANNEL, _inbox.CHANNEL,
+                                   detail={"subject": subject, "inbox_key": filed.get("inbox_key"),
+                                           "state": filed.get("state"),
+                                           "occurrences": filed.get("occurrences")})
+    if _inbox.suppresses_message(route, inbox_key, filed):
+        return {"sent": 0, "route": route, "inbox": filed, "ref_key": ref_key}
+    message_out = {"route": route, "inbox": filed}
+    if route in ("inbox", "both") and not (inbox_key or "").strip():
+        # SAY SO. The scope was declared for the inbox and this caller cannot be filed, so the
+        # tenant keeps the message rather than losing the finding, and the answer carries the reason.
+        print(f"WARN alert scope {scope!r} is routed to the inbox but carries no stable inbox_key; "
+              f"sending the message instead ({ref_key})")
+        message_out["inbox_key_missing"] = True
+    elif route == "inbox":
+        # Declared for the inbox, keyed, and the write did not land (mig 1129 un-run, or a transient
+        # failure). The alert still goes out: an un-applied migration must never cost a finding.
+        message_out["inbox_unavailable"] = (filed or {}).get("detail") or "not filed"
     recips = _alert_recipients(client, org_id, scope, store_code)
     if not recips:
         # RECORD THE SILENCE. "This tenant has nobody to tell" was invisible before — no row, no
@@ -5510,7 +5550,7 @@ async def _send_alert(client, org_id, scope, subject, text, ref_key, store_code=
             detail={"subject": subject, "count": 0, "suppressed": "no_recipients",
                     "note": ("nobody is configured to receive this scope, and the tenant has no "
                              "active admin with an email address to fall back to")})
-        return {"sent": 0, "suppressed": "no_recipients",
+        return {"sent": 0, "suppressed": "no_recipients", **message_out,
                 "detail": "no recipients configured for scope " + scope}
     html = "<p>" + text.replace("\n", "<br>") + "</p>"
     built = {"subject": subject, "html": html, "text": text}
@@ -5540,8 +5580,8 @@ async def _send_alert(client, org_id, scope, subject, text, ref_key, store_code=
             sent += 1
             tos.append(addrs[ch])
     if not sent and skipped:
-        return {"skipped": "already alerted", "ref_key": ref_key}
-    return {"sent": sent, "recipients": tos, "ref_key": ref_key}
+        return {"skipped": "already alerted", "ref_key": ref_key, **message_out}
+    return {"sent": sent, "recipients": tos, "ref_key": ref_key, **message_out}
 
 
 # ── Cash-management config: closing gate + assigned closers + alert recipients ──────────────────
