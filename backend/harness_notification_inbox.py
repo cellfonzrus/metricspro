@@ -338,16 +338,27 @@ check("H4 control: the H3 scan can fail — the one home DOES name the table",
       f'table(TABLE)' in INBOX_CODE and f'TABLE = "{NI.TABLE}"' in INBOX_CODE)
 # H5: a second module naming the table directly is the "two paths, one question" defect. Every other
 # module must reach it through the one home, so only `notification_inbox.py` may name the relation.
+# `relation_home.py` is excused BY NAME and for one reason: it is the house registry of
+# relation -> schema, it names every relation the migrations create (its own A3 lock fails if one is
+# missing), and it neither reads nor writes anything. Excusing it is not a hole in this lock — a
+# reader or writer added there would still have to call `.table(...)`, which the scan below catches.
+_EXCUSED = {"notification_inbox.py", "relation_home.py"}
 _namers = []
 for _root, _dirs, _files in os.walk("app"):
     for _f in _files:
-        if not _f.endswith(".py") or _f == "notification_inbox.py":
+        if not _f.endswith(".py") or _f in _EXCUSED:
             continue
         _txt = open(os.path.join(_root, _f), encoding="utf-8").read()
         if 'table("notification' in _txt or '"notification_inbox"' in _txt:
             _namers.append(_f)
 check("H5 LOCK: only the one home names the inbox relation — no second reader, no second writer",
       not _namers, detail=str(_namers))
+_REG = open("app/modules/core/relation_home.py", encoding="utf-8").read()
+_REG_HITS = [ln.strip() for ln in _REG.splitlines() if NI.TABLE in ln]
+check("H5a …and the excused registry only DECLARES the relation's schema — it never names it in a "
+      "query, so it is not a second reader or writer",
+      _REG_HITS == [f'"{NI.TABLE}": "{NI.SCHEMA}",']
+      and f'table("{NI.TABLE}"' not in _REG, detail=str(_REG_HITS))
 check("H5b control: the H5 scan can fail — the one home DOES name it",
       'table("notification' in INBOX_CODE or 'TABLE = "notification_inbox"' in INBOX_CODE)
 check("H6 LOCK: the channel vocabulary still has ONE home, and the ladder is the ADDRESSED one",
