@@ -253,6 +253,19 @@ _CRON_PATHS_MEMO = None              # that app's literal cron paths
 _FALLBACK_CRON_PATHS = None          # most recent successful derivation, from any app
 
 
+class _CronPaths(dict):
+    """The derived cron declaration: `{path: frozenset(methods)}`.
+
+    A Mapping, so `path in cron_paths` keeps answering the PATH question exactly as the frozenset it
+    replaced did — `_is_public` is unchanged and no caller that only wants the paths has to learn a
+    new shape. `_public_method_ok` reads the VALUES, which is the half that was missing (access probe
+    run 328; see `_public_method_ok`). A path mapped to an EMPTY set means "the route table declared
+    no methods for it", which is read as "no method fact" and leaves the historical
+    method-agnostic behaviour — never as "no method is allowed", which would strand a cron job."""
+
+    __slots__ = ()
+
+
 def _cron_literal_only() -> bool:
     return os.environ.get("CRON_PATH_LITERAL_ONLY", "1").lower() not in ("0", "false", "no", "off")
 
@@ -269,10 +282,15 @@ def cron_paths_for_app(app):
         key = id(app)
         hit = _CRON_PATHS_MEMO if key == _CRON_PATHS_FOR_APP_ID else None
         if hit is None:
-            from app.core.path_redact import route_templates
-            hit = frozenset(t for t in route_templates(app)
-                            if isinstance(t, str) and "{" not in t
-                            and (t.endswith(_RUN_DUE_SUFFIX) or t.endswith(_PROMOTE_DUE_SUFFIX)))
+            from app.core.path_redact import route_table
+            acc = {}
+            for t, methods in route_table(app):
+                if not (isinstance(t, str) and "{" not in t):
+                    continue
+                if not (t.endswith(_RUN_DUE_SUFFIX) or t.endswith(_PROMOTE_DUE_SUFFIX)):
+                    continue
+                acc.setdefault(t, set()).update(m for m in (methods or ()) if m)
+            hit = _CronPaths((t, frozenset(ms)) for t, ms in acc.items())
             _CRON_PATHS_FOR_APP_ID, _CRON_PATHS_MEMO = key, hit
             if hit:
                 _FALLBACK_CRON_PATHS = hit
@@ -654,11 +672,37 @@ _PUBLIC_METHODS = {
 }
 
 
-def _public_method_ok(path: str, method: str) -> bool:
+def _public_method_ok(path: str, method: str, cron_paths=None) -> bool:
     """PURE. For an ALREADY-allowlisted path, is this HTTP method one of the public ones? True for any
-    path with no method restriction (today's behaviour for everything not in _PUBLIC_METHODS)."""
+    path with no method restriction (today's behaviour for everything not in _PUBLIC_METHODS).
+
+    A CRON SWEEP IS SCOPED TO THE METHODS IT DECLARES — DERIVED, NEVER LISTED (access probe run 328,
+    2026-11-24, index §CORE-50). The 2026-10-28 fix stopped a PARAMETERISED path being reached by
+    typing "run-due" into it, and left the METHOD axis open: a literal sweep path was public for
+    EVERY method, and FastAPI routes a different method on that same path to whatever parameterised
+    route also matches it. Measured anonymously on production, no Authorization header at all:
+
+        GET /api/v1/storeops/salary-advance/additional-payroll/run-due   -> 500
+        (each of the other 38 sweep paths                                -> 405)
+
+    The 405s are the middleware standing down and route matching refusing the method. The 500 is
+    `GET /salary-advance/additional-payroll/{period}` — a payroll read with no permission gate of its
+    own — actually running for a stranger with `period="run-due"`. Its static sibling is
+    `PATCH /api/v1/commcalc/connectors/{cid}`, an unauthenticated WRITE handler reachable the same
+    way. Neither leaked, only because the smuggled segment must be the literal string "run-due",
+    which is no period and no uuid. That is an accident of the string, not a gate.
+
+    The fact has a home: the route table declares which methods a sweep serves, so a sweep is public
+    for those and no others. This is the same move _PUBLIC_METHODS makes by hand, whose own comment
+    says it exists to stop "a future GET on the same path being public by inheritance".
+
+    NEVER A LOCKOUT. No derivation, or a path with no declared methods, means "no method fact" and
+    the historical behaviour stands — 37 cron jobs must not 401 because a route table could not be
+    read."""
     allowed = _PUBLIC_METHODS.get(path)
-    return True if allowed is None else (method or "").upper() in allowed
+    if allowed is None:
+        allowed = (cron_paths or {}).get(path) if hasattr(cron_paths, "get") else None
+    return True if not allowed else (method or "").upper() in allowed
 
 
 # A declared-public path whose HANDLER verifies a caller identity of its own, so refusing an
@@ -703,7 +747,8 @@ def public_surface_allows(path: str, method: str, cron_paths=None) -> bool:
     Every router-level auth gate therefore ASKS this (see `app/core/router_gate.stand_down`), and
     `harness_router_gate_dereference.py` fails the build if one stops asking or a second copy of the
     answer appears."""
-    return bool(_is_public(path, cron_paths=cron_paths)) and bool(_public_method_ok(path, method))
+    return (bool(_is_public(path, cron_paths=cron_paths))
+            and bool(_public_method_ok(path, method, cron_paths=cron_paths)))
 
 
 def _fetch_memberships(client, uid):

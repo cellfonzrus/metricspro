@@ -161,8 +161,41 @@ try:
     literal = sorted({t for t in templates if "{" not in t
                       and any(t.endswith(s) for s in SUFFIXES)})
     real_literal = len(literal)
+
+    def allowlisted_for_another_reason_fwd(p):
+        """Public via the EXACT/PREFIX entries, where every method is deliberately public and the
+        handler self-gates. The SWEEP method rule below is about the cron derivation only."""
+        if p in tm._PUBLIC_EXACT:
+            return True
+        return any(p == q or p.startswith(q + "/") for q in tm._PUBLIC_PREFIXES)
+
     check("the derived set IS exactly the literal cron routes the app declares",
-          derived == frozenset(literal), (len(derived), real_literal))
+          set(derived) == set(literal), (len(derived), real_literal))
+    # ── THE METHOD AXIS (access probe run 328, 2026-11-24, index §CORE-50) ────────────────────────
+    # The check above pins WHICH PATHS. A sweep is a cron entrypoint for the METHOD it declares and
+    # for no other: FastAPI routes a different method on the same path to whatever parameterised
+    # route also matches it. Measured anonymously on production, GET on
+    # /api/v1/storeops/salary-advance/additional-payroll/run-due answered 500 — the parameterised
+    # payroll read RAN for a stranger — while each of the other 38 sweeps answered 405.
+    check("the derivation CARRIES the methods (a path alone cannot answer the method question)",
+          hasattr(derived, "get") and all(isinstance(derived.get(p), frozenset) for p in literal))
+    unscoped = [(p, m) for p in literal
+                for m in ("GET", "PUT", "PATCH", "DELETE")
+                if m not in (derived.get(p) or ())
+                and not allowlisted_for_another_reason_fwd(p)
+                and tm.public_surface_allows(p, m, cron_paths=derived)]
+    check("NO sweep path is public for a method it does not declare", unscoped == [], unscoped[:5])
+    check("every sweep is STILL public for the method it declares (no cron lockout)",
+          all(tm.public_surface_allows(p, m, cron_paths=derived)
+              for p in literal for m in (derived.get(p) or ())), None)
+    # The two routes the probe actually found, pinned as named regressions.
+    for path_, method_ in (("/api/v1/storeops/salary-advance/additional-payroll/run-due", "GET"),
+                           ("/api/v1/commcalc/connectors/run-due", "PATCH")):
+        if path_ in derived:
+            check(f"regression: {method_} {path_} is NOT public",
+                  tm.public_surface_allows(path_, method_, cron_paths=derived) is False)
+            check(f"regression: POST {path_} IS still public",
+                  tm.public_surface_allows(path_, "POST", cron_paths=derived) is True)
     for p in literal:
         check(f"literal cron route public: {p}", tm._is_public(p, cron_paths=derived), p)
     def allowlisted_for_another_reason(p):
