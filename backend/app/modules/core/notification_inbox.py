@@ -169,12 +169,22 @@ def stale_keys(rows, live_keys, prefix=None):
 
 
 # ── I/O (thin; every read is org-scoped) ───────────────────────────────────────────────────────────
-def routes(client):
-    """Every declared route row, house + tenants, in ONE read. `route_for` does the scoping, so a
-    caller can resolve many scopes for one company without a round trip each."""
+def routes(client, org_id=None):
+    """The declared route rows `route_for` needs, in ONE read.
+
+    `org_id` NARROWS THE READ AT THE QUERY to that company plus the house defaults it inherits —
+    which is every row `route_for` could legitimately use for it. Pass it on any path that answers a
+    REQUEST: `route_for` already refuses to read one tenant's row as another's, but a handler that
+    had fetched every company's rows could still disclose the SET of scopes other tenants have
+    declared, and once `alert_route` gains an editor that set is their words, not ours (owner
+    2026-10-30). Omitted (the hourly sweeps, which run for every tenant in turn) it reads all rows
+    once instead of once per company.
+    """
     try:
-        return (client.schema(ROUTE_SCHEMA).table(ROUTE_TABLE)
-                .select("org_id,scope,route").limit(2000).execute().data) or []
+        q = (client.schema(ROUTE_SCHEMA).table(ROUTE_TABLE).select("org_id,scope,route"))
+        if org_id:
+            q = q.in_("org_id", sorted({str(org_id), HOUSE_ORG}))
+        return (q.limit(2000).execute().data) or []
     except Exception as e:                                              # pragma: no cover - I/O guard
         print(f"WARN notification_inbox could not read {ROUTE_SCHEMA}.{ROUTE_TABLE}: {e}")
         return []

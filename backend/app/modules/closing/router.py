@@ -5512,7 +5512,7 @@ async def _send_alert(client, org_id, scope, subject, text, ref_key, store_code=
     from app.modules.notify.channels import email_resend, whatsapp_meta
     from app.modules.core import notification_inbox as _inbox
     so = client.schema("storeops")
-    route = _inbox.route_for(_inbox.routes(client), scope, org_id)
+    route = _inbox.route_for(_inbox.routes(client, org_id=org_id), scope, org_id)
     filed = None
     if route in ("inbox", "both") and (inbox_key or "").strip():
         filed = _inbox.file_item(client, org_id, scope, inbox_key, subject, text,

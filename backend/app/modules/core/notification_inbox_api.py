@@ -67,7 +67,7 @@ def list_routes(org_id: str = ORG_ID, authorization: str = Header(default=""),
     """Which alert scopes this company carries to the inbox, to email/WhatsApp, or to both — the
     DECLARATION behind the change, so a tenant can see why an email stopped arriving."""
     _client, _caller, org = _gate(authorization, x_active_org, org_id)
-    rows = NI.routes(sb())
+    rows = NI.routes(sb(), org_id=org)      # this company + the house defaults, nothing else
     scopes = sorted({(r.get("scope") or "").strip() for r in rows if (r.get("scope") or "").strip()})
     return {"org_id": org, "routes": [{"scope": s, "route": NI.route_for(rows, s, org)} for s in scopes],
             "default": NI.DEFAULT_ROUTE, "known": list(NI.ROUTES)}

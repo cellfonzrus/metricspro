@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
+import { safeHref } from '@/lib/safe-url'   // every deep_link goes through the house rule, §CORE-33
 import {
   groupByScope, standingFor, seenLabel, unreadCount, type InboxItem, type InboxPayload,
 } from '@/lib/notification-inbox'
@@ -99,9 +100,14 @@ export default function NotificationsPage() {
               {i.body && (
                 <p style={{ fontSize: 13, color: 'var(--muted)', margin: '6px 0 0', whiteSpace: 'pre-wrap' }}>{i.body}</p>
               )}
-              {i.deep_link && !i.resolved_at && (
+              {/* THE SAME RULE THE SIBLING SURFACE OBEYS. Today every deep_link is a literal written
+                  by the backend, so nothing attacker-shaped can reach this href — but AdminAttention
+                  wraps the import-health deep_link for exactly this reason (it is config), and the
+                  moment `alert_route` or an item gains an editor, an unwrapped href here would be the
+                  `javascript:` hole safe-url exists to close. Wrapped now, not later. */}
+              {safeHref(i.deep_link, '') && !i.resolved_at && (
                 <p style={{ margin: '8px 0 0', fontSize: 13 }}>
-                  <Link href={i.deep_link}>Open the page that fixes this →</Link>
+                  <Link href={safeHref(i.deep_link, '#')}>Open the page that fixes this →</Link>
                 </p>
               )}
             </article>

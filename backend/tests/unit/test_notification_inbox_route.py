@@ -8,6 +8,7 @@ scope nobody declared keeps mailing exactly as it does today.
 import pytest
 
 from app.modules.core import notification_inbox as NI
+from tests.fakes.supabase import FakeSupabase
 
 HOUSE = NI.HOUSE_ORG
 T1 = "11111111-1111-1111-1111-111111111111"
@@ -66,3 +67,22 @@ def test_an_item_that_could_not_be_filed_never_silences_the_message():
     assert NI.suppresses_message("inbox", "connector:x:1", {"state": "error"}) is False
     for state in ("created", "changed", "unchanged"):
         assert NI.suppresses_message("inbox", "connector:x:1", {"state": state}) is True
+
+
+@pytest.mark.unit
+def test_a_request_path_reads_only_its_own_companys_rows_and_the_house_defaults():
+    """`route_for` already refuses to read one tenant's row as another's, but a handler that fetched
+    EVERY company's rows could still disclose which scopes other tenants have declared. The security
+    pass on 2026-11-24 asked for the read itself to be narrowed, so this pins it at the query."""
+    db = FakeSupabase({"storeops.alert_route": [
+        {"org_id": HOUSE, "scope": "connector", "route": "inbox"},
+        {"org_id": T1, "scope": "connector", "route": "message"},
+        {"org_id": T2, "scope": "epay_discrepancy", "route": "inbox"},
+    ]})
+    mine = NI.routes(db, org_id=T1)
+    assert sorted({r["org_id"] for r in mine}) == sorted([HOUSE, T1])
+    assert "epay_discrepancy" not in {r["scope"] for r in mine}, (
+        "another tenant's declared scopes must not come back at all")
+    assert NI.route_for(mine, "connector", T1) == "message"
+    # The hourly sweeps run for every tenant in turn, so they read once rather than once per company.
+    assert len(NI.routes(db)) == 3
