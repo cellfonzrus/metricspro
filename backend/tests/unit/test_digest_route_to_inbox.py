@@ -191,7 +191,8 @@ def test_an_undeclared_scope_is_untouched():
     sent, _skipped, planned = _deliver(db, _digests(("S1", "2026-11-20", "fee")))
     assert sent == 1
     assert db.rows(INBOX) == []
-    assert planned[-1]["route"] == "message"
+    assert all("route" not in r for r in planned), \
+        "a scope still on `message` gets exactly the planned rows its caller always had"
 
 
 @pytest.mark.unit

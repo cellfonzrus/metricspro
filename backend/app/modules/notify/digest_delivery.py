@@ -243,7 +243,10 @@ async def deliver_digests(client, org_id, scope, digests, *, build, wa_filename,
         elif row.get("items"):
             row["items"] = len(row["items"])
         planned.append(row)
-    if route != _inbox.DEFAULT_ROUTE or item_label:
+    if route != _inbox.DEFAULT_ROUTE:
+        # Only when the inbox was actually ASKED for. A scope still on `message` gets the planned
+        # rows its caller has always had and nothing appended: a pseudo-row in that list is a
+        # surprise to every existing reader of it (it broke `harness_epay_alerts` S5 immediately).
         note = {"route": route, "inbox": filed}
         if route in ("inbox", "both") and not item_label:
             note["inbox_unnameable"] = True     # the caller named no labels; see `company_item`
