@@ -31,6 +31,7 @@ PURE: stdlib only, no DB, no network. Run: `cd backend && python3 harness_alert_
 """
 import ast
 import asyncio
+import re
 import io
 import sys
 import tokenize
@@ -415,12 +416,29 @@ check("H5 LOCK: the two superseded wrappers are GONE from every file, so no late
 check("H6 control: the H5 scan can fail — the names it hunts for are findable in this harness",
       "_lateness_record_sent" in open(__file__).read())
 
-check("H7 LOCK: the record is written only inside the delivered branch, never beside it",
-      'if not leg["delivered"]:' in DEL_CODE
-      and DEL_CODE.index('if not leg["delivered"]:') < DEL_CODE.index("_log.record_sent(")
-      and DEL_CODE.count("_log.record_sent(") == 1)
-check("H8 control: the H7 scan can fail — the branch it hunts for IS present",
-      'if not leg["delivered"]:' in DEL_CODE)
+# H7: a record may only be written AFTER something carried the finding. There are now two carriers
+# in this home — an addressed channel, and the company inbox (§CORE-49.9) — so the lock asserts the
+# RULE at every call site rather than counting to one: each `record_sent` must sit behind a guard
+# that has already established the delivery. A third call with no guard fails this, which is the
+# whole point; H8 arms it against a synthetic unguarded call.
+_GUARDS = ('if not leg["delivered"]:',                              # the addressed ladder
+           'if (filed or {}).get("state") in ("created", "changed"):')  # the inbox filing
+
+
+def _records_are_guarded(text):
+    """Every `_log.record_sent(` in `text` has one of the guards above within the preceding lines."""
+    out = []
+    for m in re.finditer(r"_log\.record_sent\(", text):
+        before = text[max(0, m.start() - 600):m.start()]
+        out.append(any(g in before for g in _GUARDS))
+    return out and all(out)
+
+
+check("H7 LOCK: every send record is written behind a guard that a carrier DELIVERED — never "
+      "beside one. Two carriers now: an addressed channel, and the company inbox",
+      _records_are_guarded(DEL_CODE) and DEL_CODE.count("_log.record_sent(") == 2)
+check("H8 control: the H7 scan can fail — an unguarded record is caught",
+      not _records_are_guarded("    _log.record_sent(client, org, scope, k, a, ch)\n"))
 
 check("H9 LOCK: every sweep that alerts dereferences the ONE delivery home",
       all("_delivery.deliver_recipient(" in t or "_delivery.deliver_digests(" in t

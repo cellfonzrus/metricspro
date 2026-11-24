@@ -6825,7 +6825,10 @@ read-only 2026-10-04: 709 rows, 706 email-shaped, 3 recorded silences).
 
 **ONE HOME:** `backend/app/modules/notify/digest_delivery.py`. `pending_by_channel` (PURE) decides
 what each channel still owes a recipient; `deliver_recipient` is the ladder; `deliver_digests` is the
-fan-out over `manager_digest.plan_digests` output. Every alert sweep in the estate dereferences it:
+fan-out over `manager_digest.plan_digests` output; `company_item` (PURE) is the ONE company-level
+notification a scope's findings add up to when the declared route is the inbox (§CORE-49.9) — so
+every addressed digest scope is one `storeops.alert_route` row, not one more code path. The addressed
+ladder is `alert_log.MESSAGE_CHANNELS`; the inbox has no address and is never offered to a recipient. Every alert sweep in the estate dereferences it:
 the lateness sweep, doc expiry, the manager follow-up digest, the ePay discrepancy digest, the
 zero-sales digest, the bill-pay declaration digest, the two store-visit digests, and
 `closing/_send_alert`.
@@ -7245,7 +7248,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 ## 16. Cross-reference: by TABLE
 
 - `core.notification_inbox` (mig `1129`) — THE company notification inbox: one row per (`org_id`, `scope`, `inbox_key`), and that unique index IS "overwrite if it is the same message everyday". `inbox_key` is the finding's STABLE identity — the feed, the connector, the document — and a date in it is the defect the table exists to remove, so the backend REFUSES an empty key and a CHECK refuses a blank one. `first_seen_at` is how old the problem is, `occurrences` how many times it has been reported, `resolved_at` is set by the next check that no longer reports it. Read and written in ONE place, `core/notification_inbox.py`; no other module may name the relation (`harness_notification_inbox.py` H5) (§CORE-49).
-- `storeops.alert_route` (mig `1129`) — WHICH route a company+scope takes: `message` | `inbox` | `both`. A POLICY, which is where a house default is right (owner 2026-10-30), so the house row declares `connector` and `upload_due` as `inbox` and every tenant inherits it; a tenant's own row wins for that tenant and reaches no other. An **undeclared scope reads `message`**, so nothing changes until it is declared, and an unknown route value reads `message` too — guessing `inbox` from a typo would SILENCE an alert. Resolved in ONE place, `notification_inbox.route_for`, dereferenced by `closing/_send_alert` (§CORE-49).
+- `storeops.alert_route` (migs `1129`, `1130`) — WHICH route a company+scope takes: `message` | `inbox` | `both`. A POLICY, which is where a house default is right (owner 2026-10-30), so the house row declares `connector` and `upload_due` as `inbox` and every tenant inherits it; a tenant's own row wins for that tenant and reaches no other. An **undeclared scope reads `message`**, so nothing changes until it is declared, and an unknown route value reads `message` too — guessing `inbox` from a typo would SILENCE an alert. Resolved in ONE place, `notification_inbox.route_for`, dereferenced by `closing/_send_alert` for company alerts and by `notify/digest_delivery.deliver_digests` for the ADDRESSED per-manager digests — two senders, one route table, no second mechanism (mig `1130` declares `epay_discrepancy`) (§CORE-49, §CORE-49.9).
 - `storeops.dropoff_label_profile` (mig `1127`) — WHICH return labels a tenant handles and what their references look like, in that tenant's OWN words: `label_name`, an anchored `reference_pattern`, and the `symbology` its code is drawn in (`code128b` | `qr`). **Seeded with NOTHING, not even for the tenant that asked** — a house default here would be one tenant's description of one vendor's paperwork answering for every tenant (owner 2026-10-30), so an org that has declared none is told so and the printed-text read stays inert for it. Read in ONE place, `storeops/dropoff_label_api._profiles`, and passed as a REQUIRED argument to `dropoff_label.read_reference`. Decoding the BARS reads none of this: a published symbology is a POLICY (§STOREOPS-12).
 - `storeops.dropoff_label_scan` (mig `1127`) — one row per rescued package: `read_reference` (what the platform proposed), `confirmed_reference` (what the person accepted, and what was printed), `corrected` when they differ, plus the read's source, the label type, the photo's name and who confirmed it. An AUDIT trail, not a queue — nothing in the platform decides anything from it; it exists so that "this package went back to the wrong vendor" is answerable down to the character that was wrong (§STOREOPS-12).
 - `commcalc.receipt_source_map` (mig `1115`) — THE per-tenant declaration of INBOUND money: which feed states what a carrier/processor will pay us (`source_table`), which column is the money (`amount_field`), and on what rhythm it pays (`payout_cadence` + its one day/lag column). **The column that DATES a row is deliberately NOT here**: it is dereferenced from `data_lineage_registry.DATA_DATE_COLUMN_BY_TABLE`, that fact's one home since the feed watchdog shipped, and that map's `None` entries are DECLARATIONS — a period-keyed snapshot is refused as a receipt source rather than guessed around. **Seeded with NOTHING, on purpose**: a house default here would be one tenant's commercial arrangement answering for every tenant (owner 2026-10-30), so an undeclared carrier reads NOT MEASURED and the calendar says so. Read in ONE place, `payables/expected_receipts.declared_sources`, through `payables/receipt_schedule.resolve_schedule`; written only by `PUT /payables/receipt-sources`, which validates the cadence against the home's vocabulary before it can be stored (§PAYABLES-02).
@@ -52198,6 +52201,48 @@ So the code is safe to deploy ahead of its migration: until 1129 is applied and 
 1. **Apply migration `1129`** (one self-committing run; no money is read or written).
 2. Nothing else. Both hosts auto-deploy from `main`, and the house route rows ship inside 1129, so
    the daily emails stop at the first hourly tick after it is applied.
-3. Open to him, not decided here: `epay_discrepancy` is by far the loudest scope in the log (**873
-   sends in 21 days, ~40 a day**). It is a money finding rather than a feed fault, so it was left on
-   email; moving it is now a single `alert_route` row and no code.
+3. ~~Open to him: `epay_discrepancy` ... moving it is now a single `alert_route` row and no code.~~
+   **ANSWERED, and the claim was half wrong — see §CORE-49.9.** He chose *"All 5 plus ePay
+   discrepancy"* on 2026-11-24. ePay is NOT one of the five: it is an ADDRESSED per-manager digest
+   through `notify/digest_delivery`, not a company alert through `closing/_send_alert`, so it took a
+   change to the digest home as well as the row (mig `1130`).
+
+### §CORE-49.9 The addressed digests take the same route (owner 2026-11-24, mig `1130`)
+
+**The correction, stated plainly.** §CORE-49.8 said moving `epay_discrepancy` was "a single
+`alert_route` row and no code". It was not. The five scopes 1129 routed all pass through
+`closing/_send_alert`, which reads the route. ePay passes through
+`notify/digest_delivery.deliver_digests`, a DIFFERENT one home — the addressed-digest ladder — which
+did not. An `alert_route` row alone would have changed nothing, silently.
+
+**The class, not the instance.** Wiring ePay's own sweep to the inbox would have been the patchwork
+the owner has ruled out three times. `deliver_digests` is the ONE home for every addressed digest —
+ePay discrepancy, zero sales, bill-pay declarations, manager follow-ups, store visits — so the route
+is dereferenced THERE. Every one of those scopes is now a single declared row, which is what
+§CORE-49.8 wrongly claimed ePay already was.
+
+| fact | its one home |
+| --- | --- |
+| which route a company+scope takes | `storeops.alert_route`, read only by `notification_inbox.route_for` |
+| what ONE company item a scope's findings add up to | `digest_delivery.company_item` (PURE) |
+| what a finding is CALLED | the caller's `item_label` — ePay passes the same callable to `preview_item`, so a finding reads identically in the dry-run preview and in the inbox |
+
+**Per-manager becomes per-company, deliberately.** A digest answers "what does THIS manager owe
+attention to"; the inbox item answers "what does this COMPANY owe attention to". So the item is the
+findings deduped ACROSS recipients: a gap two managers were both emailed about is one line. The body
+is sorted, so it does not move with recipient order, and it carries NO date — a body built from
+`ref_key`s would differ every midnight and re-nag daily, which is the very defect §CORE-49 exists to
+remove. That is why `item_label` is REQUIRED and the ref_key is never used in its place.
+
+**The safe direction holds, with one more rung.** A scope whose caller passes no `item_label` cannot
+name its findings, so it cannot take the route at all: the messages go out exactly as before and the
+planned rows say `inbox_unnameable`. An un-run migration, an unreachable table or a failed route read
+all still fall back to sending (`inbox_unavailable`). Nothing in this change can silence an alert.
+
+**Self-clearing, on every path.** The item is the scope's whole answer for that company, so a sweep
+that reports nothing closes it — including the path where there were never any findings to send.
+
+Proved by `harness_notification_inbox.py` §I (14 checks, two of them armed controls) and
+`backend/tests/unit/test_digest_route_to_inbox.py` (15 tests, incl. two cross-tenant). Migration
+`1130` declares exactly one scope on the house org, additively, idempotent on 1129's unique key, and
+its REVERT restores the per-manager mail without touching a tenant's own row.

@@ -383,6 +383,17 @@ class _Schema:
 
     from_ = table
 
+    def schema(self, name: str) -> "_Schema":
+        """Switch schema again, the way the real client does — a NEW handle, never a mutation.
+
+        postgrest-py's `schema()` builds a fresh client sharing the session, so a caller handed a
+        schema-bound client (`root.schema("storeops")`) can reach another schema without re-pointing
+        the handle it was given. Code that does exactly that is real: `digest_delivery` is handed a
+        storeops-bound client and files a `core` inbox item through it. A double that mutated here
+        would let that pass while production misdirected every later query (or the reverse).
+        """
+        return _Schema(self._store, name, self._rpc, reads=self._reads)
+
     def rpc(self, name: str, params: Optional[dict] = None):
         handler = self._rpc.get(f"{self._schema}.{name}", self._rpc.get(name))
         if handler is None:

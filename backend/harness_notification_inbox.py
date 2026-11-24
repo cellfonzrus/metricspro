@@ -31,6 +31,13 @@ WHAT THIS PINS
   H. THE LOCKS, each with an ARMED CONTROL proving the scan can fail: every sender passes a stable
      key, no sender writes the inbox itself, no second inbox table, the channel vocabulary has one
      home, and RULE TWO.
+  I. THE ADDRESSED DIGESTS take the SAME route (owner 2026-11-24, "All 5 plus ePay discrepancy").
+     ePay is not one of the five — it is a per-manager digest through
+     `notify/digest_delivery.deliver_digests`. Fixing ePay alone would be the patchwork again, so
+     the route is read in the digest ONE HOME and every digest scope (ePay, zero sales, bill-pay,
+     manager follow-ups, store visits) gains the choice at once. Pinned here: the company item is
+     derived once and carries NO date, it is order-independent, it is unnameable scopes' safe
+     direction, and migration 1130 declares exactly one scope.
 
 PURE: stdlib only, no DB, no network. Run: `cd backend && python3 harness_notification_inbox.py`
 """
@@ -384,6 +391,68 @@ check("H11 LOCK: RULE TWO — no carrier, tenant or vendor name in the new modul
       detail=str(hits))
 check("H12 control: the RULE TWO scan can fail — a word that IS in the modules is found",
       "inbox" in low)
+
+print("\nI. the ADDRESSED digests take the same route (ePay, and every digest scope with it)")
+from app.modules.notify import digest_delivery as DD                             # noqa: E402
+
+SCOPE = "epay_discrepancy"
+
+
+def _dg(*findings, to="dm@x.test"):
+    """What `manager_digest.plan_digests` hands the delivery home, in its real shape."""
+    return [{"to": to, "to_name": "M", "items": [
+        {"store_code": s, "close_date": d, "kind": k,
+         "ref_key": f"{SCOPE}|2026-11-24|{to}|{s}|{d}|{k}"} for s, d, k in findings]}]
+
+
+def _lab(i):
+    return f"{i['store_code']} {i['close_date']} {i['kind']}"
+
+
+_one = DD.company_item(SCOPE, _dg(("S1", "2026-11-20", "fee")), _lab)
+check("I1 a scope's findings add up to ONE company item, keyed on the scope and nothing else",
+      _one["inbox_key"] == f"digest:{SCOPE}")
+check("I2 the item carries NO date of its own — a body that moves at midnight re-nags every day",
+      "2026-11-24" not in _one["body"] and "2026-11-24" not in _one["title"]
+      and "2026-11-20" in _one["body"])
+_two = DD.company_item(SCOPE, _dg(("S1", "2026-11-20", "fee"), to="a@x") +
+                       _dg(("S1", "2026-11-20", "fee"), ("S2", "2026-11-21", "payment"), to="b@x"),
+                       _lab)
+check("I3 a finding two managers were both mailed is ONE line for the company",
+      _two["affected"] == ["S1 2026-11-20 fee", "S2 2026-11-21 payment"])
+check("I4 the body does not depend on recipient order",
+      DD.company_item(SCOPE, _dg(("S2", "2026-11-21", "fee"), ("S1", "2026-11-20", "fee")), _lab)
+      == DD.company_item(SCOPE, _dg(("S1", "2026-11-20", "fee"), ("S2", "2026-11-21", "fee")), _lab))
+check("I5 no findings is NO item, which is what closes the company's item",
+      DD.company_item(SCOPE, [], _lab) is None and DD.company_item(SCOPE, _dg(), _lab) is None)
+check("I6 LOCK: the digest home dereferences the SAME route table — not a second mechanism. It may "
+      "NAME it in prose; what it may not do is query it, which is the one home's job",
+      "notification_inbox as _inbox" in DEL_CODE and "route_for(" in DEL_CODE
+      and f'table("{NI.ROUTE_TABLE}"' not in DEL_CODE
+      and f'table({NI.ROUTE_TABLE}' not in DEL_CODE)
+check("I7 control: the I6 scan can fail — the query IS in the one home",
+      f'table({NI.ROUTE_TABLE.upper()}' in INBOX_CODE or f'table("{NI.ROUTE_TABLE}"' in INBOX_CODE
+      or "table(ROUTE_TABLE)" in INBOX_CODE)
+check("I8 LOCK: a scope that cannot NAME its findings cannot take the route, so it cannot go quiet",
+      "company_item(scope, digests, item_label) if item_label else None" in DEL_CODE
+      and "inbox_unnameable" in DEL_CODE)
+check("I9 LOCK: the ePay sweep passes ONE spelling of a finding's name to both the preview and the "
+      "item — a finding reads identically wherever it is shown",
+      "preview_item=_label, item_label=_label" in SENDERS["commcalc/router"])
+check("I10 …and that spelling is the store-day and the kind, never today's date",
+      "f\"{i['store_code']} {i['close_date']} {i['kind']}\"" in SENDERS["commcalc/router"])
+check("I11 the inbox is STILL never an addressed channel, now that a digest can file one",
+      DD.CHANNELS == ("email", "whatsapp") and NI.CHANNEL not in DD.CHANNELS)
+
+MIG30 = sql_text("database/migrations/1130_epay_digest_to_inbox.sql")
+check("I12 migration 1130 declares exactly ONE scope, on the house org, additively",
+      MIG30.count("INSERT INTO") == 1 and f"'{SCOPE}'" in MIG30
+      and NI.HOUSE_ORG in MIG30 and "CREATE TABLE" not in MIG30 and "ALTER TABLE" not in MIG30)
+check("I13 …it is idempotent on the unique key 1129 created",
+      "ON CONFLICT (org_id, scope) DO UPDATE" in MIG30)
+check("I14 …and its REVERT restores the per-manager mail without touching a tenant's own row",
+      "-- REVERT:" in MIG30 and "DELETE FROM storeops.alert_route" in MIG30
+      and "HOUSE default only" in MIG30)
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 for f in FAIL:
