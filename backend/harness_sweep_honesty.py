@@ -376,8 +376,10 @@ def run_email(store, attachments, payloads, *, org=HOUSE, fail_writes_on=(), ale
         return {'written': 0}
     R._promote_feed_to_raw_sales = _promote
 
-    async def _alert(c, o, kind, subj, text, ref):
-        (alerts if alerts is not None else []).append({'org': o, 'subject': subj, 'text': text, 'ref': ref})
+    async def _alert(c, o, kind, subj, text, ref, **kw):
+        (alerts if alerts is not None else []).append(
+            {'org': o, 'subject': subj, 'text': text, 'ref': ref,
+             'inbox_key': kw.get('inbox_key')})
     CR._send_alert = _alert
     out = asyncio.run(R._run_email_sweep(org))
     return out, log, seen_files
@@ -399,8 +401,10 @@ def run_ftp(store, files, payloads, *, org=HOUSE, fail_writes_on=(), alerts=None
         return p
     R.upload_file = _uf
 
-    async def _alert(c, o, kind, subj, text, ref):
-        (alerts if alerts is not None else []).append({'org': o, 'subject': subj, 'text': text, 'ref': ref})
+    async def _alert(c, o, kind, subj, text, ref, **kw):
+        (alerts if alerts is not None else []).append(
+            {'org': o, 'subject': subj, 'text': text, 'ref': ref,
+             'inbox_key': kw.get('inbox_key')})
     CR._send_alert = _alert
     out = asyncio.run(R._run_ftp_sweep(org))
     return out, log, seen_files

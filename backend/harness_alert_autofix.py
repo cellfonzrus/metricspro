@@ -168,7 +168,17 @@ ok("C1 the connector key is keyed on the episode's start, not today's date",
    'since-{since}' in SCAN and 'now.date()}:{kind}' not in SCAN)
 ok("C2 …taken from last_run_at, which §19.17 made mean LAST SUCCESS",
    'since = str(lr or "")[:10] or "never"' in SCAN)
-MON = _func_src(ROUTER, "_data_freshness_monitor")
+# §CORE-49 split the check in two: `_data_freshness_monitor` is the DOOR every caller uses (it
+# reconciles this company's inbox items with the answer on every path, including the early
+# return where nothing is stale), and `_data_freshness_measure` holds the measuring and the
+# autofix. The mechanism these checks lock now spans both, so they read both — and the two
+# checks below assert the split itself, so the door cannot be bypassed or re-merged silently.
+DOOR = _func_src(ROUTER, "_data_freshness_monitor")
+MON = DOOR + _func_src(ROUTER, "_data_freshness_measure")
+ok("C0 the door measures and then reconciles the inbox, so a recovered feed CLOSES its item",
+   "_data_freshness_measure(client, org_id)" in DOOR and "resolve_missing" in DOOR)
+ok("C0b …and no caller reaches the measuring half directly, which would skip the reconcile",
+   _src(ROUTER).count("_data_freshness_measure(") == 2)
 ok("C3 the freshness key is keyed on the feed's stuck data date, not today's date",
    "stuck-at-{ld}" in MON and "{today_s}" not in MON)
 ROUTER_SRC = _src(ROUTER)
