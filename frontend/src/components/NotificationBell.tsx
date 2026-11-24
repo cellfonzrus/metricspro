@@ -21,7 +21,19 @@ import { unreadCount, badgeLabel, type InboxPayload } from '@/lib/notification-i
 //     gate to drift from the backend's.
 // Every display decision is in lib/notification-inbox, shared with the page, so the badge can never
 // disagree with the list it opens.
+//
+// THE READ IS A SUBSCRIPTION, NOT AN AWAIT INSIDE THE EFFECT. `react-hooks/set-state-in-effect`
+// flags a setState reached synchronously from an effect, and it is right to: the state here arrives
+// from an external system, so it is set in the promise's own callback. That keeps this component
+// OFF `frontend/eslint_pending.txt` — the lint register may only shrink, and a new file joining it
+// is new debt (index §CORE-30).
 const POLL_MS = 120000   // these findings change hourly at best; a badge is not a thread
+
+/** Only an entitlement answer is permanent; any other failure keeps the last known count. */
+function isEntitlementError(e: unknown): boolean {
+  const status = (e as { status?: number } | null)?.status
+  return status === 401 || status === 403
+}
 
 export default function NotificationBell() {
   const pathname = usePathname()
@@ -29,18 +41,13 @@ export default function NotificationBell() {
   const [dead, setDead] = useState(false)      // not entitled (403) or no inbox — render nothing
   const busy = useRef(false)
 
-  const load = useCallback(async () => {
+  const load = useCallback(() => {
     if (busy.current) return
     busy.current = true
-    try {
-      const r = await api('/api/v1/core/notifications') as InboxPayload
-      setUnread(unreadCount(r))
-    } catch (e: any) {
-      // Only an entitlement answer is permanent. A network blip keeps the last known count.
-      if (e?.status === 401 || e?.status === 403) setDead(true)
-    } finally {
-      busy.current = false
-    }
+    api('/api/v1/core/notifications')
+      .then((r) => { setUnread(unreadCount(r as InboxPayload)) })
+      .catch((e: unknown) => { if (isEntitlementError(e)) setDead(true) })
+      .finally(() => { busy.current = false })
   }, [])
 
   useEffect(() => { load() }, [load, pathname])

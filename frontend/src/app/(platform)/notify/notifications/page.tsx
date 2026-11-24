@@ -18,6 +18,12 @@ import {
   groupByScope, standingFor, seenLabel, unreadCount, type InboxItem, type InboxPayload,
 } from '@/lib/notification-inbox'
 
+/** An Error's own message, or the given fallback — never `any`. */
+function messageOf(e: unknown, fallback: string): string {
+  const m = (e as { message?: unknown } | null)?.message
+  return typeof m === 'string' && m ? m : fallback
+}
+
 const SEV_COLOR: Record<string, string> = {
   error: 'var(--c-bg-dc2626)', warning: 'var(--c-bg-d97706)', info: 'var(--border)',
 }
@@ -28,22 +34,25 @@ export default function NotificationsPage() {
   const [err, setErr] = useState<string>('')
   const [busy, setBusy] = useState(false)
 
-  const load = useCallback(async () => {
-    setBusy(true)
-    try {
-      const r = await api(`/api/v1/core/notifications?include_resolved=${showResolved ? 1 : 0}`) as InboxPayload
-      setPayload(r); setErr('')
-    } catch (e: any) {
-      setErr(e?.message || 'Could not load notifications')
-    } finally { setBusy(false) }
+  // THE READ IS A SUBSCRIPTION, NOT AN AWAIT INSIDE THE EFFECT. `react-hooks/set-state-in-effect`
+  // flags a setState reached synchronously from an effect; the payload arrives from an external
+  // system, so it is set in the promise's own callback. That keeps this page OFF
+  // `frontend/eslint_pending.txt`, a register that may only shrink (index §CORE-30).
+  const load = useCallback(() => {
+    api(`/api/v1/core/notifications?include_resolved=${showResolved ? 1 : 0}`)
+      .then((r) => { setPayload(r as InboxPayload); setErr('') })
+      .catch((e: unknown) => { setErr(messageOf(e, 'Could not load notifications')) })
+      .finally(() => { setBusy(false) })
   }, [showResolved])
 
   useEffect(() => { load() }, [load])
 
-  const markAllRead = async () => {
-    try { await api('/api/v1/core/notifications/read', { method: 'POST', body: JSON.stringify({ all: true }) }) }
-    catch (e: any) { setErr(e?.message || 'Could not mark these read') }
-    load()
+  const refresh = () => { setBusy(true); load() }
+
+  const markAllRead = () => {
+    api('/api/v1/core/notifications/read', { method: 'POST', body: JSON.stringify({ all: true }) })
+      .catch((e: unknown) => { setErr(messageOf(e, 'Could not mark these read')) })
+      .finally(load)
   }
 
   const unread = unreadCount(payload)
@@ -59,7 +68,7 @@ export default function NotificationsPage() {
       </p>
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
-        <button onClick={load} disabled={busy}>{busy ? 'Checking…' : 'Refresh'}</button>
+        <button onClick={refresh} disabled={busy}>{busy ? 'Checking…' : 'Refresh'}</button>
         <button onClick={markAllRead} disabled={!unread}>Mark all read</button>
         <label style={{ fontSize: 13, display: 'inline-flex', gap: 6, alignItems: 'center' }}>
           <input type="checkbox" checked={showResolved} onChange={e => setShowResolved(e.target.checked)} />
