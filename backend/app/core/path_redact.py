@@ -219,6 +219,46 @@ _CACHE = {}
 _MAX_ROUTER_DEPTH = 8
 
 
+def route_table(node, prefix="", _depth=0):
+    """Every FULL route template under an app or router WITH the HTTP methods it declares, as a list
+    of `(template, frozenset(methods))`. ONE walk — `route_templates` dereferences this rather than
+    keeping a second copy of the router recursion.
+
+    WHY THE METHODS (access probe run 328, 2026-11-24, index §CORE-50). A template alone cannot
+    answer "may an anonymous caller use THIS method on this path". `tenant_middleware` derives its
+    cron-sweep allowlist from this walk, and a sweep is a cron entrypoint for the method it declares
+    (POST) and for no other — a GET on the same path is routed to whatever parameterised route also
+    matches it. Reading the template without the methods is asking half the question.
+
+    `methods` is empty for a container/mount that declares none. Never raises."""
+    out = []
+    if _depth > _MAX_ROUTER_DEPTH:
+        return out
+    try:
+        routes = getattr(node, "routes", None)
+        if routes is None:
+            routes = getattr(getattr(node, "router", None), "routes", None)
+        for r in routes or []:
+            f = getattr(r, "path_format", None) or getattr(r, "path", None)
+            if isinstance(f, str) and f:
+                ms = getattr(r, "methods", None)
+                try:
+                    methods = frozenset(str(m).upper() for m in (ms or ()))
+                except Exception:
+                    methods = frozenset()
+                out.append((prefix + f, methods))
+            nested = getattr(r, "original_router", None) or getattr(r, "router", None)
+            if nested is not None and nested is not r and nested is not node:
+                ctx = getattr(r, "include_context", None)
+                sub = getattr(ctx, "prefix", None) or getattr(r, "prefix", None) or ""
+                if not isinstance(sub, str):
+                    sub = ""
+                out.extend(route_table(nested, prefix + sub, _depth + 1))
+    except Exception:
+        pass
+    return out
+
+
 def route_templates(node, prefix="", _depth=0):
     """Every FULL route template under an app or router, walking INCLUDED ROUTERS.
 
@@ -230,28 +270,11 @@ def route_templates(node, prefix="", _depth=0):
     exercises this against real FastAPI objects rather than strings.
 
     Written to survive either shape: a flattened `app.routes` (other FastAPI versions) yields its
-    templates directly, and a container is recursed into with its prefix prepended. Never raises."""
-    out = []
-    if _depth > _MAX_ROUTER_DEPTH:
-        return out
-    try:
-        routes = getattr(node, "routes", None)
-        if routes is None:
-            routes = getattr(getattr(node, "router", None), "routes", None)
-        for r in routes or []:
-            f = getattr(r, "path_format", None) or getattr(r, "path", None)
-            if isinstance(f, str) and f:
-                out.append(prefix + f)
-            nested = getattr(r, "original_router", None) or getattr(r, "router", None)
-            if nested is not None and nested is not r and nested is not node:
-                ctx = getattr(r, "include_context", None)
-                sub = getattr(ctx, "prefix", None) or getattr(r, "prefix", None) or ""
-                if not isinstance(sub, str):
-                    sub = ""
-                out.extend(route_templates(nested, prefix + sub, _depth + 1))
-    except Exception:
-        pass
-    return out
+    templates directly, and a container is recursed into with its prefix prepended. Never raises.
+
+    DEREFERENCES `route_table` — the walk has ONE home, so a caller that needs the methods and a
+    caller that needs only the templates can never see different route tables."""
+    return [t for t, _methods in route_table(node, prefix, _depth)]
 
 
 def rules_for_app(app):

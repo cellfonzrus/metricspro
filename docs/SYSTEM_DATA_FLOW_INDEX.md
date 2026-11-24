@@ -251,6 +251,7 @@ Primary code homes:
 | CORE-46 | **A stored credential shown to a person is an audited event** | The owner asked that the per-store download screen SHOW each store's back-office password, because the portal refuses automated clients and a person has to type it. Legitimate — and the first route in the platform that hands a stored credential back to a browser, where every other read strips it. Granting it inside the screen's own endpoint would have made the decision a property of one screen, and the next screen would decide again. So the decision has one home, for every credential this platform stores: only a column the credential registry calls a credential, only a row of the asking organisation, and only after the row saying WHO looked is written — a reveal that cannot be recorded is refused rather than served unrecorded. |
 | CORE-47 | **We never tell a caller to resend a request off TLS** | Found from OUTSIDE by the adversarial access probe (§CORE-42, run 326) and reproducible by hand: `GET /api/v1/core/me/` — the token-verified whoami, one extra trailing slash — answered `307 Location: http://…`, so a client that had arrived over TLS was told by us to resend the request, Authorization header included, in the clear. The instance was two paths; the class was that the app did not know it sat behind a TLS-terminating edge, so EVERY absolute URL it built downgraded the caller. Fixed at the root (the server now believes the edge) with an outbound backstop that cannot un-wire, and the "which entry of an appended `X-Forwarded-*` header may be believed" arithmetic FACTORED OUT of the address one home rather than copied for the scheme. |
 | CORE-48 | **A path we declare public must not be refused by a router-level gate** | Found from OUTSIDE by the adversarial access probe (§CORE-42, run 327) and reproducible by hand: `GET /api/v1/pos/public/w9/{token}` — the link a wholesale customer is EMAILED to return their Form W-9, where the one-use token IS the auth — answered `401 "sign in to perform this action"` to every caller, the token never read, so every return link ever sent was dead. Neither component was wrong alone: the middleware allowlisted the path and the `pos` router's router-level gate refused unauthenticated callers, and nothing owned the composition. The class is that "is this path public" had one home and a router-level auth gate was a second gate that did not read it; every gate now dereferences `router_gate.stand_down`. The probe had called this a pass for 325 runs — `LOCKED_OUT` was unreachable for an anonymous caller — and that half is fixed too. |
+| CORE-50 | **A cron sweep is public for the METHOD it declares, never for every method on its path** | Found from OUTSIDE by the adversarial access probe (§CORE-42, run 328) and reproducible by hand: `GET /api/v1/storeops/salary-advance/additional-payroll/run-due`, with no `Authorization` header at all, answered **500** while each of the other 38 sweep paths answered 405. The 405s are the middleware standing down for a declared cron entrypoint and route matching refusing the method; the 500 is `GET /salary-advance/additional-payroll/{period}` — a payroll read with no permission gate of its own — actually RUNNING for a stranger with `period="run-due"`. Its static sibling is `PATCH /api/v1/commcalc/connectors/{cid}`, an unauthenticated WRITE handler reachable the same way. Neither leaked, only because the smuggled segment must be the literal string `run-due`, which is no period and no uuid — an accident of the string, not a gate. The 2026-10-28 fix had closed the PATH axis (a parameterised template can never become a sweep) and left the METHOD axis open: the derived cron set answered *which paths* and said nothing about *which methods*, so every sweep path was public for every verb and FastAPI routed the other verbs to whatever parameterised route also matched. The class is that "is this path public" and "for which methods" are two questions, and the derivation answered one — the same inheritance `_PUBLIC_METHODS` exists by hand to prevent. The derivation now CARRIES the methods the route table declares. |
 | CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
 | CORE-27 | **A report arrives with the standard filters and the send bar, or it does not arrive** | "Zero Sales does not have send notification bar, please note this also in teh indsex all reports must have the satandard filters and the send bar by default" — the sender and the filter bar each already had one home; what was missing was the content to send and anything that made either a default. What is a figure nobody can mail worth, and what fails the build when the 129th report ships without a toolbar? |
@@ -26618,6 +26619,7 @@ status word rather than a blank that reads as nil.
 | CORE-46 | core, commcalc |
 | CORE-47 | core |
 | CORE-48 | core, pos |
+| CORE-50 | core, storeops, commcalc |
 | STOREOPS-08 | storeops |
 | STOREOPS-09 | storeops, account |
 | STOREOPS-10 | storeops, account |
@@ -41934,6 +41936,7 @@ curl: `/mnt/project-files/security-review-2026-10-28/SET_TRUSTED_PROXY_HOPS.md`.
 | `harness_client_ip.py` | 45 | a FIFTH copy of the leftmost-`X-Forwarded-For` parse anywhere in `app/`, or a wired call site that stops dereferencing the one home; plus the hop arithmetic for chains shorter, equal and longer than N. Its `trusted_entry` selector is dereferenced by `forwarded_tls` too (§CORE-47) |
 | `harness_forwarded_tls.py` | 40 | the app forgetting it sits behind a TLS-terminating edge, so a redirect tells a signed-in caller to resend the request over plaintext — the forwarded-proto trust at the root, the outbound backstop, no second copy of either rule (§CORE-47) |
 | `harness_router_gate_dereference.py` | 31 | a router-level `APIRouter(dependencies=…)` auth gate that cannot ask whether the platform declared a path public — the §CORE-48 W-9 lockout. Derives the gates from the AST, measures both directions under TestClient (no declared-public route refused; the stand-down widened nothing, proved by disarming it), and refuses a second copy of the allowlist inside `core/router_gate` |
+| `harness_public_allowlist_lock.py` | 89 | the public allowlist being satisfied by a route it does not name — a PARAMETERISED template filled with `run-due` (the 2026-10-28 path axis), and a sweep path reached by a METHOD the route table does not declare for it (the §CORE-50 anonymous payroll read). Derives both from the REAL 1,869-route table, pins the two routes the probe found as named regressions, and proves no cron lockout — every sweep stays public for the verb it declares. Disarming the method lookup turns 89/0 into 86/3 |
 | `harness_anonymous_write_surface.py` | 43 | any audit/diagnostic write (`failure_log`, `access_log`, `log`, `auth_event`, `impersonation_action`) that takes its `org_id` from the query string; plus the login-record cap's existence, tier separation and bite |
 
 All three are **enforcing** jobs in `.github/workflows/security.yml` (not `continue-on-error`), so the
@@ -45978,6 +45981,110 @@ is handed None and fails closed, and the lockout returns SILENTLY. `router_gate`
 from fastapi at all, and that too is locked. Regressions `tests/unit/test_public_path_gate_standdown.py` (7) and
 `tests/integration/test_public_path_reaches_its_handler.py` (3, the composition on the assembled
 app); the probe's own blind spot is pinned by 11 new checks in `harness_security_probe.py` (138).
+
+## §CORE-50. A CRON SWEEP IS PUBLIC FOR THE METHOD IT DECLARES, NEVER FOR EVERY METHOD ON ITS PATH (measured 2026-11-24)
+
+Found by the adversarial access probe (§CORE-42), run 328 — the THIRD defect that pass has found
+from outside, and the second found not by the probe's own status codes but by asking what an
+attacker would DO with a clean-looking result. The rotation's module was `recovery`, which reported
+0 findings and was clean on all 11 of its paths by hand. The defect was found while measuring the
+blast radius of the one surface `recovery` declares public: its `/run-due` cron entrypoint.
+
+### §CORE-50.1 The measurement
+
+```
+$ curl -s -w ' <- %{http_code}\n' \
+    https://api.metricspro.tech/api/v1/storeops/salary-advance/additional-payroll/run-due
+{"detail":"A system error occurred. Reference: 2977ab5f"} <- 500
+
+$ # the same anonymous GET against each of the other 38 sweep paths
+405  x38
+```
+
+No `Authorization` header at all, reproducible on every attempt. The **405s are correct**: the
+middleware stands down for a declared cron entrypoint and route matching then refuses the method.
+The **500 is the defect** — `GET /salary-advance/additional-payroll/{period}` matches that same path
+with `period="run-due"`, so a payroll read with no permission gate of its own RAN for an anonymous
+stranger and crashed inside `pto_accrual.month_bounds` (`invalid literal for int(): 'run'`).
+
+`OPTIONS` and `HEAD` on the same path answer 405, and `.../run-due/` and `.../nonexistent/run-due`
+answer 401 — which is how the finding was localised to "a GET route exists here that the method
+scoping does not know about".
+
+### §CORE-50.2 The blast radius, and why nothing leaked
+
+Two routes in the whole app collide this way, derived from the deployed route table:
+
+| the sweep path, declared public | also matched by | what the handler is |
+|---|---|---|
+| `/api/v1/storeops/salary-advance/additional-payroll/run-due` | `GET .../additional-payroll/{period}` | a payroll READ — per-store additional-payroll expense and per-employee pay figures |
+| `/api/v1/commcalc/connectors/run-due` | `PATCH /api/v1/commcalc/connectors/{cid}` | an unauthenticated WRITE into `commcalc.connector_instances` |
+
+**Neither leaked a row and neither wrote one** — but only because the smuggled segment must be the
+literal string `run-due`, which is no period and no uuid. The payroll read 500s before it returns,
+and the connector update matches no row. That is an accident of the string, not a gate. Both
+handlers rely entirely on the middleware for authentication and for the `org_id` rewrite, and with
+the middleware stood down `org_id` defaults to the HOUSE org — so a valid period smuggled through
+this hole would have handed a stranger the house tenant's per-store payroll expense.
+
+### §CORE-50.3 The class: the 2026-10-28 fix closed one axis of two
+
+The security review of 2026-10-28 (`harness_public_allowlist_lock.py`) found that
+`_is_public` tested the REQUEST PATH for a `/run-due` suffix, so any of 315 parameterised routes
+could be made public by typing `run-due` into its last segment. The fix was right and is intact: the
+sweep allowlist DEREFERENCES the app's route table, and a parameterised template can never become a
+cron entrypoint.
+
+It answered **which paths**. It said nothing about **which methods**. A literal sweep path was
+public for every verb, and FastAPI routes the other verbs on that path to whatever parameterised
+route also matches — which is the defect above. The general fact that was wrong:
+
+> "Is this path public" and "for which methods" are two questions, and the cron derivation answered
+> only the first.
+
+This is the same inheritance `_PUBLIC_METHODS` exists, by hand, to prevent — its own comment says it
+is there to stop "a future GET on the same path being public by inheritance" — and the DERIVED cron
+set bypassed it for all 39 sweep paths at once.
+
+### §CORE-50.4 The fix: the derivation carries the methods
+
+- `core/path_redact.route_table(node)` is now **the one walk** of the router, yielding
+  `(template, frozenset(methods))`. `route_templates` dereferences it, so a caller that needs the
+  methods and a caller that needs only the templates can never see different route tables.
+- `core/tenant_middleware.cron_paths_for_app(app)` returns `_CronPaths`, a Mapping
+  `{path: frozenset(methods)}`. It is still a Mapping, so `path in cron_paths` answers the PATH
+  question exactly as the frozenset it replaced did and `_is_public` is unchanged.
+- `_public_method_ok(path, method, cron_paths)` reads the VALUES — the half that was missing. A
+  sweep is public for the methods its literal route declares (POST, for all 39) and no others.
+- `public_surface_allows` — the §CORE-48 one home — threads the derivation into both halves, so the
+  outside probe and the middleware keep reading one answer.
+- **NEVER A LOCKOUT.** No derivation, or a path the route table declared no methods for, means "no
+  method fact" and the historical behaviour stands: 37 cron jobs must not 401 because a FastAPI
+  internal changed shape. `CRON_PATH_LITERAL_ONLY=0` still restores the pre-2026-10-28 behaviour.
+
+### §CORE-50.5 The lock
+
+Extended `harness_public_allowlist_lock.py` (81 -> 89 checks, already a CI gate on every PR as
+"A parameterised route can never be public") rather than adding a sibling harness for the same
+question. Against the REAL 1,869-route table it now also proves the derivation carries methods, that
+no sweep path is public for a method it does not declare, that every sweep IS still public for the
+method it declares, and pins the two routes above as named regressions. Disarming the method lookup
+turns 89/0 into 86/3.
+
+TDD, the failing test first: `tests/unit/test_cron_sweep_is_method_scoped.py` (7) and
+`tests/integration/test_cron_sweep_method_endpoint.py` (6) — the latter carrying a negative control
+on its own fixture, because **the middleware's enforcement is gated by `MULTI_TENANT_ENFORCE`, which
+is UNSET locally**. An integration test that does not set it exercises the pass-through and proves
+nothing about the deployed platform; with it unset, the anonymous GET reproduces the production 500
+verbatim. That is the §CORE-42 blindness in miniature, inside the test that was written to close it.
+
+### §CORE-50.6 What this run did NOT measure
+
+The `rep` and `cross_tenant` personas were `skipped` and `measured: False` again — the probe test
+accounts do not exist in the environment, so the Manan class itself (a confined employee typing a
+manager's URL, and one tenant's admin carrying another tenant's ids) remains unmeasured. Every
+finding above is from the `anon` persona alone.
+
 
 ## §COMMCALC-55. A SUCCESSFUL LOGIN IS RECOGNISED BY EVIDENCE, NEVER BY A GUESSED VOCABULARY (owner report 2026-11-05)
 
