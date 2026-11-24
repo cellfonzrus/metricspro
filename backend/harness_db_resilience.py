@@ -1723,7 +1723,25 @@ _all_routes = _flatten_routes(real_app.routes)
 # under their store. backend/tests/integration/test_portal_login_import.py asserts that at the HTTP
 # boundary, plus that the stored password reads back through `portal_secret.open_row` (proving it
 # went through the sealing writer) and that no response carries the pasted value.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1866"))
+# 1866 -> 1869, 2026-11-24 (PR for §CORE-49, the company notification inbox).
+# RE-VERIFIED THE HOUSE WAY, not assumed: `git diff origin/main..HEAD -- backend/ | grep '@router\.'`
+# shows exactly THREE added routes and none removed, all three in the new sub-router
+# `core/notification_inbox_api.py` (prefix `/notifications`, mounted onto `core.router`):
+#   GET  /core/notifications         — this company's inbox items + its unread count
+#   POST /core/notifications/read    — mark items (or all open items) read
+#   GET  /core/notifications/routes  — which scopes this company carries to the inbox vs email
+# Gate: ALL THREE go through `import_health._gate` — `can_view_attention` (super-admin, the
+# `/admin/import-health` page grant, the `admin` module, company-wide scope, or the `admin` role)
+# and `_scope_org`, which CLAMPS a non-super-admin to their own membership org whatever `org_id` the
+# query asks for. No new gate and no second org clamp were written.
+# Money: NONE. The inbox holds alert text, a severity and timestamps; no stored total, statement,
+# GP, commission, payable or tax figure is read or moved.
+# Cross-tenant negatives: every read and write is org-scoped AT the query, and the route read is
+# narrowed to the caller's own company plus the house defaults it inherits.
+# backend/tests/integration/test_notification_inbox_endpoint.py asserts at the HTTP boundary that a
+# caller ASKING for another company's inbox is clamped to their own, that an anonymous caller is
+# 401, and that marking all read clears one company's badge only.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1869"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

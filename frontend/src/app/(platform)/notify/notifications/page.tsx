@@ -53,7 +53,7 @@ export default function NotificationsPage() {
   return (
     <div style={{ padding: 20, maxWidth: 940 }}>
       <h1 style={{ fontSize: 20, margin: '0 0 4px' }}>Notifications</h1>
-      <p style={{ color: 'var(--muted)', fontSize: 13, margin: '0 0 16px' }}>
+      <p style={{ color: 'var(--text3)', fontSize: 13, margin: '0 0 16px' }}>
         One item per standing problem for this company. When the same problem is found again the item
         is updated instead of a new message being sent, and it closes itself once the check passes.
       </p>
@@ -67,7 +67,7 @@ export default function NotificationsPage() {
         </label>
         {/* A ZERO IS NOT AN UNKNOWN: the count only appears once a read has succeeded. */}
         {unread != null && (
-          <span style={{ fontSize: 13, color: 'var(--muted)' }}>{unread} unread</span>
+          <span style={{ fontSize: 13, color: 'var(--text3)' }}>{unread} unread</span>
         )}
       </div>
 
@@ -86,19 +86,19 @@ export default function NotificationsPage() {
             <article key={i.id} style={{
               border: '1px solid var(--border)', borderLeft: `4px solid ${SEV_COLOR[i.severity || 'warning'] || 'var(--border)'}`,
               borderRadius: 8, padding: '10px 12px', marginBottom: 8,
-              background: i.read_at ? 'transparent' : 'var(--surface-2, transparent)',
+              background: i.read_at ? 'transparent' : 'var(--surface2)',
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline' }}>
                 <strong style={{ fontSize: 14 }}>
                   {!i.read_at && <span aria-label="unread" style={{ marginRight: 6 }}>•</span>}
                   {i.title}
                 </strong>
-                <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
+                <span style={{ fontSize: 12, color: 'var(--text3)', whiteSpace: 'nowrap' }}>
                   {i.resolved_at ? 'fixed' : standingFor(i)} · {seenLabel(i)}
                 </span>
               </div>
               {i.body && (
-                <p style={{ fontSize: 13, color: 'var(--muted)', margin: '6px 0 0', whiteSpace: 'pre-wrap' }}>{i.body}</p>
+                <p style={{ fontSize: 13, color: 'var(--text3)', margin: '6px 0 0', whiteSpace: 'pre-wrap' }}>{i.body}</p>
               )}
               {/* THE SAME RULE THE SIBLING SURFACE OBEYS. Today every deep_link is a literal written
                   by the backend, so nothing attacker-shaped can reach this href — but AdminAttention

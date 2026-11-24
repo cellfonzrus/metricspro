@@ -240,12 +240,16 @@ def resolve_missing(client, org_id, scope, live_keys, prefix=None, now=None):
         print(f"WARN notification_inbox resolve read failed ({org_id}/{scope}): {e}")
         return {"resolved": 0}
     gone = stale_keys(rows, live_keys, prefix=prefix)
-    for key in gone:
-        try:
-            (client.schema(SCHEMA).table(TABLE).update({"resolved_at": now, "updated_at": now})
-             .eq("org_id", org_id).eq("scope", scope).eq("inbox_key", key).execute())
-        except Exception as e:                                          # pragma: no cover - I/O guard
-            print(f"WARN notification_inbox resolve failed ({org_id}/{scope}/{key}): {e}")
+    if not gone:
+        return {"resolved": 0, "keys": []}
+    # ONE round trip for the whole set, not one per finding (§CORE-22, the round-trip ratchet). An
+    # estate where every feed broke at once is exactly when this runs widest.
+    try:
+        (client.schema(SCHEMA).table(TABLE).update({"resolved_at": now, "updated_at": now})
+         .eq("org_id", org_id).eq("scope", scope).in_("inbox_key", gone).execute())
+    except Exception as e:                                              # pragma: no cover - I/O guard
+        print(f"WARN notification_inbox resolve failed ({org_id}/{scope}): {e}")
+        return {"resolved": 0, "keys": []}
     return {"resolved": len(gone), "keys": gone}
 
 
@@ -283,11 +287,11 @@ def mark_read(client, org_id, ids=None, all_items=False, now=None):
             r = (client.schema(SCHEMA).table(TABLE).update({"read_at": now, "updated_at": now})
                  .eq("org_id", org_id).is_("read_at", None).is_("resolved_at", None).execute())
             done = len(r.data or [])
-        else:
-            for i in ids or []:
-                r = (client.schema(SCHEMA).table(TABLE).update({"read_at": now, "updated_at": now})
-                     .eq("org_id", org_id).eq("id", i).execute())
-                done += len(r.data or [])
+        elif ids:
+            # ONE round trip, org-scoped at the query: an id from another company matches nothing.
+            r = (client.schema(SCHEMA).table(TABLE).update({"read_at": now, "updated_at": now})
+                 .eq("org_id", org_id).in_("id", list(ids)).execute())
+            done = len(r.data or [])
     except Exception as e:                                              # pragma: no cover - I/O guard
         print(f"WARN notification_inbox mark_read failed ({org_id}): {e}")
     return {"read": done}
