@@ -18,6 +18,7 @@ import { actingCompany, switcherOptions, switcherVisible, switchConfirmText } fr
 import HelpPanel from '@/components/HelpPanel'
 import AdminAttention from '@/components/AdminAttention'
 import ChatEnvelope from '@/components/ChatEnvelope'
+import NotificationBell from '@/components/NotificationBell'
 import PlatformBanners from '@/components/PlatformBanners'
 import FlowReturnBar from '@/components/FlowReturnBar'
 import { apiUrl } from '@/lib/apiBase'
@@ -651,6 +652,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
                 GET /chat/unread and rides its existing per-user realtime topic — no new count, no
                 second notifier. Renders nothing for a login with no chat; fail-silent throughout. */}
             <ChatEnvelope />
+            <NotificationBell />
             {(permissions?.modules?.admin || permissions?.scope === 'all') && (
               <Link href="/configurations" title="All settings & configuration in one place"
                 style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', textDecoration: 'none', border: '1px solid var(--border)', borderRadius: 8, padding: '5px 10px' }}>

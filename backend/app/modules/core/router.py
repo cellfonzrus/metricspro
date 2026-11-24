@@ -5626,6 +5626,15 @@ router.include_router(_import_health.router)
 # functions), so there is no import cycle. NOTE: these paths are middleware-allowlisted (the agent door
 # carries no JWT), so EVERY route in that module self-gates via its own _authorize() — see the module
 # docstring and harness_fix_pipeline.py's route-coverage proof.
+# ── The company notification inbox (mig 1129, owner directive 2026-11-24) ────────────────────────
+# "Stop sending daily messages about data not uploading … create [one] for each compay in their
+# notifications inbox and overwrite if it is the same message everyday". Mounted ONTO this router
+# (same rationale as import_health above), so its paths resolve to /api/v1/core/notifications*. It
+# reuses import_health's gate and org clamp rather than growing a second one. Index §CORE-49.
+from app.modules.core import notification_inbox_api as _notification_inbox   # noqa: E402
+
+router.include_router(_notification_inbox.router)
+
 from app.modules.core import fix_pipeline as _fix_pipeline   # noqa: E402  (bottom-of-file mount)
 
 router.include_router(_fix_pipeline.router)

@@ -287,6 +287,10 @@ jobs:
         working-directory: backend
         if: always()   # a red harness must not hide the 60 after it
         run: python3 harness_ai_usage.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_notification_inbox
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_notification_inbox.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: harness_approvals_engine
         working-directory: backend
         if: always()   # a red harness must not hide the 60 after it

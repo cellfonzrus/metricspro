@@ -247,6 +247,7 @@ Primary code homes:
 | CORE-40 | **A money column that says a word is not saying zero** | Reported on the Cash Calendar: the day grid read "in: not measured" while the table directly beneath it read Expected in \$0.00, Net \$0.00 and TOTAL \$0.00. The report exists to never print a figure for money nobody measured, and its own table printed four. Nothing was wrong with the report: "how is a money value rendered" had SIX implementations, every one of them `Number(v) || 0`. How many states does a money cell have, and which of them is a claim about measurement rather than about money? |
 | CORE-41 | **Inheritance is not a decision — what each tenant is OFFERED** | "why is vidapay connector showing in boost ? we need to get these things under control before we roll out for outside customers — have an agent asses and create a dashboard for the super admin whereby these things can be gated out for the respective tenants right from the get go". Three mechanisms answered "is this on for this tenant" and all three answered by INHERITING a house row — on an org id that IS a real tenant, so that tenant could not be gated at all, and a new tenant arrived holding everything. Where does a human's decision about one tenant live, which mechanisms read it, and what stops one of them answering differently? |
 | CORE-44 | **The prefix is the address, and a missing route is not an answer** | "the targets are also not updating in target settings and daily targets, seem to be the same error" — and it was. `apiUrl()` prefixes nothing: in the browser the site proxies the path as given, so `/api/v1` IS the address. Two frontend calls omitted it, reached the Next app, got its 404, and had their `catch` answer for them. One of the two was the TARGET AXIS — "what does this tenant sell, so what can have a target" — which fell back to the four built-in categories. Every category a tenant had declared was therefore invisible on every target screen, no target for one could be typed, and `commcalc.target_line` held zero rows in the entire database: 13 categories for LuxeLink, 4 for the house, none of them ever targetable. The class is not the typo but that a MISSING ROUTE and a REAL ANSWER were indistinguishable to the caller, and that a lock on "only one copy of this fact exists" said nothing about "the one copy never arrives". |
+| CORE-49 | **A recurrence is not news — one standing item per company, overwritten** | "Stop sending daily messages about data not uploading instead create [one] for each compay in their notifications inbox and overwrite if it is the same message everyday". Measured first, read-only, over 21 days of `storeops.alert_log`: three companies received **5-9 emails EVERY DAY for eight days** on alert scope `connector` — stale feeds, errored sweeps, report files no rule matched, offline cameras. Five senders write that scope and each had grown its own "don't repeat yourself" key; the loudest carried the feed's own stuck DATA DATE, so a feed that stayed behind while its data crept forward was a NEW message every morning. The class is not any one key spelling but that a recurrence had **nowhere to go but a new message** — every sender's only verb was "send", so "tell them again" and "tell them something new" were the same act. |
 | CORE-46 | **A stored credential shown to a person is an audited event** | The owner asked that the per-store download screen SHOW each store's back-office password, because the portal refuses automated clients and a person has to type it. Legitimate — and the first route in the platform that hands a stored credential back to a browser, where every other read strips it. Granting it inside the screen's own endpoint would have made the decision a property of one screen, and the next screen would decide again. So the decision has one home, for every credential this platform stores: only a column the credential registry calls a credential, only a row of the asking organisation, and only after the row saying WHO looked is written — a reveal that cannot be recorded is refused rather than served unrecorded. |
 | CORE-47 | **We never tell a caller to resend a request off TLS** | Found from OUTSIDE by the adversarial access probe (§CORE-42, run 326) and reproducible by hand: `GET /api/v1/core/me/` — the token-verified whoami, one extra trailing slash — answered `307 Location: http://…`, so a client that had arrived over TLS was told by us to resend the request, Authorization header included, in the clear. The instance was two paths; the class was that the app did not know it sat behind a TLS-terminating edge, so EVERY absolute URL it built downgraded the caller. Fixed at the root (the server now believes the edge) with an outbound backstop that cannot un-wire, and the "which entry of an appended `X-Forwarded-*` header may be believed" arithmetic FACTORED OUT of the address one home rather than copied for the scheme. |
 | CORE-48 | **A path we declare public must not be refused by a router-level gate** | Found from OUTSIDE by the adversarial access probe (§CORE-42, run 327) and reproducible by hand: `GET /api/v1/pos/public/w9/{token}` — the link a wholesale customer is EMAILED to return their Form W-9, where the one-use token IS the auth — answered `401 "sign in to perform this action"` to every caller, the token never read, so every return link ever sent was dead. Neither component was wrong alone: the middleware allowlisted the path and the `pos` router's router-level gate refused unauthenticated callers, and nothing owned the composition. The class is that "is this path public" had one home and a router-level auth gate was a second gate that did not read it; every gate now dereferences `router_gate.stand_down`. The probe had called this a pass for 325 runs — `LOCKED_OUT` was unreachable for an anonymous caller — and that half is fixed too. |
@@ -7243,6 +7244,8 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 
 ## 16. Cross-reference: by TABLE
 
+- `core.notification_inbox` (mig `1129`) — THE company notification inbox: one row per (`org_id`, `scope`, `inbox_key`), and that unique index IS "overwrite if it is the same message everyday". `inbox_key` is the finding's STABLE identity — the feed, the connector, the document — and a date in it is the defect the table exists to remove, so the backend REFUSES an empty key and a CHECK refuses a blank one. `first_seen_at` is how old the problem is, `occurrences` how many times it has been reported, `resolved_at` is set by the next check that no longer reports it. Read and written in ONE place, `core/notification_inbox.py`; no other module may name the relation (`harness_notification_inbox.py` H5) (§CORE-49).
+- `storeops.alert_route` (mig `1129`) — WHICH route a company+scope takes: `message` | `inbox` | `both`. A POLICY, which is where a house default is right (owner 2026-10-30), so the house row declares `connector` and `upload_due` as `inbox` and every tenant inherits it; a tenant's own row wins for that tenant and reaches no other. An **undeclared scope reads `message`**, so nothing changes until it is declared, and an unknown route value reads `message` too — guessing `inbox` from a typo would SILENCE an alert. Resolved in ONE place, `notification_inbox.route_for`, dereferenced by `closing/_send_alert` (§CORE-49).
 - `storeops.dropoff_label_profile` (mig `1127`) — WHICH return labels a tenant handles and what their references look like, in that tenant's OWN words: `label_name`, an anchored `reference_pattern`, and the `symbology` its code is drawn in (`code128b` | `qr`). **Seeded with NOTHING, not even for the tenant that asked** — a house default here would be one tenant's description of one vendor's paperwork answering for every tenant (owner 2026-10-30), so an org that has declared none is told so and the printed-text read stays inert for it. Read in ONE place, `storeops/dropoff_label_api._profiles`, and passed as a REQUIRED argument to `dropoff_label.read_reference`. Decoding the BARS reads none of this: a published symbology is a POLICY (§STOREOPS-12).
 - `storeops.dropoff_label_scan` (mig `1127`) — one row per rescued package: `read_reference` (what the platform proposed), `confirmed_reference` (what the person accepted, and what was printed), `corrected` when they differ, plus the read's source, the label type, the photo's name and who confirmed it. An AUDIT trail, not a queue — nothing in the platform decides anything from it; it exists so that "this package went back to the wrong vendor" is answerable down to the character that was wrong (§STOREOPS-12).
 - `commcalc.receipt_source_map` (mig `1115`) — THE per-tenant declaration of INBOUND money: which feed states what a carrier/processor will pay us (`source_table`), which column is the money (`amount_field`), and on what rhythm it pays (`payout_cadence` + its one day/lag column). **The column that DATES a row is deliberately NOT here**: it is dereferenced from `data_lineage_registry.DATA_DATE_COLUMN_BY_TABLE`, that fact's one home since the feed watchdog shipped, and that map's `None` entries are DECLARATIONS — a period-keyed snapshot is refused as a receipt source rather than guessed around. **Seeded with NOTHING, on purpose**: a house default here would be one tenant's commercial arrangement answering for every tenant (owner 2026-10-30), so an undeclared carrier reads NOT MEASURED and the calendar says so. Read in ONE place, `payables/expected_receipts.declared_sources`, through `payables/receipt_schedule.resolve_schedule`; written only by `PUT /payables/receipt-sources`, which validates the cadence against the home's vocabulary before it can be stored (§PAYABLES-02).
@@ -7525,6 +7528,7 @@ route here NOT granted to a confined employee — a rep rescues the package in f
 every store's record is a report (§STOREOPS-12, §CORE-33.1).
 | endpoint | code | what it is the one home of |
 | --- | --- | --- |
+| `GET /core/notifications` · `POST /core/notifications/read` · `GET /core/notifications/routes` | the company notification inbox's read surface. **No new gate and no new org clamp**: both are `import_health._gate` (`can_view_attention` + the caller's own org), which is who already hears about broken feeds — a tenant that granted `/admin/import-health` has already decided that. `read_ok` is the silent-zero guard: a caller can tell "nothing to report" from "the read did not happen" | `core/notification_inbox_api.py` → `core/notification_inbox.list_items` | §CORE-49 |
 | `GET /core/filter-options` | the org-scoped option source behind the shared `StandardFilterBar` — stores (+markets) from `storeops.stores` ∪ `commcalc.store_mapping`, reps from `storeops.employees` ∪ `storeops.app_users`. **ACTIVE-ONLY since 2026-11-14** through `core/roster_visibility`, with `include_inactive=1` and an `inactive_hidden` count so hiding is never silent | `core/router.filter_options` → `StandardFilterBar` `optionsUrl` | §CORE-45 · §3d |
 | `POST /storeops/timeclock/clock-in` · `POST /storeops/timeclock/clock-out` | `storeops/router.py` (`_punch_geo_columns` → `core/store_geofence.evaluate_presence`) | WHERE a punch was made, judged against that punch's OWN store (never the rep's home store — a floater ends their shift where they worked it) and stored beside it. The clock-out carried NO location at all before 2026-11-01. **Never refuses a punch** on its location. Gated on `_punch_geo_present` so an un-migrated database behaves exactly as today (§STOREOPS-04) |
 | `GET /storeops/timeclock/geo-config` · `PUT …` | `storeops/router.py` → `core/store_geofence.resolve_config` | the tenant's punch-geofence policy, read and written through the SAME resolver the judging path uses, so a junk payload cannot write a fence the judging code would then obey. Manager/admin only (§STOREOPS-04) |
@@ -26607,6 +26611,7 @@ status word rather than a blank that reads as nil.
 | CORE-43 | core |
 | CORE-44 | core |
 | CORE-45 | core, storeops, hr, commcalc |
+| CORE-49 | core, storeops, commcalc, vision |
 | CORE-46 | core, commcalc |
 | CORE-47 | core |
 | CORE-48 | core, pos |
@@ -52057,3 +52062,142 @@ What a Happy Returns QR actually encodes is unconfirmed — a re-printed one is 
 reconstruction from the BAG ID, and is labelled as such until a printed one is scanned at the
 counter and accepted. No organisation has declared a label type yet, so the text-reading path is
 inert until one does; the bar-decoding path is live for everyone.
+
+---
+
+## §CORE-49. A RECURRENCE IS NOT NEWS — ONE STANDING ITEM PER COMPANY, OVERWRITTEN (owner directive 2026-11-24, mig `1129`)
+
+> *"Stop sending daily messages about data not uploading instead create a [one] for each compay in
+> their notifications inbox and overwrite if it is the same message everyday"*
+
+### §CORE-49.1 What was measured, live, before anything was built
+
+Read-only over `storeops.alert_log`, 21 days to 2026-11-24. **Three companies received 5-9 emails
+EVERY DAY for eight days straight** on alert scope `connector`:
+
+| subject, as sent | sends in the window | sender |
+| --- | --- | --- |
+| `🔧 Cameras: Google is not connected` | 16 | `vision/router._vision_health_escalate` |
+| `🔴 Cameras: The store PC is not reporting` | 8 | the same |
+| `⚠️ Data source errored: DLAR sweep` | 8 | `commcalc/router._scan_connector_health` |
+| `⚠️ 1 report(s) arrived that no import rule matched` | 7 | `commcalc/router` (email sweep) |
+| `⚠️ Data not updating: Payment detail is 2 day(s) behind` | 4 | `commcalc/router._data_freshness_monitor` |
+| `⚠️ Data source stalled: Email import — B2B Soft (standard)` | 3 | the connector scan |
+| `⚠️ Data not updating: Compensation report is 3 day(s) behind` | 3 | the freshness monitor |
+| … plus `Master-agent daily transactions`, `Master-agent commission`, `ePay sweep` | 1-2 each | |
+
+A fifth sender, `commcalc/setup_documents.run_reminders` (scope `upload_due`, *"Upload due: …"*), is
+wired the same way and had sent nothing — it is included because it is the same class, not because it
+was loud.
+
+### §CORE-49.2 THE CLASS, not the instance
+
+Every one of those senders had already tried to solve this, separately. §19.17 and §19.20 moved the
+connector scan and the freshness monitor off *today's date* and onto an "episode key"
+(`since-<last success>`, `stuck-at-<data date>`) precisely to stop daily repeats. Both notes say
+*"one alert per episode, not one per day"*. And yet:
+
+- `freshness:<org>:<feed>:stuck-at-<data date>` **moves whenever the data date moves** — a feed that
+  creeps forward while staying behind is a fresh episode every morning. That is 2 → 3 → 4 days behind,
+  mailed each time.
+- the connector scan's key is genuinely stable, and its alert is still a MESSAGE, so there is nowhere
+  for "still broken, day nine" to be recorded except a ninth inbox entry in a person's mail client.
+
+**The class: a recurrence had nowhere to go but a new message.** Every sender's only verb was
+*send*, so *tell them again* and *tell them something new* were the same act, and each sender fought
+that with a private key spelling. Fixing the freshness key alone would have been the patchwork the
+owner has ruled out three times (CLAUDE.md, "A fix is a DESIGN fix or it is not a fix").
+
+### §CORE-49.3 Duplicate check (the build gate)
+
+| Question asked of the index | Answer | What was done |
+| --- | --- | --- |
+| Is there already an in-app notifications inbox? | **No.** `AdminAttention` (§CORE-attention, mig 717) is a LIVE-DERIVED popup — it has no stored item, no read state, no age and no history, so "it has been like this for nine days" cannot be asked of it. The chat envelope (§23t) counts MESSAGES between people. | Built the one thing that did not exist, and reused both patterns' rules rather than their code: always-visible landmark + a badge that only renders a count it actually read. |
+| Is there already one place every alert passes through? | **Yes** — `closing/router._send_alert`, the single door for all five senders (§15.1). | The route decision lives THERE, so declaring a scope fixes every sender at once. No sender writes the inbox itself (locked, H3). |
+| Is there already a send record? | **Yes** — `storeops.alert_log` (mig 1051, §15.1). | An inbox item is a DELIVERY, recorded there as channel `inbox`. No second audit table. |
+| Is there already a recipient resolver? | **Yes** — `_alert_recipients` + `_org_admin_recipients`. | Untouched. An inbox item is addressed to the COMPANY, so it needs none. |
+| Is there already a per-org config pattern with house defaults? | **Yes** — RULE TWO, house org `00000000-…-0001`, resolved like `training.resolve_tours`. | `storeops.alert_route` follows it exactly, including the tenant-override precedence test. |
+
+### §CORE-49.4 The design fix — one fact, one home, dereferenced
+
+- **`core/notification_inbox.py`** is the ONE home. Pure first: `route_for` (precedence: tenant+scope
+  → tenant+`all` → house+scope → house+`all` → `message`), `merge_row`, `stale_keys`,
+  `suppresses_message`, `identity`. Thin I/O after: `file_item`, `resolve_missing`, `list_items`,
+  `mark_read`. It is the only module in the backend permitted to name the relation.
+- **`merge_row` is the whole of "overwrite if it is the same message everyday"**, and it reports
+  WHAT the sighting meant: `created` · `unchanged` (byte-identical → `first_seen_at` and the read
+  state are KEPT; an identical message must not nag, or the inbox is the daily email with extra
+  steps) · `changed` (the text moved on, or the finding had been resolved and is back → the item
+  returns UNREAD, because that IS news).
+- **`storeops.alert_route`** declares the route per company+scope. A route is a POLICY — a switch —
+  which is exactly where a house default is right (owner 2026-10-30); it is not a tenant's own
+  vocabulary, which may never have one. The house row declares `connector` and `upload_due`.
+- **Every sender passes a STABLE `inbox_key`** with no date in it:
+  `freshness:<org>:<feed>` · `connector:<table>:<id>` · `unrouted:<org>:<mailbox>` ·
+  `datadrop:<org>:<type>:<key>` · `vision_health:<org>` (`vision/health.inbox_key`, deliberately not
+  keyed on the code set, unlike its `alert_ref` sibling) · `upload_due:<org>:<document>`.
+- **SELF-CLEARING** (owner's standing rule, 2026-07-26: *"a notification must disappear once the check
+  is OK"*). `resolve_missing(…, prefix=…)` closes every open item the latest check did not report.
+  `prefix` is how a check that answers only PART of a scope stays honest — the freshness monitor knows
+  nothing about cameras, and both write scope `connector`.
+- **`_data_freshness_monitor` was split in two.** The measure function returns early the moment
+  nothing is stale, which is exactly the case where an item must be CLOSED, so the reconcile moved
+  OUT to a wrapper that derives the live key set from the report itself (`freshness_inbox_keys`) and
+  cannot be skipped by a future early return added inside. Locked (H9) with an armed control (H10).
+
+### §CORE-49.5 THE SAFE DIRECTION — this change can silence nothing
+
+An alert that is suppressed and not filed is a finding LOST, which is worse than a ninth email. So
+`suppresses_message` requires BOTH a stable key AND an item that was actually written:
+
+- **no `inbox_key`** → the message goes out as before and the answer carries `inbox_key_missing`;
+- **the write did not land** (most importantly: migration 1129 not yet applied) → the message goes
+  out as before and the answer carries `inbox_unavailable`.
+
+So the code is safe to deploy ahead of its migration: until 1129 is applied and a route row says
+`inbox`, every alert is mailed exactly as it is today.
+
+### §CORE-49.6 Surfaces
+
+- **`/notify/notifications`** — one row per standing finding, worst first and longest-standing first
+  within a severity, grouped by scope, each carrying how long it has been standing, how many times it
+  has been reported, and the page that fixes it. "Include problems that have since been fixed" shows
+  the closed ones.
+- **`NotificationBell`** in the platform header, mounted beside the chat envelope whose shape it
+  mirrors: always visible, only the badge comes and goes, and a zero is never rendered before the
+  first successful read (§23e). A 401/403 renders nothing, so the entitlement IS the gate.
+- **Every display decision is in `frontend/src/lib/notification-inbox.ts`**, shared by the page and
+  the badge, so the badge can never disagree with the list it opens — the defect §23t had to fix in
+  the chat count.
+
+### §CORE-49.7 Tests, and every tenant (project rule 2026-10-30)
+
+- `tests/unit/test_notification_inbox_merge.py` (6) — the overwrite rule, including that an identical
+  message does not un-read itself and that an empty key is refused.
+- `tests/unit/test_notification_inbox_route.py` (7) — house default, tenant override, scope over
+  catch-all, unknown route, and that **T1's declaration never reaches T2**.
+- `tests/unit/test_alert_route_to_inbox.py` (5) — the REAL `_send_alert`: mails nobody, files one
+  item, files the SAME item on the next three days, records channel `inbox`, and the same key for two
+  companies is two items.
+- `tests/integration/test_notification_inbox_endpoint.py` (6) — over the real app: a caller asking
+  for ANOTHER company's inbox is clamped to their own, anonymous is 401, mark-all-read clears one
+  company's badge only, and an empty inbox says so.
+- `frontend/src/lib/notification-inbox.test.ts` (6) — the badge's silent-zero rule, ordering, and
+  that a scope the platform has no words for is shown rather than mislabelled.
+- `backend/harness_notification_inbox.py` — **50 checks, wired into `tests.yml` `harness-suite-1`**
+  (not pinned on the debt list). §H carries five LOCKS, each with an armed control: every sender
+  passes a stable key; no sender writes the inbox itself; no second module names the relation; the
+  channel vocabulary still has one home and the delivery LADDER still offers only the ADDRESSED
+  channels; RULE TWO.
+- `harness_alert_channel_record.py` gains H17/H18 and its E3 is restated: `alert_log.CHANNELS` is now
+  `("email", "whatsapp", "inbox")` while `MESSAGE_CHANNELS` — what `digest_delivery` dereferences —
+  stays the addressed two. An inbox delivery has no address and is never offered to a recipient.
+
+### §CORE-49.8 What the owner still has to do
+
+1. **Apply migration `1129`** (one self-committing run; no money is read or written).
+2. Nothing else. Both hosts auto-deploy from `main`, and the house route rows ship inside 1129, so
+   the daily emails stop at the first hourly tick after it is applied.
+3. Open to him, not decided here: `epay_discrepancy` is by far the loudest scope in the log (**873
+   sends in 21 days, ~40 a day**). It is a money finding rather than a feed fault, so it was left on
+   email; moving it is now a single `alert_route` row and no code.

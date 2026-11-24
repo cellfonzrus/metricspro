@@ -28,7 +28,9 @@ Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §15.2.
 
 from app.modules.storeops import alert_log as _log
 
-CHANNELS = _log.CHANNELS
+#: The ADDRESSED channels only (`alert_log.MESSAGE_CHANNELS`). The send record knows one more —
+#: the company inbox — which has no address and is never offered to a recipient (index §CORE-49).
+CHANNELS = _log.MESSAGE_CHANNELS
 
 
 def pending_by_channel(addresses, items, carried, channels_ok):

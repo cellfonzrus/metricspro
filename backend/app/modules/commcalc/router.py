@@ -1074,7 +1074,12 @@ async def _sweep_shrink_alert(client, org_id, shrinks, *, source_line):
                     f"partial export. Verify the source report is complete before trusting {s['upload_type']} "
                     f"numbers for {s['key']}; re-sending the full report self-heals (the ingest replaces it).")
             ref = f"datadrop:{org_id}:{s['upload_type']}:{s['key']}:{_today}"
-            await _send_alert(client, org_id, "connector", subject, text, ref)
+            # The inbox identity drops the DATE: the same truncated day reported again tomorrow is
+            # the same finding, so it overwrites its item instead of filing a second one (§CORE-49).
+            await _send_alert(client, org_id, "connector", subject, text, ref,
+                              inbox_key=f"datadrop:{org_id}:{s['upload_type']}:{s['key']}",
+                              severity="error", deep_link="/commcalc/email-imports",
+                              affected=[s['upload_type'], str(s['key'])])
     except Exception as e:
         print(f"WARN row-count guardrail alert failed: {e}")
 
@@ -13701,7 +13706,38 @@ async def _freshness_autofix(client, org_id, stale_feeds):
     return acted
 
 
+def freshness_inbox_keys(org_id, report):
+    """PURE: the inbox identity of every feed this company's freshness answer says is STILL behind.
+
+    ONE derivation of "which feed items should be open", used both to file them and to close the ones
+    that recovered — a second spelling is the divergence CLAUDE.md's one-home rule forbids.
+    """
+    return [f"freshness:{org_id}:{f['key']}"
+            for f in ((report or {}).get("feeds") or [])
+            if f.get("stale") and f.get("rows")]
+
+
 async def _data_freshness_monitor(client, org_id):
+    """The freshness check, plus the one thing that must happen on EVERY path through it: this
+    company's feed items in the notification inbox are reconciled with the answer just measured.
+
+    Owner's standing rule (2026-07-26): *"a notification must disappear once the check is OK"*. The
+    measure function returns early the moment nothing is stale — which is exactly the case where an
+    item has to be CLOSED — so the reconcile lives out here, derived from the report itself, and
+    cannot be skipped by a future early return added inside (index §CORE-49).
+    """
+    rep = await _data_freshness_measure(client, org_id)
+    try:
+        from app.modules.core import notification_inbox as _inbox
+        _inbox.resolve_missing(client, org_id, "connector",
+                               freshness_inbox_keys(org_id, rep),
+                               prefix=f"freshness:{org_id}:")
+    except Exception as e:                                              # pragma: no cover - I/O guard
+        print(f"WARN freshness inbox reconcile failed for {org_id}: {e}")
+    return rep
+
+
+async def _data_freshness_measure(client, org_id):
     """AUTO self-heal check (owner 2026-08-28: "an auto check and an auto fix … before users complain"). Run
     right AFTER a sweep — the sweep IS the auto re-pull — and if a feed is STILL behind, escalate a
     once-a-day-deduped alert with the diagnosis, distinguishing 'the report email stopped arriving' (last
@@ -13779,7 +13815,14 @@ async def _data_freshness_monitor(client, org_id):
                          f"widened to {_af['widened_to']} days to reach past {_af['before']}, and the "
                          f"feed is now at {_af['after'] or 'the same date'}. It is still behind, so the "
                          f"data for the missing days is not in the mailbox — ask the source to re-send.")
-            await _send_alert(client, org_id, "connector", subject, text, ref)
+            # The inbox identity is the FEED, with no date and no "stuck at" in it. This is the
+            # sender that mailed three companies every day for eight days (measured 2026-11-24):
+            # its episode key moved whenever the feed's data date moved while staying behind, so
+            # every day was a new message. One feed is now one item (§CORE-49).
+            await _send_alert(client, org_id, "connector", subject, text, ref,
+                              inbox_key=f"freshness:{org_id}:{f['key']}",
+                              severity="warning", deep_link="/commcalc/email-imports",
+                              affected=[f.get("label") or f["key"]])
     except Exception as e:
         print(f"WARN freshness alert failed for {org_id}: {e}")
     return rep
@@ -39941,7 +39984,10 @@ async def _run_email_sweep(org_id, account='default', since_days_override=None):
                         f"What to do: open Data Imports → Email Imports and add or widen a rule so the filename "
                         f"matches (e.g. *Sales*Transaction*Details* → daily sales). The next sweep imports it.")
                 _ref = f"unrouted:{org_id}:{account}:{_date.today().isoformat()}"   # once per mailbox per day
-                await _send_alert(client, org_id, "connector", _subj, _txt, _ref)
+                await _send_alert(client, org_id, "connector", _subj, _txt, _ref,
+                                  inbox_key=f"unrouted:{org_id}:{account}",
+                                  severity="warning", deep_link="/commcalc/email-imports",
+                                  affected=_unr_names[:12])
             except Exception as _ae:
                 print(f"WARN unrouted alert failed for {account}: {_ae}")
     finally:
@@ -41162,6 +41208,10 @@ def _scan_connector_health(client):
                                or f"no successful run in {hrs:g}h+ (schedule: {_freq})")[:180],
                     "alertable": True,
                     "ref_key": f"connector:{table}:{r.get('id')}:since-{since}:{kind}",
+                    # STABLE identity for the company's inbox: the connector itself, with neither
+                    # the episode nor the kind in it, so a source that errors, recovers and stalls
+                    # is one standing item rather than three (§CORE-49).
+                    "inbox_key": f"connector:{table}:{r.get('id')}",
                 })
     return out
 
@@ -41193,10 +41243,28 @@ async def connector_health_run_due(x_notify_secret: str = Header(default="")):
         text = (f"MetricsPro — a data source {f['kind']}.\n\n{f['source']}\nStatus: {f['detail']}\n\n"
                 f"Check the connector / re-run the sweep so reports keep updating.")
         try:
-            res = await _send_alert(client, f["org_id"], "connector", subject, text, f["ref_key"])
+            res = await _send_alert(client, f["org_id"], "connector", subject, text, f["ref_key"],
+                                     inbox_key=f.get("inbox_key"),
+                                     severity=("error" if f["kind"] == "errored" else "warning"),
+                                     deep_link="/commcalc/connectors",
+                                     affected=[f["source"]])
             sent.append({"source": f["source"], "kind": f["kind"], "result": res})
         except Exception as e:
             sent.append({"source": f["source"], "kind": f["kind"], "error": str(e)[:160]})
+    # SELF-CLEARING, FOR EVERY COMPANY THE SCAN COVERED (owner 2026-07-26: "a notification must
+    # disappear once the check is OK"). The scan is the COMPLETE connector answer for every tenant
+    # it read, so a `connector:`-prefixed item it did not report is a source that recovered — or one
+    # that is now `unmonitored`, which is not a fault and must not sit in an inbox either.
+    try:
+        from app.modules.core import notification_inbox as _inbox
+        _orgs = sorted({str(f.get("org_id")) for f in scanned if f.get("org_id")})
+        for _oid in _orgs:
+            _inbox.resolve_missing(
+                client, _oid, "connector",
+                [f.get("inbox_key") for f in failures if str(f.get("org_id")) == _oid],
+                prefix="connector:")
+    except Exception as e:
+        print(f"WARN connector inbox reconcile failed: {e}")
     # SETUP-DOCUMENT REMINDERS (index §39) ride this same hourly tick and the same alert pipeline: a document the
     # tenant scheduled in the setup wizard and has not uploaded for its period gets ONE reminder per cycle (scope
     # `upload_due`; email + WhatsApp per the tenant's Cash & Closing Alerts recipients, else its admins).

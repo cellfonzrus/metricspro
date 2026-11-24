@@ -511,7 +511,11 @@ async def _vision_health_escalate(org_id: str, result: dict):
                   "something new breaks.")
         ref = HLTH.alert_ref(org_id, after, _now().date().isoformat())
         await _send_alert(sb(), org_id, "connector",
-                          f"{icon} Cameras: {after[0]['title']}", text, ref)
+                          f"{icon} Cameras: {after[0]['title']}", text, ref,
+                          inbox_key=HLTH.inbox_key(org_id),
+                          severity=("error" if HLTH.worst(after) == "down" else "warning"),
+                          deep_link="/vision/health",
+                          affected=[f.get("code") for f in after])
         return True
     except Exception as e:                                       # noqa: BLE001
         result["alert_error"] = str(e)[:200]
