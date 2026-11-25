@@ -1103,6 +1103,12 @@ on:
       # the lines above; the engine and the report card are their own subjects, and the routers and
       # the frontend screens the axis lock scans are already named by the globs below.
       - "backend/harness_target_axis_lock.py"
+      # index §COMMCALC-84 (mig 1131) — the GOAL ROLL-FORWARD POLICY. The proof NAMES ITSELF for the
+      # same §13e reason as the lines above, and its one home is listed so a change to either
+      # re-runs it. `router.py` is already named by the globs below, which matters here: §H of this
+      # proof is an un-wire lock scanning the router for a second copy of the stretch arithmetic.
+      - "backend/harness_goal_rollforward.py"
+      - "backend/app/modules/commcalc/goal_rollforward.py"
       - "backend/harness_target_declared_axis.py"
       # index §CORE-03 — WHICH STORED COLUMNS HOLD A CREDENTIAL. The lock names ITSELF and its home
       # for the same §13e reason as the lines above, plus every module wired to the registry: a
@@ -3607,6 +3613,37 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_target_registry_one_read.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # ── THE GOAL ROLL-FORWARD IS A DECLARED POLICY (index §COMMCALC-84, mig 1131, owner 2026-11-25) ─
+  # "it will be the same if they did not achieve the goal if they met the goal then it will be 10%
+  # higher than they achieved". The platform already carried a missed goal forward and stretched a
+  # met one by 10%, so the ask looked done — but it stretched off the GOAL rather than off what was
+  # ACHIEVED, which differ most where a store does BEST, and the old reading handed the best
+  # performers the SMALLER stretch. The rate was also a module constant in router.py, so a tenant
+  # wanting 5% had nowhere to say so. Both are one class: how next month's goal follows from this
+  # month's is a POLICY, declared per tenant with a house default, over ONE arithmetic.
+  # This job FAILS THE BUILD if the stretch is taken off the plan again, if the factor or the
+  # met/missed comparison reappears in the router, if a tenant's policy can be reached from another
+  # tenant's org_id, if an undeclared tenant stops inheriting the house rule, if a category with no
+  # prior goal starts reading as a goal of ZERO, if the declared categories stop rolling, or if the
+  # goals SCREEN starts spelling the rate itself again.
+  # §G and §J drive the REAL carry-forward and the REAL auto-fill endpoint through an in-memory
+  # client, so this needs the backend's dependencies — a dep-less job dies on `import fastapi`
+  # before check one, which is what harness_ci_pipefail_lock.py caught when this step was first
+  # put on the dep-less job above. DB-free.
+  goal-rollforward-declared-policy:
+    name: Goal roll-forward is a declared policy (a met goal stretches off what was ACHIEVED)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the goal roll-forward proof (a MET goal stretches off what was ACHIEVED not off the plan, the rate and basis are DECLARED per tenant with a house default, an undeclared tenant never reads another's, no prior goal is blank rather than zero, the declared categories roll too, and neither the router nor the screen keeps a copy of the rate - index COMMCALC-84)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_goal_rollforward.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # ── ONE HOME FOR "HOW MANY WILL SELL NEXT" (index §COMMCALC-49) ─────────────────────────────────
   # The velocity/horizon projection and the "is this sale line a device" test were each written TWICE

@@ -18,7 +18,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 |---|---|---|
 | `access-probe-rotation.yml` | 1 | `schedule`, `workflow_dispatch` |
 | `branch-base-guard.yml` | 1 | `pull_request_target`, `workflow_dispatch` |
-| `carrier-vocab-guard.yml` | 48 | `pull_request`, `push`, `workflow_dispatch` |
+| `carrier-vocab-guard.yml` | 49 | `pull_request`, `push`, `workflow_dispatch` |
 | `data-qa-guard.yml` | 4 | `pull_request`, `push`, `workflow_dispatch` |
 | `deploy-reachability.yml` | 1 | `deployment_status`, `workflow_dispatch` |
 | `deploy-website.yml` | 1 | `push`, `workflow_dispatch` |
@@ -33,7 +33,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 641 gates
+## Gated — 642 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -290,6 +290,7 @@ the Runs on column is how you can tell.
 | `harness_frontend_lint_lock.py` | `carrier-vocab-guard.yml` | Frontend lint (eslint over the whole frontend, ratcheted) (`frontend-lint`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_frontend_typecheck_lock.py` | `carrier-vocab-guard.yml` | Frontend type check (tsc --noEmit over the whole frontend) (`frontend-typecheck`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_geo_retention_lock.py` | `tests.yml` | One GPS retention promise, kept (lock) (`geo-retention-lock`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_goal_rollforward.py` | `carrier-vocab-guard.yml` | Goal roll-forward is a declared policy (a met goal stretches off what was ACHIEVED) (`goal-rollforward-declared-policy`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_gp_acc_basis.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_gp_carrier_class_dereference.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_gp_item_category.py` | `tests.yml` | Proof harnesses, group 2 of 4 (`harness-suite-2`) | `pull_request`, `push`, `workflow_dispatch` |

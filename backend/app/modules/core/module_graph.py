@@ -1487,6 +1487,22 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/sales_outcome_drilldown.py': ('_spiff',),
         },
     },
+    'goal_rollforward_policy': {
+        "question": 'Given a store\'s goal for a month and what it actually ACHIEVED, what is its '
+                    'goal for the next month — and at whose declared rate and basis?',
+        "homes": ('app/modules/commcalc/goal_rollforward.py',),
+        "index": ('COMMCALC-84',),
+        "locks": ('harness_goal_rollforward.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
+        # of 12 facts on 2026-10-04). The lock verifies it against the real import graph.
+        "callers": {
+            # The seed preview, the "Roll forward from last month" button and the monthly auto-fill
+            # all reach the rule through `_carry_forward_map`, which asks this module. The router
+            # keeps NO copy of the factor or of the met/missed comparison — harness §H fails the
+            # build on either, scanned over tokenised code.
+            'app/modules/commcalc/router.py': ('goal_rollforward',),
+        },
+    },
     'accessory_target_allocation': {
         "question": 'Given ONE company accessory sales goal, what target should each store carry, '
                     'derived from its own accessories-per-box history against the boxes it sells?',

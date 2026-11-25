@@ -43,6 +43,15 @@ export default function TargetSettingsPage() {
   // Active-carrier lens: name financing vendors generically for a dual-carrier tenant.
   const [rows, setRows] = useState<TargetRow[]>([])
   const [byodDefault, setByodDefault] = useState(35)
+  // THE ROLL-FORWARD RULE IS ASKED, NOT SPELLED HERE (index §COMMCALC-84). This page used to say
+  // "+10% (stretch)" in two places, which was a second copy of a rate that is now DECLARED per
+  // tenant — and, after the 2026-11-25 change, a wrong description of the basis too (the stretch is
+  // off what the store ACHIEVED, not off the goal it was set). The server sends the rule in force.
+  const [rollPolicy, setRollPolicy] = useState<{ stretch_basis?: string, stretch_factor?: number } | null>(null)
+  // "+10%" from a factor of 1.1, without inventing a rate when the server has not said.
+  const stretchPct = rollPolicy?.stretch_factor != null
+    ? `+${Math.round((Number(rollPolicy.stretch_factor) - 1) * 1000) / 10}%` : null
+  const stretchOf = rollPolicy?.stretch_basis === 'target' ? 'the goal it was set' : 'what it achieved'
   const [loading, setLoading] = useState(true)
   const [savingCode, setSavingCode] = useState<string | null>(null)
   const [savedCode, setSavedCode] = useState<string | null>(null)
@@ -80,6 +89,7 @@ export default function TargetSettingsPage() {
         _financingReady: finReady,
       })))
       setByodDefault(d.byod_pct_default ?? 35)
+      setRollPolicy(d.rollforward_policy ?? null)
     } catch (e) { console.error(e) }
     setLoading(false)
   }
@@ -151,7 +161,9 @@ export default function TargetSettingsPage() {
   }
 
   // Persist the month-over-month carry-forward for this period: prior target carried forward, or
-  // +10% where last month's target was hit. overwrite=false → only fills stores with no row yet.
+  // stretched where last month's target was hit — at THIS TENANT'S declared rate and basis, which
+  // the server decides (index §COMMCALC-84), not a rate spelled here. overwrite=false → only fills
+  // stores with no row yet.
   async function rollForward(overwrite: boolean) {
     if (overwrite && !confirm('Overwrite EVERY store for this month with last month’s carry-forward — including targets you edited by hand?')) return
     setRolling(true); setRollMsg('')
@@ -248,7 +260,10 @@ export default function TargetSettingsPage() {
       <div className="card" style={{ padding: '12px 16px', marginBottom: 16, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 260, fontSize: 13, color: 'var(--text2)' }}>
           🔁 <strong>Carry forward month over month.</strong> Stores without a target for {period} are pre-filled from
-          last month — a category the store <strong>hit</strong> becomes <strong>+10% (stretch)</strong>, one it missed
+          last month — a category the store <strong>hit</strong> becomes{' '}
+          {stretchPct
+            ? <><strong>{stretchPct} of {stretchOf}</strong></>
+            : <strong>a stretch on what it achieved</strong>}, one it missed
           carries the same number forward. Click below to save these for all stores.
         </div>
         <button className="btn btn-primary" onClick={() => rollForward(false)} disabled={rolling}>
@@ -330,7 +345,7 @@ export default function TargetSettingsPage() {
                       {r._seeded && <span style={{ color: 'var(--c-fg-b45309)', marginLeft: 6 }}>· not yet saved</span>}
                       {r._seeded && r._seed_basis && (
                         Object.values(r._seed_basis).includes('stretch')
-                          ? <span style={{ color: 'var(--green)', marginLeft: 6 }}>· 🔼 +10% stretch (hit {r._prior_period})</span>
+                          ? <span style={{ color: 'var(--green)', marginLeft: 6 }}>· 🔼 {stretchPct ? `${stretchPct} stretch` : 'stretch'} (hit {r._prior_period})</span>
                           : Object.values(r._seed_basis).includes('carry')
                             ? <span style={{ color: 'var(--text3)', marginLeft: 6 }}>· ↔ carried from {r._prior_period}</span>
                             : null

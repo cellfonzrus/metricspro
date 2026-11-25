@@ -149,6 +149,7 @@ SCHEMA_OF = {
     "flags": "commcalc",
     "ftp_processed": "commcalc",
     "ftp_sweep_config": "commcalc",
+    "goal_rollforward_policy": "commcalc",
     "gp_category_map": "commcalc",
     "gp_snapshot": "commcalc",
     "incentive_rule": "commcalc",
