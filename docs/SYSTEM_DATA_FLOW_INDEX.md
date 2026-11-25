@@ -52516,6 +52516,18 @@ nothing — §CORE-42), including a negative control on the fixture itself, and 
 coin: a stranger is refused, **and** the literal template exists so the job is not silently 401ing on
 every tick (the mig 241 / mig 411 failure mode).
 
+- **§K** the SCREEN does not spell the rate either. `targets/settings/page.tsx` said "+10% (stretch)"
+  in two places and described the WRONG BASIS after this change — telling a manager the stretch is on
+  the goal when it is on what the store achieved, and showing "+10%" to a tenant that declared 5%.
+  Fixing the backend and leaving the screen saying 10% is exactly the patchwork the house rules
+  forbid, so `GET /targets/{period}` now sends `rollforward_policy` and the page renders what it is
+  told, deriving the percentage from the factor and showing no rate at all when the server has not
+  said. §K2 is comment-aware (a header citing the deleted literal is documentation, as in §H) and was
+  proved to discriminate: planted in CODE it fails, in a COMMENT it passes.
+- **§K8** a defect found reviewing the seed path: a declared category with no prior goal comes back
+  `None`, and `safe_float(None)` is `0.0` — which would have rendered as a declared goal of **zero**
+  that no human set, and persisted it on a first save. The seed now skips it.
+
 `harness_db_resilience.py` route pin **1869 → 1870**, re-verified and re-pinned, never relaxed.
 Module-graph fact `goal_rollforward_policy`.
 

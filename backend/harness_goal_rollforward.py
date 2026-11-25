@@ -48,6 +48,7 @@ Not money: `targets_engine.achieved_for_cat` pays on ACTUALS and never reads a g
 proved here can move a payout.
 """
 import io
+import re
 import os
 import sys
 import tokenize
@@ -591,9 +592,57 @@ def section_j():
         _rs._configured_secrets = _secrets
 
 
+# ── §K — THE SCREEN DOES NOT SPELL THE RATE EITHER ────────────────────────────────────────────────
+def section_k():
+    """The frontend half of the same one-home rule.
+
+    `targets/settings/page.tsx` said "+10% (stretch)" in two places and "+10% where last month's
+    target was hit" in a comment. That is a SECOND COPY of a rate that is now declared per tenant —
+    and after 2026-11-25 it also described the WRONG BASIS, telling a manager the stretch is on the
+    goal when it is on what the store achieved. A tenant declaring 5% would have read "+10%" on its
+    own goals screen. Fixing the backend and leaving the screen saying 10% is the patchwork the
+    house rules forbid, so the rule is SENT and the page renders what it is told."""
+    page = os.path.join(os.path.dirname(HERE), "frontend", "src", "app", "(platform)",
+                        "commcalc", "targets", "settings", "page.tsx")
+    ok("K1 the targets settings page exists", os.path.exists(page), page)
+    if not os.path.exists(page):
+        return
+    with open(page, "r", encoding="utf-8") as fh:
+        src = fh.read()
+    # Strip // and /* */ comments: the header explaining the deleted literal must stay allowed,
+    # exactly as §H allows the router's header to cite it.
+    body = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+    body = "\n".join(ln for ln in body.split("\n") if not ln.strip().startswith("//"))
+    ok("K2 no hard-coded stretch rate in the page's own code",
+       "+10%" not in body and "10% (stretch)" not in body,
+       "the screen is spelling the stretch rate again instead of rendering what the server sends")
+    ok("K3 the page reads the rule the server sends", "rollforward_policy" in body,
+       "the page does not read the declared policy")
+    ok("K4 ...and derives the percentage from the factor", "stretch_factor" in body)
+    ok("K5 ...and does not invent a rate when the server has not said",
+       "stretchPct" in body and "null" in body)
+
+    # And the server must actually SEND it, or K3 is rendering undefined.
+    router = os.path.join(HERE, "app", "modules", "commcalc", "router.py")
+    rsrc = open(router, "r", encoding="utf-8").read()
+    i = rsrc.find("def get_targets")
+    j = rsrc.find("\n@router", i)
+    gbody = rsrc[i:j] if (i >= 0 and j > i) else ""
+    ok("K6 get_targets is found and bounded", 0 < len(gbody) < 12000, f"{len(gbody)} chars")
+    ok("K7 GET /targets/{period} sends the rule in force",
+       "'rollforward_policy'" in gbody,
+       "the page is told nothing, so it would render an empty rate")
+    # THE SEED MUST NOT RESURRECT A ZERO. A declared category with no prior goal comes back None,
+    # and safe_float(None) is 0.0 — which would render as a declared goal of ZERO that no human set
+    # and persist on a first save. This was a real defect found reviewing the seed path.
+    ok("K8 the seed skips a declared category with no goal to roll",
+       "if v is None" in gbody,
+       "safe_float(None) would turn 'no goal' back into a goal of zero on the seed path")
+
+
 def main():
     for fn in (section_a, section_b, section_c, section_d, section_e,
-               section_f, section_g, section_h, section_i, section_j):
+               section_f, section_g, section_h, section_i, section_j, section_k):
         try:
             fn()
         except Exception as exc:                                   # a section must never abort the run

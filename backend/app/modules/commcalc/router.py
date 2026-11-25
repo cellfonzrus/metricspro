@@ -32970,6 +32970,12 @@ def get_targets(period: str, include_inactive: bool = False,
                   for ln in _lines_for(tlines_by_store, code)}
         if not existing:
             for k, v in (cf['by_code'].get(code.upper(), {}).get('lines') or {}).items():
+                # `v is None` is basis 'new' — there was NO prior goal for this declared category,
+                # so there is nothing to suggest. It must stay ABSENT: `safe_float(None)` is 0.0,
+                # which would render as a declared goal of ZERO that no human set, and a first save
+                # would then persist it. Same rule as the built-in columns (§COMMCALC-84).
+                if v is None:
+                    continue
                 _saved.setdefault(k, safe_float(v))
         row['lines'] = _saved
         out.append(row)
@@ -32980,7 +32986,12 @@ def get_targets(period: str, include_inactive: bool = False,
         out = [r for r in out if in_keyset(ks, r.get('store_code'), r.get('address'))]
     return {'period': period, 'byod_pct_default': byod_def, 'targets': out,
             # The axis this page should render columns for — asked, so the page keeps no list.
-            'axis': targets_engine.target_axis(catalog)}
+            'axis': targets_engine.target_axis(catalog),
+            # THE RULE IN FORCE, so the SCREEN does not spell it either. The page used to say
+            # "+10% (stretch)" in two places, which was a second copy of the rate (and, after the
+            # 2026-11-25 change, a wrong description of the basis). It now renders what this says.
+            'rollforward_policy': goal_rollforward.policy_for(
+                _rollforward_policy_rows(client, org_id) or [], org_id)}
 
 
 class SaveTargetIn(LaxModel):
