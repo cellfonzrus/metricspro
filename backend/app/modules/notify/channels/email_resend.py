@@ -55,13 +55,35 @@ def tenant_from_name(org_id) -> str:
 
 
 async def send_email(to: str, subject: str, html: str, attachments: list | None = None,
-                     from_name: str | None = None, org_id=None) -> str:
+                     from_name: str | None = None, org_id=None, *, purpose: str,
+                     label: str = "", subscription_id=None, filters=None,
+                     triggered_by: str = "") -> str:
     """Send one email. `attachments` = [(filename, bytes, mime), ...]. Returns provider id.
 
     Raises RuntimeError with the provider message on failure (caught by the caller
-    so one bad recipient doesn't abort the batch)."""
+    so one bad recipient doesn't abort the batch).
+
+    EVERY ATTEMPT IS RECORDED HERE, in `notify.send_log`, through the one home for it
+    (`notify/send_record`, index §NOTIFY-02) — accepted or refused, before the exception reaches the
+    caller. It is done in the TRANSPORT because thirty-one call sites each decided for themselves
+    whether to record a send and every one of them decided not to, which is why "did the employee
+    get the onboarding invite" was unanswerable on 2026-11-25 (owner report). `purpose` is therefore
+    a REQUIRED keyword argument and has deliberately NO default: a send that cannot say what it is
+    cannot be made, and a new caller that forgets fails loudly instead of sending invisibly.
+    `harness_email_send_record.py` fails the build if this function stops recording.
+    """
+    from app.modules.notify import send_record
+
+    def _record(status, mid="", error=""):
+        send_record.record_attempt(org_id=org_id, purpose=purpose, channel="email", target=to,
+                                   status=status, provider_message_id=mid, error=error,
+                                   label=label, subscription_id=subscription_id,
+                                   filters=filters, triggered_by=triggered_by)
+
     if not is_configured():
-        raise RuntimeError("Email sending isn't set up yet — contact support to switch it on.")
+        note = "Email sending isn't set up yet — contact support to switch it on."
+        _record("failed", error=note)
+        raise RuntimeError(note)
 
     # `org_id` is the usual way a sender says "this is that tenant's mail"; `from_name` is for a
     # caller that already holds the name. Neither → the platform's own NOTIFY_FROM_NAME, which is
@@ -75,12 +97,22 @@ async def send_email(to: str, subject: str, html: str, attachments: list | None 
             for (fn, data, _mime) in attachments
         ]
 
-    async with httpx.AsyncClient(timeout=60) as cx:
-        r = await cx.post(RESEND_URL, json=body,
-                          headers={"Authorization": f"Bearer {settings.RESEND_API_KEY}"})
-    if r.status_code >= 300:
-        raise RuntimeError(f"Resend {r.status_code}: {r.text[:300]}")
     try:
-        return r.json().get("id", "")
+        async with httpx.AsyncClient(timeout=60) as cx:
+            r = await cx.post(RESEND_URL, json=body,
+                              headers={"Authorization": f"Bearer {settings.RESEND_API_KEY}"})
+    except Exception as e:
+        # A transport failure (DNS, TLS, timeout) never reached the provider. Before this it was
+        # indistinguishable from a send nobody recorded — which is the whole defect.
+        _record("failed", error=f"{type(e).__name__}: {e}"[:300])
+        raise
+    if r.status_code >= 300:
+        note = f"Resend {r.status_code}: {r.text[:300]}"
+        _record("failed", error=note)
+        raise RuntimeError(note)
+    try:
+        mid = r.json().get("id", "")
     except Exception:
-        return ""
+        mid = ""
+    _record("sent", mid=mid)
+    return mid

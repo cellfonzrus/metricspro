@@ -2192,7 +2192,8 @@ async def _notify_envelope_mismatch(client, org_id, summary):
             if email_resend.is_configured():
                 await email_resend.send_email(email, "⚠️ Envelope mismatch",
                                               "<p>" + summary.replace("\n", "<br>") + "</p>",
-                                              org_id=org_id)
+                                              org_id=org_id,
+                                              purpose="closing_envelope_mismatch")
         except Exception:
             pass
     if wa and cfg.get("notify_whatsapp", True):
@@ -5387,7 +5388,8 @@ async def _notify_pickup(client, org_id, dm_name, date, items, total,
             if email_resend.is_configured():
                 html = "<p>" + summary.replace("\n", "<br>") + "</p>"
                 mid = await email_resend.send_email(email, f"{kind_label} — {date} ({_usd(total)})", html,
-                                                    org_id=org_id)
+                                                    org_id=org_id, purpose="closing_pickup_summary",
+                                                    label=kind_label)
                 results.append({"channel": "email", "to": email, "ok": True, "id": mid or "sent"})
             else:
                 results.append({"channel": "email", "ok": False, "detail": "Resend not configured on the server"})
@@ -6867,7 +6869,7 @@ async def _run_entry_quality_coaching(org_id=None):
                                 await email_resend.send_email(
                                     email, "Daily closing — quick training walkthrough",
                                     "<p>" + body["message"].replace("\n", "<br>") + "</p>",
-                                    org_id=oid)
+                                    org_id=oid, purpose="closing_training_nudge")
                                 sent_via.append("email")
                         except Exception:
                             pass

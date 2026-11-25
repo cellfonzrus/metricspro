@@ -32,6 +32,7 @@ from app.modules.core import roster_visibility as _rv
 from app.modules.storeops import payroll_hours_basis as _hours_basis
 # THE ONE punch/correction read on the pay path, and the interlock that gates paying from it (§14y).
 from app.modules.storeops import payroll_evidence as _payevid
+from app.modules.notify import send_record as _send_record
 
 router = APIRouter(prefix="/hr", tags=["HR"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -2251,6 +2252,30 @@ def _invite_email_html(first_name, method, url, email=None, temp_pw=None, task_l
             f"<p style='font-size:12px;color:#888'>If the button doesn't work, copy this link:<br>{url}</p></div>")
 
 
+#: WHAT an onboarding invite is, in `notify.send_log.report_key`. One spelling, dereferenced by the
+#: sender and by the delivery read below, so the screen and the history can never key on different
+#: words (§NOTIFY-02).
+INVITE_PURPOSE = "hr_onboarding_invite"
+
+
+def invite_audit_detail(method, email, *, emailed, send_email_flag=True, note=None):
+    """PURE. What the `invited` audit event records about the mail.
+
+    The defect this removes: the old detail was `{"sent_to": <address>}`, written BEFORE the send and
+    regardless of its outcome, so an invite the provider refused left an audit trail saying it had
+    gone to the employee. An intent is not a delivery. `emailed` is the transport's own answer and
+    `note` is its reason when it said no.
+    """
+    out = {"method": method, "email": email or None, "emailed": bool(emailed)}
+    if not email:
+        out["not_emailed_because"] = "no email address on the employee record"
+    elif not send_email_flag:
+        out["not_emailed_because"] = "the caller asked for the link only, with no email"
+    elif not emailed:
+        out["not_emailed_because"] = str(note or "the mail provider did not accept it")[:200]
+    return out
+
+
 async def _send_invite(org_id, employee, method="link", *, dob=None, role_name=None,
                        expires_days=30, actor="HR", send_email_flag=True,
                        authorization="", x_active_org=""):
@@ -2316,18 +2341,13 @@ async def _send_invite(org_id, employee, method="link", *, dob=None, role_name=N
         result["token"] = token
         result["portal_url"] = url
 
-    # ensure the hire is at least 'invited'
-    try:
-        cur = _get_profile(so, org_id, employee_id) or {}
-        if not cur.get("workflow_status") or cur.get("workflow_status") == "invited":
-            _set_status(so, org_id, employee_id, "invited", actor=actor)
-        _log_event(org_id, employee_id, "invited", actor=actor,
-                   detail={"method": method, "sent_to": email})
-    except Exception:
-        pass
-
     result["ok"] = True
     result["emailed"] = False
+    # THE SEND HAPPENS BEFORE THE AUDIT ROW IS WRITTEN (owner report 2026-11-25). It used to be the
+    # other way round, so the audit said `sent_to: <address>` for an invite the provider had
+    # refused — the event was written from the INTENT to send, which is not a fact about delivery.
+    # The attempt itself is recorded in notify.send_log by the transport (§NOTIFY-02); this event
+    # now carries the OUTCOME so the two cannot disagree.
     if send_email_flag and email:
         try:
             labels = [t.get("label") for t in _employee_tasks(org_id, employee_id)][:12]
@@ -2339,12 +2359,25 @@ async def _send_invite(org_id, employee, method="link", *, dob=None, role_name=N
                 await send_email(email, "Complete your onboarding",
                                  _invite_email_html(first, method, result["portal_url"], email,
                                                     result.get("temp_password"), labels),
-                                 org_id=org_id)
+                                 org_id=org_id, purpose=INVITE_PURPOSE,
+                                 filters={"employee_id": employee_id, "method": method})
                 result["emailed"] = True
             else:
                 result["email_note"] = "email not configured (RESEND_API_KEY unset) — hand the link/credentials over manually"
         except Exception as e:
             result["email_note"] = f"send failed: {str(e)[:160]}"
+
+    # ensure the hire is at least 'invited'
+    try:
+        cur = _get_profile(so, org_id, employee_id) or {}
+        if not cur.get("workflow_status") or cur.get("workflow_status") == "invited":
+            _set_status(so, org_id, employee_id, "invited", actor=actor)
+        _log_event(org_id, employee_id, "invited", actor=actor,
+                   detail=invite_audit_detail(method, email, emailed=result["emailed"],
+                                              send_email_flag=send_email_flag,
+                                              note=result.get("email_note")))
+    except Exception:
+        pass
     return result
 
 
@@ -2570,12 +2603,63 @@ async def onboarding_provision(employee_id: str, body: OnboardingProvisionIn, or
                 await send_email(email, "Your MetricsPro account is ready",
                                  _invite_email_html(first, "login", f"{settings.APP_PUBLIC_URL}/portal",
                                                     email, login.get("temp_password"), None),
-                                 org_id=org_id)
+                                 org_id=org_id, purpose=INVITE_PURPOSE,
+                                 filters={"employee_id": employee_id, "method": "login"})
                 emailed = True
         except Exception:
             pass
     return {"ok": True, "workflow_status": "provisioned", "role": role,
             "temp_password": login.get("temp_password"), "emailed": emailed, "was_override": override}
+
+
+@router.get("/onboarding/invite-delivery")
+def onboarding_invite_delivery(employee_ids: str = "", org_id: str = ORG_ID,
+                               authorization: str = Header(default="")):
+    """DID THE INVITE ACTUALLY REACH THEM? One answer per employee, read from the send history.
+
+    The reported defect (owner 2026-11-25): the Employee Setup screen said `invited` and nothing
+    else, because `invited` only ever meant "we minted a link". It could not say otherwise — no
+    onboarding send was recorded anywhere. Now the transport records every attempt (§NOTIFY-02) and
+    the provider's webhook stamps what became of it, so this read can say "delivered", "the address
+    rejected it", "marked as spam" or "we could not send it" — and, honestly, "no send recorded"
+    where there is no row, which is NOT the same as sent.
+
+    Org-scoped (the roster read is `.eq("org_id", org_id)`, and the history read is org-scoped in
+    its one home), so one tenant can never see another's addresses or delivery states.
+    `employee_ids` is a comma-separated list; empty asks about every active hire with an address.
+    """
+    _require_hr_or_admin(authorization)
+    so = _so()
+    ids = [i.strip() for i in (employee_ids or "").split(",") if i.strip()]
+    q = so.table("employees").select("employee_id,name,email").eq("org_id", org_id)
+    if ids:
+        q = q.in_("employee_id", ids)
+    else:
+        q = q.eq("is_active", True)
+    emps = (q.limit(2000).execute().data) or []
+    by_address = {}
+    for e in emps:
+        addr = str(e.get("email") or "").strip().lower()
+        if addr:
+            by_address.setdefault(addr, []).append(e)
+    rows = _send_record.last_attempts(org_id, INVITE_PURPOSE, list(by_address))
+    out = []
+    for addr, people in by_address.items():
+        state, message = _send_record.delivery_verdict(rows.get(addr))
+        for e in people:
+            out.append({"employee_id": e.get("employee_id"), "name": e.get("name"),
+                        "email": e.get("email"), "state": state, "message": message,
+                        "at": (rows.get(addr) or {}).get("created_at")})
+    # An employee with NO address could never have been emailed; say that rather than leave them out
+    # of an answer a screen reads as a complete list.
+    for e in emps:
+        if not str(e.get("email") or "").strip():
+            out.append({"employee_id": e.get("employee_id"), "name": e.get("name"), "email": None,
+                        "state": "no_address",
+                        "message": "No email address on their record, so no invite could be sent.",
+                        "at": None})
+    out.sort(key=lambda r: (r.get("name") or "").lower())
+    return {"delivery": out, "purpose": INVITE_PURPOSE}
 
 
 @router.get("/onboarding/employee/{employee_id}/events")
@@ -2614,7 +2698,8 @@ async def _notify_mandatory_added(org_id, employee_id, missing_labels, state_und
         from app.modules.notify.channels.email_resend import send_email, is_configured
         if is_configured():
             await send_email(email, "Action needed: a new onboarding document is required", html,
-                             org_id=org_id)
+                             org_id=org_id, purpose="hr_onboarding_document",
+                             filters={"employee_id": employee_id})
             return True
     except Exception:
         pass
@@ -2962,7 +3047,8 @@ async def _notify_return(org_id, employee_id, task, missing, reason):
         from app.modules.notify.channels.email_resend import send_email, is_configured
         if is_configured():
             await send_email(email, f"Action needed: {task.get('label') or 'onboarding document'}", html,
-                             org_id=org_id)
+                             org_id=org_id, purpose="hr_onboarding_document",
+                             filters={"employee_id": employee_id})
             return True
     except Exception:
         pass
@@ -3372,7 +3458,7 @@ async def onboarding_forward_accounting(employee_id: str, body: OnboardingForwar
     sent, errors = [], []
     for to in emails:
         try:
-            await send_email(to, subject, html, org_id=org_id)
+            await send_email(to, subject, html, org_id=org_id, purpose="hr_notice")
             sent.append(to)
         except Exception as e:
             errors.append({"to": to, "error": str(e)[:200]})

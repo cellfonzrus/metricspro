@@ -26458,6 +26458,7 @@ status word rather than a blank that reads as nil.
 | 15.2 | notify |
 | 15.3 | notify |
 | NOTIFY-01 | notify |
+| NOTIFY-02 | notify |
 | STOREOPS-01 | storeops |
 | STOREOPS-02 | storeops |
 | STOREOPS-03 | storeops |
@@ -41388,6 +41389,148 @@ appear in the browser. In CI as **"A failed send names who, why and the fix"**.
 
 ---
 
+## §NOTIFY-02. AN OUTBOUND EMAIL IS RECORDED BY THE TRANSPORT THAT SENT IT, AND THE PROVIDER'S LATER VERDICT LANDS ON THAT RECORD (owner report 2026-11-25)
+
+Owner: *"onboargin em,ail not reaching employees"*, said while working in NY Logistics Employee Setup.
+
+**THE INSTANCE, measured read-only on production BEFORE anything was changed.** Two NY Logistics
+hires were invited at 20:26:57 and 20:26:59 UTC that day. Both `storeops.employee_onboarding_profile`
+rows carried `invite_method='login'` and an `invited_at`; both `storeops.onboarding_event` rows said
+`invited` with `detail.sent_to = <the employee's address>`. **`notify.send_log` held no row for
+either.** Nor for any HR letter, CRM campaign, helpdesk reply, POS receipt, recovery claim or access
+code ever sent: thirty days of that table held report sends and nothing else. Email delivery itself
+was healthy — 1,336 sends in ten days, 1,052 of them to `gmail.com`, the most recent that afternoon —
+so the reported symptom was never a broken provider. It was that **nobody could tell**: a refused
+send, a bounced address and a delivered mail all left exactly the same trace, which is none.
+
+**THE CLASS.** Not "the HR invite forgets to log". **An outbound message was recorded by the CALLER
+that asked for it, instead of the TRANSPORT that sent it.** `notify.send_log` was already the house's
+record of a send — one row per attempt with the channel, the address, the provider's message id and
+the provider's error — and migration `714` had already added `delivery_status` / `delivery_error` /
+`delivery_updated_at` for what the provider says afterwards. Thirty-one `send_email` call sites each
+decided for themselves whether to use any of it, and every one except the report senders decided not
+to. That is §19.18's pattern verbatim: the registry existed and the callers were never wired to it.
+Fixing the HR path alone would have left the other thirty invisible.
+
+**THE SIBLING NOBODY FIXED, for sixteen months.** The identical defect was found and fixed for
+WhatsApp on 2026-07-18 (mig `714`): Meta accepts a message, hands back a wamid, then silently drops
+it, so acceptance was recorded and delivery was not. **Email never got the sibling** — there was no
+provider webhook at all, so `delivery_status` was NULL on every email row ever written, and a bounced
+onboarding invite was indistinguishable from a delivered one. "Fixed for one and not the other is the
+same defect wearing a hat" (CLAUDE.md), so the delivery arithmetic that July fix produced is FACTORED
+OUT of `remediation/router` rather than copied for the second webhook.
+
+**NO MIGRATION.** The table, the columns and the index were all already there. The defect was never a
+missing fact; it was a fact nobody wrote.
+
+### NOTIFY-02.1 One home: `backend/app/modules/notify/send_record.py`
+
+Everything above `insert_rows` is pure stdlib, so the harness proves it with no database.
+
+- `attempt_row(...)` → one `notify.send_log` row. **`purpose` is required and `status` may only be
+  `sent` or `failed`** — "the provider took it" and "it arrived" are different facts, and letting the
+  second be written here is the WhatsApp defect rebuilt. `purpose` lands in the NOT NULL `report_key`
+  column, which has always meant "what was sent"; only report senders ever filled it because only
+  report senders wrote rows.
+- `insert_rows` / `record_attempt` — the write, inheriting `router._insert_log`'s strip-one-optional-
+  column-and-retry so an un-run migration costs a poorer row, never the whole history.
+- `valid_status(channel, status)` — an **ALLOWLIST per channel**. Meta never says `bounced` and Resend
+  never says `read`, so a word a channel's provider does not use records nothing rather than letting a
+  spoofed payload write a verdict that channel cannot reach (the `component_is_evidence` rule, §66).
+- `merge_status(current, incoming)` — monotonic, any failure state always winning however late it
+  arrives, an unknown word changing nothing. **Absorbed verbatim** from
+  `remediation/router._merge_delivery_status`; the harness pins the old behaviour unchanged.
+- `flatten_meta_errors` / `delivery_from_resend` — each provider's payload → `(message_id, status,
+  error)`. `email.opened` and `email.clicked` are deliberately absent: an open is somebody reading a
+  mail, not us delivering one, and recording it as a delivery state would overwrite a bounce.
+- `svix_signed_payload` / `svix_signature_ok` — the webhook's ONLY authentication. Constant-time,
+  skew-bounded so a captured payload cannot be replayed forever, several signatures accepted during a
+  secret rotation, and **fail-CLOSED: an unset `RESEND_WEBHOOK_SECRET` rejects every payload.**
+- `stamp_delivery` — the provider's later verdict onto the row, matched GLOBALLY on the message id (no
+  org filter: an id is globally unique and an org filter could only MISS the row), idempotent on
+  replay, a silent no-op on an un-run migration because a webhook that errors gets its subscription
+  disabled.
+- `last_attempts` / `delivery_verdict` — the READ side. **An absent record reads `unknown`, never
+  `sent`**: "we have no idea" is exactly the fact that was hidden, and an accepted mail reads
+  `accepted`, not `delivered`, with the spam folder named.
+
+### NOTIFY-02.2 Where it is dereferenced
+
+| Caller | What it now does |
+|---|---|
+| `notify/channels/email_resend.send_email` | **writes the row itself**, on acceptance, on a provider refusal, on a transport error and when no key is configured. `purpose` is a REQUIRED keyword argument with no default — a send that cannot say what it is cannot be made |
+| `POST /notify/email-webhook` | NEW. Resend's delivery webhook → `stamp_delivery`. On the PUBLIC middleware allowlist as an EXACT path, METHOD-SCOPED to `POST`, self-verifying and fail-closed |
+| `remediation` Meta webhook | `_merge_delivery_status` / `_flatten_delivery_errors` / `_DELIVERY_RANK` are now names bound to the one home, and the status handler writes through `stamp_delivery`. No second copy |
+| `notify/router._insert_log` | delegates to `insert_rows`, and the two report paths pass only their NON-email rows — the email row is the transport's, and writing it twice would be the duplicate the index rules forbid |
+| `GET /hr/onboarding/invite-delivery` | NEW. Per employee: `delivered` / `bounced` / `complained` / `delayed` / `accepted` / `failed` / `no_address` / `unknown`, org-scoped, with the sentence a human reads |
+| `hr/router.invite_audit_detail` | PURE. The `invited` audit event now records `emailed` and, when false, WHY. The old detail was `{"sent_to": <address>}` written BEFORE the send and regardless of outcome — an intention, recorded as a delivery |
+| the 31 senders | every one names its purpose: `hr_onboarding_invite`, `hr_onboarding_document`, `hr_letter`, `pos_receipt`, `pos_w9_request`, `core_access_code`, `helpdesk_ticket_update`, `payroll_disbursement`, … |
+
+**THE ONE DOCUMENTED EXCEPTION.** `core/auth_notify._email_otp` (a sign-in or password-reset code) is
+asked for before any tenant is known, and `send_log.org_id` is NOT NULL, so that attempt records
+nothing. It is named in the code where it is taken and pinned by the harness, so a second orgless
+sender cannot appear quietly.
+
+### NOTIFY-02.3 The surface
+
+`frontend/src/app/(platform)/hr/onboarding/page.tsx` — the Documents board's **Sent** column now
+carries a delivery badge beside the date, and the export carries the state as a column, because an
+exported "sent" that cannot be told apart from a bounce is the same lie in a spreadsheet. The states
+and their sentences come from the backend's one home; the browser holds no second spelling.
+
+### NOTIFY-02.4 Lock
+
+**`backend/harness_email_send_record.py`** — 51 checks, DB-free, each lock shipping an armed CONTROL
+that proves the scan can fail. `purpose` is keyword-only with no default and every call site passes it
+(an AST scan of every `send_email` call in `app/`); the transport dereferences `record_attempt`;
+**ONE writer of `notify.send_log`** (an AST scan for an `insert`/`update`/`upsert`/`delete` whose
+receiver chain names the table — readers are allowed and still exist); ONE caller of
+`api.resend.com`; `remediation` may not re-grow its own merge, rank table or flattener; the webhook
+verifies before reading, refuses an unverified POST, is allowlisted as an exact path for POST only and
+has no break-glass that would accept anonymous payloads; the orgless sender is the only one; RULE TWO.
+
+Plus `backend/tests/unit/test_send_record_is_the_one_home.py` (25 tests, three tenants) and
+`backend/tests/integration/test_onboarding_invite_is_recorded.py` (24 tests over the REAL app and the
+REAL transport, with only the provider's HTTP call replaced, asserting that one tenant's send history
+is not reachable from another tenant's read).
+
+### NOTIFY-02.5 What the live data turned out to be — and why it is the purest case of this class
+
+The owner read the provider's dashboard while this was being built. The two invites of 2026-11-25
+answered DIFFERENTLY, and neither answer was available anywhere in MetricsPro:
+
+| Address | Provider says | What the app said | What it means |
+|---|---|---|---|
+| `toobarafique75@gmail.com` | **Delivered** | `invited` | it arrived; look in the spam folder |
+| `demindkin.elan@gmail.com` | **suppressed** | `invited` | **the provider never sent it** |
+
+**`suppressed` is this defect's purest form.** An address joins a Resend account's suppression list
+after an earlier hard bounce or spam complaint. Every later send to it is dropped AT THE PROVIDER —
+and the API still answers `200 OK` with a real message id. So `email_resend.send_email` returned a
+message id, the caller counted a success, the audit row said `sent_to: <that address>` and the board
+showed a green tick, for a mail that was never sent at all. No amount of care at the call site could
+have caught it; only a record that the provider can later contradict can.
+
+Two consequences, both in the code:
+- **`email.failed` is in `RESEND_EVENTS`**, mapping to delivery status `failed`.
+- **A provider REFUSAL is not a bounce.** `delivery_verdict` answers `refused` ("The mail provider
+  did not send it"), separately from `bounced` ("The address rejected it"). A bounce is the receiving
+  server saying no and the address is the recipient's problem; a refusal is OUR provider declining
+  and the remedy is ours — correct the address, or clear the suppression. Conflating them would hand
+  a human the wrong fix, which is the thing §NOTIFY-01's allowlist exists to avoid.
+
+Also live, and REPORTED rather than papered over: that address reads `dem**in**dkin` while the
+employee's name is Demi**d**kin, so the suppression most likely began as a typo that hard-bounced
+once. The fix for that employee is a corrected address, not an unsuppression.
+
+**WHAT THIS DID NOT DO.** It did not deliver either invite, and it does not reach back: for sends
+made before it landed, the provider's dashboard remains the only record, and the suppression list is
+the only place the estate's other silently-dropped addresses are named. Reading that list and naming
+whose addresses are on it is outstanding owner work, not something code can infer.
+
+
+---
+
 ## §STOREOPS-02. A CARD FOR MANY STORES COSTS A FIXED NUMBER OF READS (load test follow-up 2026-10-29)
 
 **Owner 2026-10-29, on the round-trip findings:** *"give me the fixes"*.
@@ -47480,6 +47623,7 @@ conversation the server already listed for that viewer.
 §19.36 / §19.38 (the one customer sentence for "not switched on", and the detectors this
 dereferences) · §CORE-12 (`can_edit_setting` — the authority answer this asks and never copies) ·
 §NOTIFY-01 (why a send failed, and its remedy — the same shape, a different subject) · §54
+§NOTIFY-02 (whether a send ARRIVED — the record, not the reason)
 (`route-index.ts`, against which every destination is checked) · §19.18 (one fact, one home,
 dereferenced — never copied; the duplicated targets sentence is its latest instance) ·
 §COMMCALC-49.10 (every feature for every tenant) · §19.37 (a 2xx is not proof — why a failed ask says

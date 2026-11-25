@@ -1053,6 +1053,11 @@ on:
       - "backend/app/modules/notify/digest_delivery.py"
       - "backend/app/modules/notify/send_outcome.py"
       - "backend/harness_notify_send_outcome.py"
+      - "backend/app/modules/notify/send_record.py"
+      - "backend/harness_email_send_record.py"
+      - "backend/app/modules/notify/channels/email_resend.py"
+      - "backend/app/modules/hr/router.py"
+      - "backend/app/modules/remediation/router.py"
       - "frontend/src/lib/send-outcome.tsx"
       - "frontend/src/lib/send-report.tsx"
       - "frontend/src/app/(platform)/notify/page.tsx"
@@ -3507,6 +3512,24 @@ jobs:
       - name: Run the send-outcome proof (a failure is reported with its recipient and its remedy, never as a count — index §NOTIFY-01)
         working-directory: backend
         run: python3 harness_notify_send_outcome.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # EVERY OUTBOUND EMAIL IS RECORDED, BY THE TRANSPORT. Owner report 2026-11-25 ("onboarding email not
+  # reaching employees"): the invites existed, the audit said they had been sent, and notify.send_log
+  # held no row for any of them — nor for any HR, CRM, helpdesk, receipt or access-code mail ever sent.
+  # The locks: `purpose` is keyword-only with no default and every call site passes it; the transport
+  # dereferences the one home; ONE writer of notify.send_log; ONE caller of the provider's API; the
+  # Resend webhook fails closed and is public for POST only. Every lock ships an armed control, so it
+  # cannot pass vacuously. stdlib only, DB-free, no app import. Index §NOTIFY-02.
+  email-send-record-proof:
+    name: Every email is recorded and its delivery is visible (DB-free, the real module)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the send-record proof (an outbound email is recorded by the transport, and a bounce lands on that record — index §NOTIFY-02)
+        working-directory: backend
+        run: python3 harness_email_send_record.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE DATABASE-RESILIENCE PROOF — owner directive 2026-10-08 ("do it"), taking this file off
   # backend/harness_unrun_pending.txt. It is the only thing asserting that a dropped Supabase

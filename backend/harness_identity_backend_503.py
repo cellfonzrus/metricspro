@@ -270,8 +270,27 @@ else:
     main_pre = paths_in(fn_src(MAIN, "_PUBLIC_PREFIXES = (", "# Self-authenticating background sweeps"))
     now_pre = paths_in(fn_src(NOW, "_PUBLIC_PREFIXES = (", "# Self-authenticating background sweeps"))
     WH = "/api/v1/remediation/whatsapp-webhook"
-    ck("no public path ADDED vs main (the union is unchanged)",
-       (now_exact | now_pre) == (main_exact | main_pre))
+    # 2026-11-25 (§NOTIFY-02) adds the SECOND provider webhook, for the same reason the first one is
+    # here: a provider carries no JWT of ours, so the auth requirement must not fire before a
+    # handler that authenticates the request itself. It is the same shape as the Meta entry, to the
+    # letter — an EXACT path (never a prefix), METHOD-SCOPED to POST alone, self-verifying the
+    # `svix-signature` HMAC and FAIL-CLOSED with no break-glass, so an unset secret refuses every
+    # payload rather than accepting anonymous writes into a tenant's send history. Named here, and
+    # asserted below, so the allowlist still cannot grow by accident: anything OTHER than this path
+    # appearing fails the build exactly as before.
+    EMAIL_WH = "/api/v1/notify/email-webhook"
+    ck("no public path ADDED vs main but the one declared provider webhook",
+       (now_exact | now_pre) - (main_exact | main_pre) <= {EMAIL_WH},
+       )
+    ck("nothing public was REMOVED vs main either",
+       (main_exact | main_pre) - (now_exact | now_pre) == set())
+    ck("the new webhook is on the EXACT list, never the PREFIX list",
+       EMAIL_WH in now_exact and EMAIL_WH not in now_pre)
+    MID = open("app/core/tenant_middleware.py").read()
+    ck("the new webhook is public for POST ONLY",
+       '"%s": ("POST",),' % EMAIL_WH in MID)
+    ck("the new webhook has NO break-glass that would accept an unsigned payload",
+       "RESEND_WEBHOOK_REQUIRE_SIGNATURE" not in open("app/core/config.py").read())
     # These two used to assert the webhook move was still PENDING vs main (delta == {WH}). That
     # package has since merged — main and the working tree now agree — so a delta-shaped assertion
     # reads as failure precisely when the change is fully landed. The durable security property is

@@ -60,13 +60,14 @@ def pending_by_channel(addresses, items, carried, channels_ok):
     return out
 
 
-async def _send(ch, address, built, wa_filename, from_name=""):
+async def _send(ch, address, built, wa_filename, from_name="", org_id=None, scope=""):
     """THE only place this codebase speaks to a channel on a digest's behalf. True when it really
     delivered — a transport that answers without a message id delivered nothing."""
     if ch == "email":
         from app.modules.notify.channels import email_resend
         await email_resend.send_email(to=address, subject=built["subject"], html=built["html"],
-                                     from_name=from_name)
+                                     from_name=from_name, org_id=org_id,
+                                     purpose=f"digest_{scope}" if scope else "digest")
         return True
     if ch == "whatsapp":
         from app.modules.notify.channels import whatsapp_meta
@@ -124,7 +125,8 @@ async def deliver_recipient(client, org_id, scope, *, addresses, items, carried,
             continue
         built = build(to_name, todo)
         try:
-            leg["delivered"] = await _send(ch, addr, built, wa_filename, from_name=from_name)
+            leg["delivered"] = await _send(ch, addr, built, wa_filename, from_name=from_name,
+                                           org_id=org_id, scope=scope)
         except Exception as e:
             leg["error"] = str(e)[:200]
             # SIBLING OF THE SEND BOX (§NOTIFY-01): a digest leg parked the provider's raw string and

@@ -636,13 +636,23 @@ use_sb(_REAL_SB)
 # ══════════════════════════════════════════════════════════════════════════════════════════
 sec("H. MULTI-TENANT — the tenant comes from the send_log row, never from the payload")
 
-src_status = inspect.getsource(R._record_delivery_statuses)
+# THE WRITE MOVED HOUSE on 2026-11-25 (§NOTIFY-02). When EMAIL needed the same delivery webhook
+# this handler had held since 2026-07-18, the choice was to copy its arithmetic or to factor it out;
+# it was factored out, so `_record_delivery_statuses` now dereferences
+# `notify/send_record.stamp_delivery` and the three guarantees below are asserted where they now
+# live. They are the SAME guarantees, followed to the fact's new home rather than deleted because
+# they moved — and the first one is now stronger, because one write path cannot drift from another.
+from app.modules.notify import send_record as SR          # the one home (§NOTIFY-02)
+src_status = inspect.getsource(R._record_delivery_statuses) + inspect.getsource(SR.stamp_delivery)
 ok("H the status handler never reads an org from the payload",
    "org_id" not in src_status.split('"""')[-1])
 ok("H the wamid lookup is a GLOBAL provider_message_id match (no org filter)",
-   'eq("provider_message_id", wamid)' in src_status and '.eq("org_id"' not in src_status)
+   'eq("provider_message_id", mid)' in src_status and '.eq("org_id"' not in src_status)
 ok("H updates are addressed by the send_log ROW id (which carries its own org_id)",
    '.eq("id", r.get("id"))' in src_status)
+ok("H the handler writes through the one home, holding no second write path of its own",
+   "_send_record.stamp_delivery(" in inspect.getsource(R._record_delivery_statuses)
+   and 'table("send_log")' not in inspect.getsource(R._record_delivery_statuses))
 
 ST2 = {"log": [{"id": "L-A", "org_id": "ORG-HOUSE", "provider_message_id": "wamid.H",
                 "delivery_status": None},

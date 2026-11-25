@@ -117,6 +117,14 @@ _PUBLIC_EXACT = frozenset({
                                           # attaches and fails closed when VISION_PUBSUB_AUDIENCE or
                                           # VISION_PUBSUB_SA_EMAIL is unset. Tenancy is resolved from
                                           # OUR vision_camera table by device name, never from the body.
+    "/api/v1/notify/email-webhook",       # Resend delivery webhook (§NOTIFY-02). EXACT path,
+                                          # METHOD-SCOPED to POST below. Resend carries no JWT of
+                                          # ours, so the auth requirement must not fire before the
+                                          # handler, which self-verifies the `svix-signature` HMAC
+                                          # and fails CLOSED when RESEND_WEBHOOK_SECRET is unset.
+                                          # Same shape, same reasoning and the same method scoping
+                                          # as the Meta entry below, so it cannot repeat the 2026-08-05
+                                          # widening (a prefix, public for every method).
     "/api/v1/remediation/whatsapp-webhook",  # Meta webhook. EXACT path + METHOD-SCOPED below to
                                           # {GET, POST} only (2026-08-05: it was a PREFIX, so any future
                                           # sibling path under it would have been public too, and every
@@ -669,6 +677,8 @@ _PUBLIC_METHODS = {
     # inheritance — the exact mistake the whatsapp entry below was widened by until 2026-08-05.
     "/api/v1/vision/google/events": ("POST",),
     "/api/v1/remediation/whatsapp-webhook": ("GET", "POST"),
+    # Resend only ever POSTs its delivery events; no other method on this path is public.
+    "/api/v1/notify/email-webhook": ("POST",),
 }
 
 

@@ -1571,7 +1571,8 @@ def _notify(org_id: str, *, emails, subject: str, body: str) -> bool:
             for addr in addrs:
                 try:
                     await email_resend.send_email(addr, subject, html, [],
-                                                  from_name=_from_name)
+                                                  from_name=_from_name, org_id=org_id,
+                                                  purpose="crm_campaign_email")
                     ok = True
                 except Exception:
                     pass

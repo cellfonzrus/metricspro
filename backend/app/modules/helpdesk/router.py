@@ -823,7 +823,8 @@ async def _notify_new_ticket(org_id: str, ticket: dict, requester: str):
                 f"<p>{(ticket.get('description') or '')[:500]}</p>")
         for addr in emails:
             try:
-                await email_resend.send_email(addr, subject, html, [], org_id=org_id)
+                await email_resend.send_email(addr, subject, html, [], org_id=org_id,
+                                              purpose="helpdesk_ticket_update")
             except Exception:
                 pass
     except Exception:
@@ -1040,7 +1041,8 @@ async def _notify_escalation(org_id: str, ticket: dict, actor: str):
                 f"<p>Track it in the support console.</p>")
         for addr in emails:
             try:
-                await email_resend.send_email(addr, subject, html, [], org_id=org_id)
+                await email_resend.send_email(addr, subject, html, [], org_id=org_id,
+                                              purpose="helpdesk_ticket_update")
             except Exception:
                 pass
     except Exception:
@@ -1217,7 +1219,8 @@ async def _notify_ticket_reply(org_id, ticket_id):
         subject = f"[Support] Update on {num}: {t.get('subject')}"
         html = f"<p>Tech support replied to your ticket <b>{num}</b>. Open the helpdesk to view the reply.</p>"
         try:
-            await email_resend.send_email(addr, subject, html, [], org_id=org_id)
+            await email_resend.send_email(addr, subject, html, [], org_id=org_id,
+                                              purpose="helpdesk_ticket_update")
         except Exception:
             pass
     except Exception:

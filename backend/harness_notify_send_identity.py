@@ -149,10 +149,21 @@ check("D5 the stored artifact names its report too, so the DOWNLOAD row can",
       "send_identity.report_label" in ROUTER and "report_label=ident" in ROUTER)
 
 # ── E. graceful degrade when mig 1057 is un-run ──────────────────────────────────────────────────
+# THE DEGRADE MOVED HOUSE on 2026-11-25 (§NOTIFY-02): a send record is now written by the transport
+# that sent the mail, so "which columns may be missing" and the strip-one-and-retry live in the one
+# home for a send record and the router dereferences them. This lock follows the fact rather than
+# keeping its own copy of where it used to live — the sibling update the house rules require in the
+# same PR, not a check quietly deleted because it moved.
+SEND_RECORD = open("app/modules/notify/send_record.py").read()
 check("E1 the label is listed as an OPTIONAL column, so an un-run migration costs the label only",
-      "_OPTIONAL_LOG_COLUMNS" in ROUTER and "send_identity.LABEL_COLUMN" in ROUTER)
+      "_OPTIONAL_LOG_COLUMNS = send_record.OPTIONAL_COLUMNS" in ROUTER
+      and "send_identity.LABEL_COLUMN" in ROUTER
+      and '"report_label"' in SEND_RECORD and "OPTIONAL_COLUMNS = (" in SEND_RECORD)
 check("E2 the degrade drops optional columns ONE AT A TIME and retries (never loses the row)",
-      "drop.append(" in ROUTER and "for attempt in range(len(_OPTIONAL_LOG_COLUMNS)" in ROUTER)
+      "drop.append(" in SEND_RECORD
+      and "for _ in range(len(OPTIONAL_COLUMNS) + 1)" in SEND_RECORD)
+check("E2b the router still reaches that degrade rather than inserting around it",
+      "send_record.insert_rows(log_rows)" in ROUTER)
 MIG = open("../database/migrations/1057_notify_send_log_report_label.sql").read()
 check("E3 mig 1057 is additive, idempotent and carries a REVERT note",
       "ADD COLUMN IF NOT EXISTS report_label" in MIG and "-- REVERT:" in MIG

@@ -194,7 +194,7 @@ FROM_NAMES = []
 
 def fake_senders(email_ok=True, wa_ok=True):
     """Replace the ONE channel seam. Nothing here touches a network."""
-    async def _send(ch, address, built, wa_filename, from_name=""):
+    async def _send(ch, address, built, wa_filename, from_name="", org_id=None, scope=""):
         # `from_name` mirrors the real seam (§POS-02): a digest is the TENANT's mail, so the name
         # the recipient sees it from rides this call. Recorded, not ignored, so the stub cannot
         # quietly diverge from the signature it stands in for.
@@ -258,7 +258,7 @@ check("C8 a third run sends nothing: both channels are square", SENT == []
       and row3["already_sent"] is True)
 
 # a channel that RAISES is a channel that carried nothing
-async def _boom(ch, _address, _built, _fn, from_name=""):
+async def _boom(ch, _address, _built, _fn, from_name="", org_id=None, scope=""):
     if ch == "email":
         raise RuntimeError("transport down")
     return True

@@ -2235,6 +2235,31 @@ FACTS: dict[str, dict] = {
             'app/modules/notify/digest_delivery.py': ('_why',),
         },
     },
+    'email_send_record': {
+        "question": 'DID THIS EMAIL ACTUALLY GO, AND WHAT BECAME OF IT? The record of one outbound '
+                    'message: that we handed it to the provider, the id the provider gave back, its '
+                    'refusal if it refused, and the verdict it reports afterwards (delivered, '
+                    'bounced, marked as spam, delayed). Reported 2026-11-25 as "onboarding email '
+                    'not reaching employees": the invites existed, the audit said they had been '
+                    'sent, and `notify.send_log` held no row for any of them — nor for any HR '
+                    'letter, CRM mail, helpdesk reply, receipt or access code ever sent. The table '
+                    'and mig 714\'s delivery columns were already there; thirty-one callers each '
+                    'decided for themselves whether to write a row and all but the report senders '
+                    'decided not to. So the row is written by the TRANSPORT, where no caller can '
+                    'forget, and `purpose` is a required argument of it. The delivery arithmetic '
+                    'came from the 2026-07-18 WhatsApp silent-drop fix and was factored OUT of '
+                    '`remediation/router` rather than copied for the email webhook.',
+        "homes": ('app/modules/notify/send_record.py',),
+        "index": ('NOTIFY-02',),
+        "locks": ('harness_email_send_record.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/notify/channels/email_resend.py': ('send_record',),
+            'app/modules/notify/router.py': ('send_record',),
+            'app/modules/remediation/router.py': ('_send_record',),
+            'app/modules/hr/router.py': ('_send_record',),
+        },
+    },
     'alert_channel_ladder': {
         "question": 'Which channels does this recipient still owe, and what did each one do?',
         "homes": ('app/modules/notify/digest_delivery.py',),
