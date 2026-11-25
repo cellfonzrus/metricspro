@@ -45731,6 +45731,51 @@ See also §3d / §CORE-27 / §CORE-28 (the shared bar this is a control on) · �
 dereferenced) · §COMMCALC-49.10 (a tenant's vocabulary is never a default — and why a POLICY default
 is different) · §13e (two spellings of one store, which is why the option fold is filtered twice).
 
+### CORE-45.7 The MENU is not the label list (owner report 2026-11-25)
+
+Owner: *"once the employee is made incactieve it shoudl deacitvated from all menus, i just
+deaactivated aiman from ny logistics it was still appearing in employee set up"*.
+
+**Measured against production the day it was reported:** `storeops.employees` row 275 (NY LOGISTICS,
+`E275`) carries `is_active = false`, so the deactivation itself saved correctly, and the roster
+endpoint excludes him by default. NY LOGISTICS has exactly one inactive employee; he is it.
+
+**The class.** Seven screens ask the server for inactive people ON PURPOSE — an attendance or
+time-clock report covers past weeks, and a punch from a week somebody still worked must carry their
+NAME rather than a bare id. Each of them then handed that SAME unfiltered list to a **dropdown**. So
+the list a page keeps for LABELS became the options it OFFERS, and four screens had each written the
+option builder out by hand (`.map(e => ({ id: e.name, label: e.name, sublabel: e.email }))`). The
+roster READ had a home since §CORE-45; the MENU had none.
+
+**The one home:** `frontend/src/lib/roster-visibility.rosterOptions(rows, showInactive, fields?)` —
+returns `EntityOption[]` (the shape `EntityPicker` already takes, not a sibling of it): active people
+only unless asked, each deactivated option labelled with the one wording `INACTIVE_SUFFIX`
+(`" (inactive)"`), ids unique, sorted as read. `id` defaults to the name, `label` to the name (a menu
+of `E275`s is a menu nobody can read), `sublabel` to the email.
+
+**Wired, and what each one was doing:** Time Clock (rep filter + the manual-hours employee picker —
+hours could be booked against a deactivated person), Attendance Exceptions (rep filter), StoreOps
+Employees (rep filter offered the people its own table was hiding), HR Compliance (its own
+`(inactive)` suffix, now the home's, behind a default-off tick box reaching a leaver's signed
+paperwork), Commission Plans (`is_active !== false` by hand), Employee Setup + StoreOps Admin (the
+list filter tested `e.is_active` by TRUTHINESS, which reads a NULL flag as INACTIVE — the opposite of
+the column's default, so a person whose flag was never set was hidden from the very screen that sets
+it; no such row exists in production today, so this was latent), Org Chart (`include inactive` →
+the one label).
+
+**The lock:** `harness_roster_visibility.py` section F. A file that asks the server for inactive
+people must pass them through the home, and the eight in scope are pinned per file to the function
+they must call — "mentions the home somewhere" is a weaker claim than "builds its menu through it",
+since a screen can dereference it for stores and still leak its people picker. Proved by mutation
+(reverting Attendance's builder to `.map(...)` goes red). Pins: `WIRED_MENU_TS`.
+
+💰 **No migration, no money, no schema change** — menus only. Rows are untouched: a deactivated
+person's punches and hours stay in the weeks they worked, per the 2026-11-14 ruling, and every
+narrowed menu carries a way back to the leavers plus a count of how many are being held back.
+
+**Ledger movement in the same PR:** `frontend/roster_visibility_pending.txt` 64 → 62 across 46 files
+(HR Compliance's line deleted, Commission Plans 2 → 1).
+
 
 ## §CORE-46. A STORED CREDENTIAL SHOWN TO A PERSON IS AN AUDITED EVENT (owner decision 2026-11-20)
 

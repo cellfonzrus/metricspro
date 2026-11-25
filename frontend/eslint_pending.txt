@@ -275,7 +275,7 @@
 11	@typescript-eslint/no-explicit-any	src/app/(platform)/helpdesk/new/page.tsx
 4	@typescript-eslint/no-explicit-any	src/app/(platform)/helpdesk/page.tsx
 13	@typescript-eslint/no-explicit-any	src/app/(platform)/helpdesk/settings/page.tsx
-6	@typescript-eslint/no-explicit-any	src/app/(platform)/hr/compliance/page.tsx
+5	@typescript-eslint/no-explicit-any	src/app/(platform)/hr/compliance/page.tsx
 5	@typescript-eslint/no-explicit-any	src/app/(platform)/hr/employee-database/page.tsx
 4	@typescript-eslint/no-explicit-any	src/app/(platform)/hr/letters/page.tsx
 8	@typescript-eslint/no-explicit-any	src/app/(platform)/hr/letters/queue/page.tsx
