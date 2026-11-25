@@ -2243,7 +2243,7 @@ FACTS: dict[str, dict] = {
                     'not reaching employees": the invites existed, the audit said they had been '
                     'sent, and `notify.send_log` held no row for any of them — nor for any HR '
                     'letter, CRM mail, helpdesk reply, receipt or access code ever sent. The table '
-                    'and mig 714\'s delivery columns were already there; thirty-one callers each '
+                    'and the delivery columns it needs were already there; thirty-one callers each '
                     'decided for themselves whether to write a row and all but the report senders '
                     'decided not to. So the row is written by the TRANSPORT, where no caller can '
                     'forget, and `purpose` is a required argument of it. The delivery arithmetic '

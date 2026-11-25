@@ -273,8 +273,38 @@ for path in py_files():
 
 check("B3 LOCK: EVERY send_email call site names its purpose", not MISSING,
       detail=", ".join(MISSING[:6]))
-check("B4 control: the call-site scan is really finding call sites", len(CALL_SITES) >= 25,
-      detail=str(len(CALL_SITES)))
+
+#: WHO SENDS EMAIL IN THIS HOUSE, declared, not counted. A bare `len(CALL_SITES) >= 25` is a lower
+#: bound on a set this lock derived from the code, so a module that STOPPED sending — or one that
+#: appeared — would slide under it unnamed (the derived-subject-set rule; CI's own guard caught this
+#: assertion on 2026-11-25 before it shipped). Declared as a map so a module that gains or loses a
+#: send names itself, which is the point: thirty-one senders, each of which must record what it did.
+EXPECTED_SENDERS = {
+    "app/modules/closing/router.py": 3,
+    "app/modules/core/auth_notify.py": 2,
+    "app/modules/crm/router.py": 1,
+    "app/modules/helpdesk/router.py": 3,
+    "app/modules/hr/letters.py": 1,
+    "app/modules/hr/router.py": 5,
+    "app/modules/notify/digest_delivery.py": 1,
+    "app/modules/notify/router.py": 3,
+    "app/modules/pos/router.py": 2,
+    "app/modules/recovery/router.py": 1,
+    "app/modules/referral/router.py": 2,
+    "app/modules/remediation/router.py": 1,
+    "app/modules/storeops/payroll_approval.py": 2,
+    "app/modules/storeops/router.py": 4,
+}
+_found = {}
+for _site in CALL_SITES:
+    _found[_site.rsplit(":", 1)[0]] = _found.get(_site.rsplit(":", 1)[0], 0) + 1
+check("B4 the senders are EXACTLY the declared set (a module that gains or loses one names itself)",
+      _found == EXPECTED_SENDERS,
+      detail="added/changed: %s | missing: %s" % (
+          {k: v for k, v in sorted(_found.items()) if EXPECTED_SENDERS.get(k) != v},
+          {k: v for k, v in sorted(EXPECTED_SENDERS.items()) if k not in _found}))
+check("B4b control: the declared set is not vacuous — 31 sends across 14 modules",
+      sum(EXPECTED_SENDERS.values()) == 31 and len(EXPECTED_SENDERS) == 14)
 
 # ── C. the transport is what records ────────────────────────────────────────────────────────────
 print("\n── C. LOCK: the transport records, not the caller ──")
