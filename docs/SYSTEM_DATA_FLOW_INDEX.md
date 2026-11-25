@@ -52453,8 +52453,29 @@ afterwards for a human to read and nothing branches on them.
 **It never overwrites** (`overwrite=False`), so a goal somebody set by hand is never replaced. A
 tenant with nothing to carry writes **nothing** — the writer already skips a store whose carried
 figures are all zero, so "auto-fill for every tenant" cannot invent goals for a tenant that has never
-set one. Measured 2026-11-25: Cellfonz R Us and Luxelink Wireless have October goals; **Vzone and NY
-LOGISTICS have none in any month**, so nothing is written for them.
+set one.
+
+**Measured 2026-11-25 by running the REAL `_carry_forward_map` against production for all four
+tenants**, which is the only way this was going to be right:
+
+| tenant | stores | declared categories | basis | rows it would write |
+|---|---|---|---|---|
+| Cellfonz R Us | 29 | 8 | 5 stretch / 79 carry / 119 new | 28 |
+| Luxelink | 20 | 17 | 1 stretch / 35 carry / 284 new | 20 |
+| NY LOGISTICS | 1 | 20 | 1 carry / 18 new | 1 |
+| Vzone | 1 | 4 | 3 new | 0 |
+
+Each tenant reads its **own** declared vocabulary (8 / 17 / 20 / 4 categories) — the 2026-10-30
+requirement, verified rather than assumed.
+
+**NY LOGISTICS corrects a claim worth not repeating.** It has no `commcalc.targets` row in ANY month,
+so "nothing to carry" looks obvious — but its store carries `storeops.stores.monthly_target = 39000`,
+which `_carry_forward_map` has **always** used as the accessories goal when there is no prior targets
+row, so it legitimately carries $39,000 forward. That fallback is pre-existing and is right (the store
+*does* have a declared monthly accessory goal). The lesson: **"this tenant has no goals" cannot be
+answered from the `targets` table alone**, because for accessories a goal has two homes. Vzone writes
+nothing for the honest reason — its `monthly_target` is 0 and it has no prior goal, so every category
+reads `new`.
 
 ### §COMMCALC-84.6 Money
 

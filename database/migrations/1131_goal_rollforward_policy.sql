@@ -48,10 +48,28 @@
 -- identical rows would create four places for one fact to drift.
 --
 -- AUTO-FILL FOR EVERY TENANT (owner's choice on the decision card, 2026-11-25). Measured the same
--- day: Cellfonz R Us and Luxelink Wireless have October goals and will have November ones written;
--- Vzone and NY LOGISTICS have no goals in any month, so there is nothing to carry and nothing is
--- written for them — the writer already skips a store with no prior goal rather than creating a row
--- of zeroes.
+-- day by running the REAL `_carry_forward_map` against production for all four tenants, which is the
+-- only way this was going to be right:
+--
+--   Cellfonz R Us  29 stores,  8 declared categories, 5 stretch / 79 carry / 119 new -> 28 rows
+--   Luxelink       20 stores, 17 declared categories, 1 stretch / 35 carry / 284 new -> 20 rows
+--   NY LOGISTICS    1 store,  20 declared categories,              1 carry /  18 new ->  1 row
+--   Vzone           1 store,   4 declared categories,                          3 new ->  0 rows
+--
+-- Each tenant reads its OWN declared vocabulary (8 / 17 / 20 / 4 categories), which is the
+-- 2026-10-30 directive's requirement and was verified rather than assumed.
+--
+-- NY LOGISTICS IS THE INTERESTING ONE, and it corrects a claim worth not repeating: it has no
+-- `commcalc.targets` row in ANY month, so "nothing to carry" looks obvious — but its store carries
+-- `storeops.stores.monthly_target = 39000`, which `_carry_forward_map` has ALWAYS used as the
+-- accessories goal when there is no prior targets row. So it legitimately carries $39,000 forward.
+-- That fallback is pre-existing behaviour and is right (the store does have a declared monthly
+-- accessory goal); the lesson is that "this tenant has no goals" cannot be answered from the
+-- `targets` table alone, because a goal has TWO homes for accessories.
+--
+-- Vzone writes nothing, and for the honest reason: its store's `monthly_target` is 0 and it has no
+-- prior goal, so every category reads 'new' and the writer skips an all-zero carry rather than
+-- creating a row of zeroes. Auto-fill cannot invent a goal for a tenant that has never set one.
 --
 -- THE STATUS COLUMNS ARE NOT THE AUTHORITY. `last_filled_period` / `last_run_at` / `last_result`
 -- record what a run SAID it did; whether a month actually has goals is answered by reading
