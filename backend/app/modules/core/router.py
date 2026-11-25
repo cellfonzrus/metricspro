@@ -3834,7 +3834,7 @@ async def _deliver_access_code(client, org_id, email, code, *, record_on_invite=
         tname = t.get("name")
     except Exception:
         tname = None
-    ok, channel, err = await _anotify.send_invite_email(email, code, tname or "MetricsPro")
+    ok, channel, err = await _anotify.send_invite_email(email, code, tname or "MetricsPro", org_id=org_id)
     status = "sent" if ok else "failed"
     if record_on_invite:
         try:

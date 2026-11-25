@@ -7604,6 +7604,7 @@ async def request_shift_extension(body: ShiftExtensionRequestIn, authorization: 
             if email_resend.is_configured():
                 await email_resend.send_email(
                     org_id=org_id,
+                    purpose="shift_extension_approval",
                     to=dm_email,
                     subject=f"Shift-extension approval needed — {row['employee_name'] or employee_id}",
                     html=(f"<p>{mgr.get('email')} requested to extend "
@@ -7736,7 +7737,8 @@ def _send_plain_email(*, emails, subject: str, body: str, org_id=None) -> bool:
             ok = False
             for addr in addrs:
                 try:
-                    await email_resend.send_email(addr, subject, html, [], org_id=org_id)
+                    await email_resend.send_email(addr, subject, html, [], org_id=org_id,
+                                                        purpose="storeops_notice")
                     ok = True
                 except Exception:
                     pass
@@ -8245,6 +8247,7 @@ async def request_budget_override(body: BudgetOverrideRequestIn, authorization: 
             if email_resend.is_configured():
                 await email_resend.send_email(
                     org_id=org_id,
+                    purpose="hours_budget_override",
                     to=dm_email,
                     subject=f"Hours-budget override needed — {store} (week of {week_start})",
                     html=(f"<p>{mgr.get('email')} requested to schedule <b>{store}</b> past its weekly "
@@ -11241,7 +11244,8 @@ def _do_google_reviews_sweep(org_id, store_codes=None):
                         try:
                             await email_resend.send_email(to=n["email"], subject=n["subject"],
                                                           html=f"<p>{n['body']}</p>",
-                                                          org_id=org_id)
+                                                          org_id=org_id,
+                                                          purpose="storeops_notice")
                         except Exception:
                             pass
                 asyncio.run(_send_all())

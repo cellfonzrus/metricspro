@@ -656,7 +656,7 @@ def _deliver_qr(org_id: str, referral: dict, url: str) -> dict:
                         f"<p><a href='{url}'>Open the referral link</a></p></div>")
                 attach = [("referral-qr.png", png, "image/png")] if png else []
                 asyncio.run(email_resend.send_email(email, "Your referral QR code", html, attach,
-                                                    org_id=org_id))
+                                                    org_id=org_id, purpose="referral_qr"))
                 out["email"] = True
         except Exception:
             pass
@@ -860,7 +860,8 @@ def _notify_referrer_approved(org_id: str, referral: dict, amount: float, payout
                 html = f"<div style='font-family:system-ui,sans-serif'><p>{_h.escape(body)}</p></div>"
                 asyncio.run(email_resend.send_email(referral["referrer_email"],
                                                     "Your referral was approved 🎉", html, [],
-                                                    org_id=org_id))
+                                                    org_id=org_id,
+                                                    purpose="referral_approved"))
     except Exception:
         pass
     try:

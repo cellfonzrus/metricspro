@@ -47,8 +47,13 @@ def _code_box(code: str) -> str:
             f'margin:14px 0">{code}</div>')
 
 
-async def send_invite_email(email: str, code: str, tenant_name: str) -> tuple:
-    """Email an account-link / access invite code. Returns (ok, 'email', error_or_None)."""
+async def send_invite_email(email: str, code: str, tenant_name: str, org_id=None) -> tuple:
+    """Email an account-link / access invite code. Returns (ok, 'email', error_or_None).
+
+    `org_id` is WHOSE invite this is, and it is what lets the attempt be recorded in
+    `notify.send_log` (§NOTIFY-02) — an invite is a tenant's own mail, so the history row belongs
+    to that tenant. Without it the send still goes out and simply records nothing, which is the
+    narrow, documented exception below."""
     title = f"You've been invited to {tenant_name or 'a company'} on MetricsPro"
     html = _wrap(title,
                  f'<p style="font-size:14px;line-height:1.5">An administrator set up access for you. '
@@ -62,7 +67,8 @@ async def send_invite_email(email: str, code: str, tenant_name: str) -> tuple:
         # The invite is the TENANT's mail and the tenant's name is already in hand here, so it is
         # passed straight to the channel rather than re-read (owner 2026-10-17, §POS-02).
         mid = await email_resend.send_email(email, f"Your MetricsPro access code for {tenant_name or 'MetricsPro'}",
-                                            html, [], from_name=tenant_name or None)
+                                            html, [], from_name=tenant_name or None,
+                                            org_id=org_id, purpose="core_access_code")
         return (True, "email", None)
     except Exception as e:
         return (False, "email", str(e)[:300])
@@ -99,7 +105,12 @@ async def _email_otp(email: str, code: str, purpose: str, instruction: str) -> t
                  f'<p style="font-size:13px;color:#475569">This code expires in about 10 minutes. '
                  f'Do not share it with anyone.</p>')
     try:
-        await email_resend.send_email(email, f"MetricsPro {purpose} code: {code}", html, [])
+        # THE ONE DOCUMENTED ORGLESS SEND. A sign-in or password-reset code is asked for BEFORE
+        # any tenant is known (the caller has an address and nothing else), and `send_log.org_id` is
+        # NOT NULL, so this attempt records nothing. Named here, and pinned by
+        # harness_email_send_record.py, so a second orgless sender cannot appear quietly.
+        await email_resend.send_email(email, f"MetricsPro {purpose} code: {code}", html, [],
+                                      purpose="core_login_code")
         return (True, "email", None)
     except Exception as e:
         return (False, "email", str(e)[:300])

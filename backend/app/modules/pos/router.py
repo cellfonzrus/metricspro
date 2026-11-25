@@ -2023,7 +2023,8 @@ async def request_customer_w9(customer_id: str, body: dict = None,
     try:
         mid = await _mail.send_email(
             to, _w9.request_subject(company), _w9.request_html(company, form_url, link, name),
-            None, from_name=company or None)
+            None, from_name=company or None, org_id=org_id, purpose="pos_w9_request",
+            filters={"customer_id": customer_id})
     except Exception as e:
         raise HTTPException(502, f"the mail provider refused it: {str(e)[:200]}")
     row = {"status": _w9.STATUS_REQUESTED, "requested_at": now.isoformat() + "Z",
@@ -3340,7 +3341,8 @@ async def email_sale_receipt(sale_id: str, body: dict = None,
                    if bundle["pdf_bytes"] else [])
     try:
         mid = await _mail.send_email(view["to"], view["subject"], html, attachments,
-                                     from_name=bundle["company_name"] or None)
+                                     from_name=bundle["company_name"] or None, org_id=org_id,
+                                     purpose="pos_receipt")
     except Exception as e:
         raise HTTPException(502, f"the mail provider refused it: {str(e)[:200]}")
     msg = f"Receipt emailed to {view['to']}."

@@ -556,7 +556,8 @@ async def _send_email_for_letter(employee, subject, body):
         # A letter is the EMPLOYER's letter, so it carries the employer's name (one home:
         # core/tenant_identity, through the channel's own resolver) — owner 2026-10-17, §POS-02.
         await email_resend.send_email(addr, subject, _letter_html(subject, body), [],
-                                      org_id=(employee or {}).get("org_id"))
+                                      org_id=(employee or {}).get("org_id"),
+                                      purpose="hr_letter", label=subject)
         return True, None
     except Exception as e:
         return False, str(e)[:300]

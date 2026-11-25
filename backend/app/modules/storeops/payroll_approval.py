@@ -1270,7 +1270,7 @@ async def dispatch(body: PayrollDispatchIn, authorization: str = Header(default=
         html = _statement_html(tname, g["label"], s.isoformat(), e.isoformat(), g["rows"], th, tp)
         try:
             await send_email(email, f"Payroll to disburse — {tname} — week of {s.isoformat()}", html,
-                             org_id=org_id)
+                             org_id=org_id, purpose="payroll_disbursement")
             stamp = {"dispatch_status": "sent", "dispatched_at": _now(),
                      "dispatch_to": email, "dispatch_error": None}
             sent.append({"to": email, "employees": len(g["rows"]), "pay": tp})
@@ -1367,7 +1367,7 @@ async def run_weekly_notice(x_notify_secret: str = Header(default=""), eval_date
 </div>"""
                 try:
                     await send_email(email, f"Approve last week's hours — {tname}", html,
-                                     org_id=oid)
+                                     org_id=oid, purpose="payroll_hours_approval")
                     emailed += 1
                 except Exception:
                     pass

@@ -6,11 +6,12 @@ server-side (report_registry + render) so on-demand and scheduled output match t
 browser export. Scheduling is driven by Supabase pg_cron hitting POST /notify/run-due.
 """
 import base64
+import json
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Header, Response
+from fastapi import APIRouter, HTTPException, Header, Request, Response
 from starlette.concurrency import run_in_threadpool
 
 from app.core.database import get_supabase
@@ -22,7 +23,7 @@ from app.core.schemas import LaxModel
 from app.core.run_secret import verify_notify_secret
 from app.modules.core.run_for_tenant import run_for_tenant_async, TenantNotRunnable
 from app.modules.core import auth_security as _sec
-from . import report_registry, render, download_token, whatsapp_window, send_identity, send_outcome
+from . import report_registry, render, download_token, whatsapp_window, send_identity, send_outcome, send_record
 from .channels import email_resend, whatsapp_meta
 
 
@@ -495,34 +496,22 @@ def _email_html(payload, link, message) -> str:
     )
 
 
-# Columns a send_log row carries ONLY once its migration has been run: `delivery_route` (mig 723) and
-# `report_label` (mig 1057). PostgREST rejects the WHOLE batch when any one of them is missing, so
-# `_insert_log` drops them one at a time and retries. Un-run migration = a history row that is slightly
-# poorer, never a history row that is silently lost (and `send_identity.display_label` resolves the name
-# for a row that has no stored label, so the Notify history reads correctly either way).
-_OPTIONAL_LOG_COLUMNS = ("delivery_route", send_identity.LABEL_COLUMN)
+# WHICH COLUMNS MAY BE MISSING, and the strip-and-retry that copes with it, now live in the ONE home
+# for a send record (`notify/send_record`, §NOTIFY-02). This wrapper stays because every caller here
+# already speaks in lists of rows; it holds no second copy of the rule.
+_OPTIONAL_LOG_COLUMNS = send_record.OPTIONAL_COLUMNS
 
 
 def _insert_log(log_rows) -> None:
-    """Write send_log rows. Never lets a logging failure abort a real send, and DEGRADES GRACEFULLY when
-    a column's migration has not been run: strip one optional column, retry, repeat. Without the retry an
-    un-run migration would silently lose the ENTIRE send history — exactly the class of failure this
-    package exists to remove."""
-    if not log_rows:
-        return
-    rows = [dict(r) for r in log_rows]
-    drop = []
-    for attempt in range(len(_OPTIONAL_LOG_COLUMNS) + 1):
-        payload = [{k: v for k, v in r.items() if k not in drop} for r in rows]
-        try:
-            sb().table("send_log").insert(payload).execute()
-            return
-        except Exception:
-            pass
-        nxt = [c for c in _OPTIONAL_LOG_COLUMNS if c not in drop and any(c in r for r in rows)]
-        if not nxt:
-            return
-        drop.append(nxt[0])
+    """Write send_log rows through the one home. Never lets a logging failure abort a real send.
+
+    EMAIL ROWS ARE NOT WRITTEN HERE. Since 2026-11-25 the email transport itself records every
+    attempt (`channels/email_resend.send_email` -> `send_record.record_attempt`), so that every one
+    of the thirty-one senders that is NOT a report gets a history row too. Writing the email row
+    again here would be the second copy the index rules forbid, so callers hand this function the
+    rows of the channels whose transport has no home of its own yet (WhatsApp).
+    """
+    send_record.insert_rows(log_rows)
 
 
 async def _dispatch(org_id, report_key, filters, channels, formats, emails, phones, message,
@@ -568,8 +557,12 @@ async def _dispatch(org_id, report_key, filters, channels, formats, emails, phon
         html = _email_html(payload, link, message)
         for addr in emails:
             try:
-                mid = await email_resend.send_email(addr, subject, html, email_attachments,
-                                                    from_name=_from_name(org_id))
+                mid = await email_resend.send_email(
+                    addr, subject, html, email_attachments, from_name=_from_name(org_id),
+                    org_id=org_id, purpose=ident["report_key"],
+                    label=ident.get(send_identity.LABEL_COLUMN) or "",
+                    subscription_id=subscription_id, filters=filters or {},
+                    triggered_by=triggered_by)
                 _log("email", addr, "sent", mid=mid)
             except Exception as e:
                 _log("email", addr, "failed", err=str(e))
@@ -589,7 +582,7 @@ async def _dispatch(org_id, report_key, filters, channels, formats, emails, phon
                 except Exception as e:
                     _log("whatsapp", ph, "failed", err=str(e))
 
-    _insert_log(log_rows)
+    _insert_log([r for r in log_rows if r.get("channel") != "email"])   # email rows: see _insert_log
 
     return {"sent": sent, "failed": failed, "targets": {"emails": emails, "phones": phones},
             "formats": formats, "channels": channels,
@@ -651,8 +644,10 @@ async def send_file(body: dict, org_id: str = ORG_ID):
         html = f"<p>{(message or 'Please find the attached report.')}</p><p style='color:#64748b;font-size:12px'>{title}</p>"
         for addr in emails:
             try:
-                mid = await email_resend.send_email(addr, title, html, attachments,
-                                                    from_name=_from_name(org_id))
+                mid = await email_resend.send_email(
+                    addr, title, html, attachments, from_name=_from_name(org_id), org_id=org_id,
+                    purpose=ident["report_key"],
+                    label=ident.get(send_identity.LABEL_COLUMN) or "", triggered_by="manual")
                 _log("email", addr, "sent", mid=mid)
             except Exception as e:
                 _log("email", addr, "failed", err=str(e))
@@ -670,7 +665,7 @@ async def send_file(body: dict, org_id: str = ORG_ID):
                          route=res.get("route") or "")
                 except Exception as e:
                     _log("whatsapp", ph, "failed", err=str(e))
-    _insert_log(log_rows)
+    _insert_log([r for r in log_rows if r.get("channel") != "email"])   # email rows: see _insert_log
     return {"sent": sent, "failed": failed, "targets": {"emails": emails, "phones": phones},
             "channels": channels, "outcome": send_outcome.summarize(log_rows)}
 
@@ -828,7 +823,9 @@ async def send_email_plain(body: SendEmailPlainIn, org_id: str = ORG_ID):
     for addr in to:
         try:
             mid = await email_resend.send_email(addr, subject, html, [],
-                                                from_name=_from_name(org_id))
+                                                from_name=_from_name(org_id), org_id=org_id,
+                                                purpose="notify_plain_email",
+                                                triggered_by="manual")
             sent.append({"to": addr, "id": mid})
         except Exception as e:
             sent.append({"to": addr, "error": str(e)})
@@ -915,6 +912,47 @@ def update_subscription(sid: str, body: SubscriptionIn, org_id: str = ORG_ID):
 def delete_subscription(sid: str, org_id: str = ORG_ID):
     sb().table("subscriptions").delete().eq("org_id", org_id).eq("id", sid).execute()
     return {"deleted": sid}
+
+
+# ── the provider's own verdict on an email we already sent ───────────────────────────────────────
+@router.post("/email-webhook")
+async def email_webhook(request: Request):
+    """Resend's delivery webhook. Stamps `delivered` / `bounced` / `complained` / `delayed` onto the
+    `notify.send_log` row the send wrote (matched on the provider's message id).
+
+    WHY THIS EXISTS (owner report 2026-11-25, §NOTIFY-02). The IDENTICAL defect was found for
+    WhatsApp on 2026-07-18 — a provider accepts a message, hands back an id, then drops it — and
+    mig 714 added the three `delivery_*` columns plus the Meta webhook that fills them. Email was
+    never given the sibling, so `delivery_status` was NULL on every email row ever written and a
+    bounced onboarding invite was indistinguishable from a delivered one. The arithmetic is NOT
+    copied from the Meta handler: both now dereference `notify/send_record`.
+
+    AUTHENTICATION. This path is on the PUBLIC middleware allowlist (Resend carries no JWT of ours),
+    so the `svix-signature` HMAC is its ONLY gate and it FAILS CLOSED — an unset
+    RESEND_WEBHOOK_SECRET rejects every payload rather than letting a stranger write a fake
+    "delivered" onto a mail that bounced.
+
+    It always answers 2xx once the signature is good, even for an event it does nothing with: a
+    provider disables a subscription that keeps erroring, and a disabled subscription is how this
+    blind spot would quietly come back.
+    """
+    body = await request.body()
+    h = request.headers
+    if not send_record.svix_signature_ok(settings.RESEND_WEBHOOK_SECRET, h.get("svix-id"),
+                                         h.get("svix-timestamp"), h.get("svix-signature"), body):
+        raise HTTPException(403, "signature verification failed")
+    try:
+        event = json.loads(body or b"{}")
+    except Exception:
+        return {"ok": True, "recorded": 0, "note": "unreadable payload"}
+    found = send_record.delivery_from_resend(event)
+    if not found:
+        # An event this house has not ruled on (an open, a click) records NOTHING rather than a
+        # confident wrong verdict — the ALLOWLIST rule. Still a 2xx: it is not an error.
+        return {"ok": True, "recorded": 0, "event": str(event.get("type") or "")[:60]}
+    mid, status, error = found
+    changed = send_record.stamp_delivery(mid, status, channel="email", error=error)
+    return {"ok": True, "recorded": changed, "status": status}
 
 
 @router.get("/send-log")

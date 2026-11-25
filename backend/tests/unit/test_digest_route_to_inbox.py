@@ -54,7 +54,9 @@ def _transport(monkeypatch):
     went out" could not tell that apart from the silence it exists to forbid."""
     calls = []
 
-    async def _send(ch, address, built, wa_filename, from_name=""):
+    async def _send(ch, address, built, wa_filename, from_name="", org_id=None, scope=""):
+        # `org_id`/`scope` mirror the real `_send` (§NOTIFY-02): a digest's send is recorded against
+        # the tenant it belongs to, and the record names which digest it was.
         calls.append((ch, address))
         return True
     monkeypatch.setattr(DD, "_send", _send)

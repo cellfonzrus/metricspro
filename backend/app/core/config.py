@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     RESEND_API_KEY: str = ""
     NOTIFY_FROM_EMAIL: str = "reports@metricspro.tech"
     NOTIFY_FROM_NAME: str = "MetricsPro"
+    # POST /api/v1/notify/email-webhook is on the PUBLIC allowlist (Resend carries no JWT of ours),
+    # so its ONLY authentication is the `svix-signature` HMAC it self-verifies. The secret is the
+    # `whsec_…` value Resend shows when the endpoint is created. UNSET = fail closed, refuse every
+    # payload — the same posture WHATSAPP_APP_SECRET takes, and for the same reason: an anonymous
+    # write path into a tenant's send history could park a fake "delivered" on a mail that bounced.
+    # There is no break-glass override here: unlike the WhatsApp webhook this endpoint is NEW, so
+    # there is no deployed window in which it must work before the secret is set.
+    RESEND_WEBHOOK_SECRET: str = ""
     # Meta WhatsApp Cloud API
     WHATSAPP_ACCESS_TOKEN: str = ""
     WHATSAPP_PHONE_NUMBER_ID: str = ""

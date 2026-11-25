@@ -98,7 +98,11 @@ class StoreopsFake:
 
 
 SENT = []
-async def _fake_send(to, subject, html, attachments=None, from_name=None, org_id=None):
+async def _fake_send(to, subject, html, attachments=None, from_name=None, org_id=None, *,
+                     purpose, label="", subscription_id=None, filters=None, triggered_by=""):
+    # `purpose` is REQUIRED on the real channel since 2026-11-25 (§NOTIFY-02) so that every send is
+    # recorded by the transport. Required here too: a sender that stops naming what it is sending
+    # fails in this harness instead of sending invisibly.
     # from_name / org_id mirror the real channel (§POS-02): the alert is the TENANT's own mail.
     SENT.append({"to": to, "subject": subject, "from_name": from_name, "org_id": org_id})
     return "fake-id"

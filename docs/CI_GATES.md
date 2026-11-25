@@ -18,7 +18,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 |---|---|---|
 | `access-probe-rotation.yml` | 1 | `schedule`, `workflow_dispatch` |
 | `branch-base-guard.yml` | 1 | `pull_request_target`, `workflow_dispatch` |
-| `carrier-vocab-guard.yml` | 49 | `pull_request`, `push`, `workflow_dispatch` |
+| `carrier-vocab-guard.yml` | 50 | `pull_request`, `push`, `workflow_dispatch` |
 | `data-qa-guard.yml` | 4 | `pull_request`, `push`, `workflow_dispatch` |
 | `deploy-reachability.yml` | 1 | `deployment_status`, `workflow_dispatch` |
 | `deploy-website.yml` | 1 | `push`, `workflow_dispatch` |
@@ -33,7 +33,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 642 gates
+## Gated — 643 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -241,6 +241,7 @@ the Runs on column is how you can tell.
 | `harness_drilldown_coverage.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_dropoff_label.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_eep_retail_ops.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_email_send_record.py` | `carrier-vocab-guard.yml` | Every email is recorded and its delivery is visible (DB-free, the real module) (`email-send-record-proof`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_email_sweep_dispatch.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_employee_dashboard_access.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_employee_write_proof.py` | `org-scope-guard.yml` | Employee pay writes + change-log identity (`employee-write-locks`) | `pull_request`, `push`, `workflow_dispatch` |

@@ -250,7 +250,8 @@ async def _deliver_claim(cfg, claim, lines):
                     att = [(filename, data, mime)] if data else None
                     await email_resend.send_email(email, subject, html, attachments=att,
                                                   org_id=(claim or {}).get("org_id")
-                                                  or (cfg or {}).get("org_id"))
+                                                  or (cfg or {}).get("org_id"),
+                                                  purpose="recovery_claim")
                     delivered.append(f"email:{email}")
             except Exception:
                 pass

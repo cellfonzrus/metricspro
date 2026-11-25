@@ -394,6 +394,38 @@ export default function OnboardingAdminPage() {
 }
 
 
+// ── Did the invite actually reach them? ──────────────────────────────────────────────────────────
+// The states come from the backend's one home for a send record, never from a guess here, so this
+// badge and the API can never disagree about what "sent" means (§NOTIFY-02).
+type DeliveryRow = { employee_id: string; state?: string; message?: string; at?: string | null }
+
+const DELIVERY_LOOK: Record<string, { label: string; fg: string; bg: string; bd: string }> = {
+  delivered: { label: '✓ delivered', fg: 'var(--c-fg-065f46)', bg: 'var(--c-bg-ecfdf5)', bd: 'var(--c-bg-a7f3d0)' },
+  accepted: { label: 'accepted — not confirmed', fg: 'var(--c-fg-9a3412)', bg: 'var(--c-bg-fff7ed)', bd: 'var(--c-bg-fdba74)' },
+  delayed: { label: 'delayed', fg: 'var(--c-fg-9a3412)', bg: 'var(--c-bg-fff7ed)', bd: 'var(--c-bg-fdba74)' },
+  bounced: { label: '✕ bounced', fg: 'var(--c-fg-991b1b)', bg: 'var(--c-bg-fef2f2)', bd: 'var(--c-bg-fca5a5)' },
+  // A PROVIDER REFUSAL is not a bounce. Confirmed live 2026-11-25: the reported invite was
+  // `suppressed` at Resend after an earlier bounce from that address, so nothing was sent while the
+  // API answered 200. The remedy is ours (fix the address, or clear the suppression), not the
+  // recipient's, so it gets its own words.
+  refused: { label: '✕ provider did not send', fg: 'var(--c-fg-991b1b)', bg: 'var(--c-bg-fef2f2)', bd: 'var(--c-bg-fca5a5)' },
+  complained: { label: '⚠ marked as spam', fg: 'var(--c-fg-991b1b)', bg: 'var(--c-bg-fef2f2)', bd: 'var(--c-bg-fca5a5)' },
+  failed: { label: '✕ not sent', fg: 'var(--c-fg-991b1b)', bg: 'var(--c-bg-fef2f2)', bd: 'var(--c-bg-fca5a5)' },
+  no_address: { label: 'no email address', fg: 'var(--text3)', bg: 'var(--surface)', bd: 'var(--border)' },
+  unknown: { label: 'no send recorded', fg: 'var(--text3)', bg: 'var(--surface)', bd: 'var(--border)' },
+}
+
+function DeliveryBadge({ row }: { row?: DeliveryRow }) {
+  const state = row?.state || 'unknown'
+  const look = DELIVERY_LOOK[state] || DELIVERY_LOOK.unknown
+  return (
+    <span title={row?.message || 'No send recorded — nobody can say whether this reached them.'}
+      style={{ fontSize: 11, padding: '1px 7px', borderRadius: 12, whiteSpace: 'nowrap',
+        background: look.bg, border: `1px solid ${look.bd}`, color: look.fg }}>{look.label}</span>
+  )
+}
+
+
 // ── 📤 Documents board — who was SENT the onboarding packet, what came BACK, what's missing ──────
 function DocumentsBoard() {
   const [rows, setRows] = useState<any[]>([])
@@ -404,10 +436,22 @@ function DocumentsBoard() {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [res, setRes] = useState<any>(null)
+  // DID IT ACTUALLY REACH THEM (§NOTIFY-02). "Sent" on this board used to mean only that we had
+  // minted a link and asked the mail provider — it could not mean anything else, because no
+  // onboarding send was recorded anywhere (owner report 2026-11-25). This read is the provider's
+  // own verdict per employee, and it deliberately shows "no send recorded" rather than letting an
+  // absent record pass for a delivery.
+  const [deliv, setDeliv] = useState<Record<string, DeliveryRow>>({})
 
   async function load() {
     try { const d = await api('/api/v1/hr/onboarding/doc-status'); setReady(d?.ready !== false); setRows(d?.employees || []) }
     catch (e: any) { setMsg(e?.message || 'Load failed') }
+    try {
+      const d = await api('/api/v1/hr/onboarding/invite-delivery')
+      const by: Record<string, DeliveryRow> = {}
+      for (const r of (d?.delivery || [])) if (r?.employee_id) by[r.employee_id] = r
+      setDeliv(by)
+    } catch { /* the board still works without it; a missing read must not blank the page */ }
   }
   useEffect(() => { load() }, [])
 
@@ -442,6 +486,9 @@ function DocumentsBoard() {
     { header: 'Employee ID', field: 'employee_id', get: (r: any) => r.employee_id || '' },
     { header: 'Email', field: 'email', get: (r: any) => r.email || '' },
     { header: 'Sent', field: 'sent', get: (r: any) => r.sent ? (r.docs_sent_at || r.invited_at || 'yes').slice(0, 10) : 'not sent' },
+    // The export carries the DELIVERY state too: an exported "sent" that cannot be told apart from
+    // a bounce is the same lie this fix removes, just in a spreadsheet.
+    { header: 'Delivery', field: 'delivery', get: (r: { employee_id?: string }) => (DELIVERY_LOOK[deliv[r.employee_id || '']?.state || 'unknown'] || DELIVERY_LOOK.unknown).label },
     { header: 'Documents Back', field: 'back', get: (r: any) => `${(r.submitted || 0) + (r.verified || 0)}/${r.total || 0}` },
     { header: 'Returned for Fixes', field: 'returned', type: 'number', get: (r: any) => r.returned || 0 },
     { header: 'Outstanding', field: 'outstanding', get: (r: any) => (r.pending_labels || []).join('; ') },
@@ -493,6 +540,7 @@ function DocumentsBoard() {
                 {r.sent
                   ? <span style={{ fontSize: 12, color: 'var(--c-fg-059669)' }}>✓ {fmt(r.docs_sent_at || r.invited_at)}</span>
                   : <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-fg-b91c1c)' }}>not sent</span>}
+                <div style={{ marginTop: 3 }}><DeliveryBadge row={deliv[r.employee_id]} /></div>
               </div>
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

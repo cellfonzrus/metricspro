@@ -25,6 +25,7 @@ from app.core.schemas import LaxModel
 from app.modules.core import ai_gate as _gate
 from app.modules.core import control_box as cbx
 from app.modules.notify import whatsapp_window
+from app.modules.notify import send_record as _send_record
 from . import playbooks as pb
 
 router = APIRouter(prefix="/remediation", tags=["remediation"])
@@ -272,7 +273,8 @@ async def _send_approval(req, approval_url):
             from app.modules.notify.channels import email_resend
             if email_resend.is_configured():
                 await email_resend.send_email(email, subject, html,
-                                              org_id=(req or {}).get("org_id"))
+                                              org_id=(req or {}).get("org_id"),
+                                              purpose="remediation_request")
                 channels.append("email"); email_status = "sent"
             else:
                 email_status = "email (Resend) not configured"
@@ -483,84 +485,33 @@ def _orgs_for_sender(client, digits):
 #                                          errors?:[{code,title,message,error_data}]}]
 # We record the latest status onto the matching notify.send_log row(s) (provider_message_id == wamid),
 # so a message Meta ACCEPTED ('sent') but then dropped never reaching 'delivered' is visible in the log.
-_DELIVERY_RANK = {"sent": 1, "delivered": 2, "read": 3, "failed": 4}
-
-
-def _merge_delivery_status(current, incoming):
-    """PURE. The latest delivery status, monotonic by rank sent<delivered<read with failed ALWAYS winning.
-    Never regresses (a later 'delivered' after 'read' keeps 'read'); an unknown/empty incoming keeps the
-    current value. Returns the winning status string (lowercased) or the unchanged current."""
-    inc = (incoming or "").strip().lower()
-    inc_r = _DELIVERY_RANK.get(inc, 0)
-    if inc_r == 0:
-        return current
-    cur_r = _DELIVERY_RANK.get((current or "").strip().lower(), 0)
-    return inc if inc_r >= cur_r else current
-
-
-def _flatten_delivery_errors(errors):
-    """PURE. Flatten a Meta status `errors[]` array into one short human string for send_log.delivery_error.
-    Each error: {code, title, message, error_data:{details}}. Best-effort; '' when there are none."""
-    if not errors:
-        return ""
-    parts = []
-    for e in errors:
-        if not isinstance(e, dict):
-            parts.append(str(e)[:200])
-            continue
-        code = e.get("code")
-        title = e.get("title") or e.get("message") or ""
-        ed = e.get("error_data")
-        detail = ed.get("details") if isinstance(ed, dict) else ""
-        seg = (f"[{code}] {title}" if code is not None else str(title)).strip()
-        if detail:
-            seg = f"{seg} — {detail}".strip(" —")
-        if seg:
-            parts.append(seg)
-    return " | ".join(parts)[:500]
+# THE ARITHMETIC IS NOT HERE ANY MORE (2026-11-25, §NOTIFY-02). The monotonic merge and the error
+# flattening this fix produced in July were the only copy of "what did the provider say afterwards",
+# and when EMAIL needed the same webhook the choice was to copy them or to factor them out. They now
+# live in `notify/send_record` and both webhooks dereference it; `harness_email_send_record.py`
+# fails the build if a second copy appears.
+_DELIVERY_RANK = _send_record.DELIVERY_RANK          # kept as a name: read by this module's tests
+_merge_delivery_status = _send_record.merge_status
+_flatten_delivery_errors = _send_record.flatten_meta_errors
 
 
 def _record_delivery_statuses(statuses):
-    """Best-effort: write Meta delivery-status events onto notify.send_log. GLOBAL wamid lookup
-    (`provider_message_id == id`) — wamids are globally unique, so NO org filter (an org filter could miss
-    the row). Writes ONLY the three delivery columns; the status is monotonic (never regresses; failed
-    wins). GRACEFUL pre-mig-714: any missing-column / query error drops the whole batch to a silent no-op
-    (the webhook MUST always 200 — Meta disables a subscription that repeatedly errors). Never raises."""
-    try:
-        log = get_supabase().schema("notify").table("send_log")
-    except Exception:
-        return
-    now_iso = _now()
+    """Write Meta delivery-status events onto notify.send_log, through the ONE home for a send
+    record (`notify/send_record.stamp_delivery`, §NOTIFY-02).
+
+    What that home guarantees, and what this handler relied on before it existed: a GLOBAL lookup on
+    the provider's message id (no org filter — a wamid is globally unique and an org filter could
+    only MISS the row), a monotonic status that never regresses and in which failure always wins,
+    an idempotent replay (a re-sent batch changes nothing), and a graceful no-op when mig 714 has
+    not been run. The webhook MUST always 200 — Meta disables a subscription that repeatedly errors
+    — so nothing here raises.
+    """
     for st in statuses or []:
         if not isinstance(st, dict):
             continue
-        wamid = st.get("id")
         status = (st.get("status") or "").strip().lower()
-        if not wamid or status not in _DELIVERY_RANK:
-            continue
-        try:
-            rows = (log.select("id, delivery_status")
-                    .eq("provider_message_id", wamid).execute().data) or []
-        except Exception:
-            return  # missing column (un-run mig 714) / query error → no-op for the whole batch
-        if not rows:
-            continue  # unknown wamid → nothing to update (no crash)
-        err = _flatten_delivery_errors(st.get("errors")) if status == "failed" else ""
-        for r in rows:
-            cur = r.get("delivery_status")
-            merged = _merge_delivery_status(cur, status)
-            # IDEMPOTENT REPLAY (Meta retries a webhook until it sees a 2xx, and re-sends the same
-            # status events): when the merge changes nothing and there is no new error to record, skip
-            # the write entirely. Replaying a batch is then a pure no-op on the row.
-            if merged == cur and not err:
-                continue
-            upd = {"delivery_status": merged, "delivery_updated_at": now_iso}
-            if err:
-                upd["delivery_error"] = err
-            try:
-                log.update(upd).eq("id", r.get("id")).execute()
-            except Exception:
-                return  # graceful: a missing column on write → no-op
+        err = _send_record.flatten_meta_errors(st.get("errors")) if status == "failed" else ""
+        _send_record.stamp_delivery(st.get("id"), status, channel="whatsapp", error=err)
 
 
 def _valid_signature(sig_header, body):
