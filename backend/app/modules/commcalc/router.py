@@ -33036,6 +33036,36 @@ async def save_target(period: str, body: SaveTargetIn, authorization: str = Head
     return r.data[0] if r.data else row
 
 
+def _write_rolled_target_lines(client, rows) -> bool:
+    """Upsert the DECLARED half of a roll-forward (`commcalc.target_line`). True when it landed.
+
+    A SEPARATE FUNCTION FOR A REASON, not for tidiness. `roll_forward_targets` writes
+    `commcalc.targets`, whose `updated_by` is TEXT and legitimately records the string
+    `'roll-forward'` — that is how the house has stamped this write since mig 006. `target_line`
+    (mig 1074) declares `updated_by` as a **UUID**, because it holds WHO, and a process is not a
+    who. With both writes in one function, `harness_actor_uid_lock.py` can only see that the
+    function contains the literal `'roll-forward'` AND writes a table with a UUID actor column, and
+    it fails the build — correctly, because from the outside those two facts are exactly what a real
+    defect looks like. Splitting the writer makes each function's actor columns unambiguous, so the
+    lock reads the truth instead of a coincidence. (The alternative — an excuse entry naming
+    `target_line` — is refused by that lock on purpose, and rightly: an excuse for a column that
+    really is a UUID is how this class gets waved through.)
+
+    So these rows carry NO `updated_by` at all. The column is nullable, and the provenance of the
+    roll-forward is already recorded in the `notes` on the sibling `commcalc.targets` row
+    ("Rolled forward from <month>"), which is where a person looks.
+
+    Returns False instead of raising: the built-in half is already committed by the time this runs,
+    so mig 1074 being unapplied must be REPORTED (`declared_lines_failed`) rather than turning a
+    successful roll-forward of every built-in category into a total failure."""
+    try:
+        (client.schema('commcalc').table('target_line')
+         .upsert(rows, on_conflict='org_id,store_code,period,metric_key,grain').execute())
+        return True
+    except Exception:
+        return False
+
+
 class RollForwardTargetsIn(LaxModel):
     overwrite: Any = None
 
@@ -33068,6 +33098,7 @@ def roll_forward_targets(period: str, body: Optional[RollForwardTargetsIn] = Non
                             catalog=_target_catalog(client, org_id))
     prior = cf['prior_period']
     written, skipped, lines_failed = [], 0, []
+    line_rows, line_codes = [], []        # the declared half, collected for ONE write after the loop
     try:
         from app.modules.storeops.router import scope_keyset as _rf_scope, in_keyset as _rf_in
         _rf_ks = _rf_scope(authorization, org_id)   # None = unrestricted (admin / enforcement off)
@@ -33112,21 +33143,29 @@ def roll_forward_targets(period: str, body: Optional[RollForwardTargetsIn] = Non
         # A category whose basis is 'new' carries value None — there was no prior goal to roll — and
         # is SKIPPED rather than written as 0, because a goal of zero that no human set is a
         # plausible-looking number, which is how this class hides (§COMMCALC-49.10).
+        # COLLECTED, NOT WRITTEN PER STORE. One upsert after the loop carries every store's declared
+        # goals: a write inside this loop would be a per-item round trip that grows with the roster
+        # (29 stores x 4 declared categories = 29 extra calls), which is what
+        # harness_round_trip_ratchet.py fails the build on — and it caught this.
+        #
+        # `updated_by` is OMITTED, not set to a sentinel. `target_line.updated_by` is a UUID column
+        # (mig 1074) while `targets.updated_by` is TEXT, so the 'roll-forward' string this function
+        # legitimately writes to the TEXT column must not reach the UUID one.
+        # harness_actor_uid_lock.py fails the build on that, correctly: the column holds WHO, and a
+        # process is not a who. The row's provenance is carried by the `notes` on its sibling.
         _lines = {k: v for k, v in (cfrow.get('lines') or {}).items() if v is not None}
         if _lines:
-            _lrows = [{'org_id': org_id, 'store_code': code, 'period': period,
-                       'metric_key': k, 'grain': 'month', 'target_value': v,
-                       'updated_by': None} for k, v in _lines.items()]
-            try:
-                (client.schema('commcalc').table('target_line')
-                 .upsert(_lrows, on_conflict='org_id,store_code,period,metric_key,grain').execute())
-            except Exception:
-                # Mig 1074 unapplied, or the table unreachable: the built-in half has already been
-                # written and must not be rolled back by the declared half failing. Reported in the
-                # response so the skip is visible rather than silent.
-                lines_failed.append(code)
+            line_rows.extend({'org_id': org_id, 'store_code': code, 'period': period,
+                              'metric_key': k, 'grain': 'month', 'target_value': v}
+                             for k, v in _lines.items())
+            line_codes.append(code)
         written.append({'store_code': code, 'basis': cfrow.get('basis'),
                         'lines': _lines or None})
+
+    # THE DECLARED HALF, in one write, through its own writer — see `_write_rolled_target_lines`
+    # for why it is a separate function and not three lines here.
+    if line_rows and not _write_rolled_target_lines(client, line_rows):
+        lines_failed.extend(line_codes)
     return {'period': period, 'prior_period': prior, 'written': len(written),
             'skipped': skipped, 'inactive_skipped': inactive_skipped,
             'declared_lines_failed': lines_failed,
@@ -33223,7 +33262,26 @@ def roll_forward_targets_run_due(period: str = "", x_notify_secret: str = Header
     # month was filled by the tick or re-run by hand (period-duality is a recurring bug class here).
     target_period = _period_or_400(
         period if str(period or "").strip() else f"{_MONTH_NAMES[_now.month - 1]} {_now.year}")
-    results = []
+    results, status_rows = [], []
+    # WHICH TENANTS ALREADY HAVE GOALS FOR THIS MONTH — read ONCE for the whole platform, not once
+    # per tenant. Still the GOALS themselves and not any status row (that is the §19.18 property
+    # this guard is built on); reading them for every org in one trip does not weaken it, and a
+    # per-tenant read here was a round trip that grew with the number of tenants
+    # (harness_round_trip_ratchet.py caught it).
+    #
+    # Cross-tenant: this selects `org_id` ALONE, and the result is used only as a set-membership
+    # test keyed by org_id. No tenant's figures are read, so nothing one tenant owns can reach
+    # another tenant's answer. The caller here is the platform's own tick, which legitimately asks
+    # the question for every tenant at once — unlike a tenant's request, which may not.
+    try:
+        _filled_orgs = {str((r or {}).get('org_id') or '')
+                        for r in ((client.schema('commcalc').table('targets').select('org_id')
+                                   .in_('period', _pvariants(target_period)).execute().data) or [])}
+    except Exception:
+        # Unreadable: treat NO tenant as filled and let each one's own guard decide. The writer
+        # never overwrites, so the worst case is a tenant whose month is already set being
+        # attempted and skipping every store — never a hand-set goal being replaced.
+        _filled_orgs = set()
     for oid in _rollforward_tenant_org_ids(client):
         entry = {'org_id': oid, 'period': target_period}
         try:
@@ -33240,12 +33298,10 @@ def roll_forward_targets_run_due(period: str = "", x_notify_secret: str = Header
                 entry['outcome'] = 'auto_fill_off'
                 results.append(entry)
                 continue
-            # THE AUTHORITY: the goals themselves. One indexed read, and a month that already has a
-            # goal on ANY store is a month a human or an earlier tick has handled.
-            got = (client.schema('commcalc').table('targets').select('store_code')
-                   .eq('org_id', oid).in_('period', _pvariants(target_period))
-                   .limit(1).execute().data) or []
-            if got:
+            # THE AUTHORITY: the goals themselves (read above, once for the platform). A month that
+            # already has a goal on ANY of this tenant's stores is one a human or an earlier tick
+            # has handled.
+            if oid in _filled_orgs:
                 entry['outcome'] = 'already_has_goals'
                 results.append(entry)
                 continue
@@ -33257,15 +33313,24 @@ def roll_forward_targets_run_due(period: str = "", x_notify_secret: str = Header
         except Exception as e:                      # one tenant's failure is not the tick's failure
             entry['outcome'] = 'error'
             entry['error'] = str(e)[:300]
-        # Informational ONLY — nothing above branches on these columns (see the header).
+        # Informational ONLY — nothing above branches on these columns (see the header). COLLECTED
+        # for one write after the loop rather than one per tenant: a status row is the least
+        # important thing here and must not cost a round trip per tenant
+        # (harness_round_trip_ratchet.py).
+        status_rows.append({'org_id': oid, 'last_filled_period': target_period,
+                            'last_run_at': _now.isoformat(),
+                            'last_result': entry.get('outcome')})
+        results.append(entry)
+
+    # One write for every tenant's status. Swallowed on failure BY DESIGN: these columns are a note
+    # for a human and nothing reads them to make a decision, so losing them must never turn a run
+    # that actually filled the goals into a reported failure.
+    if status_rows:
         try:
             (client.schema('commcalc').table('goal_rollforward_policy')
-             .upsert({'org_id': oid, 'last_filled_period': target_period,
-                      'last_run_at': _now.isoformat(),
-                      'last_result': entry.get('outcome')}, on_conflict='org_id').execute())
+             .upsert(status_rows, on_conflict='org_id').execute())
         except Exception:
             pass
-        results.append(entry)
     return {'period': target_period, 'tenants': len(results),
             'filled': sum(1 for r in results if r.get('outcome') == 'filled'),
             'results': results}

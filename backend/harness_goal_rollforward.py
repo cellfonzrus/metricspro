@@ -391,8 +391,29 @@ def section_i():
     # declared category can never roll, which is the duplicate-shape defect wearing a hat.
     ok("I2 the writer reads the declared half", "lines" in body,
        "roll-forward ignores the declared categories' suggestions")
-    ok("I3 the writer persists to target_line", "target_line" in body,
-       "roll-forward writes no commcalc.target_line row, so a declared goal never rolls")
+    # I3 — THE DECLARED HALF REALLY REACHES THE TABLE. Asserting `"target_line" in body` is NOT
+    # enough and was briefly passing for the wrong reason: the declared write moved into the helper
+    # `_write_rolled_target_lines`, and "target_line" is a SUBSTRING of that function's own name, so
+    # the check went on passing while the body contained no table reference at all. Prove the chain:
+    # the endpoint calls the writer, and the writer upserts the table.
+    ok("I3 the writer hands the declared half to its writer",
+       "_write_rolled_target_lines" in body,
+       "roll-forward does not call the declared-half writer, so a declared goal never rolls")
+    wi = src.find("def _write_rolled_target_lines")
+    wj = src.find("\nclass ", wi + 10)
+    wbody = src[wi:wj] if (wi >= 0 and wj > wi) else ""
+    ok("I3b the declared-half writer exists and is bounded", 0 < len(wbody) < 4000, f"{len(wbody)}")
+    ok("I3c ...and it upserts commcalc.target_line",
+       "table('target_line')" in wbody and "upsert" in wbody,
+       "the declared-half writer does not write the table")
+    # ...and it must NOT stamp a process name into a UUID actor column (harness_actor_uid_lock).
+    # CODE ONLY, past the docstring — which explains at length WHY 'roll-forward' and `updated_by`
+    # must not appear here, and so contains both words. Checking the whole body made this fail on
+    # its own explanation: the §H lesson again, in a new place.
+    wcode = wbody.split('"""')[-1] if wbody.count('"""') >= 2 else wbody
+    ok("I3d ...without stamping a process into the actor column",
+       "roll-forward" not in wcode and "updated_by" not in wcode,
+       f"the declared-half writer is putting a non-UUID actor into target_line.updated_by")
     # A 'new' category has NO goal to roll (value None) and must never be written as a goal of zero.
     ok("I4 the writer skips a category with no goal to roll",
        "is not None" in body, "the writer cannot be distinguishing 'no goal' from a goal of zero")
