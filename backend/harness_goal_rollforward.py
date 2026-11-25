@@ -47,11 +47,9 @@ So this harness pins a MECHANISM:
 Not money: `targets_engine.achieved_for_cat` pays on ACTUALS and never reads a goal, so nothing
 proved here can move a payout.
 """
-import io
 import re
 import os
 import sys
-import tokenize
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -74,6 +72,7 @@ def eq(label, got, want):
 
 
 # ── the module under proof ────────────────────────────────────────────────────────────────────────
+import harnesslib as _hl                                   # noqa: E402
 from app.modules.commcalc import goal_rollforward as GR     # noqa: E402
 
 HOUSE = "00000000-0000-0000-0000-000000000001"
@@ -308,26 +307,20 @@ def section_g():
 
 # ── §H — THE UN-WIRE LOCK ─────────────────────────────────────────────────────────────────────────
 def _code_only(path):
-    """`path`'s source with comments and docstrings stripped.
+    """`path`'s source with comments and docstrings stripped, via the ONE house reader.
 
     A whole-file grep is not a lock. §E9 of harness_annual_goal.py passed while a planted duplicate
     of the arithmetic sat in the file, because the NAME it searched for appeared in the module
-    docstring. Words are proved over tokenised code; figures are proved over the whole file."""
+    docstring. Words are proved over code; figures are proved over the whole file.
+
+    This used to be a private `tokenize.STRING` walk. PEP 701 (Python 3.12) stopped making an
+    f-string one STRING token, so every such private walk goes blind to f-strings on a newer
+    interpreter — which is why `harness_py_string_reader_lock.py` §C3 fails the build on one. The
+    answer is to DEREFERENCE `harnesslib.py_code_only` rather than to add a line to its debt list:
+    one fact, one home, exactly as the house rule says.
+    """
     with open(path, "r", encoding="utf-8") as fh:
-        src = fh.read()
-    out, prev, prev_end = [], tokenize.INDENT, (1, 0)
-    for tok in tokenize.generate_tokens(io.StringIO(src).readline):
-        ttype, tstr, start, end, _ = tok
-        if ttype == tokenize.COMMENT:
-            continue
-        if ttype == tokenize.STRING and prev in (tokenize.INDENT, tokenize.NEWLINE,
-                                                 tokenize.NL, tokenize.DEDENT):
-            prev = ttype                       # a bare string statement = a docstring
-            continue
-        if ttype not in (tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT):
-            out.append(tstr)
-        prev, prev_end = ttype, end
-    return "\n".join(out)
+        return _hl.py_code_only(fh.read())
 
 
 def section_h():
