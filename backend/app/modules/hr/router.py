@@ -2613,7 +2613,8 @@ async def onboarding_provision(employee_id: str, body: OnboardingProvisionIn, or
 
 
 @router.get("/onboarding/invite-delivery")
-def onboarding_invite_delivery(employee_ids: str = "", org_id: str = ORG_ID,
+def onboarding_invite_delivery(employee_ids: str = "", include_inactive: bool = False,
+                               org_id: str = ORG_ID,
                                authorization: str = Header(default="")):
     """DID THE INVITE ACTUALLY REACH THEM? One answer per employee, read from the send history.
 
@@ -2626,17 +2627,23 @@ def onboarding_invite_delivery(employee_ids: str = "", org_id: str = ORG_ID,
 
     Org-scoped (the roster read is `.eq("org_id", org_id)`, and the history read is org-scoped in
     its one home), so one tenant can never see another's addresses or delivery states.
-    `employee_ids` is a comma-separated list; empty asks about every active hire with an address.
+    `employee_ids` is a comma-separated list; empty asks about every hire with an address, narrowed
+    to the ACTIVE ones through the one home for "is this person active"
+    (`core/roster_visibility.visible`, §CORE-45) rather than by a hand-rolled SQL filter —
+    narrowing on the flag in the query would drop the NULL the column defaults to and so lose
+    live people, which is exactly the copy that lock exists to stop.
     """
     _require_hr_or_admin(authorization)
     so = _so()
     ids = [i.strip() for i in (employee_ids or "").split(",") if i.strip()]
-    q = so.table("employees").select("employee_id,name,email").eq("org_id", org_id)
+    q = so.table("employees").select("employee_id,name,email,is_active").eq("org_id", org_id)
     if ids:
         q = q.in_("employee_id", ids)
-    else:
-        q = q.eq("is_active", True)
     emps = (q.limit(2000).execute().data) or []
+    # Named employees are answered about whoever was named; an unnamed ask is the screen's own list,
+    # so it follows the screen's rule — active only unless the caller opts in.
+    if not ids:
+        emps = _rv.visible(emps, include_inactive=include_inactive)
     by_address = {}
     for e in emps:
         addr = str(e.get("email") or "").strip().lower()
