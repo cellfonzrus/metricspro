@@ -488,7 +488,7 @@ function DocumentsBoard() {
     { header: 'Sent', field: 'sent', get: (r: any) => r.sent ? (r.docs_sent_at || r.invited_at || 'yes').slice(0, 10) : 'not sent' },
     // The export carries the DELIVERY state too: an exported "sent" that cannot be told apart from
     // a bounce is the same lie this fix removes, just in a spreadsheet.
-    { header: 'Delivery', field: 'delivery', get: (r: any) => (DELIVERY_LOOK[deliv[r.employee_id]?.state || 'unknown'] || DELIVERY_LOOK.unknown).label },
+    { header: 'Delivery', field: 'delivery', get: (r: { employee_id?: string }) => (DELIVERY_LOOK[deliv[r.employee_id || '']?.state || 'unknown'] || DELIVERY_LOOK.unknown).label },
     { header: 'Documents Back', field: 'back', get: (r: any) => `${(r.submitted || 0) + (r.verified || 0)}/${r.total || 0}` },
     { header: 'Returned for Fixes', field: 'returned', type: 'number', get: (r: any) => r.returned || 0 },
     { header: 'Outstanding', field: 'outstanding', get: (r: any) => (r.pending_labels || []).join('; ') },
