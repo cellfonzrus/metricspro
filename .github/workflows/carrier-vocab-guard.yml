@@ -1103,6 +1103,12 @@ on:
       # the lines above; the engine and the report card are their own subjects, and the routers and
       # the frontend screens the axis lock scans are already named by the globs below.
       - "backend/harness_target_axis_lock.py"
+      # index §COMMCALC-84 (mig 1131) — the GOAL ROLL-FORWARD POLICY. The proof NAMES ITSELF for the
+      # same §13e reason as the lines above, and its one home is listed so a change to either
+      # re-runs it. `router.py` is already named by the globs below, which matters here: §H of this
+      # proof is an un-wire lock scanning the router for a second copy of the stretch arithmetic.
+      - "backend/harness_goal_rollforward.py"
+      - "backend/app/modules/commcalc/goal_rollforward.py"
       - "backend/harness_target_declared_axis.py"
       # index §CORE-03 — WHICH STORED COLUMNS HOLD A CREDENTIAL. The lock names ITSELF and its home
       # for the same §13e reason as the lines above, plus every module wired to the registry: a
@@ -2198,6 +2204,9 @@ jobs:
       - name: Run the target-axis lock (ONE answer to what is targetable; no ninth copy of the category list, every fold call carries the tenant's catalog, a week is a WINDOW over the month - index COMMCALC-01)
         working-directory: backend
         run: python3 harness_target_axis_lock.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the goal roll-forward proof (a MET goal stretches off what was ACHIEVED not off the plan, the rate and basis are DECLARED per tenant with a house default, an undeclared tenant never reads another's, no prior goal is blank rather than zero, and the router keeps no copy of the arithmetic - index COMMCALC-84)
+        working-directory: backend
+        run: python3 harness_goal_rollforward.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the declared-category target proof (the four built-ins byte-identical with a catalog present; a declared category reaches need and pace with no new arithmetic; the backward calculation is honest with no days left - index COMMCALC-01)
         working-directory: backend
         run: python3 harness_target_declared_axis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

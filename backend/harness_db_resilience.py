@@ -1741,7 +1741,28 @@ _all_routes = _flatten_routes(real_app.routes)
 # backend/tests/integration/test_notification_inbox_endpoint.py asserts at the HTTP boundary that a
 # caller ASKING for another company's inbox is clamped to their own, that an anonymous caller is
 # 401, and that marking all read clears one company's badge only.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1869"))
+# 1869 -> 1870, 2026-11-25 (PR for §COMMCALC-84, the declared goal roll-forward policy).
+# RE-VERIFIED THE HOUSE WAY, not assumed: `git diff origin/main -- backend/ | grep '^+@router\.'`
+# shows exactly ONE added route and none removed:
+#   POST /commcalc/targets/roll-forward/run-due  — the pg_cron entrypoint for the monthly auto-fill
+# (A note for the next person who re-pins: my first count read FOUR added routes, because
+# `origin/main` was a STALE ref — it still pointed before the notification-inbox merge, so that
+# package's own three routes rendered as mine. `git fetch origin main` FIRST, then count. Same
+# family of trap as the three-dot merge-base rule in CLAUDE.md: the command looks right and the
+# baseline is wrong.)
+# Gate: SECRET-GATED, not RBAC-gated — `verify_notify_secret`, the same check the email-sweep,
+# reviews, data-sources and system-check run-due entrypoints use, because the caller is the
+# platform's own pg_cron and carries no user token. No new gate was written. It takes NO `org_id`
+# from the caller at all: it walks `storeops.tenants` itself and resolves each tenant's policy
+# org-scoped AT the query, so there is no org parameter for a caller to point at another tenant.
+# Money: NONE. It writes goals (`commcalc.targets` / `commcalc.target_line`) — what a store is ASKED
+# to do. `targets_engine.achieved_for_cat` pays on ACTUALS and never reads a goal, so no payout,
+# rate, plan, statement, GP or commission figure is read or moved.
+# Cross-tenant negatives: `goal_rollforward.policy_for` takes `org_id` as a REQUIRED argument and
+# matches it EXACTLY, so a tenant with no row of its own gets the HOUSE DEFAULT rather than another
+# tenant's rate; harness_goal_rollforward.py §F proves both directions, and §E/§F prove a NULL
+# column reads as undeclared rather than as a declaration of nothing.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1870"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

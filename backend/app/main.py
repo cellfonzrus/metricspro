@@ -417,6 +417,26 @@ def _email_sweep_cron_startup():
 
 
 @app.on_event("startup")
+def _goal_rollforward_cron_startup():
+    """Self-heal the monthly GOAL ROLL-FORWARD schedule on every boot (mig 1131, §COMMCALC-84).
+
+    Owner 2026-11-25 chose auto-fill for every tenant, so next month's goals must appear without
+    anyone pressing anything. Same posture as the email-sweep hook above and for the same reason —
+    "an automation whose repair step is a human click defeats the automation" (owner, 2026-09-01).
+    Idempotent (cron.schedule with the same job name REPLACES it), re-embeds the CURRENT
+    API_PUBLIC_URL + NOTIFY_RUN_SECRET so a rotation needs no flag day, and best-effort: a missing
+    secret or absent pg_cron logs the reason, never blocks boot, and leaves the manual "Roll forward
+    from last month" button working."""
+    try:
+        from app.modules.commcalc.router import _ensure_goal_rollforward_cron
+        print(f"[goal-rollforward-cron] self-register on boot: "
+              f"{_ensure_goal_rollforward_cron() or 'no status returned'}", flush=True)
+    except Exception as e:
+        print(f"WARN [goal-rollforward-cron] self-register failed (goals stay on their "
+              f"last-known schedule): {e}", flush=True)
+
+
+@app.on_event("startup")
 def _google_reviews_sweep_cron_startup():
     """Self-heal the google-reviews sweep schedule on EVERY boot (mig 950).
 

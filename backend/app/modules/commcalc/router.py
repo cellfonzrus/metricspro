@@ -36,7 +36,7 @@ from app.modules.commcalc import daily_incentive as _daily_incentive   # 2026-10
 from app.modules.commcalc import incentive_shortfall as _incentive_shortfall   # 2026-11-18 — how close a day came to a gated payout, and what missing it cost (index §COMMCALC-81)
 from app.modules.commcalc import annual_goal as _annual_goal       # 2026-11-17 — WHERE a scope's YEAR must land, and whether it is going to (mig 1125, §COMMCALC-79)
 from app.modules.commcalc import metric_authority as _metric_authority  # 2026-11-17 — WHICH source answers a store-day: the declaration or the store's own report (§COMMCALC-77)
-from app.modules.commcalc import revenue_scope as _revenue_scope  # 2026-11-17 — does money no declared category claimed count toward the day's revenue (§COMMCALC-80)
+from app.modules.commcalc import revenue_scope as _revenue_scope  # 2026-11-17 — does money no declared category claimed count toward the day's revenue (§COMMCALC-84)
 from app.modules.commcalc import pos_report_sweep as _pos_report_sweep  # the POS-report feed's own home: its table, its connector and its ingest (§COMMCALC-07)
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
 from app.modules.commcalc import peer_comparison as _peercmp   # 2026-10-08 — THE peer traffic-band comparison (index §59)
@@ -95,6 +95,7 @@ from app.modules.commcalc import xlsx_tolerant as _xlsx  # 2026-09-20 — an .xl
 from app.modules.commcalc import activation_bucketing as _act_bucketing  # mig 313 — config-driven AD buckets
 from app.modules.commcalc.discrepancy_engine import run_discrepancy
 from app.modules.commcalc import targets_engine
+from app.modules.commcalc import goal_rollforward   # §COMMCALC-84 — the declared roll-forward policy
 from app.modules.commcalc import vip_sweep
 from app.modules.commcalc import dlar_sweep
 from app.modules.commcalc import epay_sweep
@@ -32641,12 +32642,35 @@ def _storeops_roster(client, org_id, cols=_ROSTER_COLS, include_inactive=False, 
 
 # ── Month-over-month target carry-forward + stretch ──────────────────────────────────────────────
 # The prior month's target carries forward automatically; a store that HIT a category's target last
-# month gets a 110% STRETCH on it, one that missed carries the same number forward. Evaluated per
-# category (activations / upgrades / accessories). Powers the Target Settings seed preview + the
-# "Roll forward from last month" action (which persists).
+# month gets a STRETCH on it, one that missed carries the same number forward. Evaluated per
+# category over the declared target axis. Powers the Target Settings seed preview, the "Roll forward
+# from last month" action (which persists) and the monthly auto-fill (§COMMCALC-84).
+#
+# THE ARITHMETIC IS NOT HERE. Both the rule and its rate live in `commcalc/goal_rollforward.py`,
+# the one home, because "how next month's goal follows from this month's" is a POLICY a tenant
+# declares (mig 1131), not a constant. This file used to carry `STRETCH_FACTOR = 1.10` and decide
+# 'met' itself, and it stretched off the GOAL rather than off what was ACHIEVED — the owner's
+# 2026-11-25 rule is the latter. `harness_goal_rollforward.py` §H fails the build if either the
+# factor or the comparison reappears below.
 _MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
                 'July', 'August', 'September', 'October', 'November', 'December']
-STRETCH_FACTOR = 1.10
+
+
+def _rollforward_policy_rows(client, org_id):
+    """Every `commcalc.goal_rollforward_policy` row for this org, for `goal_rollforward.policy_for`.
+
+    Returns [] on ANY failure, deliberately: before mig 1131 is applied — or if the table cannot be
+    read — every tenant falls back to `goal_rollforward.HOUSE_DEFAULT`, which IS the owner's rule.
+    So an unapplied migration degrades to the right behaviour rather than to no behaviour, and a
+    goals screen never 500s because a config table is missing.
+
+    ORG-SCOPED at the query, not in the caller: a policy read that returned the platform's rows and
+    let the caller filter is how one tenant's rate reaches another's request."""
+    try:
+        return (client.schema('commcalc').table('goal_rollforward_policy')
+                .select('*').eq('org_id', org_id).execute().data) or []
+    except Exception:
+        return []
 
 
 def _prior_period(period: str) -> str:
@@ -32660,8 +32684,13 @@ def _prior_period(period: str) -> str:
 
 def _carry_forward_map(client, org_id, period, stores, catalog=None):
     """Per store_code (UPPER): the suggested next-month target derived from the prior period —
-    carry each category forward, or ×1.10 when the store achieved that category's prior target.
+    carry each category forward, or stretch it when the store achieved that category's prior target.
     basis[cat] ∈ 'stretch' | 'carry' | 'new' (no prior target to work from).
+
+    THE RULE IS ASKED, NOT APPLIED. `goal_rollforward.next_goal` decides what 'met' means, which
+    figure the stretch is taken from and at what rate, all of it from this tenant's declared policy
+    (mig 1131, house default: 10% above what was ACHIEVED). This function's job is to assemble the
+    prior month's goals and achievement and ask, once per store per category.
 
     THE AXIS IS ASKED, NOT LISTED. This function used to carry its own `(cat, col)` tuple list —
     one of seven copies of the target category axis found on 2026-10-11 — so a tenant that declared
@@ -32679,6 +32708,9 @@ def _carry_forward_map(client, org_id, period, stores, catalog=None):
     p_actuals = _fetch_actuals(client, org_id, prior)
     # The prior month's declared targets and declared achievement, read once for every store.
     p_lines_by_store = _target_lines_by_store(_target_lines(client, org_id, prior))
+    # This tenant's declared rule, read ONCE for the whole roster rather than once per store.
+    policy = goal_rollforward.policy_for(_rollforward_policy_rows(client, org_id), org_id)
+    units = targets_engine.target_units(catalog)
     out = {}
     for s in stores:
         code = str(s.get('store_code', '') or '').strip()
@@ -32696,18 +32728,13 @@ def _carry_forward_map(client, org_id, period, stores, catalog=None):
             store = targets_engine.target_store(cat)
             if store == 'derived':      # byod rides activations × byod_pct; it has no target of its own
                 continue
-            tgt = safe_float(p_monthly.get(cat))
-            got = safe_float(achieved.get(cat))
-            if tgt > 0 and got >= tgt:
-                val, basis[cat] = tgt * STRETCH_FACTOR, 'stretch'
-            elif tgt > 0:
-                val, basis[cat] = tgt, 'carry'
-            else:
-                val, basis[cat] = tgt, 'new'
-            # Money rounds to the cent, a tally to a whole unit — asked of the category's unit
-            # rather than special-casing the one category that happens to be money today.
-            _dollars = targets_engine.target_units(catalog).get(cat) == 'dollars'
-            val = round(val, 2) if _dollars else round(val)
+            # ASK the one home. It decides 'met', the basis figure, the rate and the rounding —
+            # all four from this tenant's declared policy. `achieved.get(cat)` is passed RAW
+            # (None when the category was not measured) because "not measured" is not "achieved
+            # zero", and only the rule gets to say what that means for a goal.
+            _ng = goal_rollforward.next_goal(p_monthly.get(cat), achieved.get(cat),
+                                             policy, unit=units.get(cat))
+            val, basis[cat] = _ng['value'], _ng['basis']
             if store == 'column':
                 res[targets_engine.BUILTIN_TARGET_COLUMN[cat]] = val
             else:
@@ -33017,7 +33044,7 @@ def roll_forward_targets(period: str, body: Optional[RollForwardTargetsIn] = Non
     cf = _carry_forward_map(client, org_id, period, stores,
                             catalog=_target_catalog(client, org_id))
     prior = cf['prior_period']
-    written, skipped = [], 0
+    written, skipped, lines_failed = [], 0, []
     try:
         from app.modules.storeops.router import scope_keyset as _rf_scope, in_keyset as _rf_in
         _rf_ks = _rf_scope(authorization, org_id)   # None = unrestricted (admin / enforcement off)
@@ -33052,10 +33079,161 @@ def roll_forward_targets(period: str, body: Optional[RollForwardTargetsIn] = Non
             'notes': f'Rolled forward from {prior}', 'updated_by': 'roll-forward',
         }
         client.schema('commcalc').table('targets').upsert(row, on_conflict='org_id,store_code,period').execute()
-        written.append({'store_code': code, 'basis': cfrow.get('basis')})
+
+        # THE DECLARED HALF. The built-in categories have physical columns on commcalc.targets; a
+        # category the tenant declared lives in commcalc.target_line (mig 1074, §COMMCALC-02), and
+        # until now this writer ignored it — so a tenant selling drop-offs could set a goal by hand
+        # and watch it never roll, while its activations rolled every month. One rule that reaches
+        # three of a tenant's categories and not the fourth is the duplicate defect wearing a hat.
+        #
+        # A category whose basis is 'new' carries value None — there was no prior goal to roll — and
+        # is SKIPPED rather than written as 0, because a goal of zero that no human set is a
+        # plausible-looking number, which is how this class hides (§COMMCALC-49.10).
+        _lines = {k: v for k, v in (cfrow.get('lines') or {}).items() if v is not None}
+        if _lines:
+            _lrows = [{'org_id': org_id, 'store_code': code, 'period': period,
+                       'metric_key': k, 'grain': 'month', 'target_value': v,
+                       'updated_by': None} for k, v in _lines.items()]
+            try:
+                (client.schema('commcalc').table('target_line')
+                 .upsert(_lrows, on_conflict='org_id,store_code,period,metric_key,grain').execute())
+            except Exception:
+                # Mig 1074 unapplied, or the table unreachable: the built-in half has already been
+                # written and must not be rolled back by the declared half failing. Reported in the
+                # response so the skip is visible rather than silent.
+                lines_failed.append(code)
+        written.append({'store_code': code, 'basis': cfrow.get('basis'),
+                        'lines': _lines or None})
     return {'period': period, 'prior_period': prior, 'written': len(written),
             'skipped': skipped, 'inactive_skipped': inactive_skipped,
+            'declared_lines_failed': lines_failed,
             'overwrite': overwrite, 'stores': written}
+
+
+# ── THE MONTHLY AUTO-FILL (owner 2026-11-25, index §COMMCALC-84, mig 1131) ───────────────────────
+# Owner's choice on the decision card: next month's goals fill themselves, for EVERY tenant. The
+# button stays — this only removes the need to press it.
+#
+# ONE GLOBAL TICK, EVERY TENANT, THE PER-ORG POLICY DECIDES. The cron (mig 1131) posts here daily;
+# this walks every tenant, resolves each one's declared policy through the ONE home, and fills only
+# where auto_fill is on AND the month has no goals yet.
+#
+# THE GUARD READS THE GOALS, NOT THE STATUS ROW. Whether a month is already filled is answered by
+# reading `commcalc.targets` for that period — never by trusting `last_filled_period`. That is
+# §19.18 stated as a constraint ("a sweep's status is not a reliable record of what it did"): a lost
+# or lying status row cannot cause a month to be skipped or filled twice. The status columns are
+# written afterwards for a human to read, and nothing branches on them.
+#
+# IT NEVER OVERWRITES. `overwrite=False` on the shared writer, so a goal somebody set by hand is
+# never replaced by a computed one — the whole point is to fill the months nobody got to.
+def _rollforward_tenant_org_ids(client):
+    """Every tenant's org_id, for the platform-wide tick.
+
+    `storeops.tenants` is the roster of tenants (there is no `organizations` table). Returns [] on
+    failure rather than raising: one unreadable roster must not take the tick down for the tenants
+    it could have served, and the next tick is a day away at most."""
+    try:
+        rows = (client.schema('storeops').table('tenants').select('org_id').execute().data) or []
+        out, seen = [], set()
+        for r in rows:
+            oid = str((r or {}).get('org_id') or '').strip()
+            if oid and oid not in seen:
+                seen.add(oid)
+                out.append(oid)
+        return out
+    except Exception:
+        return []
+
+
+def _ensure_goal_rollforward_cron():
+    """Self-register the GLOBAL goal roll-forward pg_cron job so NO ONE runs SQL by hand (mig 1131).
+
+    Same shape and same posture as `_ensure_email_sweep_cron`: idempotent, re-embeds the CURRENT
+    API_PUBLIC_URL + NOTIFY_RUN_SECRET on every boot so a secret rotation needs no flag day, and
+    NON-FATAL — a missing secret, mig 1131 unapplied, or pg_cron/pg_net absent just means the
+    auto-fill is skipped and the "Roll forward from last month" button still works. Returns the
+    RPC's status string (or None)."""
+    try:
+        url = (getattr(settings, "API_PUBLIC_URL", "") or "").strip()
+        secret = (getattr(settings, "NOTIFY_RUN_SECRET", "") or "").strip()
+        if not url or not secret:
+            return "skipped: API_PUBLIC_URL or NOTIFY_RUN_SECRET not set"
+        res = sb().schema("commcalc").rpc(
+            "ensure_goal_rollforward_cron", {"p_url": url, "p_secret": secret}).execute()
+        return res.data if isinstance(res.data, str) else (res.data or None)
+    except Exception as e:
+        print(f"WARN _ensure_goal_rollforward_cron skipped: {e}")
+        return None
+
+
+@router.post("/targets/roll-forward/run-due")
+def roll_forward_targets_run_due(period: str = "", x_notify_secret: str = Header(default="")):
+    """pg_cron entrypoint (mig 1131): fill the CURRENT month's goals for every tenant that declares
+    auto-fill and has none yet.
+
+    SECRET-GATED, not RBAC-gated: the caller is the platform's own scheduler, which carries no user
+    token. `verify_notify_secret` is the same check the other run-due entrypoints use.
+
+    `period` is for a re-run of a specific month by hand; left empty it is TODAY'S month, which is
+    what the daily tick wants.
+
+    Per tenant, in order: resolve the declared policy (house default when the tenant has no row) ->
+    skip unless `auto_fill` -> READ `commcalc.targets` for the period and skip if ANY store already
+    has a goal there -> otherwise run the same writer the button runs, with overwrite off.
+
+    A tenant with nothing to carry (no prior goals at all — Vzone and NY LOGISTICS, measured
+    2026-11-25) writes NOTHING: the shared writer already skips a store whose carried figures are
+    all zero rather than creating a row of zeroes. So "auto-fill for every tenant" cannot invent
+    goals for a tenant that has never set one.
+
+    Every tenant is attempted even when an earlier one fails, and each outcome is reported per org:
+    one tenant's unreadable roster must not cost the others their month."""
+    if not verify_notify_secret(x_notify_secret):
+        raise HTTPException(401, "invalid or missing run secret")
+    client = sb()
+    _now = datetime.now(timezone.utc)
+    # Both branches go through the one normalizer, so the stored spelling cannot depend on whether a
+    # month was filled by the tick or re-run by hand (period-duality is a recurring bug class here).
+    target_period = _period_or_400(
+        period if str(period or "").strip() else f"{_MONTH_NAMES[_now.month - 1]} {_now.year}")
+    results = []
+    for oid in _rollforward_tenant_org_ids(client):
+        entry = {'org_id': oid, 'period': target_period}
+        try:
+            policy = goal_rollforward.policy_for(_rollforward_policy_rows(client, oid), oid)
+            if not policy.get('auto_fill'):
+                entry['outcome'] = 'auto_fill_off'
+                results.append(entry)
+                continue
+            # THE AUTHORITY: the goals themselves. One indexed read, and a month that already has a
+            # goal on ANY store is a month a human or an earlier tick has handled.
+            got = (client.schema('commcalc').table('targets').select('store_code')
+                   .eq('org_id', oid).in_('period', _pvariants(target_period))
+                   .limit(1).execute().data) or []
+            if got:
+                entry['outcome'] = 'already_has_goals'
+                results.append(entry)
+                continue
+            res = roll_forward_targets(target_period, None, authorization="", org_id=oid)
+            entry['outcome'] = 'filled'
+            entry['written'] = res.get('written')
+            entry['skipped'] = res.get('skipped')
+            entry['prior_period'] = res.get('prior_period')
+        except Exception as e:                      # one tenant's failure is not the tick's failure
+            entry['outcome'] = 'error'
+            entry['error'] = str(e)[:300]
+        # Informational ONLY — nothing above branches on these columns (see the header).
+        try:
+            (client.schema('commcalc').table('goal_rollforward_policy')
+             .upsert({'org_id': oid, 'last_filled_period': target_period,
+                      'last_run_at': _now.isoformat(),
+                      'last_result': entry.get('outcome')}, on_conflict='org_id').execute())
+        except Exception:
+            pass
+        results.append(entry)
+    return {'period': target_period, 'tenants': len(results),
+            'filled': sum(1 for r in results if r.get('outcome') == 'filled'),
+            'results': results}
 
 
 # ── SHARED period normalizer for the targets / coaching / exec family ────────────────────────────
@@ -50594,7 +50772,7 @@ def get_daily_incentive(close_date: str, store_code: str = "", metric_source: st
     declared = _mc.declared(cat, row, lines)
     per_emp = _mc.by_employee(cat, lines)
     hours, roster = _incentive_hours_for_day(client, org_id, store_code, close_date)
-    # WHETHER that money counts is the org's own declaration, resolved in one home (§COMMCALC-80).
+    # WHETHER that money counts is the org's own declaration, resolved in one home (§COMMCALC-84).
     # The endpoint passes the ADDEND, never the scope: the engine must not be able to re-decide the
     # policy next to the money, and `unclassified_addend` is the only place the switch is read.
     scope_declared, scope_pending = _declared_revenue_scope(client, org_id)

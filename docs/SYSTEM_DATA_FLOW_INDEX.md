@@ -223,6 +223,7 @@ Primary code homes:
 | COMMCALC-81 | **A missed gate is not a zero** | A day that missed its qualifying threshold rendered as $0.00 with no reason, so a day two sales short of a five-sale gate looked identical to a day that sold nothing. And a gate withholds the pay not on the units you were short of but on every unit you already sold. How far short was this day, what did the gate cost, and is that a coaching moment or an admin's unfinished rule? |
 | COMMCALC-82 | **"I could not look" is not "there is nothing there"** | The processor's back office refuses automated clients from every address tried, and offers no delivery of its own, so each store's file arrives because a PERSON fetched it — 29 logins, every day. That is only survivable if a screen says what is still outstanding, and the question nothing answered was the NEGATIVE one: the feed knew what had landed and nobody could ask what had not. Writing it exposed the worse half: both legs of the fee reconciliation answered `{}` when their read FAILED, which is the same answer they give for a genuinely empty table — so an unreadable feed flagged a variance on every store-day against zero, and a coverage grid would have sent a person to download 29 files a day that were already landed. Three states, not two: have, missing, unknown. |
 | COMMCALC-83 | **A credential may not travel through a file to reach the database** | Asked to ENTER the 29 per-store back-office logins himself, the owner's own route would have been a SQL script — which means 29 plaintext passwords in a project file, a commit and a chat message, the exact thing the credential registry exists to prevent. There was no door between "one login on a form" and "a script": a tenant whose every store has its own login could only be served 29 visits at a time. One POST now takes a pasted block and stores each row through the SAME writer the form uses, so the sealing cannot be true of one door and not the other, and a store this organisation has not declared is REPORTED rather than guessed at — "29 entered" must never mean 23. Nothing it answers carries a password: a line is quoted back with every cell it cannot NAME, and the password, replaced by its length. |
+| COMMCALC-84 | **How next month's goal follows from this month's is a POLICY, not a constant** | "it will be the same if they did not achieve the goal if they met the goal then it will be 10% higher than they achieved" — and the platform already carried a missed goal forward and stretched a met one by 10%, so the ask looked done. It stretched off the GOAL rather than off what was ACHIEVED: on live October data all five store-categories that beat their goal got the SMALLER stretch, and the divergence is widest where a store does best. The rate was `STRETCH_FACTOR = 1.10` in a router, which is the shape RULE TWO forbids — a tenant wanting 5%, or wanting to stretch the plan, had nowhere to say so. Both halves are one class, so the rule, its basis and its rate are DECLARED per tenant over ONE arithmetic every caller dereferences. A tenant with no row gets the house rule, never another tenant's; a category with no prior goal reads BLANK, never as a goal of zero; the declared categories roll for the first time; and the monthly fill schedules itself, because an automation whose repair step is a human click defeats the automation. |
 | COMMCALC-76 | **A weekly review pack is one fold, read from the reports that own its figures** | The owner asked for the LuxeLink performance deck as an in-app report on the Management tile, admins only, one report per market plus a consolidated one, with inventory aging per carrier among its items, generated at the end of each week for the Monday review with the DMs — and on demand. It derives nothing: profit, commission, the accessory gap, growth, the reps behind, aging and payroll are each QUOTED from the surface that already owns them, and the fold is pure, so a second derivation cannot grow beside the report it quotes. An item nobody measured carries no figure and says why in words; a store no market claims gets its own named scope rather than vanishing between the market packs and the company one; and the market vocabulary is a required argument, so nothing declared means nothing identified. The gate is the server's on every door — a company-wide reporting scope is not an administrator. **Corrected 2026-11-17 (§COMMCALC-76.8):** profit now quotes the P&L's own `profit_by_store`, not the GP report (the two differed by $366k on one org in one month); aging quotes the whole shelf per carrier, not the owed>0 subset in which everything is already overdue; and a row the scope cannot match is kept on the consolidated pack and counted, never dropped — which is what had made October's commission read as nothing. Every item now carries the sentences that explain it, and the pack downloads as a deck (§COMMCALC-76.9) whose DESIGN has one home in `notify/render.build_pptx` — tone, stat cards, charts and banded tables, so every caller of the house file writer gets the same face (§COMMCALC-76.10). |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
@@ -26568,6 +26569,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-81 | commcalc |
 | COMMCALC-82 | commcalc |
 | COMMCALC-83 | commcalc |
+| COMMCALC-84 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -52353,3 +52355,161 @@ Proved by `harness_notification_inbox.py` §I (14 checks, two of them armed cont
 `backend/tests/unit/test_digest_route_to_inbox.py` (15 tests, incl. two cross-tenant). Migration
 `1130` declares exactly one scope on the house org, additively, idempotent on 1129's unique key, and
 its REVERT restores the per-manager mail without touching a tenant's own row.
+
+---
+
+## §COMMCALC-84. HOW NEXT MONTH'S GOAL FOLLOWS FROM THIS MONTH'S IS A DECLARED POLICY (owner directive 2026-11-25)
+
+Owner (Sanjot), verbatim: *"Update the Nov goals for boost same as Oct and set that as default for
+tenant as we discussed - it will be the same if they did not achieve the goal if they met the goal
+then it will be 10% higher than they achieved"*.
+
+**THE RULE.** A **missed** goal carries forward unchanged. A **met** goal becomes `stretch_factor`
+times what the store **actually achieved**. A category with **no prior goal** has nothing to roll and
+says so.
+
+### §COMMCALC-84.1 The duplicate check, stated (build gate)
+
+`docs/SYSTEM_DATA_FLOW_INDEX.md` was searched for an existing mechanism before anything was built.
+There is exactly **one** month-over-month goal path — `router._carry_forward_map` (§2170, §23632,
+§27442/27443) — and it was **EXTENDED**, not duplicated. The other carry-forward in the platform,
+`expenses_effective` (§19.50), answers a different question (which expense rows a month books) and is
+untouched. `STRETCH_FACTOR` existed in exactly one place, so this is a one-home fix, not a
+de-duplication.
+
+### §COMMCALC-84.2 Two defects, one class
+
+| | what was wrong | why it matters |
+|---|---|---|
+| **the basis** | stretched to 10% above the **GOAL**, not above the **ACHIEVEMENT** | measures the plan, not the performance — and the gap is **widest where a store does best**, which gave the best performers the **smaller** stretch |
+| **the rate** | `STRETCH_FACTOR = 1.10`, a module constant in `router.py` | RULE TWO: behaviour is per-org config with house defaults. A tenant wanting 5%, or wanting to stretch the plan, had nowhere to say so |
+
+Measured on **live October 2026 house data** — five store-categories beat their goal, and the two
+readings disagree on every one:
+
+| store | category | Oct goal | achieved | old reading | declared reading |
+|---|---|---|---|---|---|
+| B-6507 | accessories | $7,500 | $8,471 | $8,250 | **$9,318** |
+| B-2778 | activations | 75 | 78 | 82 | **86** |
+| B-117 | upgrades | 45 | 52 | 50 | **57** |
+| B-151 | activations | 61 | 65 | 67 | **72** |
+| B-5619 | upgrades | 50 | 51 | 55 | **56** |
+
+The other 82 store-categories missed and carry October forward unchanged. **November 2026 held no
+goal on any Cellfonz store** when this was built.
+
+### §COMMCALC-84.3 The one home
+
+`commcalc/goal_rollforward.py` — `HOUSE_DEFAULT`, `policy_for(rows, org_id)`,
+`next_goal(prior_target, achieved, policy, *, unit)`, `rounded`, `auto_fill_enabled`. Pure and
+DB-free. `router._carry_forward_map` **asks** it; the router keeps no copy of the factor and makes no
+met/missed comparison of its own.
+
+**A house default is correct here, and that is not a contradiction with the 2026-10-30 directive.**
+That directive bans a default that is really one tenant's **VOCABULARY** standing behind an argument
+nobody passed. This is a **POLICY** — a rate, a basis and a switch — which the same directive names as
+exactly where a house default stays right. What is *not* defaulted is the tenant: `policy_for` takes
+`org_id` as a **required** argument and matches it **exactly**, so a caller that has not asked which
+tenant cannot get an answer, and a tenant with no row of its own gets the **house** rule rather than
+another tenant's.
+
+**`'new'` is not zero.** A category with no prior goal returns `value=None`. A zero would be a goal of
+zero that no human set — a plausible-looking number, which is how this class hides (§COMMCALC-49.10).
+The screen renders it blank and the writer skips it.
+
+### §COMMCALC-84.4 What rolls, and what used to not
+
+The built-in categories live in columns on `commcalc.targets`; a category the tenant **declared**
+lives in `commcalc.target_line` (mig 1074, §COMMCALC-02). The writer ignored the declared half
+entirely, so a tenant selling drop-offs could set a goal by hand and watch it never roll while its
+activations rolled every month — one rule reaching three of a tenant's categories and not the fourth.
+`roll_forward_targets` now persists both. `commcalc.target_line` is **empty on all four tenants**
+(measured 2026-11-25), which is exactly why this half is **proved** rather than observed.
+
+### §COMMCALC-84.5 The monthly auto-fill
+
+Owner's choice on the decision card, 2026-11-25: auto-fill for **every** tenant. The button stays;
+this removes the need to press it.
+
+**Endpoint:** `POST /commcalc/targets/roll-forward/run-due` — secret-gated
+(`verify_notify_secret`), the same check every other `*/run-due` sweep uses, because the caller is
+pg_cron and carries no user token. It takes **no `org_id`**: it walks `storeops.tenants` itself and
+resolves each tenant's policy org-scoped at the query, so there is no parameter for a caller to point
+at another tenant. Registered as a **literal** template, so the derived cron allowlist (§CORE-50)
+admits it and pg_cron can actually reach it.
+
+**The cron registers itself** (mig 1131 + the `_goal_rollforward_cron_startup` boot hook, the
+922/940/950/956/971 pattern), daily at 06:40 UTC. Daily rather than monthly on purpose: a monthly cron
+that misses its single firing waits a whole month, whereas a daily tick that finds the month already
+filled is one indexed read. *"An automation whose repair step is a human click defeats the
+automation"* (owner, 2026-09-01).
+
+**THE GUARD READS THE GOALS, NOT THE STATUS ROW.** Whether a month is already filled is answered by
+reading `commcalc.targets` for that period — never by trusting `last_filled_period`. That is §19.18
+stated as a design constraint (*"a sweep's status is not a reliable record of what it did"*): a lost or
+lying status row cannot cause a month to be skipped or filled twice. The status columns are written
+afterwards for a human to read and nothing branches on them.
+
+**It never overwrites** (`overwrite=False`), so a goal somebody set by hand is never replaced. A
+tenant with nothing to carry writes **nothing** — the writer already skips a store whose carried
+figures are all zero, so "auto-fill for every tenant" cannot invent goals for a tenant that has never
+set one. Measured 2026-11-25: Cellfonz R Us and Luxelink Wireless have October goals; **Vzone and NY
+LOGISTICS have none in any month**, so nothing is written for them.
+
+### §COMMCALC-84.6 Money
+
+**None.** `targets_engine.achieved_for_cat` pays on ACTUALS and never reads a goal, so nothing here can
+move a payout. It sets what a store is **asked** to do, not what anyone is **paid**. No rate, plan,
+payout, statement, GP or commission column is read or written.
+
+### §COMMCALC-84.7 Locks
+
+`backend/harness_goal_rollforward.py` — 84 checks, **RED first**, §A–§J, CI job step on
+`carrier-vocab-guard.yml` with path triggers on the harness and its one home:
+
+- **§A** the house default is declared once and says basis `achieved`, factor `1.10`, auto-fill on.
+- **§B/§C** the arithmetic, and what "met" means (boundary included; a goal of 0 is not a goal; an
+  unmeasured achievement is a MISS, not a crash).
+- **§D** rounding is asked of the **category's unit** — money to the cent, a tally whole.
+- **§E** a tenant row overrides **per field**; a NULL column is undeclared, not a declaration of
+  nothing; an unknown basis and a factor below 1.0 fall back rather than being passed through.
+- **§F** **every tenant** — no tenant's policy reachable from another's `org_id`, an undeclared tenant
+  gets the house rule, and `org_id` is required.
+- **§G** integration: the **real** `_carry_forward_map` over an in-memory fake, proving the router
+  dereferences the one home (B-117 → 57, not 50).
+- **§H** the **un-wire lock**, scanned over **tokenised code** with comments and docstrings stripped —
+  the §COMMCALC-79 lesson, where a whole-file grep passed because the name it searched for appeared in
+  a docstring while a planted duplicate sat below it. The header above `_carry_forward_map`
+  deliberately cites the deleted constant by name and value, which a whole-file scan would forbid.
+- **§I** the writer persists the declared half, with the scan **bounded to one function** by the next
+  decorator. The first version used a fixed 9,000-character window and **both checks passed while the
+  function wrote nothing of the sort** — the window ran past the end into neighbours that do mention
+  `target_line`. A vacuous check is worse than no check, so §I1b/§I1c now prove the bound itself.
+- **§J** the auto-fill through the real endpoint: fail-closed on a bad secret, `auto_fill` off
+  honoured, a filled month left alone, the written row carrying 57, nothing written for a skipped
+  tenant, and the status row proved **not** to be the guard.
+
+`backend/tests/integration/test_goal_rollforward_run_due_endpoint.py` — 6 tests at the HTTP boundary
+with `MULTI_TENANT_ENFORCE` **on** (a test that leaves it unset measures the pass-through and proves
+nothing — §CORE-42), including a negative control on the fixture itself, and both halves of the cron
+coin: a stranger is refused, **and** the literal template exists so the job is not silently 401ing on
+every tick (the mig 241 / mig 411 failure mode).
+
+`harness_db_resilience.py` route pin **1869 → 1870**, re-verified and re-pinned, never relaxed.
+Module-graph fact `goal_rollforward_policy`.
+
+**A trap worth recording for the next re-pin:** the first route count read **four** added routes,
+because `origin/main` was a **stale ref** — it still pointed before the notification-inbox merge, so
+that package's own three routes rendered as mine. `git fetch origin main` **first**, then count. Same
+family as the three-dot merge-base trap in CLAUDE.md: the command looks right and the baseline is
+wrong.
+
+### §COMMCALC-84.8 Still open
+
+- Migration `1131` is **surfaced, not applied** — schema changes wait for the owner. Until it is
+  applied every tenant behaves by `HOUSE_DEFAULT`, which **is** the owner's rule, so an unapplied
+  migration degrades to the right behaviour rather than to no behaviour. What it unlocks is a tenant
+  **differing** from the house rule, and the self-scheduling cron.
+- `harness_area_targets.py` is **RED on main** (`degenerate inputs raised: 'activations'`), unrelated
+  to this work and pre-existing. It is on `harness_unrun_pending.txt`, so no workflow runs it —
+  reported, not silently fixed, per the house rule on a defect found in passing.
