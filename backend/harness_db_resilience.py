@@ -1762,7 +1762,39 @@ _all_routes = _flatten_routes(real_app.routes)
 # matches it EXACTLY, so a tenant with no row of its own gets the HOUSE DEFAULT rather than another
 # tenant's rate; harness_goal_rollforward.py §F proves both directions, and §E/§F prove a NULL
 # column reads as undeclared rather than as a declaration of nothing.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1870"))
+# 1870 -> 1872, 2026-11-25 (PR for §NOTIFY-02, "an email is recorded by the transport that sent it").
+# RE-VERIFIED THE HOUSE WAY, not assumed: `git fetch origin main` FIRST (see the trap noted above),
+# then `git diff origin/main -- backend/ | grep -E '^[+-]@router\.'` shows exactly TWO added routes
+# and none removed:
+#   POST /notify/email-webhook             — the mail provider's delivery callback
+#   GET  /hr/onboarding/invite-delivery    — "did the invite actually reach them", per employee
+# Gate, route 1: NONE, by necessity, and that is the interesting one. It is on the PUBLIC middleware
+# allowlist because the provider carries no token of ours — the same reason the Meta webhook is
+# there — so it SELF-AUTHENTICATES on the `svix-signature` HMAC and FAILS CLOSED: an unset
+# RESEND_WEBHOOK_SECRET refuses every payload, and there is deliberately no break-glass env var to
+# relax that (unlike the 2026-08-05 WhatsApp hardening, this endpoint is new, so no deployed window
+# needs it). It is allowlisted as an EXACT path, METHOD-SCOPED to POST alone, so no sibling path or
+# other method can ride in. harness_identity_backend_503.py names it in the allowlist tripwire and
+# harness_email_send_record.py §G pins the posture; the integration test asserts a 403 for an
+# unsigned and a wrongly-signed POST.
+# Gate, route 2: `_require_hr_or_admin(authorization)`, this file's existing HR gate. No new gate
+# was written.
+# Money: NONE. Neither route reads or moves a payout, rate, plan, statement, GP, commission,
+# payable or tax figure. Route 1 writes only `notify.send_log.delivery_status` /
+# `delivery_error` / `delivery_updated_at` — what a mail provider said about one email. Route 2 is
+# read-only.
+# Cross-tenant negatives: route 2 takes NO org from the caller (`org_id` is the resolved ORG_ID) and
+# both of its reads are org-scoped AT the query — the roster read is `.eq("org_id", org_id)` and the
+# history read goes through `send_record.last_attempts`, which filters on `org_id` and `report_key`,
+# so asking for another tenant's address returns nothing;
+# backend/tests/integration/test_onboarding_invite_is_recorded.py proves that directly, by sending
+# for three tenants and asserting each tenant's read of EVERY address returns only its own. Route 1
+# deliberately has NO org filter, and that is the correct direction: a provider's message id is
+# globally unique, the row it matches carries its own `org_id`, and an org filter could only ever
+# MISS the row the event belongs to — the rule the Meta status handler established in 2026-07-18 and
+# which both webhooks now share through one write path (harness_whatsapp_delivery_truth.py §H).
+# A webhook's payload is never trusted to name a tenant; the row it matches is.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1872"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
