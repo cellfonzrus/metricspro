@@ -533,8 +533,25 @@ if base_src:
                       if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
     now_fns = sorted(n.name for n in ast.walk(TREE)
                      if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
-    check("F3 no function added or removed vs origin/main", base_fns == now_fns,
+    # 2026-11-25 (§NOTIFY-02): two functions LEFT this file on purpose. When email needed the same
+    # delivery webhook this router has held since 2026-07-18, its delivery arithmetic was FACTORED
+    # OUT to `notify/send_record` rather than copied for the second provider, so
+    # `_merge_delivery_status` and `_flatten_delivery_errors` are now names bound to that home
+    # instead of definitions here. Named, not waved through: the departure is asserted to be exactly
+    # those two, and that each is still REACHABLE from this module and still answers the same way,
+    # so "the function left" cannot stand in for "the behaviour left".
+    FACTORED_OUT = {"_merge_delivery_status", "_flatten_delivery_errors"}
+    check("F3 no function added or removed vs origin/main but the two factored out",
+          set(now_fns) - set(base_fns) == set()
+          and set(base_fns) - set(now_fns) == FACTORED_OUT,
           f"diff={set(base_fns) ^ set(now_fns)}")
+    import app.modules.remediation.router as _rr
+    check("F3b each factored-out name is still reachable here, bound to the one home",
+          all(callable(getattr(_rr, n, None)) for n in FACTORED_OUT))
+    check("F3c and still answers the same way (the behaviour moved, it did not change)",
+          _rr._merge_delivery_status("read", "failed") == "failed"
+          and _rr._merge_delivery_status("read", "delivered") == "read"
+          and "131026" in _rr._flatten_delivery_errors([{"code": 131026, "title": "undeliverable"}]))
 else:
     check("F2 origin/main copy readable for comparison", False, "git show failed")
 # F4 was written for a concurrent-agent build and string-matched any MENTION of a shared file. It
