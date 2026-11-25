@@ -253,6 +253,7 @@ Primary code homes:
 | CORE-47 | **We never tell a caller to resend a request off TLS** | Found from OUTSIDE by the adversarial access probe (§CORE-42, run 326) and reproducible by hand: `GET /api/v1/core/me/` — the token-verified whoami, one extra trailing slash — answered `307 Location: http://…`, so a client that had arrived over TLS was told by us to resend the request, Authorization header included, in the clear. The instance was two paths; the class was that the app did not know it sat behind a TLS-terminating edge, so EVERY absolute URL it built downgraded the caller. Fixed at the root (the server now believes the edge) with an outbound backstop that cannot un-wire, and the "which entry of an appended `X-Forwarded-*` header may be believed" arithmetic FACTORED OUT of the address one home rather than copied for the scheme. |
 | CORE-48 | **A path we declare public must not be refused by a router-level gate** | Found from OUTSIDE by the adversarial access probe (§CORE-42, run 327) and reproducible by hand: `GET /api/v1/pos/public/w9/{token}` — the link a wholesale customer is EMAILED to return their Form W-9, where the one-use token IS the auth — answered `401 "sign in to perform this action"` to every caller, the token never read, so every return link ever sent was dead. Neither component was wrong alone: the middleware allowlisted the path and the `pos` router's router-level gate refused unauthenticated callers, and nothing owned the composition. The class is that "is this path public" had one home and a router-level auth gate was a second gate that did not read it; every gate now dereferences `router_gate.stand_down`. The probe had called this a pass for 325 runs — `LOCKED_OUT` was unreachable for an anonymous caller — and that half is fixed too. |
 | CORE-50 | **A cron sweep is public for the METHOD it declares, never for every method on its path** | Found from OUTSIDE by the adversarial access probe (§CORE-42, run 328) and reproducible by hand: `GET /api/v1/storeops/salary-advance/additional-payroll/run-due`, with no `Authorization` header at all, answered **500** while each of the other 38 sweep paths answered 405. The 405s are the middleware standing down for a declared cron entrypoint and route matching refusing the method; the 500 is `GET /salary-advance/additional-payroll/{period}` — a payroll read with no permission gate of its own — actually RUNNING for a stranger with `period="run-due"`. Its static sibling is `PATCH /api/v1/commcalc/connectors/{cid}`, an unauthenticated WRITE handler reachable the same way. Neither leaked, only because the smuggled segment must be the literal string `run-due`, which is no period and no uuid — an accident of the string, not a gate. The 2026-10-28 fix had closed the PATH axis (a parameterised template can never become a sweep) and left the METHOD axis open: the derived cron set answered *which paths* and said nothing about *which methods*, so every sweep path was public for every verb and FastAPI routed the other verbs to whatever parameterised route also matched. The class is that "is this path public" and "for which methods" are two questions, and the derivation answered one — the same inheritance `_PUBLIC_METHODS` exists by hand to prevent. The derivation now CARRIES the methods the route table declares. |
+| REFERRAL-01 | **"Which referral may this caller touch" is one fact — the READS asked it, the ten ACTIONS did not** | Found by the adversarial access probe (§CORE-42, run 330), module `referral`, whose own verdict was CLEAN: 16 anonymous probes, 0 findings, all 15 gated paths hand-verified 401 and the declared-public `GET /referral/redeem/{token}` correctly answering the uniform 404. The defect came from the blast-radius question instead. Three by-id READS each carried their OWN COPY of the store-span check and the TEN by-id ACTIONS resolved the row org-only and asked nothing about the store, so a store- or market-scoped manager refused by `GET /referrals/{id}/redeem-url` could obtain the same signed customer redeem link from `POST /referrals/{id}/send` (which returns it), read the row back from the action response (customer name + phone, referrer phone, commission), void or flag another store's pending payout, and approve + mark PAID a commission outside their span. Two facts prove it unintended rather than a choice: that one door refused what the door beside it handed over, and that the unified approvals inbox (`approvals._may_decide`) ALREADY asked the span before deciding the same referral commission — two paths to one money decision, one gated and one not. Confined reps were never exposed (`rep_surface` is default-deny and declares no referral surface). The class is that a span is one fact and it was copied into three readers and omitted from ten writers; `_referral_in_span` is now the ONE home that all twelve by-id endpoints dereference, with `authorization` a REQUIRED argument. NOT measured from outside — the persona that reaches it still has no test account — and reproduced by integration test only. |
 | CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
 | CORE-27 | **A report arrives with the standard filters and the send bar, or it does not arrive** | "Zero Sales does not have send notification bar, please note this also in teh indsex all reports must have the satandard filters and the send bar by default" — the sender and the filter bar each already had one home; what was missing was the content to send and anything that made either a default. What is a figure nobody can mail worth, and what fails the build when the 129th report ships without a toolbar? |
@@ -26622,6 +26623,7 @@ status word rather than a blank that reads as nil.
 | CORE-47 | core |
 | CORE-48 | core, pos |
 | CORE-50 | core, storeops, commcalc |
+| REFERRAL-01 | referral |
 | STOREOPS-08 | storeops |
 | STOREOPS-09 | storeops, account |
 | STOREOPS-10 | storeops, account |
@@ -26647,7 +26649,6 @@ it is removed.
 | crm | undocumented |
 | helpdesk | undocumented |
 | recovery | undocumented |
-| referral | undocumented |
 | remediation | undocumented |
 
 <!-- MODULES-WITHOUT-SECTION:END -->
@@ -52546,3 +52547,110 @@ wrong.
 - `harness_area_targets.py` is **RED on main** (`degenerate inputs raised: 'activations'`), unrelated
   to this work and pre-existing. It is on `harness_unrun_pending.txt`, so no workflow runs it —
   reported, not silently fixed, per the house rule on a defect found in passing.
+
+## §REFERRAL-01. "WHICH REFERRAL MAY THIS CALLER TOUCH" IS ONE FACT — THE READS ASKED IT, THE TEN ACTIONS DID NOT (measured 2026-11-25)
+
+**How it was found.** The daily adversarial access probe (§CORE-42), run 330, module `referral`.
+The probe's own verdict was **clean** — 16 anonymous probes, 0 findings, and all 15 gated paths
+hand-verified as `401` to a stranger, with the one declared-public path (`GET /referral/redeem/{token}`)
+correctly reaching its handler and returning the uniform `404`. The defect came from the blast-radius
+question the probe does not ask: *what would a caller who IS signed in, but confined to a store span,
+reach here?*
+
+### §REFERRAL-01.1 The instance, and the evidence it was unintended
+
+`app/modules/referral/router.py` had **three** by-id READS that each carried their own copy of the
+store-span check —
+
+```python
+r = _get_referral(org_id, referral_id)            # org scope only
+ks = _keyset(authorization, org_id)
+if r.get("store_code") and not _in_keyset(ks, r.get("store_code")):
+    raise HTTPException(403, "This referral belongs to a store outside your access.")
+```
+
+— on `GET /referrals/{id}`, `GET /referrals/{id}/qr.png` and `GET /referrals/{id}/redeem-url`, and
+**ten** by-id ACTIONS that resolved the row with the org-only `_get_referral` and asked nothing about
+the store: `send`, `log-sale`, `activate`, `submit`, `approve`, `pay`, `reject`, `void`, `flag`.
+
+Two facts make this a defect rather than a design choice, and neither is an opinion:
+
+1. **`POST /referrals/{id}/send` returns `{"url": …}` — the signed customer redeem link** — which is
+   exactly the fact that `GET /referrals/{id}/redeem-url` exists to gate. One door refused it and the
+   door next to it handed it over.
+2. **The unified approvals inbox already asked.** `approvals/router._may_decide` applies
+   `scope_keyset` + `in_keyset` **before** running the referral adapter's approver predicate, so an
+   inbox decision on a referral commission was span-gated while `POST /referrals/{id}/approve` and
+   `POST /referrals/{id}/pay` on the same row were not. Two paths to one money decision, one gated
+   and one not — the duplicate defect wearing a hat (CLAUDE.md, owner directive 2026-09-20).
+
+**Blast radius.** A store- or market-scoped manager, signed in, same tenant. They could obtain the
+signed redeem link for another store's customer (the link *is* the credential — §11914), read the
+whole referral row back from the action's `_decorate(r)` response (customer name and phone, referrer
+phone, commission amount), move another store's referral through its lifecycle, `void` or
+`flag_fraud` someone else's pending payout, and — with approver permission, which a market-scope
+manager has by `_is_manager` — `approve` and mark `paid` a referral commission outside their span.
+A **confined** employee was never exposed: `rep_surface.api_allowed` is default-deny and declares no
+`referral` surface, so `/api/v1/referral/*` is refused to them outright.
+
+### §REFERRAL-01.2 Duplicate check (the build gate)
+
+Searched the index and the code for an existing home for "which referral may this caller touch":
+there was none — the question was answered by three copies and omitted ten times. The scoping
+**vocabulary** already had one home and is reused unchanged: `storeops.scope_keyset` / `in_keyset`,
+reached through the module's existing thin `_keyset` / `_in_keyset` wrappers (§13a). Nothing new was
+derived, no sibling resolver was created.
+
+### §REFERRAL-01.3 The design fix — one fact, one home, dereferenced
+
+`referral/router._referral_in_span(org_id, referral_id, authorization)` is now the ONE home. All
+**twelve** by-id endpoints (the 3 reads and the 9 action routes, 10 counting `send`) dereference it
+and hold no gate of their own; the three copied blocks are deleted. `authorization` is a **required**
+argument, never defaulted — a caller that has not asked who is calling cannot resolve a referral.
+
+**Explicitly excused, with the reason:**
+- `GET`/`POST /referral/redeem/{token}` — the declared-public customer pair. The token is the auth
+  and the customer has no span; `_resolve_token` is deliberately org-free and derives the org from
+  the row it authenticated.
+- `_get_referral_safe` — the approvals adapter's non-raising fetch. Its caller `_may_decide` applies
+  the span first (§REFERRAL-01.1), so the gate is upstream, not missing.
+
+### §REFERRAL-01.4 NO LOCKOUT — proved, not asserted
+
+The gate can only refuse a referral the reads already refuse, and that is tested three ways:
+an unrestricted caller (`keyset is None`) is unaffected; a referral **not yet routed to a store**
+stays workable by a scoped caller, matching the posture `list_referrals` already took so a brand-new
+record nobody has routed is never invisible to the people meant to work it; and every one of the ten
+actions still succeeds inside the caller's span.
+
+### §REFERRAL-01.5 Tests + the lock
+
+`backend/harness_referral.py` (already a CI gate in `tests.yml`, group `harness-suite-3`), written
+failing first:
+- **SECTION J** — for each of the ten actions: refused outside the span (403) **and the row
+  unchanged**, so nothing is half-applied; succeeds inside the span (NO LOCKOUT); unrestricted caller
+  unaffected; un-routed referral still workable; public redeem excused.
+- **SECTION K** — the lock, four static assertions over the router's AST/source that **fail the
+  build**: every by-id endpoint calls `_referral_in_span`; nothing but the one home and
+  `_get_referral_safe` reaches the org-only `_get_referral`; the single-row span refusal appears
+  exactly once; and both list-shaped reads still narrow their rows. `K0` asserts the lock actually
+  found the endpoints, because a lock that measures nothing is worse than none. Verified armed by
+  un-wiring one endpoint: 4 checks trip.
+
+Harness: **139 passed, 0 failed** (was 117 passed / 21 failed with the fix reverted).
+
+### §REFERRAL-01.6 The wider shape — reported, NOT fixed (the owner's call)
+
+A static sweep of every router that scopes by store found the same *shape* far beyond referral:
+modules whose by-id reads apply the span while by-id writes resolve through an org-only fetch —
+`commcalc` (114), `pos` (38), `storeops` (38), `crm` (13). **Most of those are not defects**: a great
+many are tenant-configuration endpoints (carriers, departments, tax codes) where a store span is
+meaningless, and they carry a *permission* gate instead, which is the right control. The sweep cannot
+tell the two apart, and reporting 203 "findings" would be the false-positive flood that trains a
+reader to skim (§CORE-42, the 405-oracle lesson). It is recorded here as the next probe runs' work,
+module by module, judged one surface at a time — not as a defect list.
+
+**Cross-references:** §CORE-42 (the probe that found it) · §CORE-48 (the same class at the
+composition of a declared-public route and a router-level gate) · §13a (the one store resolver) ·
+§11914 (the redeem token: the URL is the credential) · §STOREOPS-07.65 (a person-keyed read that
+never asked whose person).

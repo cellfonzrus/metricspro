@@ -22,6 +22,11 @@ SECTION I — router wiring against an in-memory fake Supabase client whose .eq(
             org scoping on read AND insert, create-time fraud flag, transition gating, approve
             segregation-of-duties, the PUBLIC redeem (uniform 404 on bad/used/expired token; single-use;
             fraud-trip stays uniform), and missing-table degrade.
+SECTION J — ★ the STORE SPAN is asked by every by-id endpoint, not only the reads ★ (the access-probe
+            finding of 2026-11-25): the ten action endpoints refuse a referral outside the caller's
+            span, NO LOCKOUT inside it, an unrestricted caller unaffected, the public redeem excused.
+SECTION K — the LOCK: static assertions that every by-id endpoint dereferences the one home and that
+            no second copy of the span comparison can appear.
 
 Run: `python3 harness_referral.py` from backend/.
 """
@@ -587,6 +592,164 @@ T = fresh_tables(); patch(T, missing=("referral",))
 res = rr.list_referrals(org_id=ORG_A)
 check("I23 an un-run migration degrades to an empty list with a note, never a crash",
       res["rows"] == [] and "note" in res, res)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# SECTION J — ★ the STORE SPAN is asked by every by-id endpoint, not only the reads ★
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# Found 2026-11-25 by the daily access probe (index §CORE-42) while measuring the blast radius of the
+# `referral` module. The three by-id READS (`get_referral`, `qr_image`, `redeem_url`) each carried
+# their OWN copy of the keyset check; the TEN by-id ACTION endpoints resolved the row with an
+# org-only fetch and asked nothing about the store. So a store- or market-scoped manager refused by
+# `GET /referrals/{id}/redeem-url` for another store's referral could obtain the very same signed
+# customer redeem link from `POST /referrals/{id}/send`, and could move, void, flag, approve or mark
+# PAID a referral payout belonging to a store outside their span.
+#
+# The CLASS: "which referral may this caller touch" is one fact, and it was copied into three readers
+# and absent from ten writers. The unified approvals inbox (approvals/_may_decide) already asks the
+# store span before letting anyone decide a referral commission — two paths to the same money
+# decision, one gated and one not. Now there is ONE home, `_referral_in_span`, and §K below fails the
+# build if any endpoint resolves a referral by id without it.
+#
+# NO LOCKOUT: an unrestricted caller (keyset None) is unaffected, and a scoped caller keeps every
+# referral they can already SEE — the gate can only refuse a referral the reads already refuse.
+
+OUT_OF_SPAN = {"B-99"}          # the caller's span; the fixture referral RA lives at B-01
+IN_SPAN = {"B-01"}
+
+# Every by-id action endpoint, with a body that is valid for the state we put the row in.
+def _action_calls():
+    return [
+        ("send",     lambda rid: rr.send_qr(rid, _body(rr.ReferralNoteIn, {}), org_id=ORG_A),            "created"),
+        ("log-sale", lambda rid: rr.log_sale(rid, _body(rr.LogSaleIn, {}), org_id=ORG_A),                "redeemed"),
+        ("activate", lambda rid: rr.activate(rid, _body(rr.ActivateReferralIn, {}), org_id=ORG_A),       "sale_logged"),
+        ("submit",   lambda rid: rr.submit_for_approval(rid, _body(rr.ReferralNoteIn, {}), org_id=ORG_A), "activated"),
+        ("approve",  lambda rid: rr.approve(rid, _body(rr.ApproveReferralIn, {"commission_amount": 50}), org_id=ORG_A), "commission_pending"),
+        ("pay",      lambda rid: rr.mark_paid(rid, _body(rr.ReferralNoteIn, {}), org_id=ORG_A),          "approved"),
+        ("reject",   lambda rid: rr.reject(rid, _body(rr.ReferralReasonIn, {"reason": "no"}), org_id=ORG_A), "commission_pending"),
+        ("void",     lambda rid: rr.void(rid, _body(rr.ReferralReasonIn, {"reason": "no"}), org_id=ORG_A), "created"),
+        ("flag",     lambda rid: rr.flag_fraud(rid, _body(rr.ReferralReasonIn, {"reason": "no"}), org_id=ORG_A), "created"),
+    ]
+
+for name, call, state in _action_calls():
+    T = fresh_tables()
+    T["referral"][0]["status"] = state
+    T["referral"][0]["redeem_expires_at"] = (NOW + timedelta(hours=48)).isoformat()
+    # a DIFFERENT approver than the creator, so segregation of duties is not what refuses us
+    patch(T, caller={"org_id": ORG_A, "employee_id": "EMP-OTHER", "id": "uid-other",
+                     "perms": {"scope": "market"}, "role": "manager"}, keyset=OUT_OF_SPAN)
+    before = dict(T["referral"][0])
+    try:
+        call("RA")
+        check(f"J1.{name} POST /referrals/{{id}}/{name} REFUSES a referral outside the caller's store span",
+              False, "the action went through")
+    except HTTPException as e:
+        check(f"J1.{name} POST /referrals/{{id}}/{name} REFUSES a referral outside the caller's store span",
+              e.status_code == 403, f"HTTP {e.status_code}: {e.detail}")
+    check(f"J2.{name} ... and the row is UNCHANGED (nothing half-applied)",
+          T["referral"][0].get("status") == before.get("status"), T["referral"][0].get("status"))
+
+# ── NO LOCKOUT: the same calls succeed when the referral IS in the caller's span ──
+for name, call, state in _action_calls():
+    T = fresh_tables()
+    T["referral"][0]["status"] = state
+    T["referral"][0]["redeem_expires_at"] = (NOW + timedelta(hours=48)).isoformat()
+    patch(T, caller={"org_id": ORG_A, "employee_id": "EMP-OTHER", "id": "uid-other",
+                     "perms": {"scope": "all"}, "role": "admin"}, keyset=IN_SPAN)
+    try:
+        call("RA")
+        check(f"J3.{name} ★ NO LOCKOUT ★ the same action still works inside the caller's span", True)
+    except HTTPException as e:
+        check(f"J3.{name} ★ NO LOCKOUT ★ the same action still works inside the caller's span",
+              False, f"HTTP {e.status_code}: {e.detail}")
+
+# ── an UNRESTRICTED caller (keyset None) is never narrowed ──
+T = fresh_tables(); patch(T, keyset=None)
+rr.send_qr("RA", _body(rr.ReferralNoteIn, {}), org_id=ORG_A)
+check("J4 an unrestricted caller (keyset None) is unaffected by the span gate",
+      T["referral"][0]["status"] == "sent", T["referral"][0]["status"])
+
+# ── a referral with NO store yet stays workable by a scoped caller (same posture as the list read) ──
+T = fresh_tables(); T["referral"][0]["store_code"] = None
+patch(T, keyset=OUT_OF_SPAN)
+rr.send_qr("RA", _body(rr.ReferralNoteIn, {}), org_id=ORG_A)
+check("J5 a referral not yet routed to a store is NOT invisible to a scoped caller (matches the list read)",
+      T["referral"][0]["status"] == "sent", T["referral"][0]["status"])
+
+# ── the PUBLIC redeem path carries NO keyset (the token is the auth) — explicitly excused ──
+T = fresh_tables()
+T["referral"][0].update({"status": "sent", "redeem_expires_at": (NOW + timedelta(hours=48)).isoformat()})
+patch(T, caller=None, keyset=OUT_OF_SPAN)
+view = rr.redeem_view(core.sign_token("RA", 1, SECRET))
+check("J6 the public redeem view is EXCUSED from the span gate (the token is the auth, the customer has no span)",
+      view.get("ok") is True, view)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# SECTION K — ★ the lock: the span fact cannot un-wire and no second copy can appear ★
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# Without this, the next edit quietly restores the patchwork — it has happened three times in this
+# repo (CLAUDE.md §19.18). Two static assertions over the router source:
+#   K1  every by-id endpoint resolves its referral through the ONE home, never the raw fetch.
+#   K2  the keyset comparison appears exactly ONCE in the module (inside the one home).
+import ast as _ast
+import inspect as _inspect
+
+_ROUTER_SRC = _inspect.getsource(rr)
+_tree = _ast.parse(_ROUTER_SRC)
+_ONE_HOME = "_referral_in_span"
+_RAW = "_get_referral"            # org-only fetch: private to the one home
+
+_endpoints = []
+for _n in _ast.walk(_tree):
+    if not isinstance(_n, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+        continue
+    for _d in _n.decorator_list:
+        if (isinstance(_d, _ast.Call) and isinstance(_d.func, _ast.Attribute)
+                and isinstance(_d.func.value, _ast.Name) and _d.func.value.id == "router"
+                and _d.args and isinstance(_d.args[0], _ast.Constant)):
+            _endpoints.append((_d.func.attr.upper(), _d.args[0].value, _n))
+
+# /redeem/{token} is the declared-public pair: the token is the auth, the caller has no span.
+_EXCUSED = {("GET", "/redeem/{token}"), ("POST", "/redeem/{token}")}
+_byid = [(m, p, n) for (m, p, n) in _endpoints if "{" in p and (m, p) not in _EXCUSED]
+check("K0 the lock found the module's by-id endpoints (a lock that measures nothing is worse than none)",
+      len(_byid) >= 12, f"{len(_byid)} found")
+
+_offenders = []
+for _m, _p, _n in _byid:
+    _calls = {c.func.id for c in _ast.walk(_n) if isinstance(c, _ast.Call) and isinstance(c.func, _ast.Name)}
+    if _ONE_HOME not in _calls:
+        _offenders.append(f"{_m} {_p}")
+check(f"K1 every by-id endpoint resolves its referral through {_ONE_HOME}() — no endpoint holds its own gate",
+      not _offenders, "ungated: " + ", ".join(_offenders))
+
+_raw_callers = []
+for _n in _ast.walk(_tree):
+    if not isinstance(_n, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+        continue
+    if _n.name in (_ONE_HOME, "_get_referral_safe"):
+        continue
+    for _c in _ast.walk(_n):
+        if isinstance(_c, _ast.Call) and isinstance(_c.func, _ast.Name) and _c.func.id == _RAW:
+            _raw_callers.append(_n.name)
+check(f"K2 nothing but {_ONE_HOME}() / _get_referral_safe() calls the org-only {_RAW}()",
+      not _raw_callers, "raw callers: " + ", ".join(sorted(set(_raw_callers))))
+
+# K3 — the SINGLE-ROW span refusal (`if r.get("store_code") and not _in_keyset(...)`) is the shape
+# that was copied three times. It must now exist exactly once: inside the one home. The LIST reads
+# (list_referrals, dashboard) filter a SET of rows instead, a different question, and K4 holds them.
+_SINGLE_ROW_REFUSAL = 'if r.get("store_code") and not _in_keyset('
+check("K3 the single-row span refusal exists in exactly ONE place (no second copy to drift)",
+      _ROUTER_SRC.count(_SINGLE_ROW_REFUSAL) == 1,
+      f"{_ROUTER_SRC.count(_SINGLE_ROW_REFUSAL)} occurrences")
+
+# K4 — and the two LIST reads keep narrowing their rows, so a future edit cannot quietly drop the
+# span from the surfaces that return many referrals at once.
+_LIST_FILTER = 'not r.get("store_code") or _in_keyset(ks, r.get("store_code"))'
+check("K4 both list-shaped reads (list + dashboard) still narrow their rows to the caller's span",
+      _ROUTER_SRC.count(_LIST_FILTER) == 2, f"{_ROUTER_SRC.count(_LIST_FILTER)} occurrences")
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════

@@ -290,6 +290,35 @@ def _get_referral(org_id: str, referral_id: str) -> dict:
     return rows[0]
 
 
+def _referral_in_span(org_id: str, referral_id: str, authorization: str) -> dict:
+    """★ THE ONE HOME for "which referral may this caller touch" ★ — org scope, then STORE SPAN.
+
+    Every by-id endpoint in this module dereferences this and holds no gate of its own.
+    `harness_referral.py` SECTION K fails the build if an endpoint stops asking, if anything but this
+    function reaches the org-only `_get_referral`, or if a second copy of the span comparison
+    appears. `authorization` is a REQUIRED argument, never defaulted — a caller that has not asked
+    who is calling must not be able to resolve a referral.
+
+    Found by the daily access probe (index SS CORE-42) on 2026-11-25: the three by-id READS each
+    carried their own copy of this check and the TEN by-id ACTIONS carried none, so a store- or
+    market-scoped manager refused by `GET /referrals/{id}/redeem-url` could obtain the same signed
+    customer redeem link from `POST /referrals/{id}/send`, and could void, flag, approve or mark PAID
+    a referral payout belonging to a store outside their span. The unified approvals inbox
+    (`approvals._may_decide`) already asked the span before deciding the same referral commission --
+    two paths to one money decision, one gated and one not.
+
+    NO LOCKOUT (and it is proved, not asserted): an unrestricted caller (keyset None) is unaffected,
+    a referral not yet routed to a store stays workable by a scoped caller -- the same posture the
+    list read already takes -- and a scoped caller keeps every referral they can already SEE. This
+    can only refuse what the reads already refuse.
+    """
+    r = _get_referral(org_id, referral_id)
+    ks = _keyset(authorization, org_id)
+    if r.get("store_code") and not _in_keyset(ks, r.get("store_code")):
+        raise HTTPException(403, "This referral belongs to a store outside your access.")
+    return r
+
+
 def _get_referral_safe(org_id: str, referral_id: str):
     """Non-raising referral fetch for the approvals engine adapter (which has no HTTP context to map a
     404 onto). Returns the row or None."""
@@ -439,10 +468,7 @@ def list_referrals(org_id: str = ORG_ID, status: str = "", store_code: str = "",
 @router.get("/referrals/{referral_id}")
 def get_referral(referral_id: str, org_id: str = ORG_ID, authorization: str = Header(default=""),
                  x_active_org: str = Header(default="")):
-    r = _get_referral(org_id, referral_id)
-    ks = _keyset(authorization, org_id)
-    if r.get("store_code") and not _in_keyset(ks, r.get("store_code")):
-        raise HTTPException(403, "This referral belongs to a store outside your access.")
+    r = _referral_in_span(org_id, referral_id, authorization)
     cfg = _cfg(org_id)
     try:
         audit = (sb().table("referral_audit").select("*").eq("org_id", org_id)
@@ -563,10 +589,7 @@ def _qr_png(url: str) -> bytes:
 @router.get("/referrals/{referral_id}/qr.png")
 def qr_image(referral_id: str, org_id: str = ORG_ID, authorization: str = Header(default=""),
              x_active_org: str = Header(default="")):
-    r = _get_referral(org_id, referral_id)
-    ks = _keyset(authorization, org_id)
-    if r.get("store_code") and not _in_keyset(ks, r.get("store_code")):
-        raise HTTPException(403, "This referral belongs to a store outside your access.")
+    r = _referral_in_span(org_id, referral_id, authorization)
     url = _redeem_url(r)
     if not url:
         raise HTTPException(400, "QR signing is not configured on this server (no download secret set).")
@@ -583,10 +606,7 @@ def redeem_url(referral_id: str, org_id: str = ORG_ID, authorization: str = Head
                x_active_org: str = Header(default="")):
     """The signed redeem URL as text (so the UI can render its own QR / copy the link). Same access
     gate as the image."""
-    r = _get_referral(org_id, referral_id)
-    ks = _keyset(authorization, org_id)
-    if r.get("store_code") and not _in_keyset(ks, r.get("store_code")):
-        raise HTTPException(403, "This referral belongs to a store outside your access.")
+    r = _referral_in_span(org_id, referral_id, authorization)
     url = _redeem_url(r)
     if not url:
         raise HTTPException(400, "QR signing is not configured on this server (no download secret set).")
@@ -651,7 +671,7 @@ def send_qr(referral_id: str, body: ReferralNoteIn = None, org_id: str = ORG_ID,
     body = body or ReferralNoteIn()
     caller = _caller(authorization, x_active_org)
     cfg = _cfg(org_id)
-    r = _get_referral(org_id, referral_id)
+    r = _referral_in_span(org_id, referral_id, authorization)
     url = _redeem_url(r)
     if not url:
         raise HTTPException(400, "QR signing is not configured on this server (no download secret set).")
@@ -678,7 +698,7 @@ def log_sale(referral_id: str, body: LogSaleIn = None, org_id: str = ORG_ID,
              authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     body = body or LogSaleIn()
     caller = _caller(authorization, x_active_org)
-    r = _get_referral(org_id, referral_id)
+    r = _referral_in_span(org_id, referral_id, authorization)
     extra = {}
     if body.sale_ref:
         extra["sale_ref"] = str(body.sale_ref)[:200]
@@ -696,7 +716,7 @@ def activate(referral_id: str, body: ActivateReferralIn = None, org_id: str = OR
     approval step (a different person) is the real control, not this flag."""
     body = body or ActivateReferralIn()
     caller = _caller(authorization, x_active_org)
-    r = _get_referral(org_id, referral_id)
+    r = _referral_in_span(org_id, referral_id, authorization)
     extra = {}
     if body.activation_ref:
         extra["activation_ref"] = str(body.activation_ref)[:200]
@@ -712,7 +732,7 @@ def submit_for_approval(referral_id: str, body: ReferralNoteIn = None, org_id: s
     this; the APPROVAL itself (money) is gated separately."""
     body = body or ReferralNoteIn()
     caller = _caller(authorization, x_active_org)
-    r = _get_referral(org_id, referral_id)
+    r = _referral_in_span(org_id, referral_id, authorization)
     r = _apply_transition(org_id, r, "commission_pending", caller, "staff",
                           body.note or "Submitted for commission approval")
     # Intimation into the UNIFIED approvals inbox — the gated commission decision now surfaces centrally
@@ -744,7 +764,7 @@ def approve(referral_id: str, body: ApproveReferralIn = None, org_id: str = ORG_
     body = body or ApproveReferralIn()
     caller = _caller(authorization, x_active_org)
     _require_approver(caller)
-    r = _get_referral(org_id, referral_id)
+    r = _referral_in_span(org_id, referral_id, authorization)
 
     conflict = core.approval_conflict((caller or {}).get("employee_id"), (caller or {}).get("id"), r)
     if conflict:
@@ -773,7 +793,7 @@ def mark_paid(referral_id: str, body: ReferralNoteIn = None, org_id: str = ORG_I
     body = body or ReferralNoteIn()
     caller = _caller(authorization, x_active_org)
     _require_approver(caller)
-    r = _get_referral(org_id, referral_id)
+    r = _referral_in_span(org_id, referral_id, authorization)
     r = _apply_transition(org_id, r, "paid", caller, "staff",
                           body.note or "Referral payout marked paid")
     _audit(org_id, referral_id, "pay", "approved", "paid",
@@ -787,7 +807,7 @@ def reject(referral_id: str, body: ReferralReasonIn = None, org_id: str = ORG_ID
     body = body or ReferralReasonIn()
     caller = _caller(authorization, x_active_org)
     _require_approver(caller)
-    r = _get_referral(org_id, referral_id)
+    r = _referral_in_span(org_id, referral_id, authorization)
     reason = body.reason or body.note or "Referral rejected"
     out = _apply_referral_decision(org_id, r, "deny", caller=caller, note=reason)
     try:
@@ -805,7 +825,7 @@ def void(referral_id: str, body: ReferralReasonIn = None, org_id: str = ORG_ID,
          authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     body = body or ReferralReasonIn()
     caller = _caller(authorization, x_active_org)
-    r = _get_referral(org_id, referral_id)
+    r = _referral_in_span(org_id, referral_id, authorization)
     reason = body.reason or body.note or "Referral voided"
     r = _apply_transition(org_id, r, "void", caller, "staff", reason)
     return {"referral": _decorate(r)}
@@ -818,7 +838,7 @@ def flag_fraud(referral_id: str, body: ReferralReasonIn = None, org_id: str = OR
     kill). Allowed from any live working state by the state machine."""
     body = body or ReferralReasonIn()
     caller = _caller(authorization, x_active_org)
-    r = _get_referral(org_id, referral_id)
+    r = _referral_in_span(org_id, referral_id, authorization)
     reason = body.reason or body.note or "Manually flagged as suspected fraud"
     r = _apply_transition(org_id, r, "flagged_fraud", caller, "staff", reason,
                           extra={"fraud_flag": True, "fraud_reason": reason[:2000]})
