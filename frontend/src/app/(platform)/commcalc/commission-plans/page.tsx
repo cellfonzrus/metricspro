@@ -6,6 +6,7 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import EntityPicker from '@/components/EntityPicker'
+import { rosterIsActive, rosterOptions } from '@/lib/roster-visibility'
 import QualifierEditor, { hasQualifier, qualifierVocabReady } from '../_lib/QualifierEditor'
 import {
   PlanOptions, MatchRule, MatchValuePicker, MatchWarnings, OptionsSourceNote,
@@ -443,23 +444,23 @@ export default function CommissionPlansPage() {
   // ePay/POS name when set (the escape hatch for POS strings that differ beyond word order — initials,
   // nicknames — which the name bridge alone can't reconcile), else the roster name. Sublabel shows role +
   // email, plus an "epay: <x>" hint when the stored ePay name differs from the display name. Active only.
-  const employeeOptions = employees
-    .filter(e => e.is_active !== false)
-    .map(e => {
+  // Active only, THROUGH THE ONE HOME (§CORE-45.7) — `is_active !== false` was written out here by
+  // hand, which is how the same question came to have a different answer on the screen next door.
+  const employeeOptions = rosterOptions(employees, false, {
+    id: e => String(e.epay_salesperson || '') || String(e.name || ''),
+    sublabel: e => {
       const nm = String(e.name || ''), epay = String(e.epay_salesperson || '')
-      const idVal = epay || nm
       const hint = epay && epay !== nm ? `epay: ${epay}` : null
-      return { id: idVal, label: nm || idVal,
-               sublabel: [e.role, e.email, hint].filter(Boolean).join(' · ') || undefined }
-    })
-    .filter(o => o.id)
+      return [e.role, e.email, hint].filter(Boolean).join(' · ')
+    },
+  })
   // ROLE picker: distinct job roles from the org's roster with an employee-count preview. Writing scope=
   // 'role' scope_value=<role> assigns the plan to EVERY rep with that role. Count shows "N active (+M
   // inactive)" because the engine matches inactive reps too — so the number agrees with what pays.
   const roleStats = employees.reduce((m: Record<string, { active: number; inactive: number }>, e) => {
     const r = String(e.role || '').trim(); if (!r) return m
     const s = m[r] || (m[r] = { active: 0, inactive: 0 })
-    if (e.is_active === false) s.inactive++; else s.active++
+    if (rosterIsActive(e)) s.active++; else s.inactive++
     return m
   }, {})
   const roleOptions = Object.entries(roleStats).sort((a, b) => a[0].localeCompare(b[0]))

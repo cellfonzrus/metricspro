@@ -8,6 +8,7 @@ import { api } from '@/lib/client'
 import { notSavedNote } from '@/lib/rowSave'
 import { sel, cell, EMP_EDIT_FIELDS, isDirty, PHONE_EG, cleanPhone } from '../lib'
 import ScreenLink from '@/components/ScreenLink'
+import { INACTIVE_LABEL, inactiveCount, visibleRoster } from '@/lib/roster-visibility'
 
 export default function EmployeeSetupPage() {
   const [emps, setEmps] = useState<any[]>([])
@@ -155,8 +156,12 @@ export default function EmployeeSetupPage() {
     setUpBusy(false)
   }
 
-  const filtered = emps.filter(e => (showInactive || e.is_active) &&
+  // `e.is_active` by TRUTHINESS read a NULL flag as INACTIVE — the opposite of the column's own
+  // default (`BOOLEAN DEFAULT true`, nullable), so a person whose flag was never set was hidden from
+  // the very screen that sets it. One home, dereferenced (§CORE-45).
+  const filtered = visibleRoster(emps, showInactive).filter(e =>
     (!search || `${e.name} ${e.home_store || ''} ${e.role || ''} ${e.email || ''}`.toLowerCase().includes(search.toLowerCase())))
+  const empsHidden = inactiveCount(emps)
   const dirtyEmpCount = emps.filter(e => isDirty(e, origEmps[e.id], EMP_EDIT_FIELDS)).length
 
   return (
@@ -190,7 +195,10 @@ export default function EmployeeSetupPage() {
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
             <input className="input" style={{ ...sel, width: 240 }} placeholder="Search name / store / role…" value={search} onChange={e => setSearch(e.target.value)} />
             <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 5 }}>
-              <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} /> show inactive
+              <input type="checkbox" aria-label={INACTIVE_LABEL} checked={showInactive}
+                onChange={e => setShowInactive(e.target.checked)} /> {INACTIVE_LABEL}
+              {!showInactive && empsHidden > 0 &&
+                <span style={{ color: 'var(--text3)' }}>({empsHidden} inactive hidden)</span>}
             </label>
             <span style={{ fontSize: 13, color: 'var(--text3)' }}>{filtered.length} shown</span>
             {/* Active toggle auto-saves per row (below); this covers any OTHER edited field (name/ID/

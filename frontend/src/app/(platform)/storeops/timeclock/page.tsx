@@ -10,6 +10,7 @@ import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib
 import { computeTotalScope, type TotalsCol, type TotalScope, type TotalsRow } from '@/lib/report-totals'
 import { SetupNotice } from '@/lib/setupNotice'
 import ScreenLink from '@/components/ScreenLink'
+import { inactiveCount, rosterOptions } from '@/lib/roster-visibility'
 import { buildStoreMarket } from '@/lib/store-market'
 
 // Time Clock admin (Part B / B1): review punches (clock-in/out, hours, selfie, GPS, face-match) and
@@ -177,10 +178,17 @@ export default function TimeClockAdminPage() {
     for (const s of stores) ms.add((s.market && String(s.market).trim()) ? s.market : NO_MARKET)
     return Array.from(ms).sort()
   }, [stores])
-  const repOptions = useMemo(() => employees
-    .filter(e => e.name)
-    .map(e => ({ id: e.name, label: e.name, sublabel: e.email || undefined }))
-    .sort((a, b) => a.label.localeCompare(b.label)), [employees])
+  // THE MENU IS NOT THE LABEL LIST (owner report 2026-11-25, §CORE-45.7): the roster is fetched
+  // `include_inactive=true` so a punch from a week somebody still worked carries their name, but a
+  // person deactivated this morning must not be offered as somebody to filter by — or to book hours
+  // against (the manual-hours picker below reads the same one home). "Show inactive" brings them back.
+  const repOptions = useMemo(() => rosterOptions(employees, !!filt.showInactive),
+                             [employees, filt.showInactive])
+  const empIdOptions = useMemo(() => rosterOptions(employees, !!filt.showInactive,
+                                                   { id: e => e.employee_id }),
+                               [employees, filt.showInactive])
+  // People kept OUT OF THE MENUS. The punch rows are history and are never dropped.
+  const repsHidden = useMemo(() => inactiveCount(employees), [employees])
 
   // Deliverable 2 — linkage: a punch/manual-hours row's OWN change-log entries (source_table + id),
   // never a loose employee+date match, so the marker only lights up on the EXACT row that was touched.
@@ -327,6 +335,7 @@ export default function TimeClockAdminPage() {
         onChange={onFilterChange}
         periodMode="range"
         storeOptions={storeOptions} marketOptions={marketOptions} repOptions={repOptions}
+        inactiveHidden={repsHidden}
       />
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
@@ -432,7 +441,7 @@ export default function TimeClockAdminPage() {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
           <select style={sel} value={mh.employee_id} onChange={e => setMh({ ...mh, employee_id: e.target.value })}>
             <option value="">Employee…</option>
-            {employees.map(e => <option key={e.employee_id} value={e.employee_id}>{e.name}</option>)}
+            {empIdOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
           </select>
           <DateField style={sel} value={mh.work_date} onChange={e => setMh({ ...mh, work_date: e.target.value })} />
           <input style={{ ...sel, width: 90 }} placeholder="hours (±)" value={mh.hours} onChange={e => setMh({ ...mh, hours: e.target.value })} />

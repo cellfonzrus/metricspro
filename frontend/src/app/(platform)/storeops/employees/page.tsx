@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useMemo, Fragment } from 'react'
-import { rosterIsActive } from '@/lib/roster-visibility'
+import { INACTIVE_SUFFIX, rosterIsActive, rosterOptions } from '@/lib/roster-visibility'
 import { api } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
@@ -118,11 +118,12 @@ export default function EmployeesPage() {
   const storeMarket = useMemo(() => buildStoreMarket(stores), [stores])
   const cascadeStores: StoreOpt[] = useMemo(() => stores
     .filter((s: any) => s.store_code)
-    .map((s: any) => ({ id: s.store_code, label: s.store_code + (rosterIsActive(s) ? '' : ' (inactive)'), market: s.market || undefined }))
+    .map((s: any) => ({ id: s.store_code, label: s.store_code + (rosterIsActive(s) ? '' : INACTIVE_SUFFIX), market: s.market || undefined }))
     .sort((a: StoreOpt, b: StoreOpt) => a.label.localeCompare(b.label)), [stores])
-  const repOptions = useMemo(() => employees
-    .map(e => ({ id: e.name, label: e.name })).filter(o => o.id)
-    .sort((a, b) => a.label.localeCompare(b.label)), [employees])
+  // The rep MENU follows the same tick box as the table below it (§CORE-45.7) — this page fetches
+  // `include_inactive=true`, so without this the dropdown offered people the list itself was hiding.
+  const repOptions = useMemo(() => rosterOptions(employees, showInactive, { sublabel: () => '' }),
+                             [employees, showInactive])
 
   const filtered = filterRows(employees, filt, {
     rep: e => e.name, store: e => e.home_store || '', market: e => storeMarket.marketOf(e.home_store || ''),

@@ -19,7 +19,9 @@ next change quietly restore the patchwork. This program FAILS THE BUILD when:
   C. a roster-reading backend module hand-rolls the predicate MORE than its pinned count — the
      pending ledger may only SHRINK, and a file not in the ledger may not appear at all;
   D. the frontend home or the shared bar's control goes missing;
-  E. the frontend pending ledger grows the same way.
+  E. the frontend pending ledger grows the same way;
+  F. a screen that asks the SERVER for inactive people then feeds that list to a MENU without
+     passing it through the home (owner report 2026-11-25, §CORE-45.7).
 
 THE LEDGERS ARE DEBT, STATED OUT LOUD: `backend/roster_visibility_pending.txt` and
 `frontend/roster_visibility_pending.txt`. Each line is `<count> <path>`. Wire a caller to the home,
@@ -58,6 +60,33 @@ PRED_PY = re.compile(
     r"""|\.eq\(\s*["']is_active["']\s*,\s*True\s*\)"""
     r"""|is_active["']?\s*\)\s*is\s+True""")
 PRED_TS = re.compile(r"""is_active\s*(?:!==|===|==|!=)\s*(?:false|true)""")
+
+# ── SECTION F's scope (owner report 2026-11-25) ─────────────────────────────────────────────────
+# *"once the employee is made inactive it should [be] deactivated from all menus — i just deactivated
+# aiman from ny logistics, it was still appearing in employee set up"*.
+#
+# A handful of screens ask for inactive PEOPLE deliberately: an attendance or time-clock report covers
+# past weeks, and a punch from a week somebody still worked must carry their NAME. The defect was that
+# those pages then handed that same unfiltered list to a DROPDOWN — so the list a page keeps for
+# LABELS became the options it OFFERS, and Aiman was still selectable the morning after he was
+# deactivated. A file in scope here may keep asking for them; it may not skip the home.
+ASKS_INACTIVE_PEOPLE = re.compile(r"""employees[^\n]{0,80}include_inactive""")
+DEREFS_TS = ("rosterOptions", "visibleRoster", "rosterIsActive", "splitRoster")
+
+# Named, per file, because "the file mentions the home somewhere" is a weaker claim than "the file
+# builds its MENU through the home" — a screen could dereference it for stores and still offer a
+# deactivated person in its people dropdown, which is the exact defect. A NEW file in scope need only
+# satisfy the generic rule above; these eight are pinned to what they actually have to call.
+WIRED_MENU_TS = {
+    "app/(platform)/storeops/attendance/page.tsx": "rosterOptions",
+    "app/(platform)/storeops/timeclock/page.tsx": "rosterOptions",
+    "app/(platform)/storeops/employees/page.tsx": "rosterOptions",
+    "app/(platform)/hr/compliance/page.tsx": "rosterOptions",
+    "app/(platform)/commcalc/commission-plans/page.tsx": "rosterOptions",
+    "app/(platform)/storeops/setup/employees/page.tsx": "visibleRoster",
+    "app/(platform)/storeops/admin/page.tsx": "visibleRoster",
+    "app/(platform)/admin/org-chart/page.tsx": "visibleRoster",
+}
 
 # Each surface here is one the directive reaches EVERY report through; a line of evidence per entry.
 WIRED_PY = {
@@ -234,7 +263,7 @@ def section_d() -> None:
     if not home:
         return bad("D", "the frontend one home is GONE: frontend/src/lib/roster-visibility.ts")
     for needed in ("rosterIsActive", "visibleRoster", "inactiveCount", "INACTIVE_LABEL",
-                   "withIncludeInactive"):
+                   "withIncludeInactive", "rosterOptions", "INACTIVE_SUFFIX"):
         if f"export function {needed}" not in home and f"export const {needed}" not in home:
             bad("D", f"frontend home no longer exports {needed}")
     if "FALSE_WORDS" not in home:
@@ -260,6 +289,42 @@ def section_d() -> None:
                  "default the directive asks for")
 
 
+def section_f() -> None:
+    """Every screen that asks the server for inactive PEOPLE must put that list through the home
+    before any menu is built from it. There is no ledger here, and deliberately so: this list is
+    small, every member of it is wired today, and the next screen to join it has to arrive wired."""
+    seen = 0
+    for root, dirs, files in os.walk(FRONTEND_SRC):
+        dirs[:] = [d for d in dirs if d not in ("node_modules", "__tests__")]
+        for name in sorted(files):
+            if not name.endswith((".ts", ".tsx")) or "roster-visibility" in name:
+                continue
+            path = os.path.join(root, name)
+            src = strip_comments_ts(read(path))
+            if not ASKS_INACTIVE_PEOPLE.search(src):
+                continue
+            seen += 1
+            rel = os.path.relpath(path, FRONTEND_SRC).replace(os.sep, "/")
+            needed = WIRED_MENU_TS.get(rel)
+            if needed and needed not in src:
+                bad("F", f"src/{rel} asks the server for inactive people and no longer calls "
+                         f"{needed} — the list it keeps for LABELS is back in front of the user as "
+                         f"a MENU, offering somebody who was deactivated.")
+            elif not needed and not any(d in src for d in DEREFS_TS):
+                bad("F", f"src/{rel} asks the server for inactive people and never passes them "
+                         f"through the home — whatever menu it builds offers somebody who was "
+                         f"deactivated. Use lib/roster-visibility.rosterOptions, and pin this file "
+                         f"in WIRED_MENU_TS.")
+    for rel in sorted(WIRED_MENU_TS):
+        if not os.path.exists(os.path.join(FRONTEND_SRC, rel)):
+            bad("F", f"src/{rel} is pinned as a wired menu but no longer exists — if it moved, move "
+                     f"its pin; an unresolvable pin measures nothing")
+    if not seen:
+        bad("F", "no screen asks for inactive people any more — if that is deliberate, delete this "
+                 "section; if a fetch was merely respelled, this lock has stopped measuring anything")
+    print(f"  F. {seen} screen(s) ask for inactive people, all through the home")
+
+
 def section_e() -> None:
     found = measure(FRONTEND_SRC, (".ts", ".tsx"), PRED_TS, None, ("roster-visibility",))
     ledger("E", "frontend", found, PENDING_TS,
@@ -273,6 +338,7 @@ def main() -> int:
     section_c()
     section_d()
     section_e()
+    section_f()
     if FAILURES:
         print(f"\nRED — {len(FAILURES)} problem(s):")
         for f in FAILURES:

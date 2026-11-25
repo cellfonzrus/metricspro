@@ -7,6 +7,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { SetupNotice } from '@/lib/setupNotice'
 import { buildStoreMarket } from '@/lib/store-market'
+import { inactiveCount, rosterOptions } from '@/lib/roster-visibility'
 
 // Attendance Exceptions (owner directive 2026-08-06, verbatim): "time clock should show who were
 // scheduled and didn't clock in and also if somebody else clocked in instead of the scheduled."
@@ -123,10 +124,16 @@ export default function AttendanceExceptionsPage() {
     for (const s of stores) ms.add((s.market && String(s.market).trim()) ? s.market : NO_MARKET)
     return Array.from(ms).sort()
   }, [stores])
-  const repOptions = useMemo(() => employees
-    .filter(e => e.name)
-    .map(e => ({ id: e.name, label: e.name, sublabel: e.email || undefined }))
-    .sort((a, b) => a.label.localeCompare(b.label)), [employees])
+  // THE MENU IS NOT THE LABEL LIST (owner report 2026-11-25, §CORE-45.7). The roster above is
+  // fetched `include_inactive=true` ON PURPOSE — this report covers past weeks, and a row from a week
+  // somebody still worked must carry their name. Offering that same list as somebody to FILTER BY is
+  // a different question, and a person deactivated this morning is not an answer to it. Ticking
+  // "Show inactive" brings them back, because a correction to a month they worked is legitimate.
+  const repOptions = useMemo(() => rosterOptions(employees, !!filt.showInactive),
+                             [employees, filt.showInactive])
+  // What the bar's note is counting here: people kept OUT OF THE MENU. The rows themselves are
+  // history and are never dropped (owner ruling 2026-11-14: past earnings stay in their month).
+  const repsHidden = useMemo(() => inactiveCount(employees), [employees])
 
   const rowsWithMarket = useMemo(() => rows.map(r => ({ ...r, market: mktOf.marketOf(r.store_code) || NO_MARKET })), [rows, mktOf])
   const stdFiltered = useMemo(() => filterRows(rowsWithMarket, filt, {
@@ -232,6 +239,7 @@ export default function AttendanceExceptionsPage() {
         onChange={onFilterChange}
         periodMode="range"
         storeOptions={storeOptions} marketOptions={marketOptions} repOptions={repOptions}
+        inactiveHidden={repsHidden}
       />
 
       {/* RULE FIVE — module-specific filters APPENDED after the standard bar, never substituted. */}

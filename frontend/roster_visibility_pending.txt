@@ -20,7 +20,7 @@
 1 src/app/(platform)/commcalc/cash-calendar/page.tsx
 2 src/app/(platform)/commcalc/column-mapping/page.tsx
 1 src/app/(platform)/commcalc/commission-ledger/page.tsx
-2 src/app/(platform)/commcalc/commission-plans/page.tsx
+1 src/app/(platform)/commcalc/commission-plans/page.tsx
 1 src/app/(platform)/commcalc/commission-structure/page.tsx
 1 src/app/(platform)/commcalc/expenses/page.tsx
 5 src/app/(platform)/commcalc/incentive-rules/page.tsx
@@ -30,7 +30,6 @@
 2 src/app/(platform)/crm/agencies/page.tsx
 1 src/app/(platform)/crm/leads/[id]/page.tsx
 2 src/app/(platform)/crm/settings/page.tsx
-1 src/app/(platform)/hr/compliance/page.tsx
 2 src/app/(platform)/hr/employee-database/page.tsx
 1 src/app/(platform)/hr/letters/send/page.tsx
 5 src/app/(platform)/hr/onboarding/page.tsx

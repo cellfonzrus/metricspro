@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, supabase, activeOrgHeader } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
-import EntityPicker, { type EntityOption } from '@/components/EntityPicker'
+import EntityPicker from '@/components/EntityPicker'
+import { INACTIVE_LABEL, inactiveCount, rosterOptions } from '@/lib/roster-visibility'
 import { apiUrl } from '@/lib/apiBase'
 import { SetupNotice } from '@/lib/setupNotice'
 
@@ -80,23 +81,23 @@ export default function CompliancePage() {
   // the org's real roster (GET /storeops/employees, org-scoped by the caller's JWT — read-only use of
   // an existing endpoint, no new roster store). employee_id (the business id, NOT the numeric row id —
   // that mismatch is the exact bug class the payroll money-fix just closed) drives the server query.
-  const [employeeOptions, setEmployeeOptions] = useState<EntityOption[]>([])
+  type RosterRow = { employee_id?: string | null; name?: string | null; email?: string | null; is_active?: unknown }
+  const [roster, setRoster] = useState<RosterRow[]>([])
+  const [showInactiveStaff, setShowInactiveStaff] = useState(false)
   const [employeeIds, setEmployeeIds] = useState<string[]>([])
   useEffect(() => {
+    // ACTIVE PEOPLE ONLY, THROUGH THE ONE HOME (§CORE-45.7). The roster is still fetched
+    // `include_inactive=true`, because a person who has left still owns the documents they signed —
+    // but the default menu is live staff, and "Show inactive" below reaches the leavers, each option
+    // then labelled as such. This screen wrote the `(inactive)` suffix by hand first; the home now
+    // owns that wording so no two menus can word it differently.
     apiCached('/api/v1/storeops/employees?all_company=true&include_inactive=true', LOOKUP)
-      .then((rows: any[]) => {
-        const opts = (rows || [])
-          .filter(e => (e?.employee_id || '').toString().trim())
-          .map(e => ({
-            id: String(e.employee_id),
-            label: (e.name || e.employee_id) + (e.is_active === false ? ' (inactive)' : ''),
-            sublabel: e.email || undefined,
-          }))
-          .sort((a, b) => a.label.localeCompare(b.label))
-        setEmployeeOptions(opts)
-      })
+      .then((rows: RosterRow[]) => setRoster(rows || []))
       .catch(() => {})
   }, [])
+  const employeeOptions = useMemo(
+    () => rosterOptions(roster, showInactiveStaff, { id: e => e.employee_id }), [roster, showInactiveStaff])
+  const staffHidden = useMemo(() => inactiveCount(roster), [roster])
 
   // Two independent, composable (AND), inclusive-both-ends date-range filters.
   const [sentFrom, setSentFrom] = useState('')
@@ -215,6 +216,15 @@ export default function CompliancePage() {
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
         <EntityPicker multi options={employeeOptions} value={employeeIds} onChange={setEmployeeIds}
           placeholder="Filter by employee(s)…" ariaLabel="Filter by employee" width={280} />
+        {/* The menu is live staff by default (§CORE-45.7); a leaver's signed paperwork is still here,
+            and this reaches them — never silently, so the count says how many are being held back. */}
+        <label style={{ ...lbl, gap: 5 }}>
+          <input type="checkbox" aria-label={INACTIVE_LABEL} checked={showInactiveStaff}
+            onChange={e => setShowInactiveStaff(e.target.checked)} />
+          {INACTIVE_LABEL}
+          {!showInactiveStaff && staffHidden > 0 &&
+            <span style={{ color: 'var(--text3)', fontWeight: 400 }}>({staffHidden} inactive hidden)</span>}
+        </label>
         <label style={lbl}>Packet sent
           <input type="date" style={inp} value={sentFrom} onChange={e => setSentFrom(e.target.value)} aria-label="Packet sent from" />
           <span style={{ color: 'var(--text3)' }}>–</span>

@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api } from '@/lib/client'
+import { INACTIVE_LABEL, visibleRoster } from '@/lib/roster-visibility'
 
 // Employee Org Chart — the PEOPLE view of the org tree, rendered as a GRAPHIC top-down chart: each
 // org unit is a box (level, name, manager(s), people + sub-unit counts) connected to its parent by
@@ -36,7 +37,11 @@ export default function OrgChartPage() {
         api('/api/v1/storeops/org/tree'),
         api(`/api/v1/storeops/org/employees${inactive ? '?include_inactive=true' : ''}`),
       ])
-      setUnits(t?.units || []); setLevels(t?.levels || []); setEmps(e?.employees || [])
+      // The server already narrows when the box is unticked; passing the reply through the one home
+      // as well means this chart cannot be the screen where "deactivated" means something else
+      // (§CORE-45.7 — the home reads a NULL flag as ACTIVE, which a bare truthiness test does not).
+      setUnits(t?.units || []); setLevels(t?.levels || [])
+      setEmps(visibleRoster<Emp>(e?.employees || [], inactive))
     } catch (ex: any) { setErr(ex?.message || 'Failed to load org chart') }
     finally { setLoading(false) }
   }, [inactive])
@@ -172,7 +177,8 @@ export default function OrgChartPage() {
         <button className="btn btn-sm" onClick={collapseAll}>Collapse all</button>
         <button className="btn btn-sm" onClick={() => window.print()}>🖨 Print / PDF</button>
         <label style={{ fontSize: 13, color: 'var(--text3)' }}>
-          <input type="checkbox" checked={inactive} onChange={e => setInactive(e.target.checked)} /> include inactive
+          <input type="checkbox" aria-label={INACTIVE_LABEL} checked={inactive}
+            onChange={e => setInactive(e.target.checked)} /> {INACTIVE_LABEL}
         </label>
         <a href="/admin/org" className="btn btn-sm">Edit structure →</a>
       </div>
