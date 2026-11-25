@@ -562,6 +562,30 @@ def section_j():
         out2 = R.roll_forward_targets_run_due(period=NOV, x_notify_secret=SECRET)
         eq("J9 a status row claiming 'filled' does not skip an empty month",
            {r["org_id"]: r["outcome"] for r in out2["results"]}[HOUSE], "filled")
+
+        # J10 — A READ MAY DEGRADE, A WRITE MAY NOT. An UNREADABLE policy table must not be treated
+        # as "no declaration", because the house default is auto_fill ON and this tenant may have
+        # turned it off: applying the default would write goals against a stated declaration. The
+        # tick is daily, so skipping costs at most a day and self-heals.
+        store["targets"] = [r for r in store["targets"]
+                            if not (r.get("org_id") == HOUSE and r.get("period") == NOV)]
+        _rows = R._rollforward_policy_rows
+        R._rollforward_policy_rows = lambda *_a, **_k: None        # the read FAILED
+        try:
+            before = len(fake.written_to("targets"))
+            out3 = R.roll_forward_targets_run_due(period=NOV, x_notify_secret=SECRET)
+            outcomes = {r["org_id"]: r["outcome"] for r in out3["results"]}
+            eq("J10 an unreadable policy is skipped, not defaulted",
+               outcomes[HOUSE], "policy_unreadable")
+            eq("J10b ...and so is every other tenant", outcomes[VZONE], "policy_unreadable")
+            eq("J10c ...and nothing was written", len(fake.written_to("targets")), before)
+            eq("J10d ...and nothing is reported as filled", out3["filled"], 0)
+        finally:
+            R._rollforward_policy_rows = _rows
+        # ...while the DISPLAY path still renders the house rule on the same failure, because a seed
+        # preview must show something. The two callers differ on purpose.
+        eq("J10e an unreadable policy still yields a policy for display",
+           GR.policy_for([], HOUSE)["stretch_basis"], "achieved")
     finally:
         TE.scope_achieved_mtd = _scope
         _rs._configured_secrets = _secrets

@@ -32659,10 +32659,20 @@ _MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
 def _rollforward_policy_rows(client, org_id):
     """Every `commcalc.goal_rollforward_policy` row for this org, for `goal_rollforward.policy_for`.
 
-    Returns [] on ANY failure, deliberately: before mig 1131 is applied — or if the table cannot be
-    read — every tenant falls back to `goal_rollforward.HOUSE_DEFAULT`, which IS the owner's rule.
-    So an unapplied migration degrades to the right behaviour rather than to no behaviour, and a
-    goals screen never 500s because a config table is missing.
+    Returns `[]` when the tenant has genuinely declared nothing, and **None** when the table could
+    not be READ. The two are different facts and collapsing them is a fail-open: `HOUSE_DEFAULT` has
+    `auto_fill` ON, so a tenant that explicitly turned the auto-fill OFF would be written to during
+    a momentary read failure — data against a stated declaration.
+
+    A READ MAY DEGRADE; A WRITE MAY NOT. This is the distinction, and it is why the two callers
+    treat None differently:
+      • `_carry_forward_map` (the SEED PREVIEW, display) treats None as `[]` and shows the house
+        rule. A screen must render, and before mig 1131 is applied this is the ONLY answer there is
+        — which is also why an unapplied migration degrades to exactly the owner's rule rather than
+        to no behaviour.
+      • the AUTO-FILL skips the tenant entirely and says `policy_unreadable`. The tick runs daily,
+        so the cost of skipping is at most a day and it self-heals; the cost of writing against a
+        declaration persists until someone notices.
 
     ORG-SCOPED at the query, not in the caller: a policy read that returned the platform's rows and
     let the caller filter is how one tenant's rate reaches another's request."""
@@ -32670,7 +32680,7 @@ def _rollforward_policy_rows(client, org_id):
         return (client.schema('commcalc').table('goal_rollforward_policy')
                 .select('*').eq('org_id', org_id).execute().data) or []
     except Exception:
-        return []
+        return None
 
 
 def _prior_period(period: str) -> str:
@@ -32709,7 +32719,9 @@ def _carry_forward_map(client, org_id, period, stores, catalog=None):
     # The prior month's declared targets and declared achievement, read once for every store.
     p_lines_by_store = _target_lines_by_store(_target_lines(client, org_id, prior))
     # This tenant's declared rule, read ONCE for the whole roster rather than once per store.
-    policy = goal_rollforward.policy_for(_rollforward_policy_rows(client, org_id), org_id)
+    # `or []` is the DISPLAY side of the read/write split in `_rollforward_policy_rows`: an
+    # unreadable policy table shows the house rule here, because a seed preview must render.
+    policy = goal_rollforward.policy_for(_rollforward_policy_rows(client, org_id) or [], org_id)
     units = targets_engine.target_units(catalog)
     out = {}
     for s in stores:
@@ -33181,10 +33193,14 @@ def roll_forward_targets_run_due(period: str = "", x_notify_secret: str = Header
     skip unless `auto_fill` -> READ `commcalc.targets` for the period and skip if ANY store already
     has a goal there -> otherwise run the same writer the button runs, with overwrite off.
 
-    A tenant with nothing to carry (no prior goals at all — Vzone and NY LOGISTICS, measured
-    2026-11-25) writes NOTHING: the shared writer already skips a store whose carried figures are
-    all zero rather than creating a row of zeroes. So "auto-fill for every tenant" cannot invent
-    goals for a tenant that has never set one.
+    A tenant with nothing to carry writes NOTHING: the shared writer already skips a store whose
+    carried figures are all zero rather than creating a row of zeroes. So "auto-fill for every
+    tenant" cannot invent goals for a tenant that has never set one. Measured 2026-11-25, that is
+    Vzone only — NY LOGISTICS looks like a second one from `commcalc.targets` (no row in any month)
+    but carries `storeops.stores.monthly_target`, which IS its accessories goal, so it rolls.
+
+    A tenant whose POLICY ROW CANNOT BE READ is SKIPPED, not written with the house default. See
+    `_rollforward_policy_rows` for why a read may degrade and a write may not.
 
     Every tenant is attempted even when an earlier one fails, and each outcome is reported per org:
     one tenant's unreadable roster must not cost the others their month."""
@@ -33200,7 +33216,15 @@ def roll_forward_targets_run_due(period: str = "", x_notify_secret: str = Header
     for oid in _rollforward_tenant_org_ids(client):
         entry = {'org_id': oid, 'period': target_period}
         try:
-            policy = goal_rollforward.policy_for(_rollforward_policy_rows(client, oid), oid)
+            # THE WRITE SIDE of the read/write split: an unreadable policy table is NOT a licence to
+            # apply the house default, because the house default is auto_fill ON and this tenant may
+            # have turned it off. Skip; the tick is daily, so a skip costs at most a day.
+            _prows = _rollforward_policy_rows(client, oid)
+            if _prows is None:
+                entry['outcome'] = 'policy_unreadable'
+                results.append(entry)
+                continue
+            policy = goal_rollforward.policy_for(_prows, oid)
             if not policy.get('auto_fill'):
                 entry['outcome'] = 'auto_fill_off'
                 results.append(entry)
