@@ -31584,6 +31584,61 @@ correctly; only what we TOLD him about it was wrong.
 registry written and its callers left unwired), §COMMCALC-44 (an absence needs the right reason),
 §COMMCALC-48.13 (the status sentence that understated the same login's failures).
 
+### COMMCALC-11.8 A live session that cannot act says WHICH reason (owner report 2026-11-26)
+
+Owner, 03:29 UTC, minutes after a sign-in that `commcalc.data_source` recorded as `authenticated`
+with the saved session good for five more hours: *"finally logged in again but when i hit read
+report it shows cannot read as not loggedin"*. One minute later: *"seems like the live login is
+logging in and out of the portal, i dont want to get shut down."*
+
+He was told he was not signed in AT THE MOMENT HE WAS. The only move that sentence leaves an
+operator is to sign in again — repeatedly, against a franchise portal, at half past three in the
+morning. A wrong reason does not merely fail to help; it aims the operator at the one action that
+can get the account locked. That is why this is a lock, not a wording tidy-up.
+
+**THE DEFECT.** `LiveLoginSession.can_calibrate()` and `can_pull()` each folded THREE facts into one
+boolean — passed the portal's sign-in, worker thread still alive, function configured — and the two
+operator-facing callers (`commcalc.router` "Read this page", `supply.router` vendor pull), holding
+only the boolean, each spelled a sentence that GUESSED which fact it was. Both guessed "not signed
+in". The true reason was the third: `signed_in()` reads the CURRENT phase, so a session that
+authenticated and was later cancelled by the post-login inactivity timeout
+(`_POST_AUTH_IDLE_SECONDS`, 15 minutes) reads exactly like one that never got in at all.
+
+**THE CLASS.** §COMMCALC-44 — an absence needs the RIGHT reason, not just a reason — with §19.18's
+wiring rule on top: the fact gets ONE home and the callers dereference it.
+
+**THE ONE HOME.** `live_login.act_blocker(sess, action)` returns the reason (`""` when the session
+can act), over the four states `no_session` / `not_signed_in` / `window_closed` / `not_configured`;
+`live_login.cannot_act_note(action, reason)` is the operator's sentence, keyed by **(action,
+reason)** over `calibrate` and `pull`. Two new session facts feed it: `ever_signed_in()`, latched in
+`_set` the first time a `_SIGNED_IN_PHASES` phase is set and never cleared, and `worker_alive()`,
+the one answer to "is the browser thread up" that the two gates used to ask inline.
+
+**The rungs are ordered so the reason is the one the operator can act on.** A session that HAS
+signed in and whose window has since gone reads `window_closed`, never `not_signed_in` — the two
+call for opposite moves, and only one of them risks the lockout.
+
+**THE LOCK.** `can_calibrate` and `can_pull` are now DERIVED (`act_blocker(self, …) == ""`), so a
+caller that can reach the verdict can always reach the reason. `backend/harness_live_session_blocker.py`
+(30 checks, in `carrier-vocab-guard`) walks the module's AST and fails the build if any function
+other than `act_blocker` weighs all three facts, or if either router carries a reason of its own;
+`backend/tests/unit/test_a_live_session_says_why_it_cannot_act.py` (20 tests, five armed plants)
+drives real session objects through the owner's exact sequence. §COMMCALC-24.6's existing lock was
+TIGHTENED rather than relaxed: it now pins both rungs of the chain, the gates dereferencing
+`act_blocker` and `act_blocker` dereferencing `signed_in()`.
+
+**What this did NOT do.** Nothing here changes any timeout, keeps a browser open longer, or makes a
+portal easier to sign in to. Only what we TELL the operator changed.
+
+### COMMCALC-11.9 Cross-references (11.8)
+
+§COMMCALC-11.6 (the sibling wording defect on the same login, five callers that threw the kind
+away), §COMMCALC-44 (an absence needs the right reason), §19.18 (a registry written and its callers
+left unwired), §COMMCALC-24.6 (`signed_in` is a fact the session owns, not a word a screen matches — the lock
+this tightens),
+§COMMCALC-24 (the session registry lives in the browser-owning process), §COMMCALC-48.13 (the status
+sentence that understated the same login's failures).
+
 ## §COMMCALC-12. WHICH STORE'S TRAILING COMMISSION LEGS ARE RUNNING DOWN, AND IN WHICH RUNG (owner ask 2026-10-15)
 
 Owner, verbatim, in the Store Takeover thread, on a prospect table that put the month-of-life rungs

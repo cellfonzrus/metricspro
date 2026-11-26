@@ -33,7 +33,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 644 gates
+## Gated — 645 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -353,6 +353,7 @@ the Runs on column is how you can tell.
 | `harness_live_frame.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_live_input_latency.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_live_login_progress.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_live_session_blocker.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_live_session_host.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_login_outcome.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_login_progressive.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |

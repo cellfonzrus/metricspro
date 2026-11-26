@@ -44471,13 +44471,15 @@ def live_login_calibrate(sid: str, body: dict = Body(default={}), org_id: str = 
     live_login.require_session_host()   # §COMMCALC-24 — the sessions live in the browser-owning process
     require_org(org_id)
     sess = live_login.get_session(sid, org_id)
-    if sess is None:
-        raise HTTPException(409, "No live session is open for this login. Start the live login and "
-                                 "sign in first — the report pages are read as the portal shows them "
-                                 "to you.")
-    if not sess.can_calibrate():
-        return {"ok": False, "phase": sess.snapshot_phase(),
-                "error": "This live session is not signed in yet, so its report pages cannot be read."}
+    # WHY it cannot read has ONE home (§COMMCALC-11.8). This endpoint used to spell its own sentence
+    # from a bare boolean and so told the owner he was not signed in while he was — the reason he
+    # needed was that the live window had closed. Nothing here words a reason.
+    blocker = live_login.act_blocker(sess, "calibrate")
+    if blocker == "no_session":
+        raise HTTPException(409, live_login.cannot_act_note("calibrate", blocker))
+    if blocker:
+        return {"ok": False, "phase": sess.snapshot_phase(), "reason": blocker,
+                "error": live_login.cannot_act_note("calibrate", blocker)}
     res = sess.run_calibrate_blocking()
     if res is None:
         return {"ok": False, "phase": sess.snapshot_phase(),
