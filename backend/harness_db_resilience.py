@@ -1840,7 +1840,32 @@ _all_routes = _flatten_routes(real_app.routes)
 # caller cannot win another connector's landings by claiming to be it (harness_report_landing.py §B
 # and §C). A read that FAILED returns 409 rather than reporting success over logins it never
 # touched.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1875"))
+# 1875 -> 1877, 2026-11-26 (PR for §STOREOPS-15, "scheduling a store-week is a flow somebody can
+# leave halfway" — the second caller of the same shared home). The base moved to 1875 while this
+# branch was open (§COMMCALC-85's one route, noted just above), so the pin is that number plus
+# this PR’s two — re-counted against the new base, never carried over.
+# RE-VERIFIED THE HOUSE WAY: `git fetch
+# origin main` first, then `git diff origin/main -- backend/ | grep -E '^[+-].*@router\.'` shows
+# exactly TWO added routes and none removed:
+#   GET /storeops/schedule-workflow               — the board: one row per store-week
+#   GET /storeops/schedule-workflow/{store_code}  — one store-week's five steps and what each waits on
+# Gate: `storeops/router.scope_keyset(... since=, until=)`, this module's EXISTING store-keyed gate
+# (§14x), with the evidence scan bounded to the week being read. No new gate was written, and an
+# unreadable gate FAILS CLOSED (no store's week, never every store's). The by-code route applies the
+# same gate and answers 403 when it returns nothing, 404 for a code this organisation does not
+# carry — so one tenant cannot learn that another's store exists (proved in
+# backend/tests/integration/test_schedule_workflow_endpoint.py).
+# Money: NONE, and structurally so. Both routes are GETs and the whole surface carries no writer —
+# `harness_schedule_week_flow.py` §G2b/§G2c fail the build if `.insert(` / `.update(` / `.upsert(` /
+# `.delete(` appears here or if a route stops being a GET. The only figures read are scheduled HOURS
+# and a store's weekly hours budget; no rate, payout, commission or tax figure is touched.
+# Cross-tenant negatives: every read is org-scoped AT the query, and WHICH SEVEN DAYS A WEEK IS is a
+# REQUIRED argument read per organisation from `storeops.tenants.work_week_start_dow` with no house
+# Monday behind it (owner 2026-10-30) — the integration test proves the SAME requested date returns a
+# Monday week for one tenant and a Thursday week for another, and that neither tenant's stores,
+# shifts or rota sends appear on the other's board. §G5 of the lock keeps a house Monday from coming
+# back anywhere that buckets a schedule week.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1877"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

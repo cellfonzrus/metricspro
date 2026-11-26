@@ -130,6 +130,21 @@ FIXES = {
         "page": "/closing/tender-config",
         "gate": "closing",
     },
+    # ── the week itself (a DECLARATION, so the gap is "nobody has said", never a default) ──────────
+    "work_week_start": {
+        "title": "This company has not said which day its work week starts on.",
+        "consequence": "Every week a schedule, an hours budget or a pay period is measured over has to "
+                       "begin somewhere, so until the day is chosen those weeks are grouped on the "
+                       "column\u2019s own starting day rather than on yours \u2014 which can put one of "
+                       "your weeks across two of the ones you are shown.",
+        "steps": [
+            "Open Pay Period & Work-Week.",
+            "Under \u201cWork week starts on\u201d, pick the day your own week begins.",
+            "Press Save. Schedules, hours budgets and pay periods regroup on that day straight away.",
+        ],
+        "page": "/admin/tenant-settings",
+        "gate": "pay_period",
+    },
     # ── targets, KPIs, org ──────────────────────────────────────────────────────────────────────────
     "store_targets": {
         "title": "No target is set for this store and month.",

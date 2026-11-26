@@ -12218,7 +12218,11 @@ router.include_router(_clock_variance_router)
 from app.modules.storeops.dropoff_label_api import router as _dropoff_label_router  # noqa: E402
 router.include_router(_dropoff_label_router)
 
-# THE EMPLOYEE SETUP WORKFLOW SURFACE (no migration, index §STOREOPS-13) — mounted here for the same
+# THE EMPLOYEE SETUP WORKFLOW SURFACE (no migration, index §STOREOPS-14) — mounted here for the same
 # reason as the blocks above: main.py is shared and no agent edits it (AGENT_CONTRACT §1).
 from app.modules.storeops.employee_setup_api import router as _employee_setup_router  # noqa: E402
 router.include_router(_employee_setup_router)
+
+# THE SCHEDULING WORKFLOW SURFACE (no migration, index §STOREOPS-15) — same reason again.
+from app.modules.storeops.schedule_week_api import router as _schedule_week_router  # noqa: E402
+router.include_router(_schedule_week_router)
