@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import StandardFilterBar from '@/components/StandardFilterBar'
+import DateField from '@/components/DateField'
 import { api } from '@/lib/client'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
@@ -214,7 +215,7 @@ export default function ScheduleWorkflowPage() {
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '14px 0 0' }}>
         <button style={btn} onClick={() => shiftWeek(-1)} disabled={busy}>← Previous week</button>
-        <input type="date" value={week} onChange={e => setWeek(e.target.value)}
+        <DateField value={week} onChange={e => setWeek(e.target.value)}
           style={{ ...btn, cursor: 'text' }} aria-label="Any date in the week" />
         <button style={btn} onClick={() => shiftWeek(1)} disabled={busy}>Next week →</button>
         <ExportButtons payload={payload} compact csv />
