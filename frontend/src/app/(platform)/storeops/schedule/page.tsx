@@ -1,11 +1,12 @@
 'use client'
 import { useState, useEffect, useMemo, useRef, Fragment } from 'react'
 import { rosterIsActive } from '@/lib/roster-visibility'
+import { rowStripe } from '@/lib/surface'
 import { api, localToday, parseLocalDate, addDays, mondayOf } from '@/lib/client'
 import { apiCached, LOOKUP, CONFIG } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
-import { buildScheduleExport } from '../lib/scheduleExport'
+import { buildScheduleExport, hoursBetween, shiftHours } from '../lib/scheduleExport'
 import { currentPeriodFromSettingsResponse } from '@/lib/pay-period'
 import { buildStoreMarket, marketsFromRoster } from '@/lib/store-market'
 
@@ -46,20 +47,13 @@ function dayLabel(date: string) {
 // e.g. 18:00→00:30) adds a day; an equal start/end is a zero-length row (0h, never a spurious 24h).
 // Mirrors backend schedule_hours.shift_hours + the _scheduled_end_for_punch overnight guard so the
 // footer total, the trend report, and the stored scheduled_hours all agree.
-function hoursBetween(start: string, end: string) {
-  const [sh, sm] = start.split(':').map(Number)
-  const [eh, em] = end.split(':').map(Number)
-  const s = sh * 60 + sm, e = eh * 60 + em
-  if (!isFinite(s) || !isFinite(e) || e === s) return 0
-  let d = e - s
-  if (d < 0) d += 24 * 60
-  return d / 60
-}
-// Hours for a shift row — recompute from start/end (overnight-safe), falling back to the stored value.
-function shiftHrs(s: { start_time?: string; end_time?: string; scheduled_hours?: number }) {
-  if (s.start_time && s.end_time) return hoursBetween(s.start_time, s.end_time)
-  return s.scheduled_hours || 0
-}
+//
+// 2026-11-26: these two were a LOCAL copy, and the export carried the other one — it totalled a
+// shift as `scheduled_hours || 0`, so an overnight shift (or a stale stored value) read one way in
+// this grid and another in the emailed PDF. One home now, in ../lib/scheduleExport, dereferenced
+// here rather than copied. `shiftHrs` is kept as the local NAME only (every call site below reads
+// it) and is literally the shared function.
+const shiftHrs = shiftHours
 
 // Tenant-aware work-week start (storeops.tenants.work_week_start_dow, mig 085 — 0=Mon..6=Sun;
 // e.g. Luxelink=3/Thursday). `mondayOf()` in lib/client.ts is always Monday, so the schedule grid
@@ -608,7 +602,15 @@ export default function SchedulePage() {
                 const sub = isStore ? (r.market || r.address?.substring(0, 22)) : r.role
                 const rowShifts = isStore ? shiftsOf(s => s.store_code === r.store_code) : shiftsOf(s => s.employee_name === r.name)
                 const total = rowShifts.reduce((a, s) => a + shiftHrs(s), 0)
-                const rowBg = ri % 2 === 1 ? 'var(--surface2)' : 'white'
+                // ZEBRA STRIPE — through the ONE HOME (`lib/surface.rowStripe`, index §CORE-37).
+                // This was `ri % 2 === 1 ? 'var(--surface2)' : 'white'` (owner 2026-11-26: *"cannot
+                // see he employee name in white background and white font"*): in the light theme
+                // `--surface` IS pure white, so the literal looked right; in the dark theme it painted
+                // a white band under white text and every other employee's name and weekly total
+                // vanished. Nothing was misaligned — half the rows were invisible. This is the same
+                // defect `surface.ts` was created for in November, in the one table that escaped its
+                // sweep by computing the stripe into a VARIABLE instead of writing it inline.
+                const rowBg = rowStripe(ri)
                 return (
                   <tr key={r.id ?? label} style={{ background: rowBg }}>
                     <td style={{ padding: '8px 14px', fontWeight: 600, fontSize: 13, borderRight: '1px solid var(--border)', position: 'sticky', left: 0, zIndex: 1, background: rowBg }}>

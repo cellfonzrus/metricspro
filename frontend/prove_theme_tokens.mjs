@@ -281,6 +281,37 @@ for (const f of files) {
 }
 check('H4 no table hand-rolls its own stripe — they all call rowStripe()',
   handRolled.length === 0, handRolled.slice(0, 8))
+// H4 LOOKED ONLY WHERE THE COLOUR WAS WRITTEN INLINE (widened 2026-11-26). The Schedule screen
+// shipped white-on-white names in the dark theme for the whole life of this lock, because it did
+// not write the stripe in a `background:` position at all — it computed it into a VARIABLE first:
+//
+//     const rowBg = ri % 2 === 1 ? 'var(--surface2)' : 'white'      …later…  background: rowBg
+//
+// `STRIPE_IN_BG` reads forward from `background:`, so one level of indirection hid the whole thing.
+// That is the SAME class §C' already fixed once — role read by looking only at the text adjacent to
+// the colour — a step further out, which is why it is widened here rather than locked in a second
+// file beside this one. A stripe is a stripe wherever its value is computed.
+const STRIPE_IN_VAR = /(?:const|let|var)\s+\w+\s*=\s*([^;\n]*%\s*2\b[^;\n]*\?[^;\n]*)/g
+const isColourish = (t) => /var\(--|#[0-9a-fA-F]{3,8}\b|'(?:white|black|transparent)'/.test(t)
+const handRolledVar = []
+for (const f of files) {
+  if (f === join(P.SRC, 'lib', 'surface.ts')) continue
+  const src = readFileSync(f, 'utf8')
+  for (const m of src.matchAll(STRIPE_IN_VAR)) {
+    if (!isColourish(m[1])) continue
+    handRolledVar.push(f.replace(P.SRC, 'src') + ':' + src.slice(0, m.index).split('\n').length)
+  }
+}
+check('H4b …nor computes one into a variable first — the shape that hid the Schedule screen',
+  handRolledVar.length === 0, handRolledVar.slice(0, 8))
+check('H4c NEGATIVE CONTROL: the exact Schedule line is caught',
+  [..."const rowBg = ri % 2 === 1 ? 'var(--surface2)' : 'white'".matchAll(STRIPE_IN_VAR)]
+    .some(m => isColourish(m[1])))
+check('H4d NEGATIVE CONTROL: the same row through the home is NOT caught',
+  [..."const rowBg = rowStripe(ri)".matchAll(STRIPE_IN_VAR)].length === 0)
+check('H4e NEGATIVE CONTROL: a NON-colour alternation is left alone',
+  [..."const label = i % 2 === 1 ? 'odd' : 'even'".matchAll(STRIPE_IN_VAR)]
+    .every(m => !isColourish(m[1])))
 check('H5 the tables that were converted really do dereference the home',
   files.filter(f => /rowStripe\(/.test(readFileSync(f, 'utf8'))).length >= 25,
   files.filter(f => /rowStripe\(/.test(readFileSync(f, 'utf8'))).length)
