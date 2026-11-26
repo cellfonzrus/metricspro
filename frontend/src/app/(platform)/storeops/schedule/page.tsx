@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo, useRef, Fragment } from 'react'
 import { rosterIsActive } from '@/lib/roster-visibility'
+import { rowStripe } from '@/lib/surface'
 import { api, localToday, parseLocalDate, addDays, mondayOf } from '@/lib/client'
 import { apiCached, LOOKUP, CONFIG } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
@@ -601,13 +602,15 @@ export default function SchedulePage() {
                 const sub = isStore ? (r.market || r.address?.substring(0, 22)) : r.role
                 const rowShifts = isStore ? shiftsOf(s => s.store_code === r.store_code) : shiftsOf(s => s.employee_name === r.name)
                 const total = rowShifts.reduce((a, s) => a + shiftHrs(s), 0)
-                // ZEBRA STRIPE, THEMED. This was the literal `'white'` (owner 2026-11-26: *"cannot
-                // see he employee name in white background and white font"*). In the light theme
-                // `--surface` IS #ffffff, so this is byte-identical there; in the dark theme the
-                // literal painted a white band under white text and every other employee's name and
-                // weekly total vanished — the rows were never misaligned, half of them were just
-                // invisible. A colour literal cannot know the theme; a token does.
-                const rowBg = ri % 2 === 1 ? 'var(--surface2)' : 'var(--surface)'
+                // ZEBRA STRIPE — through the ONE HOME (`lib/surface.rowStripe`, index §CORE-37).
+                // This was `ri % 2 === 1 ? 'var(--surface2)' : 'white'` (owner 2026-11-26: *"cannot
+                // see he employee name in white background and white font"*): in the light theme
+                // `--surface` IS pure white, so the literal looked right; in the dark theme it painted
+                // a white band under white text and every other employee's name and weekly total
+                // vanished. Nothing was misaligned — half the rows were invisible. This is the same
+                // defect `surface.ts` was created for in November, in the one table that escaped its
+                // sweep by computing the stripe into a VARIABLE instead of writing it inline.
+                const rowBg = rowStripe(ri)
                 return (
                   <tr key={r.id ?? label} style={{ background: rowBg }}>
                     <td style={{ padding: '8px 14px', fontWeight: 600, fontSize: 13, borderRight: '1px solid var(--border)', position: 'sticky', left: 0, zIndex: 1, background: rowBg }}>

@@ -234,6 +234,7 @@ Primary code homes:
 | STOREOPS-07 | **A correction a human types reaches the figure, or nothing does** | "i just fixed the hours in ny logistics , went in to check it still shows the old hours , check and fix for good platform wide" — and nothing he could have typed could have moved those figures. **616 hand-typed corrections** sat in `storeops.manual_hours` (51 house, 565 LuxeLink; ±4,441h gross), eight of them filed in the ten days before the report, and no pay or hours path read that table at all. All four tenants had declared `count_manual_hours = true` and `resolve_config` forced it FALSE for the three on `schedule_fallback`. The one correction the figure DID honour, `shifts.actual_hours`, is written by nothing in the product — the frontend displays it in seven places and writes it in none. And the mig-914 RPC decided `correction > punch > schedule` in SQL, where it could read neither the corrections nor the declaration. Who owns "what are this person's paid hours that day", what does a correction MEAN when 2,249 of its hours are negative, and what stops a closed month restating the moment the fold is switched on? |
 | STOREOPS-09 | **An expense line per org level, named in the tenant's own words** | "Anybody who is a dm their salary is divided among the stores they are responsible for , similarly for the regional manager or market manager whatever stores they cover their salary is divided amount their stores , add a line in the expenses with the name dm salary and rm salary or mm salary , if we add another level the expense report should automatically add they level and then divide the salary based on the people who report to them" — the mechanism existed (§14t) and booked ONE combined line. Four live tenants declare four different level vocabularies agreeing on not one rung, so whose word names the line, what stops a house default from labelling one tenant's expenses in another's language, and what makes a level added tomorrow appear with no deploy? |
 | STOREOPS-12 | **A package the scanner refused still has its number, and the platform can re-print it** | "sometimes the barcode, which is used to consolidate the packages, do not work properly, and we have packages sitting in the store which are not scanned ... the user should be able to upload the picture to our platform and the platform should generate a barcode using the reference numbers" — the reference is printed under the bars the whole time, so what is lost is a MACHINE-READABLE copy of it. Which symbology does a label actually use (measured, not assumed), what part of this is a published standard and what part is one tenant's description of one vendor's paperwork, and what stops a reference read off a photograph from printing a barcode that scans perfectly into the wrong record? |
+| STOREOPS-13 | **A printed schedule is a line per person, not a picture of the grid** | "the schdule show show line by line which employee is working and thier houre next to their name instaed of in this illegible form" — the export mirrored the SCREEN GRID, so one store-day cell held every name that fell in it and a store's 127 hours sat at the far edge of a landscape page. The LINE is now the unit: one row per person per store, `Employee · Store · Hrs · Mon…Sun`, a day cell holding times only, both views over one builder. Carries the sibling it exposed — the screen and the export each had their own answer to "how long is this shift", so an overnight shift could total differently in the emailed PDF than on screen. |
 | CORE-33 | **What an employee may reach is one declaration, and the API is what enforces it** | "on ny logistics Manan was able to go past [the clock-in screen] and also see the adjustment hours, this should not be allowed for any sales reps — this is universal across the board". The browser was the only gate: a menu row the viewer could see opened its whole subtree by URL, and the payroll writes behind those pages asked for no authority at all. Who decides what a surface's audience is, and what makes the API refuse a caller the menu would not offer it to? |
 | CORE-42 | **A gate proved in-process is a claim, not a measurement** | "create a testng agent who deciatedly is checking the data leakage, unwanted access to modules even if theya re gated like the case of manan and we discovered by accident, c annot have an accident of this sort, put it on schdule and one module at a time from the front end as though somebnbody was trying to hack in to the system". Every access control here is proved by a harness that imports the handler — which catches a wrong rule and not a right rule that was never reached. Who asks the DEPLOYED platform what it actually answers an unprivileged outsider, one module at a time, and what stops that probe from writing to production or from reporting a pass on a question it never asked? |
 | CORE-32 | **A guard that reads source code must be told f-strings exist** | Found by running the suite on a newer interpreter than CI's: the guard that stops our own setup internals reaching a customer was RED on Python 3.13 and GREEN on 3.11. PEP 701 stopped making an f-string one string token, so it had stopped seeing f-strings — and the same file held a SECOND reader of the same fact that had been taught the new shape. What proves a capability that depends on the interpreter, when CI pins one? |
@@ -26632,6 +26633,7 @@ status word rather than a blank that reads as nil.
 | ACCOUNT-06 | account, commcalc |
 | STOREOPS-11 | storeops, account |
 | STOREOPS-12 | storeops, core |
+| STOREOPS-13 | storeops, core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -31277,6 +31279,30 @@ really did miss the shipped line; and §H1–H7: `rowStripe` is declared, spells
 never returns `transparent`, and **no file may hand-roll `% 2` into a background**. `B1` (no literal
 on a property whose role is declared) now has teeth it did not have before. Unit tests:
 `src/lib/__tests__/surface.test.ts`.
+
+**THE TABLE THAT ESCAPED THE SWEEP (2026-11-26).** Owner, of the Schedule screen: *"cannot see he
+employee name in white background and white font"*. It read as rows being misaligned — "ss shows
+0.0h even though shifts appear on the row above it" — but nothing was misaligned: every other
+employee's name and weekly total was simply invisible, so each visible name looked like it sat
+beside the wrong row's shifts.
+
+It was the SAME literal, in the one shape this lock could not see:
+
+```ts
+const rowBg = ri % 2 === 1 ? 'var(--surface2)' : 'white'   // …later…  background: rowBg
+```
+
+`STRIPE_IN_BG` reads FORWARD from `background:`, so a stripe computed into a VARIABLE first was
+invisible to §H4 — one level of indirection further out than the backwards-reading hole §C′ closed,
+and the same class. The page now calls `rowStripe(ri)`, and §H4b–H4e widen the EXISTING lock (never
+a second lock beside it) to a `% 2` ternary whose branches are colourish wherever its value is
+computed, with controls that the exact shipped line is caught, that the call through the home is
+not, and that a non-colour alternation (`i % 2 ? 'odd' : 'even'`) is left alone. Verified by putting
+the defect back: §H4b fails, naming the line.
+
+A sibling lock was written first and DELETED before this shipped — this section is the home for
+"a colour on a themed surface is a token", and a second gate asking the same question is the
+duplicate the house rules forbid.
 
 **EVERY TENANT.** Nothing here reads an org: the defect and the fix are in the stylesheet and the
 markup, identical for Cellfonz R Us, LuxeLink and Vzone. Verified by rendering under both themes.
@@ -52924,52 +52950,7 @@ them; the page defines no hours arithmetic of its own.
 
 **Cross-references:** §4 (export governance — one payload behind Excel / PDF / Print / CSV / Send) ·
 §14w (`gate_person_rows` — whose shifts a week may contain) · §STOREOPS-05 (the week a tenant
-declares) · §CORE-50 (the white-on-white stripe on the same screen, found in the same report) ·
-§16–18.
+declares) · §CORE-15 / the Dark theme lock (the white-on-white stripe on the same screen, found in
+the same report — fixed there, through `lib/surface.rowStripe`, not here) · §16–18.
 
 ---
-
-## §CORE-50. A COLOUR ON A THEMED SURFACE IS A TOKEN, NEVER A LITERAL (owner 2026-11-26)
-
-Owner, of the Schedule screen in the dark theme: *"cannot see he employee name in white background
-and white font"*.
-
-### THE INSTANCE
-
-One line, in `storeops/schedule/page.tsx`:
-
-```ts
-const rowBg = ri % 2 === 1 ? 'var(--surface2)' : 'white'
-```
-
-In the light theme `--surface` **is** `#ffffff`, so the literal looked right for as long as anybody
-tested in light. In the dark theme it painted a white band under white text, and every other
-employee's name and weekly total disappeared. The report read as rows being misaligned — "ss shows
-0.0h even though shifts appear on the row above it" — but nothing was misaligned: half the names
-were simply invisible, so each visible name appeared to sit beside the wrong row's shifts.
-
-### THE CLASS
-
-A colour written as a literal cannot know which theme is on, so it is right in one theme by luck and
-wrong in the other by construction. The shape is hardest to spot, and most harmful, exactly where
-the literal is the OTHER BRANCH of a choice whose first branch is already a token — the author
-tokenised one half and left the other.
-
-### THE FIX, AND THE SIBLING
-
-`var(--surface)` — byte-identical in light, correct in dark. The sweep for the same shape across
-`frontend/src` found exactly one sibling, `commcalc/gp/page.tsx`'s footer text colour: white is the
-right colour there (the footer is navy in both themes), but as the token the same row already uses
-two lines above, `var(--c-fg-ffffff)`, not as a literal. Both are now tokens; no other instance of
-the shape exists in the frontend.
-
-### WHAT FAILS THE BUILD
-
-`frontend/src/lib/__tests__/theme-colour-literal.lock.test.ts` (CI, `npm run test`) — a ratchet at
-zero. It flags a bare CSS colour keyword that shares a line with a `var(--…)` token, and the plain
-`background: 'white'` / `…Bg = 'white'` form. A semantic TONE name (`lamp={'green'}`, `tone: 'red'`)
-is a word a component maps to a token itself and is not flagged. The lock carries its own proof that
-the pattern still matches the reported line and still ignores the two shapes it must not, so it
-cannot decay into a pattern that merely passes.
-
-**Cross-references:** §STOREOPS-13 (the printed schedule, reported in the same breath) · §16–18.
