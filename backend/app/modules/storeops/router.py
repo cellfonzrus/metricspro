@@ -12226,3 +12226,7 @@ router.include_router(_employee_setup_router)
 # THE SCHEDULING WORKFLOW SURFACE (no migration, index §STOREOPS-15) — same reason again.
 from app.modules.storeops.schedule_week_api import router as _schedule_week_router  # noqa: E402
 router.include_router(_schedule_week_router)
+
+# THE PAYROLL-RUN WORKFLOW SURFACE (no migration, index §STOREOPS-16) — same reason again.
+from app.modules.storeops.payroll_run_api import router as _payroll_run_router  # noqa: E402
+router.include_router(_payroll_run_router)

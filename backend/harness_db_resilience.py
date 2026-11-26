@@ -1841,7 +1841,26 @@ _all_routes = _flatten_routes(real_app.routes)
 # Monday week for one tenant and a Thursday week for another, and that neither tenant's stores,
 # shifts or rota sends appear on the other's board. §G5 of the lock keeps a house Monday from coming
 # back anywhere that buckets a schedule week.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1876"))
+# 1876 -> 1878, 2026-11-26 (PR for §STOREOPS-16, "running one pay period is a flow somebody can
+# leave halfway" — the third and last caller of the shared home). RE-VERIFIED THE HOUSE WAY: `git
+# fetch origin main` first, then `git diff origin/main -- backend/ | grep -E '^[+-].*@router\.'`
+# shows exactly TWO added routes and none removed:
+#   GET /storeops/payroll-workflow               — the board: one row per store for this pay period
+#   GET /storeops/payroll-workflow/{store_code}  — one store's seven steps and what each waits on
+# Gate: `storeops/router.scope_keyset` (§14x) for the stores, and `storeops/pay_visibility
+# .can_see_pay` (mig 434) for the MONEY — step 7 reports what the run pushed, so its wages, employer
+# tax and expense figures are stripped for a caller who may not see pay and the payload SAYS they
+# were withheld (a blank is indistinguishable from $0.00). Both gates FAIL CLOSED: an unreadable
+# store gate shows no store, an unreadable pay gate withholds the figures.
+# Money: READ ONLY, and gated as above. Nothing here writes, and the surface cannot run payroll —
+# `harness_payroll_run_flow.py` §G2 fails the build if a writer appears or a route stops being a GET,
+# which is what keeps a "run it" button off a surface whose job is to say whether a run may happen.
+# Cross-tenant negatives: every read is org-scoped AT the query, and WHICH DATES A PAY PERIOD COVERS
+# is a REQUIRED argument resolved from the tenant's own declared cycle through
+# `payroll_approval._resolve_period` (owner 2026-10-30) — the integration test proves a weekly tenant
+# and a fortnightly one each get their own period from the same request, and that neither tenant's
+# stores, hours, approvals or run records reach the other's board.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1878"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

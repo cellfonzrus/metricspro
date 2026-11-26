@@ -1067,6 +1067,7 @@ export const NAV: NavGroup[] = [
     // form may read where it got to.
     { href: '/storeops/setup/employee-workflow', label: 'Employee Setup Workflow', icon: '🧭', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
     { href: '/storeops/schedule-workflow', label: 'Scheduling Workflow', icon: '🧭', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/storeops/payroll-workflow', label: 'Payroll Run Workflow', icon: '🧭', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
     { href: '/storeops/setup/employees', label: 'Employee Setup', icon: '🧑‍🔧', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
     // Insurance & Leases (owner directive 2026-09-05, migs 964-967): ONE insurance policy covering
     // MANY stores, its document + AI reading, and the lease/COI expiry notices. Same module +
@@ -1558,6 +1559,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/storeops/attendance', 'ops'], ['/storeops/dropoff-barcode', 'ops'],
   ['/storeops/setup/employee-workflow', 'ops'],
   ['/storeops/schedule-workflow', 'ops'],
+  ['/storeops/payroll-workflow', 'ops'],
   ['/storeops/employees', 'ops'], ['/storeops/team', 'ops'], ['/storeops/visits', 'ops'], ['/storeops/reports', 'ops'],
   ['/storeops/visits/plan', 'ops'],
   ['/closing', 'ops'], ['/closing/verify', 'ops'], ['/closing/management', 'ops'], ['/closing/recon', 'ops'],

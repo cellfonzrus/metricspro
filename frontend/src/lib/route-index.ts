@@ -354,6 +354,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/storeops/dropoff-barcode' },
   { path: '/storeops/setup/employee-workflow' },
   { path: '/storeops/schedule-workflow' },
+  { path: '/storeops/payroll-workflow' },
   { path: '/storeops/employees' },
   { path: '/storeops/hours-budget' },
   { path: '/storeops/payroll' },
