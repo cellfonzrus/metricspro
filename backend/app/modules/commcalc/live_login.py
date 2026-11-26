@@ -355,13 +355,83 @@ def _wall_note(vp, page, refusal=None, challenge=None):
 # What to tell the operator for each KIND of human check. One home, because the two need genuinely
 # different instructions and the wrong one sends them hunting for a box that is not on the page yet
 # (owner report 2026-10-15 — the UPS reporting portal arms an INVISIBLE reCAPTCHA, index §COMMCALC-11).
-_HUMAN_CHECK_MESSAGE = {
-    "visible": ("Human check detected. Complete the 'I'm not a robot' box on the screen, then click "
-                "Sign in — you're driving this login directly."),
-    "invisible": ("This portal runs a human check when you sign in. Click Sign in on the screen "
-                  "yourself and complete the check if one appears. Signing in for you would be "
-                  "rejected as a bad password."),
+# WHAT THE OPERATOR MUST DO ABOUT A HUMAN CHECK — one table, keyed by (moment, kind).
+#
+# THE CLASS, found 2026-11-26 on the owner's report *"it just disappears as soon as you click on
+# it"*. `vidapay_sweep.human_check` answers THREE states — "visible" (a box is on screen),
+# "invisible" (a widget armed to fire on submit), "" (neither) — because they need DIFFERENT
+# instructions, and this module had the right words for both. But five of the six places that set
+# `phase="human_action"` asked the BOOLEAN `_captcha_present`, threw the kind away, and then spelled
+# the VISIBLE sentence by hand. On the owner's portal the widget is armed-invisible, so there is no
+# box at all: the only reCAPTCHA thing on screen is the badge, which expands on hover and collapses
+# on click. He was told to complete a box that does not exist, clicked the badge, and watched it
+# vanish. Every tenant with an invisible widget got the same wrong instruction.
+#
+# So the kind is load-bearing at EVERY moment, and the words live in ONE place. The moment is a
+# separate axis because the tail genuinely differs — "then Sign in" is wrong advice on the code
+# screen — and that is exactly why five hand-written copies grew in the first place.
+_HUMAN_CHECK_NOTE = {
+    # at the form, before anything was submitted
+    "at_form": {
+        "visible": ("Human check detected. Complete the 'I'm not a robot' box on the screen, then click "
+                    "Sign in — you're driving this login directly."),
+        "invisible": ("This portal runs a human check when you sign in. Click Sign in on the screen "
+                      "yourself and complete the check if one appears. Signing in for you would be "
+                      "rejected as a bad password."),
+    },
+    # noticed by the upkeep loop while the operator is driving
+    "appeared": {
+        "visible": ("A human check appeared — complete the 'I'm not a robot' box on the screen, "
+                    "then continue."),
+        "invisible": ("This portal's human check runs when you press Sign in — there is no box to "
+                      "tick. Press Sign in on the screen, and only solve something if a challenge "
+                      "actually opens."),
+    },
+    # the portal served an anti-automation page after the submit
+    "botwall": {
+        "visible": ("The portal's human check must be completed — solve the 'I'm not a robot' box on "
+                    "the screen, then Sign in."),
+        "invisible": ("The portal ran its human check on your Sign in and was not satisfied. Press "
+                      "Sign in again on the screen and complete the challenge if one opens."),
+    },
+    # back at the login form with the check unsolved — NOT a credentials failure
+    "login_rejected": {
+        "visible": ("The portal's human check must be completed — solve the 'I'm not a robot' box on "
+                    "the screen, then click Sign in. (This is NOT a credentials problem.)"),
+        "invisible": ("The portal's human check did not pass, so it sent you back to the form. Press "
+                      "Sign in on the screen yourself and complete the challenge if one opens. (This "
+                      "is NOT a credentials problem.)"),
+    },
+    # after the submit, before the code field appeared
+    "before_code": {
+        "visible": ("A human check appeared before the code — complete the 'I'm not a robot' box on "
+                    "the screen, then continue."),
+        "invisible": ("A human check runs here when you press the button on the screen — there is no "
+                      "box to tick. Continue on the screen and solve a challenge only if one opens."),
+    },
+    # at or after the code step: not a rejected code
+    "after_code": {
+        "visible": ("A human check appeared — complete the 'I'm not a robot' box on the screen, "
+                    "then Submit the code again."),
+        "invisible": ("A human check ran on that submit, not a wrong code — there is no box to tick. "
+                      "Submit the code again on the screen and complete a challenge if one opens."),
+    },
 }
+
+# The at-form words under their original name, DEREFERENCED rather than copied, because the proof
+# scripts and `_preauth` already read them by this name.
+_HUMAN_CHECK_MESSAGE = _HUMAN_CHECK_NOTE["at_form"]
+
+
+def human_check_note(kind, moment):
+    """What to tell the operator about a human check of `kind`, noticed at `moment`. PURE.
+
+    Returns "" for no check, so a caller cannot turn "no human check" into an instruction. An
+    unknown moment falls back to `at_form` rather than inventing words — a new call site that has
+    not been given its own entry still says something TRUE about the kind, which is the half that
+    was being got wrong."""
+    row = _HUMAN_CHECK_NOTE.get(str(moment or ""), _HUMAN_CHECK_NOTE["at_form"])
+    return row.get(str(kind or ""), "")
 
 # WHAT IS ACTUALLY IN THE FORM — a different fact from what GATES the submit, and that is why it is
 # a different home. The invisible message above used to assert "Your details are filled in" without
@@ -1209,7 +1279,7 @@ class LiveLoginSession:
                     # Two homes, two facts: what GATES the submit, and what is in the form. The
                     # second is read from the fill's own report — never asserted (owner 2026-10-31).
                     self._set(phase="human_action",
-                              message=(_HUMAN_CHECK_MESSAGE[kind] + " "
+                              message=(human_check_note(kind, "at_form") + " "
                                        + _prefill_note(_rep)).strip())
                 else:
                     self._set(phase="login",
@@ -1252,10 +1322,10 @@ class LiveLoginSession:
                 self._post_auth_loop(page, ctx, vp)     # keep the trusted browser open for a reuse pull
                 return
             if state == "botwall":
-                if _captcha_present(vp, page):
+                _kind = _human_check_kind(vp, page)
+                if _kind:
                     self._set(phase="human_action",
-                              message="The portal's human check must be completed — solve the 'I'm not a "
-                                      "robot' box on the screen, then Sign in.")
+                              message=human_check_note(_kind, "botwall"))
                     self._capture(page)
                     self._preauth_loop(page, ctx, vp)
                     return
@@ -1265,11 +1335,10 @@ class LiveLoginSession:
                 return
             if state == "login":
                 # A login rejection with an UNSOLVED captcha present is the human check, NOT bad creds.
-                if _captcha_present(vp, page):
+                _kind = _human_check_kind(vp, page)
+                if _kind:
                     self._set(phase="human_action",
-                              message="The portal's human check must be completed — solve the 'I'm not a "
-                                      "robot' box on the screen, then click Sign in. (This is NOT a "
-                                      "credentials problem.)")
+                              message=human_check_note(_kind, "login_rejected"))
                     self._capture(page)
                     self._preauth_loop(page, ctx, vp)
                     return
@@ -1311,10 +1380,10 @@ class LiveLoginSession:
             # (device interstitial → method chooser) EXACTLY ONCE, dispatching the code a SINGLE time. The
             # page then stays OPEN on the code screen; the code the operator types goes into THIS page.
             if not vp._code_field(page):
-                if _captcha_present(vp, page):
+                _kind = _human_check_kind(vp, page)
+                if _kind:
                     self._set(phase="human_action",
-                              message="A human check appeared before the code — complete the 'I'm not a "
-                                      "robot' box on the screen, then continue.")
+                              message=human_check_note(_kind, "before_code"))
                     self._capture(page)
                     self._preauth_loop(page, ctx, vp)
                     return
@@ -1503,12 +1572,14 @@ class LiveLoginSession:
                 self._on_authenticated(page, ctx, vp)
                 return
         # Captcha status upkeep — flip TO human_action when a challenge appears, and back when it clears.
-        cap = _captcha_present(vp, page)
+        # THE KIND, not a boolean: this loop is the one that runs while the operator is looking at the
+        # screen, so it is the one whose wrong sentence sends them hunting (§COMMCALC-47.x).
+        kind = _human_check_kind(vp, page)
+        cap = bool(kind)
         ph = self.snapshot_phase()
         if cap and ph in ("login", "awaiting_code", "verifying", "action_needed"):
             self._set(phase="human_action",
-                      message="A human check appeared — complete the 'I'm not a robot' box on the screen, "
-                              "then continue.")
+                      message=human_check_note(kind, "appeared"))
         elif not cap and ph == "human_action":
             try:
                 has_code = bool(vp._code_field(page))
@@ -1872,10 +1943,10 @@ class LiveLoginSession:
             self._capture(page)
             return True
         # A human check that appears at/after the code step is NOT a code rejection — flip to human_action.
-        if _captcha_present(vp, page):
+        _kind_after_code = _human_check_kind(vp, page)
+        if _kind_after_code:
             self._set(phase="human_action",
-                      message="A human check appeared — complete the 'I'm not a robot' box on the screen, "
-                              "then Submit the code again.")
+                      message=human_check_note(_kind_after_code, "after_code"))
             self._capture(page)
             return False
         # If the auto-clicker couldn't finish the "Trust This Device" page, tell the operator to click
