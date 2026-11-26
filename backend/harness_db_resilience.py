@@ -1794,7 +1794,28 @@ _all_routes = _flatten_routes(real_app.routes)
 # MISS the row the event belongs to — the rule the Meta status handler established in 2026-07-18 and
 # which both webhooks now share through one write path (harness_whatsapp_delivery_truth.py §H).
 # A webhook's payload is never trusted to name a tenant; the row it matches is.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1872"))
+# 1872 -> 1873, 2026-11-26 (PR for §COMMCALC-85, one report declaration applied to every login).
+# RE-VERIFIED THE HOUSE WAY, not assumed: `git fetch origin main` FIRST (see the stale-ref trap
+# noted above), then `git diff origin/main -- backend/ | grep -E '^[+-]@router\.'` shows exactly ONE
+# added route and none removed:
+#   POST /commcalc/data-sources/declare-reports  — apply one report declaration to every login of a
+#                                                  connector
+# Gate: `require_org(org_id)` then `_require_import_admin(authorization, org_id)` — the SAME gate
+# §COMMCALC-83's paste-once import uses, because this writes configuration onto every login of a
+# connector. No new gate was written. The integration test asserts an ungated caller gets
+# 401/403/503 and that nothing is written.
+# Money: NONE. It writes `commcalc.data_source.portal_reports` / `portal_calibration` — which report
+# a login pulls, where to click, and where the rows land. No payout, rate, plan, statement, GP,
+# commission, payable or tax figure is read or moved.
+# Cross-tenant negatives: the login list is read org-scoped AND processor-scoped AT the query
+# (`.eq("org_id", org_id).eq("processor", processor)`), so the fan-out cannot reach another tenant's
+# login on the same connector and the same portal;
+# backend/tests/integration/test_declare_reports_across_logins.py proves that directly. The landing
+# each row may carry is decided by the LOGIN ROW's own `processor`, never by the request body, so a
+# caller cannot win another connector's landings by claiming to be it (harness_report_landing.py §B
+# and §C). A read that FAILED returns 409 rather than reporting success over logins it never
+# touched.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1873"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

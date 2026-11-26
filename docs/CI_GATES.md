@@ -29,11 +29,11 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `module-graph-guard.yml` | 2 | `pull_request`, `push`, `workflow_dispatch` |
 | `org-scope-guard.yml` | 19 | `pull_request`, `push`, `workflow_dispatch` |
 | `security.yml` | 17 | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
-| `tests.yml` | 18 | `pull_request`, `push`, `workflow_dispatch` |
+| `tests.yml` | 19 | `pull_request`, `push`, `workflow_dispatch` |
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 643 gates
+## Gated — 644 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -535,10 +535,12 @@ the Runs on column is how you can tell.
 | `harness_rep_surface.py` | `org-scope-guard.yml` | The employee's reach (`employee-reach`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_rep_surface_lock.py` | `org-scope-guard.yml` | The employee's reach (`employee-reach`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_report_declaration.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_report_declaration.py` | `tests.yml` | A report's landing is declared once and applied everywhere (lock) (`report-landing-lock`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_report_drilldown.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_report_kind_lock.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_report_kinds.py` | `tests.yml` | Proof harnesses, group 4 of 4 (`harness-suite-4`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_report_labels.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_report_landing.py` | `tests.yml` | A report's landing is declared once and applied everywhere (lock) (`report-landing-lock`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_report_links.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_report_links_lock.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_report_toolbar_coverage.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |

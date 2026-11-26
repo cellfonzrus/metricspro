@@ -22,6 +22,11 @@ import { useConnectors } from '@/lib/connectors'
 type Param = { selector: string; kind: string; value: string | null; label: string }
 type Row = {
   key: string; label: string; nav: string[]; export: string
+  // WHERE ITS ROWS LAND (§COMMCALC-85). Until 2026-11-26 this editor could not carry the field at
+  // all and every save dropped it, so no report on the platform had one — and a report with no
+  // landing is refused at ingest and offers no upload door on the download console. The choices
+  // come from the backend (`landing_targets`), read off the connector's OWN landings.
+  target?: string
   params: Param[]; line_map?: Record<string, string>
   // THE CONTROLS THE PULL PRESSES. Until 2026-11-04 this editor could save only `params`, while the
   // pull reads four facts per report — so a capture that correctly read a portal's Run and Export
@@ -51,6 +56,7 @@ type Loaded = {
   bindable_fields?: string[]
   unit_bases?: { value: string; label: string }[]
   amount_signs?: { value: string; label: string }[]
+  landing_targets?: string[]
 }
 type Saved = { reports: Row[]; count: number }
 /** What delivering a file answers with. `delivered` is true only when rows actually LANDED — an
@@ -288,6 +294,7 @@ export default function PortalReportEditor(
                   <td style={{ padding: '4px 6px' }}>Report name</td>
                   <td style={{ padding: '4px 6px' }}>Menu words that reach it</td>
                   <td style={{ padding: '4px 6px', width: 90 }}>Export</td>
+                  <td style={{ padding: '4px 6px', width: 150 }}>Where its rows land</td>
                   <td style={{ padding: '4px 6px', width: 86 }}>Filters</td>
                   <td style={{ padding: '4px 6px', width: 78 }}>Per day</td>
                   <td style={{ padding: '4px 6px', width: 40 }} />
@@ -313,6 +320,22 @@ export default function PortalReportEditor(
                         <select style={BOX} value={r.export} onChange={e => patch(i, { export: e.target.value })}>
                           {exports.map(x => <option key={x} value={x}>{x}</option>)}
                         </select>
+                      </td>
+                      <td style={{ padding: '5px 6px' }}>
+                        {(meta?.landing_targets || []).length ? (
+                          <select style={BOX} value={r.target || ''}
+                                  title="Which feed this report's rows are stored in. Nothing declared means they are not stored at all, and a file uploaded by hand has nowhere to go."
+                                  onChange={e => patch(i, { target: e.target.value })}>
+                            <option value="">— not declared —</option>
+                            {(meta?.landing_targets || []).map(t => (
+                              <option key={t} value={t}>{t}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span style={{ color: 'var(--text3)', fontSize: 11 }}>
+                            nothing on this connector lands a report yet
+                          </span>
+                        )}
                       </td>
                       <td style={{ padding: '5px 6px' }}>
                         <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 7px' }}
