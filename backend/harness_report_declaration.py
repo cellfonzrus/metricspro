@@ -80,6 +80,11 @@ def strip_text(src):
 # A source declared the way a tenant's really is: one report declared in full, one as a bare key, and
 # a calibration entry carrying something this editor does not edit.
 SRC = {
+    # The connector this login belongs to. REQUIRED by `columns` since §COMMCALC-85: which landing
+    # targets are legal is the connector's own answer, and a default would be one connector's
+    # vocabulary standing in for every other's. `pos_report` lands nothing yet, which is exactly
+    # the case worth pinning here — the editor must not be able to save a target for it.
+    "processor": "pos_report",
     "portal_reports": [
         {"key": "Item Sales", "label": "Item Sales", "nav": "Reporting > POS > Item Sales",
          "export": "csv"},
@@ -115,7 +120,7 @@ eq(rd.rows(None), [], "…nor does no source at all")
 
 
 print("\n== §B  THE ROUND TRIP IS THE IDENTITY ==")
-reports, cal = rd.columns(rows, SRC["portal_calibration"])
+reports, cal = rd.columns(rows, SRC["portal_calibration"], processor=SRC["processor"])
 again = rd.rows({"portal_reports": reports, "portal_calibration": cal})
 eq(again, rows, "columns(rows(src)) reproduces the same rows — opening and saving changes nothing")
 eq([r["key"] for r in reports], ["item_sales", "tender_cash"], "declared order is kept")
@@ -137,7 +142,8 @@ eq(cal["item_sales"].get("notes"), "captured 2026-10-29",
 eq(cal.get("login"), SRC["portal_calibration"]["login"],
    "a calibration entry for a key the editor never showed survives it (the §COMMCALC-46 login "
    "declaration lives there)")
-_, cal2 = rd.columns([r for r in rows if r["key"] != "tender_cash"], SRC["portal_calibration"])
+_, cal2 = rd.columns([r for r in rows if r["key"] != "tender_cash"], SRC["portal_calibration"],
+                   processor=SRC["processor"])
 eq("tender_cash" in cal2, False, "removing a report does remove it from the declaration")
 eq(cal2.get("login"), SRC["portal_calibration"]["login"], "…without touching the rest")
 
@@ -146,11 +152,11 @@ print("\n== §D  PER-DAY IS DERIVED, NEVER A SECOND SWITCH ==")
 eq(rows[0]["per_day"], True, "a report whose filters mention the day IS a per-day report")
 eq(rows[1]["per_day"], False, "…and one with no filters is not")
 lying = dict(rows[0]); lying["per_day"] = False
-_, cal3 = rd.columns([lying], None)
+_, cal3 = rd.columns([lying], None, processor=SRC["processor"])
 eq(rd.rows({"portal_reports": [{"key": "item_sales"}], "portal_calibration": cal3})[0]["per_day"],
    True, "a row claiming otherwise cannot save that claim — the filters decide")
-eq("per_day" in rd.columns([rows[0]], None)[0][0], False, "per_day is never stored")
-eq("problems" in rd.columns([rows[0]], None)[0][0], False, "nor is the advice")
+eq("per_day" in rd.columns([rows[0]], None, processor=SRC["processor"])[0][0], False, "per_day is never stored")
+eq("problems" in rd.columns([rows[0]], None, processor=SRC["processor"])[0][0], False, "nor is the advice")
 
 
 print("\n== §E  THE FILTER VOCABULARY IS THE PULL'S ==")
@@ -236,8 +242,15 @@ ok('"/data-sources/{sid}/reports"' in src_router, "the router exposes the editab
 ok(re.search(r'@router\.put\("/data-sources/\{sid\}/reports"\)', src_router) is not None,
    "…and a save for it")
 ok("report_declaration" in src_router, "the router dereferences this home")
-ok(re.search(r"def (data_source_reports|save_data_source_reports)[\s\S]{0,2000}?rd\.columns\(", src_router)
-   is not None, "the save builds the columns HERE, not in the endpoint")
+# The columns are built in ONE place in the router — `_save_source_reports`, which both the editor's
+# save and §COMMCALC-85's fan-out call. The teeth are the pair: the one home builds them, and the
+# ENDPOINT does not, so a second door cannot grow its own reading of a declaration.
+ok(re.search(r"def _save_source_reports[\s\S]{0,1200}?rd\.columns\(", src_router) is not None,
+   "the columns are built in the router's one writer, not in an endpoint")
+ok(re.search(r"def save_data_source_reports[\s\S]{0,1200}?rd\.columns\(", src_router) is None,
+   "…and the endpoint itself builds none of its own")
+ok(re.search(r"def save_data_source_reports[\s\S]{0,1200}?_save_source_reports\(", src_router)
+   is not None, "the endpoint dereferences that writer")
 ok(".eq(\"org_id\", org_id)" in src_router, "the endpoints are org-scoped (the house rule)")
 ok(not re.search(r"\b(ups|vidapay|b2bsoft|boost|total|luxelink|cellfonz|item sales|tender cash)\b",
                  exe_rd, re.I),
@@ -258,19 +271,19 @@ def armed(label, fn):
 armed("two rows claiming one key collapse to one, not two reports",
       lambda: len(rd.rows({"portal_reports": [{"key": "a b"}, {"key": "a_b"}]})) == 1)
 armed("…and the same on save",
-      lambda: len(rd.columns([{"key": "a b"}, {"key": "a_b"}])[0]) == 1)
+      lambda: len(rd.columns([{"key": "a b"}, {"key": "a_b"}], processor=SRC["processor"])[0]) == 1)
 armed("an unknown export falls back rather than saving an export nothing can press",
-      lambda: rd.columns([{"key": "k", "export": "telepathy"}])[0][0]["export"] == "csv")
+      lambda: rd.columns([{"key": "k", "export": "telepathy"}], processor=SRC["processor"])[0][0]["export"] == "csv")
 armed("a declared export the pull knows is kept",
-      lambda: rd.columns([{"key": "k", "export": "excel"}])[0][0]["export"] == "excel")
+      lambda: rd.columns([{"key": "k", "export": "excel"}], processor=SRC["processor"])[0][0]["export"] == "excel")
 armed("an empty line_map is not written (it would read as a declaration)",
-      lambda: "line_map" not in rd.columns([{"key": "k", "line_map": {}}])[0][0])
+      lambda: "line_map" not in rd.columns([{"key": "k", "line_map": {}}], processor=SRC["processor"])[0][0])
 armed("a declared line_map IS written",
-      lambda: rd.columns([{"key": "k", "line_map": {"x": "y"}}])[0][0]["line_map"] == {"x": "y"})
+      lambda: rd.columns([{"key": "k", "line_map": {"x": "y"}}], processor=SRC["processor"])[0][0]["line_map"] == {"x": "y"})
 armed("the editor's own fields never reach the stored report",
-      lambda: set(rd.columns([rows[0]])[0][0]) <= {"key", "label", "nav", "export", "line_map"})
+      lambda: set(rd.columns([rows[0]], processor=SRC["processor"])[0][0]) <= {"key", "label", "nav", "export", "line_map"})
 armed("saving no rows clears the reports but keeps the other calibration entries",
-      lambda: rd.columns([], SRC["portal_calibration"]) == ([], {
+      lambda: rd.columns([], SRC["portal_calibration"], processor=SRC["processor"]) == ([], {
           "item_sales": SRC["portal_calibration"]["item_sales"],
           "login": SRC["portal_calibration"]["login"]}))
 

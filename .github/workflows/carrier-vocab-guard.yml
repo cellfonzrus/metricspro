@@ -744,6 +744,7 @@ on:
       # already names further down this same list — so a change to either re-runs this job and with
       # it the human-check lock, and a check that gates the submit cannot go unseen again.
       - "backend/harness_human_check_kind.py"
+      - "backend/harness_live_session_blocker.py"
       # §COMMCALC-13 — a finished live login leaves an honest status. The homes are in live_login
       # (named further down from §COMMCALC-10) and the one reader is the data_source row decorator in
       # commcalc/router.py (already named above for §12a.2a), so both re-run this job.
@@ -1858,6 +1859,9 @@ jobs:
       - name: Run the human-check lock (a check that GATES the submit counts whether or not it is painted; each kind gets its own words)
         working-directory: backend
         run: python3 harness_human_check_kind.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the live-session blocker lock (a session that cannot act says WHICH reason; a closed window is never reported as a failed sign-in - index COMMCALC-11.8)
+        working-directory: backend
+        run: python3 harness_live_session_blocker.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the terminal-status lock (a session that ends restores the row's real status; an in-flight claim cannot outlive its worker - index COMMCALC-13)
         working-directory: backend
         run: python3 harness_terminal_status.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -3560,7 +3564,7 @@ jobs:
         with: { python-version: "3.11" }
       - name: Run the send-outcome proof (a failure is reported with its recipient and its remedy, never as a count — index §NOTIFY-01)
         working-directory: backend
-        run: python3 harness_notify_send_outcome.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+        run: set -o pipefail; python3 harness_notify_send_outcome.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # EVERY OUTBOUND EMAIL IS RECORDED, BY THE TRANSPORT. Owner report 2026-11-25 ("onboarding email not
   # reaching employees"): the invites existed, the audit said they had been sent, and notify.send_log

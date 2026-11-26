@@ -142,6 +142,77 @@ _TERMINAL = ("error", "cancelled")
 # minutes after making it. 'pulling' is post-authentication: the browser is open and trusted.
 _SIGNED_IN_PHASES = ("authenticated", "pulling")
 
+# ── WHY CAN THIS LIVE SESSION NOT DO THAT? ONE HOME (index §COMMCALC-11.8) ──────────────────────
+# Owner report 2026-11-26 03:29 UTC, minutes after a sign-in the row recorded as `authenticated`
+# with the session good for five more hours: *"finally logged in again but when i hit read report it
+# shows cannot read as not loggedin"* — then, one minute later, *"seems like the live login is
+# logging in and out of the portal, i don't want to get shut down."*
+#
+# He was told he was not signed in at the moment he WAS, so the only move the sentence left him was
+# to sign in again, repeatedly, against a franchise portal. A wrong reason does not merely fail to
+# help: it aims the operator at the one action that can get the account locked.
+#
+# THE CLASS (§COMMCALC-44, and §19.18 for the wiring). `can_calibrate` and `can_pull` each folded
+# THREE facts into one boolean — passed sign-in, worker thread alive, function configured — and the
+# two routers, holding only the boolean, each spelled a sentence that GUESSED which one it was. Both
+# guessed "not signed in". The true reason was the third, and `signed_in()` reads the CURRENT phase,
+# so a session that authenticated and was later cancelled reads exactly like one that never got in.
+#
+# So the REASON is the fact with a home, the sentence is keyed by (action, reason), and the booleans
+# are DERIVED from the reason rather than the other way round — a caller cannot reach the verdict
+# without being able to reach the reason.
+_ACT_FN = {"calibrate": "calibrate_fn", "pull": "pull_fn"}
+
+_CANNOT_ACT_NOTE = {
+    "calibrate": {
+        "no_session": ("No live session is open for this login. Start the live login and sign in — "
+                       "the report pages are read as the portal shows them to you."),
+        "not_signed_in": ("This live session has not passed the portal's sign-in yet, so its report "
+                          "pages cannot be read. Finish signing in in the live window first."),
+        "window_closed": ("The live window has closed, so there is no browser left to read the "
+                          "report pages. Your saved sign-in is not affected — start the live login "
+                          "again and press Read this page while the window is still open."),
+        "not_configured": ("This login is not set up to read its report pages, so there is nothing "
+                           "to capture. Nothing was changed."),
+    },
+    "pull": {
+        "no_session": ("No live session is open for this login. Start the live login and sign in, "
+                       "or let the scheduled pull use the saved sign-in."),
+        "not_signed_in": ("This live session has not passed the portal's sign-in yet, so it cannot "
+                          "fetch anything. Finish signing in in the live window first."),
+        "window_closed": ("The live window has closed, so there is no browser left to fetch with. "
+                          "Your saved sign-in is not affected — the scheduled pull can still use it."),
+        "not_configured": ("This login is not set up to fetch anything on a live session. Nothing "
+                           "was changed."),
+    },
+}
+
+
+def act_blocker(sess, action):
+    """THE one answer to "why can this live session not do <action>". `""` means it can.
+
+    Ordered so the reason is the one the operator can act on: a session that HAS signed in and whose
+    window has since gone reads `window_closed`, never `not_signed_in` — that distinction is the
+    whole defect this replaces, because the two call for opposite moves (wait and reopen the window
+    versus sign in again, which is what risks the lockout)."""
+    if action not in _CANNOT_ACT_NOTE:
+        raise ValueError("unknown live-session action: %r" % (action,))
+    if sess is None:
+        return "no_session"
+    if not sess.ever_signed_in():
+        return "not_signed_in"
+    if not sess.signed_in() or not sess.worker_alive():
+        return "window_closed"
+    if getattr(sess, _ACT_FN[action], None) is None:
+        return "not_configured"
+    return ""
+
+
+def cannot_act_note(action, reason):
+    """The operator's sentence for one (action, reason). Unknown either way is `""` — an absence the
+    caller must notice, never a guess dressed as an explanation."""
+    return _CANNOT_ACT_NOTE.get(str(action or ""), {}).get(str(reason or ""), "")
+
 # ── HOW LONG MAY THIS SESSION STAY IN THIS PHASE? ONE HOME, two different questions ─────────────
 # Owner report 2026-10-15, on a brand-new Team Portal login: *"it has been over 5 minutes it is
 # startying teh love login and does not move freom tehre"*. He was right, and waiting would never
@@ -705,6 +776,7 @@ class LiveLoginSession:
         self._act = "Starting up"
         self._act_at = time.time()
         self._finished_at = None
+        self._ever_signed_in = False      # latched True the first time a signed-in phase is set
         self._thread = None
         self._watchdog = None                     # the no-progress watchdog thread (see _watch)
         # What the row said BEFORE `live_login_start` stamped 'authenticating' over it — the row is
@@ -719,6 +791,8 @@ class LiveLoginSession:
                 if phase != self.phase:
                     self._phase_since = time.time()   # a new phase gets its own full budget
                 self.phase = phase
+                if phase in _SIGNED_IN_PHASES:
+                    self._ever_signed_in = True   # latched: see `ever_signed_in`
                 if phase in _TERMINAL:
                     self._finished_at = time.time()
             if message is not None:
@@ -961,13 +1035,23 @@ class LiveLoginSession:
         with self._lock:
             return self.phase in _SIGNED_IN_PHASES
 
+    def ever_signed_in(self):
+        """Did this session EVER pass the portal's sign-in? `signed_in()` reads the phase it is in
+        now, so a session that authenticated and was later cancelled answers False there — and
+        reporting that as "never signed in" is what sent the owner back to the login screen on
+        2026-11-26. Latched once and never cleared."""
+        with self._lock:
+            return bool(self._ever_signed_in)
+
+    def worker_alive(self):
+        """THE one answer to "is this session's browser thread still up". Two capability checks used
+        to ask it inline, which is how they came to disagree with the sentence shown to the operator."""
+        return bool(self._thread and self._thread.is_alive())
+
     def can_calibrate(self):
-        """True only when the worker is alive AND we are post-authentication AND a capture is
-        configured. Same shape and the same honest fallback as `can_pull`: a dead or aged-out session
-        returns False and the caller says so rather than hanging."""
-        ok_phase = self.signed_in()
-        alive = bool(self._thread and self._thread.is_alive())
-        return ok_phase and alive and self.calibrate_fn is not None
+        """Can this session read its report pages? DERIVED from `act_blocker`, which is also where
+        the reason comes from — a caller that can get the verdict can always get the reason."""
+        return act_blocker(self, "calibrate") == ""
 
     def run_calibrate_blocking(self, timeout=300):
         """Called from the request thread: enqueue a capture and block for its result. Returns None if
@@ -983,12 +1067,10 @@ class LiveLoginSession:
             return None
 
     def can_pull(self):
-        """True only when the worker is alive AND we're post-authentication (browser still open) AND a
-        pull_fn is configured — so the router can decide to reuse the live session instead of a cold
-        storage_state restore. A dead/aged-out session returns False → the router falls back cleanly."""
-        ok_phase = self.signed_in()
-        alive = bool(self._thread and self._thread.is_alive())
-        return ok_phase and alive and self.pull_fn is not None
+        """Can the router reuse this live session instead of a cold storage_state restore? DERIVED
+        from `act_blocker`, so a dead or aged-out session falls back cleanly AND the caller can say
+        which of the reasons it was."""
+        return act_blocker(self, "pull") == ""
 
     def run_pull_blocking(self, timeout=900):
         """Called from the request thread: enqueue a pull on the live session and block for its result.

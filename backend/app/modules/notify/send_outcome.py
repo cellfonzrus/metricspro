@@ -92,6 +92,25 @@ _RULES = (
      "We sent more messages than Meta's rate limit allows for this number.",
      "Nothing is broken — wait and send again. If it recurs, request a higher messaging limit in "
      "WhatsApp Manager."),
+    # #100 IS TWO FAULTS. Meta uses it both for "a value you sent is invalid" (below) and for "the
+    # object in your request URL does not exist or your token cannot see it" — which is OUR sending
+    # number, not the recipient's. They have opposite remedies, so the shape of the message decides
+    # which ruling applies (`provider_code` keys the second one `100_object`). Production 2026-11-01
+    # to 2026-11-26: 245 consecutive failures of the second shape, every one of them shown with no
+    # reason and no remedy, while the generic ruling below would have pointed at the wrong place.
+    ("100_object", "whatsapp",
+     "Meta cannot load the sending number this platform is configured with, so it refused every "
+     "message. The WhatsApp phone number ID we hold is either not a phone number ID at all, or it "
+     "belongs to a different Meta account than our access token — the recipient's number is not at "
+     "fault.",
+     "In Meta Business Suite -> WhatsApp Manager -> API Setup, compare the ID quoted in the error "
+     "with the two IDs shown there: if it is the WhatsApp Business Account ID, then "
+     "WHATSAPP_PHONE_NUMBER_ID was set to the wrong one of the two and must be set to the Phone "
+     "number ID. If it IS the Phone number ID, the access token belongs to a different Meta app or "
+     "System User: regenerate it in Business Settings -> System Users, choosing the system user that "
+     "has this WhatsApp Business Account assigned, with the app selected and "
+     "whatsapp_business_messaging. GET /notify/whatsapp-account (super-admin) reads the configured "
+     "number straight from Meta and shows which one it is."),
     ("100", "whatsapp",
      "Meta rejected one of the values we sent as invalid.",
      "Check the recipient's number is in full international form (+1 followed by 10 digits) on their "
@@ -132,7 +151,20 @@ _ANY_CHANNEL = {code for (code, ch, _r, _f) in _RULES if not ch}
 _UNRECOGNISED = ("The provider rejected this one and we have no ruling on its reason yet.",
                  "")
 
+# Meta states its error code in TWO spellings and a reader that knows one knows neither: `(#133010)`
+# inside the message for some errors, and only `"code":100` in the JSON body for others. Both are read
+# here, and nowhere else (the inline `'"code":190'` test that used to live in `provider_code` was a
+# second copy of this same fact for a single code). `"code"` must carry its opening quote so that
+# `"error_subcode":33` and a trace id can never be mistaken for the code, and `\d+` so that a
+# template's `"language":{"code":"en"}` cannot be either.
 _META_CODE = re.compile(r"\(#(\d+)\)")
+_META_CODE_JSON = re.compile(r'"code"\s*:\s*(\d+)')
+# The #100 shape that means "the object in the URL is not visible to this token" — i.e. OUR configured
+# sending number — rather than "a value you sent is invalid". Meta phrases it as an unsupported
+# request on an object that "does not exist, cannot be loaded due to missing permissions".
+_OBJECT_GONE = ("does not exist, cannot be loaded",
+                "unsupported post request",
+                "unsupported get request")
 _HTTP_CODE = re.compile(r"\b(\d{3})\b")
 
 
@@ -147,10 +179,14 @@ def provider_code(channel, error) -> str:
     low = text.lower()
     if "isn't set up yet" in low or "isnt set up yet" in low or "aren't set up yet" in low:
         return "not_configured"
-    m = _META_CODE.search(text)
+    m = _META_CODE.search(text) or _META_CODE_JSON.search(text)
     if m:
-        return m.group(1)
-    if "authentication error" in low or '"code":190' in low.replace(" ", ""):
+        code = m.group(1)
+        # An overloaded code is not a reason: #100 is disambiguated by what the message SAYS.
+        if code == "100" and any(k in low for k in _OBJECT_GONE):
+            return "100_object"
+        return code
+    if "authentication error" in low:
         return "190"
     if str(channel) == "email":
         # Resend states the fault in words, so the words are the key. Each test names a phrase the

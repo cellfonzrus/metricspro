@@ -42630,6 +42630,11 @@ def _pli():
     return _m
 
 
+def _rlanding():
+    from app.modules.commcalc import report_landing as _m
+    return _m
+
+
 @router.post("/data-sources/import")
 def import_data_sources(body: ImportDataSourcesIn, org_id: str = ORG_ID,
                         authorization: str = Header(default="")):
@@ -44471,13 +44476,15 @@ def live_login_calibrate(sid: str, body: dict = Body(default={}), org_id: str = 
     live_login.require_session_host()   # §COMMCALC-24 — the sessions live in the browser-owning process
     require_org(org_id)
     sess = live_login.get_session(sid, org_id)
-    if sess is None:
-        raise HTTPException(409, "No live session is open for this login. Start the live login and "
-                                 "sign in first — the report pages are read as the portal shows them "
-                                 "to you.")
-    if not sess.can_calibrate():
-        return {"ok": False, "phase": sess.snapshot_phase(),
-                "error": "This live session is not signed in yet, so its report pages cannot be read."}
+    # WHY it cannot read has ONE home (§COMMCALC-11.8). This endpoint used to spell its own sentence
+    # from a bare boolean and so told the owner he was not signed in while he was — the reason he
+    # needed was that the live window had closed. Nothing here words a reason.
+    blocker = live_login.act_blocker(sess, "calibrate")
+    if blocker == "no_session":
+        raise HTTPException(409, live_login.cannot_act_note("calibrate", blocker))
+    if blocker:
+        return {"ok": False, "phase": sess.snapshot_phase(), "reason": blocker,
+                "error": live_login.cannot_act_note("calibrate", blocker)}
     res = sess.run_calibrate_blocking()
     if res is None:
         return {"ok": False, "phase": sess.snapshot_phase(),
@@ -44521,7 +44528,35 @@ def data_source_reports(sid: str, org_id: str = ORG_ID):
             "unit_bases": [{"value": v, "label": rd.UNIT_BASIS_LABELS.get(v, v)}
                            for v in rd.UNIT_BASES],
             "amount_signs": [{"value": v, "label": rd.AMOUNT_SIGN_LABELS.get(v, v)}
-                             for v in rd.AMOUNT_SIGNS]}
+                             for v in rd.AMOUNT_SIGNS],
+            # WHERE A REPORT'S ROWS MAY LAND (§COMMCALC-85), served from the connector's OWN
+            # `TARGETS` rather than listed on the screen. Empty means this connector lands nothing
+            # yet, and the editor then says so instead of offering a choice that cannot be saved.
+            "landing_targets": list(_rlanding().targets_for(src.get("processor")))}
+
+
+_REPORTS_WRITE_COLUMNS = "id,processor,portal_reports,portal_calibration"
+
+
+def _save_source_reports(client, org_id, src, sent):
+    """WRITE ONE LOGIN'S REPORT DECLARATION — the one home, dereferenced by every door that writes
+    one (§COMMCALC-85). The editor saves one login's rows; the fan-out saves the same declaration
+    onto every login of a connector. Both arrive HERE, so the connector whose landings are legal,
+    the calibration fold and the stored shape cannot be true of one door and not the other.
+
+    `src` is the login row, already read and org-scoped, and it supplies the `processor` that decides
+    which landing targets are legal — read from the ROW rather than taken from the caller, so a
+    request cannot declare a landing by claiming to be another connector.
+    """
+    from app.modules.commcalc import report_declaration as rd
+    reports, calibration = rd.columns(sent, src.get("portal_calibration"),
+                                      processor=str(src.get("processor") or ""))
+    client.schema("commcalc").table("data_source").update(
+        {"portal_reports": reports, "portal_calibration": calibration}
+    ).eq("id", src.get("id")).eq("org_id", org_id).execute()
+    saved = rd.rows({"processor": src.get("processor"), "portal_reports": reports,
+                     "portal_calibration": calibration})
+    return {"reports": saved, "count": len(saved)}
 
 
 @router.put("/data-sources/{sid}/reports")
@@ -44536,20 +44571,127 @@ def save_data_source_reports(sid: str, body: dict = Body(...), org_id: str = ORG
     does not edit, and a save that dropped what it did not understand would delete working
     configuration while looking like a no-op."""
     require_org(org_id)
-    from app.modules.commcalc import report_declaration as rd
-    rows = _ds_rows(sb().schema("commcalc").table("data_source")
-                    .select("id,portal_calibration").eq("id", sid).eq("org_id", org_id).limit(1))
+    client = sb()
+    rows = _ds_rows(client.schema("commcalc").table("data_source")
+                    .select(_REPORTS_WRITE_COLUMNS).eq("id", sid).eq("org_id", org_id).limit(1))
     if not rows:
         raise HTTPException(404, "That login was not found for this company.")
     sent = body.get("reports")
     if not isinstance(sent, list):
         raise HTTPException(400, "Send the reports as a list.")
-    reports, calibration = rd.columns(sent, rows[0].get("portal_calibration"))
-    sb().schema("commcalc").table("data_source").update(
-        {"portal_reports": reports, "portal_calibration": calibration}
-    ).eq("id", sid).eq("org_id", org_id).execute()
-    saved = rd.rows({"portal_reports": reports, "portal_calibration": calibration})
-    return {"ok": True, "reports": saved, "count": len(saved)}
+    return {"ok": True, **_save_source_reports(client, org_id, rows[0], sent)}
+
+
+#: THE CEILING ON ONE FAN-OUT. A declaration is written once per login, in one request, so an org
+#: with an unbounded number of logins on a connector would turn one post into that many sequential
+#: writes. 300 is far above the real shape (27 ePay logins, the largest tenant on the platform) and
+#: the refusal above it is EXPLICIT: it reports the count and writes nothing, rather than silently
+#: applying to the first N — "27 declared" must never mean 20, the same rule §COMMCALC-83 applies to
+#: a paste. Raise it when a tenant genuinely needs more; do not turn it into a truncation.
+MAX_FANOUT_LOGINS = 300
+
+
+class DeclareReportsIn(LaxModel):
+    processor: Any = None
+    reports: Any = None
+    overwrite: Any = None
+    dry_run: Any = None
+
+
+@router.post("/data-sources/declare-reports")
+def declare_reports_across_logins(body: DeclareReportsIn, org_id: str = ORG_ID,
+                                  authorization: str = Header(default="")):
+    """ONE DECLARATION, EVERY LOGIN ON A CONNECTOR (index §COMMCALC-85).
+
+    The gap this closes is the one §COMMCALC-83 closed for credentials, one level up. A tenant whose
+    every store has its own login (27 of them, imported 2026-11-26) had to declare the SAME report on
+    each one by hand — and until that declaration exists the download console has no upload door, so
+    the credentials it just stored are unusable. Typing one identical thing 27 times is not a
+    configuration step, it is a defect generator.
+
+    SAFE BY DEFAULT, because a declaration is work somebody did. A login that already declares
+    reports is SKIPPED unless `overwrite` is set, and the answer names every login either way —
+    three states, not two: filled, overwritten, already declared. `dry_run` writes nothing.
+
+    Every write goes through `_save_source_reports`, so each login's own `processor` decides which
+    landings are legal and no row can be given a landing its connector does not have.
+    """
+    require_org(org_id)
+    _require_import_admin(authorization, org_id)
+    processor = str(body.processor or "").strip()
+    if not processor:
+        raise HTTPException(400, "Name the connector these logins belong to.")
+    sent = body.reports
+    if not isinstance(sent, list) or not sent:
+        raise HTTPException(400, "Send the report declaration as a non-empty list.")
+    client = sb()
+    try:
+        rows = _ds_rows(client.schema("commcalc").table("data_source")
+                        .select(_REPORTS_WRITE_COLUMNS + ",store_code,label")
+                        .eq("org_id", org_id).eq("processor", processor).order("store_code"))
+    except Exception:
+        # A read that FAILED is not "this connector has no logins" (§COMMCALC-82). Declaring onto an
+        # empty list would report success over 27 logins it never touched.
+        return JSONResponse(status_code=409, content={
+            "ok": False, "filled": 0, "overwritten": 0, "logins": [],
+            "note": ("The logins for this connector could not be read, so nothing was declared. "
+                     "Try again.")})
+    if not rows:
+        return {"ok": True, "filled": 0, "overwritten": 0, "logins": [],
+                "note": "This company has no logins on that connector."}
+    if len(rows) > MAX_FANOUT_LOGINS:
+        # REFUSED, not truncated: applying to the first 300 and reporting success would be the
+        # silent-drop defect §COMMCALC-83 exists to prevent.
+        raise HTTPException(400, "This connector has %d logins, more than the %d one request "
+                                 "applies to. Nothing was declared."
+                                 % (len(rows), MAX_FANOUT_LOGINS))
+    out, filled, overwritten, skipped, failed = [], 0, 0, 0, 0
+    for src in rows:
+        who = str(src.get("store_code") or src.get("label") or src.get("id") or "")
+        had = bool(src.get("portal_reports"))
+        if had and not body.overwrite:
+            skipped += 1
+            out.append({"login": who, "verdict": "already declared",
+                        "note": "left as it is — tick overwrite to replace it"})
+            continue
+        if body.dry_run:
+            out.append({"login": who,
+                        "verdict": "would overwrite" if had else "would be filled in"})
+            if had:
+                overwritten += 1
+            else:
+                filled += 1
+            continue
+        try:
+            saved = _save_source_reports(client, org_id, src, sent)
+        except HTTPException as e:
+            failed += 1
+            out.append({"login": who, "verdict": "could not be stored", "note": str(e.detail)})
+            continue
+        except Exception:
+            failed += 1
+            out.append({"login": who, "verdict": "could not be stored",
+                        "note": "Nothing was saved for this login."})
+            continue
+        if had:
+            overwritten += 1
+        else:
+            filled += 1
+        # Whether the landing actually took is the thing worth saying: a declaration saved with no
+        # target is saved and still cannot store a row.
+        landed = [r.get("target") for r in saved["reports"] if r.get("target")]
+        out.append({"login": who, "verdict": "overwritten" if had else "filled in",
+                    "reports": saved["count"],
+                    "note": ("lands in %s" % ", ".join(sorted(set(landed)))) if landed
+                            else "saved, but no landing is declared, so its rows cannot be stored"})
+    note = "%d login(s) filled in, %d overwritten, %d left as they were." % (filled, overwritten,
+                                                                            skipped)
+    if failed:
+        note += " %d could not be stored." % failed
+    if body.dry_run:
+        note = "Nothing was written. " + note.replace("filled in,", "would be filled in,")
+    return {"ok": not failed, "dry_run": bool(body.dry_run), "filled": filled,
+            "overwritten": overwritten, "skipped": skipped, "logins": out, "note": note}
 
 
 @router.post("/data-sources/{sid}/live-login/cancel")

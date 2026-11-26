@@ -90,6 +90,15 @@ const providerOf = (host: string) =>
 /** What `POST /commcalc/data-sources/import` answers (§COMMCALC-83). `cells` is the line quoted
  *  back with the password replaced by its LENGTH — there is no field here that could hold one. */
 interface ImportLine { line: number; verdict: 'ready' | 'skipped' | 'unresolved'; reason: string; cells: string[] }
+/** The few fields of a stored login this panel reads. (`sources` itself is a long-standing
+ *  `any[]`; a new reader of it declares what it actually needs rather than widening further.) */
+interface SourceChoice { id: string; processor?: string; store_code?: string; label?: string }
+/** What `POST /commcalc/data-sources/declare-reports` answers (§COMMCALC-85). */
+interface DeclareLine { login: string; verdict: string; reports?: number; note?: string }
+interface DeclareResult {
+  ok?: boolean; dry_run?: boolean; filled?: number; overwritten?: number; skipped?: number
+  note?: string; logins?: DeclareLine[]
+}
 interface ImportResult {
   ok?: boolean; dry_run?: boolean
   imported?: number; updated?: number; would_create?: number; would_update?: number
@@ -135,6 +144,14 @@ export default function EmailImportsPage() {
   const [impText, setImpText] = useState('')
   const [impBusy, setImpBusy] = useState('')
   const [impResult, setImpResult] = useState<ImportResult | null>(null)
+  // ONE DECLARATION, EVERY LOGIN ON A CONNECTOR (§COMMCALC-85). The per-store import gave 27 stores
+  // their credentials; without a report declaration each one still has nowhere to put a file, and
+  // typing the identical thing 27 times is not a configuration step.
+  const [decOpen, setDecOpen] = useState(false)
+  const [decFrom, setDecFrom] = useState('')
+  const [decOverwrite, setDecOverwrite] = useState(false)
+  const [decBusy, setDecBusy] = useState('')
+  const [decResult, setDecResult] = useState<DeclareResult | null>(null)
   const [proxyTest, setProxyTest] = useState<any>(null) // { proxy, direct, routed_through_proxy, is_us, summary }
   const [proxyBusy, setProxyBusy] = useState(false)
   // 🔧 What the pull saw — the per-report outcome + the portal's own report vocabulary (mig 242).
@@ -534,6 +551,39 @@ export default function EmailImportsPage() {
       setImpResult({ ok: false, note: e instanceof Error ? e.message : 'The import failed.' })
     }
     setImpBusy('')
+  }
+
+  // The declaration COPIED is a login's own, read back through the editor's endpoint — never a
+  // shape typed on this screen. That is what keeps "what is applied" identical to "what one login
+  // already has", so an operator can check it on that login and trust all 27.
+  async function declareAcross(dry: boolean) {
+    const src = sources.find((s: SourceChoice) => s.id === decFrom) as SourceChoice | undefined
+    if (!src) return
+    setDecBusy(dry ? 'check' : 'apply'); setDecResult(null)
+    try {
+      const one = (await api(`/api/v1/commcalc/data-sources/${decFrom}/reports`)) as
+        { reports?: unknown[]; processor?: string }
+      const reports = one?.reports || []
+      if (!reports.length) {
+        setDecResult({ ok: false, note: 'That login declares no reports yet, so there is nothing to copy. Declare them on it first, then apply them here.' })
+        setDecBusy(''); return
+      }
+      const r = (await api('/api/v1/commcalc/data-sources/declare-reports', {
+        method: 'POST',
+        body: JSON.stringify({ processor: one?.processor || src.processor, reports,
+                               overwrite: decOverwrite, dry_run: dry }),
+      })) as DeclareResult
+      setDecResult(r)
+      if (!dry) {
+        try {
+          const l = (await api('/api/v1/commcalc/data-sources')) as { sources?: unknown[] }
+          setSources(l?.sources || [])
+        } catch { /* keep list */ }
+      }
+    } catch (e: unknown) {
+      setDecResult({ ok: false, note: e instanceof Error ? e.message : 'The declaration could not be applied.' })
+    }
+    setDecBusy('')
   }
 
   async function delSource(s: any) {
@@ -1188,6 +1238,69 @@ export default function EmailImportsPage() {
                   onClick={() => setImpOpen(o => !o)}>
             {impOpen ? '▾' : '▸'} 📋 Import many logins at once
           </button>
+          <button className="btn btn-secondary" style={{ fontSize: 12, marginLeft: 8 }}
+                  onClick={() => setDecOpen(o => !o)}>
+            {decOpen ? '▾' : '▸'} 🗺️ Declare the same reports on every login
+          </button>
+          {decOpen && (
+            <div style={{ marginTop: 10 }}>
+              <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 10px' }}>
+                For a connector where every store has its own login. Set one login up the way you
+                want it — its reports, where their rows land, the menu words, the filters — then copy
+                that declaration onto every other login on the same connector. Until a login
+                declares where a report&apos;s rows land, an uploaded file has nowhere to go.
+              </p>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                <label style={{ fontSize: 12 }}>Copy from
+                  <select value={decFrom} onChange={e => setDecFrom(e.target.value)}
+                          style={{ display: 'block', minWidth: 280, padding: '6px 8px', marginTop: 4 }}>
+                    <option value="">— pick the login you set up —</option>
+                    {sources.map((s: SourceChoice) => (
+                      <option key={s.id} value={s.id}>
+                        {s.store_code ? s.store_code + ' — ' : ''}{s.label || s.processor} ({s.processor})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ fontSize: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <input type="checkbox" checked={decOverwrite}
+                         onChange={e => setDecOverwrite(e.target.checked)} />
+                  Replace declarations that already exist
+                </label>
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+                <button className="btn btn-secondary" style={{ fontSize: 12 }}
+                        disabled={!!decBusy || !decFrom}
+                        onClick={() => declareAcross(true)}>
+                  {decBusy === 'check' ? 'Checking…' : 'Check without changing anything'}
+                </button>
+                <button className="btn" style={{ fontSize: 12 }}
+                        disabled={!!decBusy || !decFrom}
+                        onClick={() => declareAcross(false)}>
+                  {decBusy === 'apply' ? 'Applying…' : 'Apply to every login'}
+                </button>
+                <span style={{ fontSize: 11, color: 'var(--text3)' }}>
+                  A login that already declares reports is left alone unless you tick the box.
+                </span>
+              </div>
+              {decResult && (
+                <div style={{ marginTop: 10, fontSize: 13 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                    {decResult.ok === false ? '⚠️ ' : decResult.dry_run ? '👀 ' : '✅ '}
+                    {decResult.note || ''}
+                  </div>
+                  <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 260, overflowY: 'auto' }}>
+                    {(decResult.logins || []).map(l => (
+                      <li key={l.login} style={{ marginBottom: 2,
+                            color: l.verdict.startsWith('could not') ? 'var(--c-fg-92400e)' : 'var(--text)' }}>
+                        {l.login}: {l.verdict}{l.note ? ' — ' + l.note : ''}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
           {impOpen && (
             <div style={{ marginTop: 10 }}>
               <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 10px' }}>

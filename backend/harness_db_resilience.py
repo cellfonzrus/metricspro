@@ -1819,8 +1819,32 @@ _all_routes = _flatten_routes(real_app.routes)
 # organisations, that each board carries only its own people, that one tenant's declared role is
 # NOT valid in the other, and that nothing a tenant with no declarations is shown contains another
 # tenant's role word; `harness_guided_workflow.py` §E locks the same four facts DB-free.
-# 1874 -> 1876, 2026-11-26 (PR for §STOREOPS-15, "scheduling a store-week is a flow somebody can
-# leave halfway" — the second caller of the same shared home). RE-VERIFIED THE HOUSE WAY: `git fetch
+# 1874 -> 1875, 2026-11-26 (PR for §COMMCALC-85, one report declaration applied to every login).
+# RE-VERIFIED THE HOUSE WAY, not assumed: `git fetch origin main` FIRST (see the stale-ref trap
+# noted above), then `git diff origin/main -- backend/ | grep -E '^[+-]@router\.'` shows exactly ONE
+# added route and none removed:
+#   POST /commcalc/data-sources/declare-reports  — apply one report declaration to every login of a
+#                                                  connector
+# Gate: `require_org(org_id)` then `_require_import_admin(authorization, org_id)` — the SAME gate
+# §COMMCALC-83's paste-once import uses, because this writes configuration onto every login of a
+# connector. No new gate was written. The integration test asserts an ungated caller gets
+# 401/403/503 and that nothing is written.
+# Money: NONE. It writes `commcalc.data_source.portal_reports` / `portal_calibration` — which report
+# a login pulls, where to click, and where the rows land. No payout, rate, plan, statement, GP,
+# commission, payable or tax figure is read or moved.
+# Cross-tenant negatives: the login list is read org-scoped AND processor-scoped AT the query
+# (`.eq("org_id", org_id).eq("processor", processor)`), so the fan-out cannot reach another tenant's
+# login on the same connector and the same portal;
+# backend/tests/integration/test_declare_reports_across_logins.py proves that directly. The landing
+# each row may carry is decided by the LOGIN ROW's own `processor`, never by the request body, so a
+# caller cannot win another connector's landings by claiming to be it (harness_report_landing.py §B
+# and §C). A read that FAILED returns 409 rather than reporting success over logins it never
+# touched.
+# 1875 -> 1877, 2026-11-26 (PR for §STOREOPS-15, "scheduling a store-week is a flow somebody can
+# leave halfway" — the second caller of the same shared home). The base moved to 1875 while this
+# branch was open (§COMMCALC-85's one route, noted just above), so the pin is that number plus
+# this PR’s two — re-counted against the new base, never carried over.
+# RE-VERIFIED THE HOUSE WAY: `git fetch
 # origin main` first, then `git diff origin/main -- backend/ | grep -E '^[+-].*@router\.'` shows
 # exactly TWO added routes and none removed:
 #   GET /storeops/schedule-workflow               — the board: one row per store-week
@@ -1841,7 +1865,7 @@ _all_routes = _flatten_routes(real_app.routes)
 # Monday week for one tenant and a Thursday week for another, and that neither tenant's stores,
 # shifts or rota sends appear on the other's board. §G5 of the lock keeps a house Monday from coming
 # back anywhere that buckets a schedule week.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1876"))
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1877"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

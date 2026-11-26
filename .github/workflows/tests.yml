@@ -231,6 +231,28 @@ jobs:
         working-directory: backend
         run: python harness_portal_login_import.py
 
+  report-landing-lock:
+    # A declaration nobody can apply twice is a defect generator (index §COMMCALC-85). The gate: a
+    # report's landing SURVIVES a save, the legal landings are the connector's own and appear
+    # nowhere as a literal, one writer builds the stored columns, and the fan-out across every
+    # login of a connector is safe by default. Wired on the day the harness was written — a harness
+    # no workflow runs is a file, not a gate.
+    name: A report's landing is declared once and applied everywhere (lock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: backend/requirements-dev.txt }
+      - name: install
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+      - name: harness_report_landing
+        working-directory: backend
+        run: python harness_report_landing.py
+      - name: harness_report_declaration
+        working-directory: backend
+        run: python harness_report_declaration.py
+
   test-discipline:
     # The lock: the framework above cannot quietly come undone. It RUNS conftest's network guard
     # against a production hostname rather than reading the source for it.

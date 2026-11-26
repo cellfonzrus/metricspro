@@ -723,9 +723,11 @@ def _live_pull(org_id, sid, po_id, mode, timeout=240):
     if not st or st.get("po_id") != po_id or sess is None:
         raise HTTPException(400, "No live vendor session is open for this order — press 'Open vendor session' "
                                  "(or type the confirmation number).")
-    if not sess.can_pull():
-        raise HTTPException(409, "The vendor session is not signed in yet (or has closed) — finish the sign-in in "
-                                 "the live window first.")
+    # The reason has ONE home (§COMMCALC-11.8) — this used to guess "not signed in (or has closed)",
+    # which is two different reasons calling for opposite moves, offered as one sentence.
+    _blocker = live_login.act_blocker(sess, "pull")
+    if _blocker:
+        raise HTTPException(409, live_login.cannot_act_note("pull", _blocker))
     st["mode"] = mode
     res = sess.run_pull_blocking(timeout)
     if res is None:
