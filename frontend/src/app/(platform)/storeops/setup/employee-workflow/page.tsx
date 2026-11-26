@@ -19,6 +19,8 @@ import { api } from '@/lib/client'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
+// A reader never meets a table name: the one home for a data source's plain words (§19.38).
+import { sourceLabel } from '@/lib/sourceLabels'
 
 type Step = {
   key: string
@@ -119,18 +121,18 @@ export default function EmployeeSetupWorkflowPage() {
     return '/api/v1/storeops/employee-setup' + (s ? `?${s}` : '')
   }, [filter])
 
-  const load = useCallback(() => {
-    setBusy(true)
-    api(url)
-      .then((r: unknown) => { setData(r as Board); setMsg('') })
-      .catch((e: unknown) => setMsg('❌ ' + errText(e)))
-      .finally(() => setBusy(false))
-  }, [url])
+  // NO setState IN THE EFFECT BODY: the request starts there and every state change happens in a
+  // callback, so a filter change cannot cascade renders (react-hooks/set-state-in-effect).
+  const load = useCallback(() => api(url)
+    .then((r: unknown) => { setData(r as Board); setMsg('') })
+    .catch((e: unknown) => setMsg('❌ ' + errText(e)))
+    .finally(() => setBusy(false)), [url])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { void load() }, [load])
+  const reload = useCallback(() => { setBusy(true); void load() }, [load])
 
-  const rows = data?.rows || []
-  const steps = data?.steps || []
+  const rows = useMemo(() => data?.rows || [], [data])
+  const steps = useMemo(() => data?.steps || [], [data])
   const stepTitle = useMemo(() => {
     const m: Record<string, string> = {}
     for (const s of steps) m[s.key] = s.title
@@ -184,7 +186,7 @@ export default function EmployeeSetupWorkflowPage() {
         <SendReportButton exportPayload={payload} compact
           title="Employee Setup — where each person is"
           filters={{ stores: filter.stores, markets: filter.markets, reps: filter.reps }} />
-        <button style={btn} onClick={load} disabled={busy}>{busy ? 'Loading…' : '↻ Refresh'}</button>
+        <button style={btn} onClick={reload} disabled={busy}>{busy ? 'Loading…' : '↻ Refresh'}</button>
       </div>
 
       <div style={{ marginTop: 12 }}>
@@ -202,7 +204,9 @@ export default function EmployeeSetupWorkflowPage() {
         <div style={{ ...card, marginBottom: 12 }}>
           <strong>Some of this could not be read, so the board may be incomplete.</strong>
           <ul style={{ margin: '6px 0 0 18px', fontSize: 13, color: 'var(--text2)' }}>
-            {data.blockers.map((b, i) => <li key={i}>{b.table} — {b.reason}</li>)}
+            {data.blockers.map((b, i) => (
+              <li key={i}><strong>{sourceLabel(b.table) || 'a data source'}</strong> — {b.reason}</li>
+            ))}
           </ul>
         </div>
       )}

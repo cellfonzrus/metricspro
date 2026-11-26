@@ -2427,6 +2427,10 @@ FACTS: dict[str, dict] = {
             # That fold lived in the drill-down above until 2026-11-12; it moved into this home when
             # a second caller needed the same answer, and both dereference it (§19.18).
             'app/modules/storeops/payroll_employer_cost.py': ('_hb',),
+            # §STOREOPS-13 — the Employee Setup board asks whether this org PAYS FROM THE CLOCK,
+            # because that is what decides whether a person with no login can be paid at all. It
+            # reads the basis config through this home rather than re-deriving the mode.
+            'app/modules/storeops/employee_setup_api.py': ('_hours_basis',),
             'app/modules/storeops/pto_accrual.py': ('_hours_basis',),
             'app/modules/storeops/router.py': ('_hours_basis',),
             'app/modules/storeops/salary_expense.py': ('_hb',),
@@ -3068,6 +3072,10 @@ FACTS: dict[str, dict] = {
             # the board and the login gate's blocking count to the stores this manager owns. A DM is
             # never gated by another district's unfixed rows (mig 1073, §14z).
             'app/modules/storeops/clock_variance_api.py': ('_cscope',),
+            # §STOREOPS-13 — the Employee Setup board is person-keyed too (one row per employee), so
+            # it rides the SAME gate as every other person-keyed read (`gate_person_rows`) and reads
+            # the store keyset from this home; it never narrows people with a rule of its own.
+            'app/modules/storeops/employee_setup_api.py': ('_cscope',),
         },
     },
     'payout_audience': {
