@@ -52843,3 +52843,133 @@ module by module, judged one surface at a time — not as a defect list.
 composition of a declared-public route and a router-level gate) · §13a (the one store resolver) ·
 §11914 (the redeem token: the URL is the credential) · §STOREOPS-07.65 (a person-keyed read that
 never asked whose person).
+
+---
+
+## §STOREOPS-13. A PRINTED SCHEDULE IS A LINE PER PERSON, NOT A PICTURE OF THE GRID (owner 2026-11-26)
+
+Owner, of the exported week of 2026-11-23: *"the schdule show show line by line which employee is
+working and thier houre next to their name instaed of in this illegible form"*. Then, of the week of
+11-30: *"also remove teh number of hours on tehe last time on the printed pdf"*.
+
+### THE INSTANCE, AND THE CLASS ABOVE IT
+
+The instance was one store's Monday cell in the PDF:
+
+> `Manan Ali 16:00-19:00; Hajra Cheema 09:00-19:00; Zohaib Ali 10:00-16:00` … **127.0**
+
+Four people's whole week on one row, with a store total at the far right edge of a landscape page.
+
+**The class** is that `buildScheduleExport` mirrored the SCREEN GRID — one cell per row-per-day,
+holding however many shift chips fell in it, with the name repeated inside every chip. A grid cell
+works on a wide scrolling screen with coloured chips and tooltips; in a fixed-width PDF column it
+wraps into an unreadable paragraph. The shape was wrong for every store, every tenant and every
+week, in the PDF, the Print view, the .xlsx, the .csv and the emailed/WhatsApp'd send alike, because
+all five render from the one payload (§4 export governance).
+
+### THE FIX — THE LINE, NOT THE CELL, IS THE UNIT
+
+`frontend/src/app/(platform)/storeops/lib/scheduleExport.ts` is still the ONE home for "what does a
+printed schedule contain", and it now emits **one line per person per store they work**:
+
+| Employee | Store | Hrs | Mon 11/23 | … | Sun 11/29 |
+|---|---|---|---|---|---|
+| Hajra Cheema | 7710 | 50.0 | `09:00-19:00` | … | |
+| Manan Ali | 7710 | 17.5 | `16:00-19:00` | … | |
+
+- **The hours sit beside the name**, in the third column, which is both what was asked for and what
+  stops the figure from falling off the far edge. Nothing trails the last day column — the owner's
+  second message is the same column, moved rather than removed.
+- **A day cell holds times only.** The name is the line, so repeating it in the cell was the thing
+  making the cell unreadable. A person's split shift stacks on its own line inside the cell; a list
+  of names can no longer be formed at all.
+- **Both on-screen views share one line builder** (`scheduleLines`), so "by store" and "by employee"
+  can never drift into two answers to "who works this week". The view decides the GROUPING only.
+- **A store with nobody scheduled keeps its line** (`NOBODY_SCHEDULED`). The old grid showed that
+  row, and a coverage gap that silently vanishes from the export is worse than an ugly one.
+- Title, subtitle and filename are unchanged — the Send bar, the scheduled-report label and saved
+  filenames key off them.
+
+### THE SIBLING FOUND ALONG THE WAY — ONE HOME FOR "HOW LONG IS THIS SHIFT"
+
+The screen totalled a shift with the page's own `shiftHrs` (recomputed from start/end, overnight
+safe) while the export totalled `scheduled_hours || 0`. Two answers: an overnight shift, or a stale
+or negative stored value, read one way on screen and another in the emailed PDF. `shiftHours` /
+`hoursBetween` in `scheduleExport.ts` are now the one home and `schedule/page.tsx` dereferences
+them; the page defines no hours arithmetic of its own.
+
+### WHAT FAILS THE BUILD
+
+`scheduleExport.lock.test.ts` (CI, `npm run test`):
+
+| | |
+|---|---|
+| A | a day cell contains a person's name, a `;` or a `,` |
+| B | a cell template in the home mentions `employee_name` or `store_code` |
+| C | the hours column stops being column 3, or a second hours/total column appears |
+| D | `schedule/page.tsx` defines `hoursBetween` / `shiftHrs` / `scheduled_hours \|\| 0` / the `24 * 60` wrap again |
+| E | the page stops importing `shiftHours` from the home |
+| F | a fourth mention of `scheduled_hours` appears in the home (a second answer) |
+
+### TESTS
+
+- `frontend/src/app/(platform)/storeops/lib/__tests__/scheduleExport.test.ts` — 21, DB-free: the
+  reported defect reproduced, both views, split shifts, overnight hours, the empty store and the
+  empty employee, **four tenants** with their own store-code and name shapes, a cross-tenant leak
+  case, RULE TWO over the source, and the payload through the real `payloadToCsv` renderer.
+- `frontend/src/app/(platform)/storeops/lib/__tests__/scheduleExport.lock.test.ts` — 8, the gate above.
+- `backend/tests/integration/test_schedule_shifts_export_contract.py` — 14: `GET /storeops/shifts`
+  really returns the six fields a line is built from, one row per shift and never pre-grouped per
+  store-day, for three tenant shapes including one with no shifts at all.
+
+**Cross-references:** §4 (export governance — one payload behind Excel / PDF / Print / CSV / Send) ·
+§14w (`gate_person_rows` — whose shifts a week may contain) · §STOREOPS-05 (the week a tenant
+declares) · §CORE-50 (the white-on-white stripe on the same screen, found in the same report) ·
+§16–18.
+
+---
+
+## §CORE-50. A COLOUR ON A THEMED SURFACE IS A TOKEN, NEVER A LITERAL (owner 2026-11-26)
+
+Owner, of the Schedule screen in the dark theme: *"cannot see he employee name in white background
+and white font"*.
+
+### THE INSTANCE
+
+One line, in `storeops/schedule/page.tsx`:
+
+```ts
+const rowBg = ri % 2 === 1 ? 'var(--surface2)' : 'white'
+```
+
+In the light theme `--surface` **is** `#ffffff`, so the literal looked right for as long as anybody
+tested in light. In the dark theme it painted a white band under white text, and every other
+employee's name and weekly total disappeared. The report read as rows being misaligned — "ss shows
+0.0h even though shifts appear on the row above it" — but nothing was misaligned: half the names
+were simply invisible, so each visible name appeared to sit beside the wrong row's shifts.
+
+### THE CLASS
+
+A colour written as a literal cannot know which theme is on, so it is right in one theme by luck and
+wrong in the other by construction. The shape is hardest to spot, and most harmful, exactly where
+the literal is the OTHER BRANCH of a choice whose first branch is already a token — the author
+tokenised one half and left the other.
+
+### THE FIX, AND THE SIBLING
+
+`var(--surface)` — byte-identical in light, correct in dark. The sweep for the same shape across
+`frontend/src` found exactly one sibling, `commcalc/gp/page.tsx`'s footer text colour: white is the
+right colour there (the footer is navy in both themes), but as the token the same row already uses
+two lines above, `var(--c-fg-ffffff)`, not as a literal. Both are now tokens; no other instance of
+the shape exists in the frontend.
+
+### WHAT FAILS THE BUILD
+
+`frontend/src/lib/__tests__/theme-colour-literal.lock.test.ts` (CI, `npm run test`) — a ratchet at
+zero. It flags a bare CSS colour keyword that shares a line with a `var(--…)` token, and the plain
+`background: 'white'` / `…Bg = 'white'` form. A semantic TONE name (`lamp={'green'}`, `tone: 'red'`)
+is a word a component maps to a token itself and is not flagged. The lock carries its own proof that
+the pattern still matches the reported line and still ignores the two shapes it must not, so it
+cannot decay into a pattern that merely passes.
+
+**Cross-references:** §STOREOPS-13 (the printed schedule, reported in the same breath) · §16–18.
