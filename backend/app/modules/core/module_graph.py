@@ -2431,6 +2431,13 @@ FACTS: dict[str, dict] = {
             # because that is what decides whether a person with no login can be paid at all. It
             # reads the basis config through this home rather than re-deriving the mode.
             'app/modules/storeops/employee_setup_api.py': ('_hours_basis',),
+            # §STOREOPS-16 — the payroll-run flow asks this home three things and derives none of
+            # them: which of a period's rows are PAID at all (`row_is_paid`), whether a basis is a
+            # MEASUREMENT or a plan (`basis_is_measurement`, which is what makes "no punches" an
+            # open step rather than zero hours), and the words to show for each basis
+            # (`basis_reason`). Its endpoint reads the org's basis config through the same home.
+            'app/modules/storeops/payroll_run_flow.py': ('_hb',),
+            'app/modules/storeops/payroll_run_api.py': ('_hb',),
             'app/modules/storeops/pto_accrual.py': ('_hours_basis',),
             'app/modules/storeops/router.py': ('_hours_basis',),
             'app/modules/storeops/salary_expense.py': ('_hb',),
