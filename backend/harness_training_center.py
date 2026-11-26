@@ -524,23 +524,12 @@ print("\nI. ROUTE SURFACE")
 from app.main import app                                              # noqa: E402
 
 
-def route_surface(application):
-    """Every (path, METHOD) the app exposes, read from its OpenAPI schema.
-
-    WHY NOT `app.routes`. This section used to walk `app.routes` and read `r.path` off each entry.
-    That worked only while FastAPI happened to FLATTEN every `include_router()` into one list. As of
-    fastapi 0.141 an included router stays in `app.routes` as a lazy `_IncludedRouter` wrapper with
-    no `.path`, so the walk died with `AttributeError: '_IncludedRouter' object has no attribute
-    'path'` — and this whole route-surface section stopped running. `len(app.routes)` is now 31 for
-    a 1,285-path app, so a count taken that way is not just broken, it is misleading.
-
-    `app.openapi()` is the SUPPORTED, public description of an app's route surface; it resolves
-    prefixes and nested includes for us and is the same document the frontend and the docs page
-    read. Reaching past it into the router's internal storage is what rotted here, and the lesson is
-    the general one: assert against a framework's public contract, never its private structure.
-    """
-    spec = application.openapi()["paths"]
-    return {(p, m.upper()) for p, ops in spec.items() for m in ops}
+# ONE HOME (2026-11-26). This file used to carry its own `route_surface()`: the same function body,
+# the same lesson in its own docstring, in three files at once. The answer to "what does this app
+# serve" now lives in `app/core/route_table.py` and is READ here — because the one copy that got it
+# WRONG was the security control, and a fact with three right copies and one wrong one is exactly
+# the shape CLAUDE.md forbids. `harness_route_table.py` fails the build if a fourth copy appears.
+from app.core.route_table import route_surface                        # noqa: E402
 
 
 SURFACE = route_surface(app)

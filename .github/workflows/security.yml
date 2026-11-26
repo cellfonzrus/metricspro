@@ -274,6 +274,8 @@ jobs:
       - run: pip install -r backend/requirements.txt
       - name: harness_router_gate_dereference
         run: cd backend && python harness_router_gate_dereference.py
+      - name: harness_route_table (the derivation cannot go vacuous again)
+        run: cd backend && python harness_route_table.py
       - run: pip install pytest
       - name: the regression and the end-to-end composition
         run: cd backend && python -m pytest tests/unit/test_public_path_gate_standdown.py tests/integration/test_public_path_reaches_its_handler.py -q

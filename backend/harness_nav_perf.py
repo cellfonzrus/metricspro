@@ -374,9 +374,13 @@ import app.main as M                                        # noqa: E402
 #    only ever report other people's features as a regression, so what is asserted instead is the
 #    property this section exists for: this sweep converted `async def` handlers to `def`, which must
 #    not add, drop or duplicate any route.
-_schema = M.app.openapi()
-routes = sorted({(p, tuple(sorted(m.upper() for m in ops)))
-                 for p, ops in _schema["paths"].items()})
+#    ONE HOME (2026-11-26): the schema read itself now lives in `app/core/route_table.py` and is
+#    dereferenced here, so this file cannot drift from the security control that asks the same
+#    question (see that module's docstring for the two traps).
+from app.core.route_table import route_surface                        # noqa: E402
+_surface = route_surface(M.app)
+routes = sorted({(p, tuple(sorted(m for _p, m in _surface if _p == p)))
+                 for p, _m in _surface})
 _pairs = [(p, m) for p, ms in routes for m in ms]
 ck("E1 the route surface is collected and non-trivial (FastAPI-version independent)",
    len(routes) > 500, f"{len(routes)} paths, {len(_pairs)} path+method pairs")
