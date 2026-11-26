@@ -30,9 +30,13 @@ WHAT THIS PINS, over the REAL module and the REAL production error strings
      without an outcome, the digest leg dereferences the same home, the surfaces render it, and no
      remedy sentence is copied into the browser.
 
-PURE: stdlib only, no DB, no network. Run: `cd backend && python3 harness_notify_send_outcome.py`
+PURE: stdlib only, no DB, no network, NO third-party import — section H lifts the delivery
+channel's three pure functions out of its real source rather than importing the module (which
+pulls httpx), because this proof's CI job installs nothing.
+Run: `cd backend && python3 harness_notify_send_outcome.py`
 """
 import ast
+import re
 import sys
 
 sys.path.insert(0, ".")
@@ -191,6 +195,106 @@ check("F4 an empty send with no note still says nothing was sent, not 'sent to 0
       "Nothing was sent" in so.summarize([])["headline"], detail=so.summarize([])["headline"])
 check("F5 headline() is the ONE sentence — summarize stamps exactly what it returns",
       out["headline"] == so.headline(out))
+
+# ── H. AN OVERLOADED CODE IS NOT A REASON (production, 2026-11-26) ────────────────────────────────
+# THE INSTANCE: WhatsApp sending last worked on 2026-10-23. From 2026-11-01 16:00Z to 2026-11-26
+# 03:32Z `notify.send_log` holds 245 consecutive WhatsApp failures carrying the string below, and the
+# Send box showed NO reason and NO remedy for a single one of them.
+#
+# THE CLASS, twice over:
+#   (i)  A provider states its code in more than one SPELLING, and reading only one spelling is
+#        reading none. Meta writes `(#133010)` in the message for some errors and only `"code":100`
+#        in the JSON body for others; `provider_code` read the first form alone, so the second was
+#        unruled by construction. The inline `'"code":190'` test that used to sit in provider_code
+#        was a SECOND COPY of this same fact for one code only — it is now the general rule.
+#   (ii) A code that covers two different faults is not a reason. Meta's #100 is both "a value you
+#        sent is invalid" (remedy: the recipient's number) and "the object in your URL is not visible
+#        to this token" (remedy: our own WHATSAPP_PHONE_NUMBER_ID / token pairing). One ruling for
+#        both would have sent a human hunting through the recipient's phone number while the fault
+#        was in our environment. So the shape of the message disambiguates the ruling.
+E_100_OBJECT = ('WhatsApp send 400: {"error":{"message":"Unsupported post request. Object with ID '
+                "'1076582715548644' does not exist, cannot be loaded due to missing permissions, or "
+                'does not support this operation. Please read the Graph API documentation at '
+                'https://developers.facebook.com/docs/graph-api","code":100,"type":"OAuthException",'
+                '"fbtrace_id":"A3kqlB8vN2rT7yWm0pQdZxE"}}')
+E_100_PARAM = ('WhatsApp send 400: {"error":{"message":"(#100) Invalid parameter","code":100,'
+               '"type":"OAuthException","error_data":{"messaging_product":"whatsapp",'
+               '"details":"Recipient phone number not valid"}}}')
+# The SAME fault stated with no `(#...)` in the message — the spelling that used to be unreadable.
+E_JSON_ONLY = ('WhatsApp send 400: {"error":{"message":"Recipient phone number not in allowed list",'
+               '"code":131030,"type":"OAuthException"}}')
+
+h = so.classify("whatsapp", E_100_OBJECT)
+check("H1 the 245 production failures are RULED — not 'no ruling yet'", h["recognised"] is True,
+      detail=str(h))
+check("H2 its reason blames the number WE are configured with, never the recipient's",
+      ("sending number" in h["reason"].lower() or "phone number id" in h["reason"].lower())
+      and "not at fault" in h["reason"].lower(), detail=h["reason"])
+check("H3 its fix names the setting to compare and WHERE the two IDs are shown side by side",
+      "WHATSAPP_PHONE_NUMBER_ID" in h["fix"] and "api setup" in h["fix"].lower()
+      and "business account id" in h["fix"].lower(), detail=h["fix"])
+check("H3b and it names the token pairing as the other possibility, not only the id",
+      "system user" in h["fix"].lower(), detail=h["fix"])
+check("H3c and it points at the diagnostic that already exists rather than a new one",
+      "/notify/whatsapp-account" in h["fix"], detail=h["fix"])
+check("H4 the OVERLOAD is split: a generic #100 keeps the recipient-number remedy",
+      so.classify("whatsapp", E_100_PARAM)["recognised"]
+      and "international" in so.classify("whatsapp", E_100_PARAM)["fix"].lower()
+      and so.classify("whatsapp", E_100_PARAM)["code"] != h["code"],
+      detail=str(so.classify("whatsapp", E_100_PARAM)))
+check("H4b control: the two #100 shapes really do get DIFFERENT remedies",
+      so.classify("whatsapp", E_100_PARAM)["fix"] != h["fix"])
+check("H5 a code stated ONLY in the JSON body is read — the second spelling is no longer unruled",
+      so.classify("whatsapp", E_JSON_ONLY)["code"] == "131030"
+      and so.classify("whatsapp", E_JSON_ONLY)["recognised"] is True)
+check("H6 control: Meta's own `(#code)` spelling still wins where both are present",
+      so.classify("whatsapp", E_133010)["code"] == "133010")
+check("H7 #190 needs NO private literal any more — the general rule reads it",
+      so.classify("whatsapp", E_190)["code"] == "190"
+      and '"code":190' not in code_text("app/modules/notify/send_outcome.py"))
+check("H8 a numeric subcode or trace id can never be mistaken for the code",
+      so.classify("whatsapp",
+                  'WhatsApp send 400: {"error":{"message":"Unsupported post request. Object with ID '
+                  "'1' does not exist, cannot be loaded due to missing permissions, or does not "
+                  'support this operation.","code":100,"error_subcode":33,"type":"OAuthException",'
+                  '"fbtrace_id":"A470cQ"}}')["code"] == h["code"])
+check("H9 a template language block cannot be read as a code",
+      so.provider_code("whatsapp", '{"template":{"language":{"code":"en"}}}') == "")
+# SIBLING (CLAUDE.md: find the siblings before you ship). The delivery LADDER reads the very same Meta
+# response with its own classifier, and the two readers of one response must not disagree: an
+# object-not-found has to be a plain 'error' there so the ladder advances to the approved template,
+# never a window error that would stop it.
+#
+# The ladder's module imports httpx, and this proof's CI job installs NOTHING (it is the
+# dependency-free guard job), so the three PURE functions are lifted out of its REAL source and run
+# here. Lifted, never copied: edit `classify_send_result` or either keyword list in the channel and
+# these checks follow it, which a transcribed expectation could not do.
+def pure_funcs(path, names):
+    """Exec the named top-level functions out of a module's real source, with nothing else from it.
+    Raises if one is missing — a rename cannot quietly skip the proof."""
+    tree = ast.parse(open(path).read())
+    picked = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
+    missing = set(names) - {n.name for n in picked}
+    if missing:
+        raise AssertionError(f"{path} no longer defines {sorted(missing)} — the sibling proof is unwired")
+    ns = {}
+    exec(compile(ast.Module(body=picked, type_ignores=[]), path, "exec"), ns)
+    return ns
+
+
+WM = pure_funcs("app/modules/notify/channels/whatsapp_meta.py",
+                ("classify_send_result", "_is_header_error", "_is_window_error"))
+check("H10 SIBLING: the delivery ladder reads this response as a plain error, not a window error",
+      WM["classify_send_result"](400, E_100_OBJECT) == "error")
+check("H11 control: the ladder's classifier is not blind — it still reads a real window error",
+      WM["classify_send_result"](400, '{"error":{"message":"(#131047) Re-engagement message",'
+                                      '"code":131047}}') == "window_error")
+check("H11b control: and still reads a real doc-header error, so H10 is not blanket blindness",
+      WM["classify_send_result"](400, '{"error":{"message":"(#132018) does not contain a title '
+                                      'component","code":132018}}') == "header_error")
+check("H12 LOCK: the code is read in ONE place — a second regex home cannot appear",
+      len(re.findall(r"re\.compile", code_text("app/modules/notify/send_outcome.py"))) <= 4
+      and code_text("app/modules/notify/send_outcome.py").count("_META_CODE") >= 2)
 
 # ── G. the locks ──────────────────────────────────────────────────────────────────────────────────
 ROUTER_SRC = open("app/modules/notify/router.py").read()

@@ -3535,7 +3535,7 @@ jobs:
         with: { python-version: "3.11" }
       - name: Run the send-outcome proof (a failure is reported with its recipient and its remedy, never as a count — index §NOTIFY-01)
         working-directory: backend
-        run: python3 harness_notify_send_outcome.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+        run: set -o pipefail; python3 harness_notify_send_outcome.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # EVERY OUTBOUND EMAIL IS RECORDED, BY THE TRANSPORT. Owner report 2026-11-25 ("onboarding email not
   # reaching employees"): the invites existed, the audit said they had been sent, and notify.send_log
