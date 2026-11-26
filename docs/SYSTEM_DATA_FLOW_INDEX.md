@@ -224,6 +224,7 @@ Primary code homes:
 | COMMCALC-82 | **"I could not look" is not "there is nothing there"** | The processor's back office refuses automated clients from every address tried, and offers no delivery of its own, so each store's file arrives because a PERSON fetched it — 29 logins, every day. That is only survivable if a screen says what is still outstanding, and the question nothing answered was the NEGATIVE one: the feed knew what had landed and nobody could ask what had not. Writing it exposed the worse half: both legs of the fee reconciliation answered `{}` when their read FAILED, which is the same answer they give for a genuinely empty table — so an unreadable feed flagged a variance on every store-day against zero, and a coverage grid would have sent a person to download 29 files a day that were already landed. Three states, not two: have, missing, unknown. |
 | COMMCALC-83 | **A credential may not travel through a file to reach the database** | Asked to ENTER the 29 per-store back-office logins himself, the owner's own route would have been a SQL script — which means 29 plaintext passwords in a project file, a commit and a chat message, the exact thing the credential registry exists to prevent. There was no door between "one login on a form" and "a script": a tenant whose every store has its own login could only be served 29 visits at a time. One POST now takes a pasted block and stores each row through the SAME writer the form uses, so the sealing cannot be true of one door and not the other, and a store this organisation has not declared is REPORTED rather than guessed at — "29 entered" must never mean 23. Nothing it answers carries a password: a line is quoted back with every cell it cannot NAME, and the password, replaced by its length. |
 | COMMCALC-84 | **How next month's goal follows from this month's is a POLICY, not a constant** | "it will be the same if they did not achieve the goal if they met the goal then it will be 10% higher than they achieved" — and the platform already carried a missed goal forward and stretched a met one by 10%, so the ask looked done. It stretched off the GOAL rather than off what was ACHIEVED: on live October data all five store-categories that beat their goal got the SMALLER stretch, and the divergence is widest where a store does best. The rate was `STRETCH_FACTOR = 1.10` in a router, which is the shape RULE TWO forbids — a tenant wanting 5%, or wanting to stretch the plan, had nowhere to say so. Both halves are one class, so the rule, its basis and its rate are DECLARED per tenant over ONE arithmetic every caller dereferences. A tenant with no row gets the house rule, never another tenant's; a category with no prior goal reads BLANK, never as a goal of zero; the declared categories roll for the first time; and the monthly fill schedules itself, because an automation whose repair step is a human click defeats the automation. |
+| COMMCALC-85 | **A declaration nobody can apply twice is a defect generator** | The 29 per-store back-office logins of §COMMCALC-83 arrived sealed and unusable: a login cannot store a row until it DECLARES which report to pull and where that report's rows land, and the editor that writes a declaration had no field for the landing at all — so no declared report anywhere on the platform carried one, which is also why the Team Portal's fifteen reports have imported zero rows since 2026. Two halves of one class. The landing is now the CONNECTOR's own answer, read from the connector and offered per connector rather than typed, so a row cannot be given a landing its connector does not have; and one post applies a declaration to every login of a connector, because typing one identical thing 27 times is not a configuration step. Safe by default: a login that already declares reports is skipped unless overwrite, a dry run writes nothing, and a read that FAILED refuses rather than report success over logins it never touched. |
 | COMMCALC-76 | **A weekly review pack is one fold, read from the reports that own its figures** | The owner asked for the LuxeLink performance deck as an in-app report on the Management tile, admins only, one report per market plus a consolidated one, with inventory aging per carrier among its items, generated at the end of each week for the Monday review with the DMs — and on demand. It derives nothing: profit, commission, the accessory gap, growth, the reps behind, aging and payroll are each QUOTED from the surface that already owns them, and the fold is pure, so a second derivation cannot grow beside the report it quotes. An item nobody measured carries no figure and says why in words; a store no market claims gets its own named scope rather than vanishing between the market packs and the company one; and the market vocabulary is a required argument, so nothing declared means nothing identified. The gate is the server's on every door — a company-wide reporting scope is not an administrator. **Corrected 2026-11-17 (§COMMCALC-76.8):** profit now quotes the P&L's own `profit_by_store`, not the GP report (the two differed by $366k on one org in one month); aging quotes the whole shelf per carrier, not the owed>0 subset in which everything is already overdue; and a row the scope cannot match is kept on the consolidated pack and counted, never dropped — which is what had made October's commission read as nothing. Every item now carries the sentences that explain it, and the pack downloads as a deck (§COMMCALC-76.9) whose DESIGN has one home in `notify/render.build_pptx` — tone, stat cards, charts and banded tables, so every caller of the house file writer gets the same face (§COMMCALC-76.10). |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
@@ -7729,6 +7730,7 @@ every store's record is a report (§STOREOPS-12, §CORE-33.1).
 | `POST /commcalc/data-sources/{sid}/live-login/submit-totp` | `router.py:live_login_submit_totp` | §12a authenticator-app code into the live session (never SMS/email OTP) |
 | `GET /commcalc/per-store-downloads` (`?connector=&date_from=&date_to=`) | `commcalc/router.per_store_downloads` → `_strip_source_pw` (the logins) + `commcalc/feed_day_coverage.coverage` (what landed) | §COMMCALC-82 — the per-store download console's ONE round trip: the logins this tenant declared a STORE on, each with its portal address and the upload door a hand-fetched report arrives through (`processor_backoffice_sweep.arrival_type`, dereferenced from the feed's `UPLOAD_TYPE` — never a sibling route), plus the store-by-day grid. Reads what landed through the feed's OWN `epay_ingest.per_store_day`, so this screen cannot disagree with the fee reconciliation about what arrived. A read that FAILED answers `measured: false` — never "no store declared", which would send an operator to re-enter 29 logins. No credential in the payload. Proof `harness_feed_day_coverage.py` + `tests/integration/test_per_store_download_console.py` |
 | `POST /commcalc/data-sources/import` | `commcalc/router.import_data_sources` → `commcalc/portal_login_import.parse` (pure) → `router._save_source_row` (the one writer) | §COMMCALC-83 — paste once, many per-store portal logins. The parser is PURE and imports NOTHING: which store a pasted spelling means is answered by `router._intake_store_resolver` (§13a) over the asking org's own roster, so a store another tenant declared reads as `unresolved` and no credential is filed under it. Every row is stored by the same writer `PUT /data-sources` uses, which is what seals the password (`core/portal_secret`), runs the SSRF guard on the portal address and drops columns the database is behind on — a second writer here would be the one place "sealed" could silently stop being true. Gated on `_require_import_admin`. `dry_run` reports what WOULD happen and writes nothing. A failed read of the stored logins REFUSES the import rather than giving every store a duplicate. Proof `harness_portal_login_import.py` + `tests/integration/test_portal_login_import.py` |
+| `POST /commcalc/data-sources/declare-reports` | `commcalc/router.declare_reports_across_logins` → `router._save_source_reports` (the one writer) → `commcalc/report_declaration.columns(processor=…)` → `commcalc/report_landing.clean_target` | §COMMCALC-85 — apply ONE report declaration to every login of a connector, for the tenant whose every store has its own login. Org+processor scoped read; each login's own `processor` (read off the ROW, never from the request) decides which landing targets are legal, so a caller cannot win a landing by claiming to be another connector. Gated on `_require_import_admin`. Three states per login, not two — filled in / overwritten / already declared — and a login that already declares reports is SKIPPED unless `overwrite`, because a declaration may hold a corrected selector no capture can replace. `dry_run` writes nothing. A failed read of the login list returns 409 rather than report success over logins it never touched (§COMMCALC-82's class). Proof `harness_report_landing.py` + `tests/integration/test_declare_reports_across_logins.py` |
 | `POST /commcalc/data-sources/{sid}/reveal-password` | `commcalc/router.reveal_source_password` → `core/credential_reveal.reveal` | §CORE-46 — SHOW one login's stored password and RECORD that it was shown. Gated on `_require_import_admin` (core's registered `import_health` settings area, FAIL-CLOSED), org-scoped on the ROW that came back, POST so no credential rides in a URL a proxy or access log would keep. The audit row (`core.credential_reveal_audit`, migration 1128) is written BEFORE the value is returned and carries no part of it; an un-run migration means the reveal is REFUSED with the migration named. Proof `tests/unit/test_credential_reveal.py` + §F of `harness_feed_day_coverage.py` |
 | `POST /calculate/{period}` | `router.py:8968` | §6 rep commission |
 | `GET /commissions/{period}` | `10222` | §6 — the Rep Incentive Report read; market stamped per row via §13a (2026-09-03 fix) |
@@ -26634,6 +26636,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-82 | commcalc |
 | COMMCALC-83 | commcalc |
 | COMMCALC-84 | commcalc |
+| COMMCALC-85 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -31587,6 +31590,61 @@ correctly; only what we TOLD him about it was wrong.
 §COMMCALC-50.8 (the sibling defect on the same portal: a page judged by how it is BUILT), §19.18 (a
 registry written and its callers left unwired), §COMMCALC-44 (an absence needs the right reason),
 §COMMCALC-48.13 (the status sentence that understated the same login's failures).
+
+### COMMCALC-11.8 A live session that cannot act says WHICH reason (owner report 2026-11-26)
+
+Owner, 03:29 UTC, minutes after a sign-in that `commcalc.data_source` recorded as `authenticated`
+with the saved session good for five more hours: *"finally logged in again but when i hit read
+report it shows cannot read as not loggedin"*. One minute later: *"seems like the live login is
+logging in and out of the portal, i dont want to get shut down."*
+
+He was told he was not signed in AT THE MOMENT HE WAS. The only move that sentence leaves an
+operator is to sign in again — repeatedly, against a franchise portal, at half past three in the
+morning. A wrong reason does not merely fail to help; it aims the operator at the one action that
+can get the account locked. That is why this is a lock, not a wording tidy-up.
+
+**THE DEFECT.** `LiveLoginSession.can_calibrate()` and `can_pull()` each folded THREE facts into one
+boolean — passed the portal's sign-in, worker thread still alive, function configured — and the two
+operator-facing callers (`commcalc.router` "Read this page", `supply.router` vendor pull), holding
+only the boolean, each spelled a sentence that GUESSED which fact it was. Both guessed "not signed
+in". The true reason was the third: `signed_in()` reads the CURRENT phase, so a session that
+authenticated and was later cancelled by the post-login inactivity timeout
+(`_POST_AUTH_IDLE_SECONDS`, 15 minutes) reads exactly like one that never got in at all.
+
+**THE CLASS.** §COMMCALC-44 — an absence needs the RIGHT reason, not just a reason — with §19.18's
+wiring rule on top: the fact gets ONE home and the callers dereference it.
+
+**THE ONE HOME.** `live_login.act_blocker(sess, action)` returns the reason (`""` when the session
+can act), over the four states `no_session` / `not_signed_in` / `window_closed` / `not_configured`;
+`live_login.cannot_act_note(action, reason)` is the operator's sentence, keyed by **(action,
+reason)** over `calibrate` and `pull`. Two new session facts feed it: `ever_signed_in()`, latched in
+`_set` the first time a `_SIGNED_IN_PHASES` phase is set and never cleared, and `worker_alive()`,
+the one answer to "is the browser thread up" that the two gates used to ask inline.
+
+**The rungs are ordered so the reason is the one the operator can act on.** A session that HAS
+signed in and whose window has since gone reads `window_closed`, never `not_signed_in` — the two
+call for opposite moves, and only one of them risks the lockout.
+
+**THE LOCK.** `can_calibrate` and `can_pull` are now DERIVED (`act_blocker(self, …) == ""`), so a
+caller that can reach the verdict can always reach the reason. `backend/harness_live_session_blocker.py`
+(30 checks, in `carrier-vocab-guard`) walks the module's AST and fails the build if any function
+other than `act_blocker` weighs all three facts, or if either router carries a reason of its own;
+`backend/tests/unit/test_a_live_session_says_why_it_cannot_act.py` (20 tests, five armed plants)
+drives real session objects through the owner's exact sequence. §COMMCALC-24.6's existing lock was
+TIGHTENED rather than relaxed: it now pins both rungs of the chain, the gates dereferencing
+`act_blocker` and `act_blocker` dereferencing `signed_in()`.
+
+**What this did NOT do.** Nothing here changes any timeout, keeps a browser open longer, or makes a
+portal easier to sign in to. Only what we TELL the operator changed.
+
+### COMMCALC-11.9 Cross-references (11.8)
+
+§COMMCALC-11.6 (the sibling wording defect on the same login, five callers that threw the kind
+away), §COMMCALC-44 (an absence needs the right reason), §19.18 (a registry written and its callers
+left unwired), §COMMCALC-24.6 (`signed_in` is a fact the session owns, not a word a screen matches — the lock
+this tightens),
+§COMMCALC-24 (the session registry lives in the browser-owning process), §COMMCALC-48.13 (the status
+sentence that understated the same login's failures).
 
 ## §COMMCALC-12. WHICH STORE'S TRAILING COMMISSION LEGS ARE RUNNING DOWN, AND IN WHICH RUNG (owner ask 2026-10-15)
 
@@ -41530,7 +41588,43 @@ still in development mode — 163 historic
 received anything. Both fixes are Meta-console steps for the owner; the app now says so on the screen
 where the failure appears.
 
-**LOCK: `backend/harness_notify_send_outcome.py`** — 53 checks, DB-free, driving the REAL module over
+**THE EXTENSION, 2026-11-26 — AN OVERLOADED CODE IS NOT A REASON, AND A SECOND SPELLING IS NOT A
+SECOND FACT.** The owner pasted a WhatsApp failure the Send box had shown with **no reason and no
+remedy**, 245 consecutive times between 2026-11-01 16:00Z and 2026-11-26 03:32Z. Two faults in
+`provider_code`, both of the class the house rules name:
+
+1. **One fact, two spellings, one of them unread.** Meta states its code as `(#133010)` inside the
+   message for some errors and as only `"code":100` in the JSON body for others. `provider_code` read
+   the `(#…)` form alone, so an entire family of errors was *unruled by construction* — and the inline
+   `'"code":190'` test that sat beside it was a SECOND COPY of the same fact for one code. Both
+   spellings are now read in the one place (`_META_CODE` / `_META_CODE_JSON`), and the private literal
+   is gone. `"code"` must carry its opening quote, so `"error_subcode"` and a trace id can never be
+   mistaken for the code, and `\d+` so a template's `"language":{"code":"en"}` cannot be either.
+2. **A code that covers two faults is not a reason.** Meta's `#100` is BOTH "a value you sent is
+   invalid" (remedy: the recipient's number) AND "the object in your request URL does not exist or
+   your token cannot load it" — which is OUR configured sending number. They have **opposite**
+   remedies, and the single ruling in place would have sent a human hunting through the recipient's
+   phone number while the fault was in the platform's own environment. The second shape is keyed
+   **`100_object`** (disambiguated by the message, not by the code) and its remedy names
+   `WHATSAPP_PHONE_NUMBER_ID`, the WhatsApp Manager → API Setup page where the Phone number ID and the
+   WhatsApp Business Account ID are shown side by side, the System-User token pairing as the other
+   possibility, and `GET /notify/whatsapp-account` as the diagnostic that already exists.
+
+**THE SIBLING, checked not excused.** `notify/channels/whatsapp_meta.classify_send_result` reads the
+same Meta response for the delivery ladder. An object-not-found must read there as a plain `error` so
+the ladder advances to the approved template, never as a window error that would stop it; §H10/H11
+pin that with an armed control.
+
+**THE LIVE FINDING, REPORTED not hidden (read-only on production).** `notify.send_log`, WhatsApp
+channel: **63 sends succeeded up to 2026-10-23 15:00Z**; `#133010` from 2026-10-24 to 2026-10-31
+(the token/phone-number pairing, broken by the 2026-10-22 rotation); and from **2026-11-01 16:00Z**
+every attempt is `#100` on object `1076582715548644`, i.e. the configured phone number ID is one the
+current token cannot load at all. So the ID was changed on 1 Nov and is either not a phone number ID
+or belongs to another Meta account. Owner console steps, not a code fix. Separately
+`notify.whatsapp_window` is **empty** — Meta's inbound webhook has never recorded a single inbound, so
+every send takes the approved-template rung only.
+
+**LOCK: `backend/harness_notify_send_outcome.py`** — 69 checks, DB-free, driving the REAL module over
 the REAL production error strings, with the owner's exact 16 rows as the regression (§D: 6 ok, 5
 failed, every one named, one deduped fix, and the 10 attempts still stated). The un-wiring locks, each
 with an armed control: an **AST scan of every `return {…}` in `notify/router.py` whose keys include
@@ -52889,6 +52983,100 @@ wrong.
 - `harness_area_targets.py` is **RED on main** (`degenerate inputs raised: 'activations'`), unrelated
   to this work and pre-existing. It is on `harness_unrun_pending.txt`, so no workflow runs it —
   reported, not silently fixed, per the house rule on a defect found in passing.
+
+
+## §COMMCALC-85. A DECLARATION NOBODY CAN APPLY TWICE IS A DEFECT GENERATOR (owner ask 2026-11-26)
+
+Owner, having just imported 27 per-store back-office logins (§COMMCALC-83): *"passowrds impotretd
+what next"*. The honest answer was that nothing could be downloaded yet, for a reason the import did
+not cause and did not reveal.
+
+### COMMCALC-85.1 THE TWO DEFECTS, WHICH ARE ONE CLASS
+
+A login stores nothing until it DECLARES a report: which page to reach, and **where that report's
+rows land**. Measured in production on 2026-11-26, **not one declared report anywhere on the
+platform carried a landing** — 27 ePay logins with none, and the Team Portal's fifteen reports with
+none either, which is the unexplained half of why that connector has imported 0 rows since it was
+configured. The cause was not fifteen or twenty-seven unfinished edits:
+`report_declaration.columns` is the ONLY writer of a declaration, and **it had no `target` field at
+all**, so a landing typed on the screen was discarded on save. A field that cannot survive a round
+trip is not a field.
+
+The second half is the one the owner met: even with the field working, serving 27 stores meant
+opening 27 editors and typing one identical thing 27 times. Typing an identical thing 27 times is
+not a configuration step, it is a defect generator — the 28th store gets a typo, and the typo is
+silent because a declaration with a wrong landing looks saved.
+
+Either fix alone is useless, so they ship together.
+
+### COMMCALC-85.2 THE LANDING IS THE CONNECTOR'S OWN ANSWER, NEVER A TYPED WORD
+
+`commcalc/report_landing.py` is the one home for "where may a report's rows land", and it holds **no
+copy of any landing**: each connector's targets are read from that connector's own `TARGETS`, keyed
+by its own `CONNECTOR` slug, through a lazy registry. So the list the screen offers, the list the
+save validates against and the list the pull would use are the same list by construction, and the
+2026-10-30 rule is satisfied in the way it demands: a declared vocabulary is read from its declarer,
+never copied, and `clean_target` returns `""` for anything a connector does not land, so a row can
+never be given a landing its connector does not have.
+
+`columns(…, processor=…)` is **keyword-only with no default**. This is the one place the house-default
+pattern is banned (2026-10-30): a default would be one connector's vocabulary standing in for every
+other's, and the failure would be silent — a caller that had not said which connector it was saving
+would write every target away as illegal, and the declaration would look saved while its rows had
+nowhere to go. Omitting it raises `TypeError`, which the lock pins.
+
+Advice is only given where it can be acted on: a connector that lands nothing yet says so about
+**itself**, on the screen, and says nothing about the individual rows — fifteen rows each carrying a
+complaint nobody can fix is noise, and the fact belongs to the connector.
+
+### COMMCALC-85.3 ONE WRITER, SO TWO DOORS CANNOT DISAGREE
+
+`router._save_source_reports` is the only place a report declaration is written. The editor's save
+(`PUT /data-sources/{sid}/reports`) and the fan-out (`POST /data-sources/declare-reports`) both
+dereference it, so the connector whose landings are legal, the calibration fold and the stored shape
+cannot be true of one door and not the other. The `processor` it validates against is read from the
+**login row**, never from the request body — otherwise a caller could claim to be another connector
+and win its landings.
+
+A declaration is written only when it is declared: `target` is absent when nothing is chosen rather
+than stored empty, so `columns(rows(src)) == src` still holds for every declaration written before
+the field existed. That round trip is the property that makes the editor safe to open at all.
+
+### COMMCALC-85.4 THREE STATES, AND NOTHING OVERWRITTEN BY SURPRISE
+
+A declaration is work somebody did, possibly a corrected selector no capture can replace
+(§COMMCALC-39 never overwrites one). So the fan-out is **safe by default**: a login that already
+declares reports is SKIPPED unless `overwrite` is ticked, and the answer names every login either
+way — filled in / overwritten / already declared, three states rather than a count. `dry_run`
+reports what would happen and writes nothing. Each verdict also says whether the landing actually
+took (`lands in …`), because a declaration saved with no landing is saved and still cannot store a
+row — a row count is not a measurement (§PAYABLES-02).
+
+A failed read of the login list returns **409**, never success: a read that FAILED is not "this
+connector has no logins" (§COMMCALC-82's class), and reporting success over an empty list would tell
+an operator 27 logins were configured when none were.
+
+The fan-out writes once per login in one request, so the login count IS the work, and it is bounded
+by a declared ceiling (`router.MAX_FANOUT_LOGINS`, 300 against a real largest shape of 27). Above it
+the request is **refused with the count and writes nothing** — applying to the first N and reporting
+success is the same silent-drop defect, and the ceiling is deliberately not a truncation.
+
+| what | where |
+| --- | --- |
+| the landings (one home, no copy of any target) | `backend/app/modules/commcalc/report_landing.py` |
+| the only writer of a declaration | `commcalc/report_declaration.columns(…, processor=…)` — keyword-only, no default |
+| the one save | `commcalc/router._save_source_reports` — both doors dereference it |
+| the fan-out door | `POST /commcalc/data-sources/declare-reports` (`router.declare_reports_across_logins`) |
+| the editor's own door | `PUT /commcalc/data-sources/{sid}/reports`; its `GET` serves `landing_targets` |
+| the screens | `frontend/src/components/commcalc/PortalReportEditor.tsx` ("Where its rows land") · `frontend/src/app/(platform)/commcalc/email-imports/page.tsx` (🗺️ Declare the same reports on every login) |
+| the lock | `backend/harness_report_landing.py` (45 checks, CI job "A report's landing is declared once and applied everywhere") |
+| tests | `tests/unit/test_report_landing.py`, `tests/integration/test_declare_reports_across_logins.py` |
+
+Related: §COMMCALC-83 (the logins this configures) · §COMMCALC-82 (the console that needs the
+declaration before it has an upload door) · §COMMCALC-48 (the editable declaration) · §COMMCALC-39
+(one declaration, one filter — and never overwriting a corrected selector) · §PAYABLES-02 (a row
+count is not a measurement).
+
 
 ## §REFERRAL-01. "WHICH REFERRAL MAY THIS CALLER TOUCH" IS ONE FACT — THE READS ASKED IT, THE TEN ACTIONS DID NOT (measured 2026-11-25)
 

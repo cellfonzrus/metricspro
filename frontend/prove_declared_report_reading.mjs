@@ -51,10 +51,24 @@ for (const word of ['payout_negative', 'payout_positive', 'payout_negative_nette
 }
 ck("the screen does not spell a unit basis value of its own",
    !/['"]column['"]\s*[,:)\]]/.test(CODE) && !/value=['"]row['"]/.test(CODE))
-ck('every <option> for a basis or a sign is either blank or mapped from the reply',
-   (CODE.match(/<option value=""/g) || []).length === 2)
+// WAS A COUNT OF BLANK PLACEHOLDERS, NOW THE RULE ITSELF (2026-11-26). Pinning
+// `<option value="">` at exactly 2 made the gate fail the moment a THIRD dropdown was added that
+// obeys the rule perfectly — §COMMCALC-85's "where its rows land", whose options come from
+// `meta.landing_targets`. A hand-kept count of the compliant shape is not the rule; the rule is
+// that NO option carries a typed value. So assert that directly: every `<option>` in this screen
+// either has the empty value (a placeholder, which declares nothing) or takes its value from an
+// expression, which can only be a word the backend sent. That is strictly stronger than the count
+// — it catches a hand-typed option anywhere in the file, including in a dropdown added later —
+// and it no longer has to be re-pinned when a declared vocabulary gains a screen.
+const TYPED_OPTIONS = (CODE.match(/<option[^>]*\svalue="[^"]+"/g) || [])
+ck('every <option> is either a blank placeholder or valued from the reply, never typed',
+   TYPED_OPTIONS.length === 0, TYPED_OPTIONS.join(' | '))
 ck('CONTROL: the component really does render options from the reply',
-   /unit_bases \|\| \[\]\)\.map/.test(CODE) && /amount_signs \|\| \[\]\)\.map/.test(CODE))
+   /unit_bases \|\| \[\]\)\.map/.test(CODE) && /amount_signs \|\| \[\]\)\.map/.test(CODE)
+   && /landing_targets \|\| \[\]\)\.map/.test(CODE))
+ck('NEGATIVE CONTROL: a typed option value would be caught by that scan',
+   (('<option value="payout_negative">Negative</option>').match(/<option[^>]*\svalue="[^"]+"/g) || [])
+     .length === 1)
 ck('NEGATIVE CONTROL: a hand-typed sign option would be caught',
    ['payout_negative'].some(w => '<option value="payout_negative">'.includes(w)))
 

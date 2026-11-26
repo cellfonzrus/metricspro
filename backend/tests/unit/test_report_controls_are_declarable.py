@@ -39,6 +39,10 @@ HOUSE = "00000000-0000-0000-0000-000000000001"
 
 # His own fourteen, as the live row carries them — three is enough to prove the shape, and the
 # vocabulary is his (RULE TWO).
+# The connector this row belongs to. `columns` REQUIRES it since §COMMCALC-85 — which
+# landings are legal is the connector's own answer, never a default.
+PROCESSOR = "pos_report"
+
 SRC = {
     "portal_reports": [
         {"key": "item_sales", "label": "Item Sales", "nav": ["Reporting", "POS", "Item Sales"],
@@ -91,7 +95,7 @@ def test_the_row_shows_what_is_declared_and_what_is_blank():
 def test_opening_the_editor_and_saving_still_changes_nothing():
     """The property that makes an editor safe. It must survive three new fields."""
     rows = rd.rows(SRC)
-    reports, cal = rd.columns(rows, SRC["portal_calibration"])
+    reports, cal = rd.columns(rows, SRC["portal_calibration"], processor=PROCESSOR)
     assert rd.rows({"portal_reports": reports, "portal_calibration": cal}) == rows
     assert cal["item_sales"]["run_selector"] == "#btnRun"
     assert cal["item_sales"]["nav_selector"] == "#ctl00_menu_ItemSales", \
@@ -102,7 +106,7 @@ def test_a_control_typed_on_the_screen_is_stored():
     rows = rd.rows(SRC)
     rows[0]["export_selector"] = "#ctl00_btnExportCsv"
     rows[0]["report_url"] = "https://portal.example/UI/Reporting/POS/POSReports.aspx"
-    _, cal = rd.columns(rows, SRC["portal_calibration"])
+    _, cal = rd.columns(rows, SRC["portal_calibration"], processor=PROCESSOR)
     assert cal["item_sales"]["export_selector"] == "#ctl00_btnExportCsv"
     assert cal["item_sales"]["report_url"].endswith("POSReports.aspx")
 
@@ -113,7 +117,7 @@ def test_a_control_cleared_on_the_screen_is_cleared_in_the_declaration(cleared):
     before this editor could write it."""
     rows = rd.rows(SRC)
     rows[0]["run_selector"] = cleared
-    _, cal = rd.columns(rows, SRC["portal_calibration"])
+    _, cal = rd.columns(rows, SRC["portal_calibration"], processor=PROCESSOR)
     assert "run_selector" not in cal["item_sales"]
     assert prp.calibrated({"portal_calibration": cal}, "item_sales", "run_selector") in (None, "", {})
 
@@ -123,7 +127,7 @@ def test_a_selector_is_taken_AS_WRITTEN():
     trims and never normalises — unlike a report key, which `spec_key` folds."""
     rows = rd.rows(SRC)
     rows[0]["export_selector"] = "  #ctl00_ContentPlaceHolder1_btnExportCSV  "
-    _, cal = rd.columns(rows, SRC["portal_calibration"])
+    _, cal = rd.columns(rows, SRC["portal_calibration"], processor=PROCESSOR)
     assert cal["item_sales"]["export_selector"] == "#ctl00_ContentPlaceHolder1_btnExportCSV"
 
 
