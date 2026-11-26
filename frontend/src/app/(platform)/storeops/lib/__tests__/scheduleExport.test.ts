@@ -167,13 +167,21 @@ describe('every tenant, with its own store-code and name shapes', () => {
     expect(JSON.stringify(lines)).not.toContain('Rana Bilal')
     expect(JSON.stringify(lines)).not.toContain('VZ-01')
   })
-  it('names no carrier, tenant or product (RULE TWO)', async () => {
+  it('the builder knows none of the words above (RULE TWO)', async () => {
+    // Every store code and person's name in this file is a FIXTURE. None of them may appear in the
+    // module, because a builder that recognises one tenant's vocabulary is the per-tenant code
+    // RULE TWO forbids. The brands themselves are not spelled here — "no carrier name in this
+    // codebase" is the house `harness_carrier_vocab_guard` lock's question, not this file's, and
+    // writing one to assert its absence trips that lock (it did, 2026-11-26).
     const fs = await import('node:fs')
-    const src = fs.readFileSync(
-      'src/app/(platform)/storeops/lib/scheduleExport.ts', 'utf8')
-    const body = src.split('\n').filter(l => !l.trim().startsWith('//') && !l.trim().startsWith('*')).join('\n')
-    for (const word of ['Boost', 'Total Wireless', 'LuxeLink', 'Cellfonz', 'Vzone', 'B-1598', '7710'])
-      expect(body).not.toContain(word)
+    const src = fs.readFileSync('src/app/(platform)/storeops/lib/scheduleExport.ts', 'utf8')
+    const body = src.split('\n')
+      .filter(l => { const t = l.trim(); return t && !t.startsWith('//') && !t.startsWith('*') })
+      .join('\n')
+    const fixtures = [...tenants.flatMap(t => [...t.stores, t.emp]), 'Manan Ali', 'Hajra Cheema']
+    for (const word of fixtures) expect(body).not.toContain(word)
+    // …and nothing store-code SHAPED is written into it at all.
+    expect(body).not.toMatch(/'[A-Z]{1,4}-?\d{3,5}'/)
   })
 })
 
