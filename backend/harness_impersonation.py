@@ -787,28 +787,15 @@ print("\n─── J. route surface ──────────────�
 from app.main import app as fastapi_app    # noqa: E402
 
 
-def _mounted_paths(routes, prefix=""):
-    """Every path mounted under `routes`, descending into included routers.
+# ONE HOME (2026-11-26). This carried its own walk over `app.routes` — correct, and the fourth
+# copy of a walk whose one WRONG copy was the security control (see `app/core/route_table.py`).
+# `route_surface` answers "which SERVED paths does this app expose" from the framework's public
+# OpenAPI contract, which resolves every mount prefix and every level of inclusion. A path missing
+# from that answer is missing from the app, which is the direction this section must never get wrong.
+from app.core.route_table import route_surface                         # noqa: E402
 
-    FastAPI no longer flattens `include_router` into `app.routes`: it stores an `_IncludedRouter`
-    node that carries the child router and its prefix, and resolves the real routes lazily. The old
-    one-line `{r.path for r in app.routes}` therefore raised AttributeError on those nodes — and had
-    it not raised, it would have silently reported the impersonation routes as MISSING, which is the
-    dangerous direction for a route-surface check to fail in.
-    """
-    out = set()
-    for r in routes:
-        p = getattr(r, "path", None)
-        if p is not None:
-            out.add(prefix + p)
-        child = getattr(r, "original_router", None)
-        if child is not None:
-            ctx = getattr(r, "include_context", None)
-            out |= _mounted_paths(child.routes, prefix + (getattr(ctx, "prefix", "") or ""))
-    return out
-
-
-paths = _mounted_paths(fastapi_app.routes)
+paths = {p for p, _m in route_surface(fastapi_app)}
+assert len(paths) > 500, f"route surface collapsed to {len(paths)} paths — J asserts nothing"
 for p in ("/api/v1/core/impersonation/start", "/api/v1/core/impersonation/stop",
           "/api/v1/core/impersonation/status", "/api/v1/core/impersonation/reauth",
           "/api/v1/core/impersonation/targets", "/api/v1/core/impersonation/log",

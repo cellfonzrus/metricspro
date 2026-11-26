@@ -71,46 +71,25 @@ def test_the_route_is_a_literal_cron_path_so_pg_cron_can_reach_it(client):
     silently never runs (the mig 241 / mig 411 failure mode — a scheduled job 401ing on every tick
     without anyone noticing). The allowlist is DERIVED from the route table and only a
     PARAMETER-FREE template qualifies, so this asserts the registered template is literal."""
-    from fastapi.routing import APIRoute
+    # ONE HOME (2026-11-26). This used to carry its own walk over `app.routes`, descending through
+    # `original_router` to reach the leaf route objects. That walk was right about the lazy wrapper
+    # and still saw PREFIX-STRIPPED templates (`/commcalc/...`, never `/api/v1/commcalc/...`), which
+    # is the second trap and the one that made the security control measure nothing. The SERVED path
+    # is now read from `app/core/route_table.py`, so this asserts the template a caller can actually
+    # address rather than an internal spelling of it.
+    from app.core import route_table
 
-    def _flatten(routes):
-        """Every LEAF route, through however many levels of router inclusion.
-
-        `app.routes` holds lazy `_IncludedRouter` wrappers, NOT leaf routes — the same counting trap
-        harness_db_resilience.py documents at length. A wrapper exposes its children on
-        `original_router.routes`, NOT on `.routes`, so reading only the top level (or only `.routes`)
-        sees `['/health']` and the test would assert nothing. Same walk as that harness's
-        `_flatten_routes`, which is why the leaf-count guard below is here: it fails loudly if this
-        shape changes again rather than passing vacuously."""
-        out = []
-        for r in routes:
-            inner = getattr(r, "original_router", None)
-            if inner is not None:
-                out.extend(_flatten(inner.routes))
-                continue
-            sub = getattr(r, "routes", None)
-            if sub:
-                out.extend(_flatten(sub))
-                continue
-            if isinstance(r, APIRoute):
-                out.append(r)
-        return out
-
-    leaves = _flatten(app.routes)
-    assert len(leaves) > 100, f"route flattening is broken — only {len(leaves)} leaf routes found"
-    # The leaf TEMPLATE carries no `/api/v1` — that prefix is applied at mount time, and the
-    # requests above (which are refused correctly) use the full URL.
-    TEMPLATE = "/commcalc/targets/roll-forward/run-due"
-    by_path = {r.path: r for r in leaves}
-    assert TEMPLATE in by_path, \
-        f"the run-due route is not registered under the expected literal template {TEMPLATE}"
-    assert "POST" in by_path[TEMPLATE].methods
+    surface = route_table.route_surface(app)
+    assert len(surface) > 500, f"route surface collapsed to {len(surface)} pairs — this asserts nothing"
+    TEMPLATE = "/api/v1/commcalc/targets/roll-forward/run-due"
+    assert route_table.serves(app, TEMPLATE, "POST"), \
+        f"the run-due route is not served under the expected literal template {TEMPLATE}"
     # LITERAL, so it qualifies for the derived cron allowlist. A template with a path parameter can
     # never be allowlisted, whatever value is typed into it (index §CORE-50).
     assert "{" not in TEMPLATE
     # And the sibling it must not be confused with IS parameterised, which is why the cron path has
     # its own literal template rather than reusing the button's route.
-    assert "/commcalc/targets/{period}/roll-forward" in by_path
+    assert route_table.serves(app, "/api/v1/commcalc/targets/{period}/roll-forward", "POST")
     # A template with a path parameter can never be allowlisted, whatever is typed into it.
 
 

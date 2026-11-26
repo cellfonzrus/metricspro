@@ -240,6 +240,7 @@ Primary code homes:
 | STOREOPS-15 | **Scheduling a store-week is a flow somebody can leave halfway, and the week is the tenant's own** | "...and then simlar workflow for scheduling", said of the daily-closing workflow a new person can start and come back to. What are the steps for ONE store in ONE week, where does somebody pick up, what does "the week" mean for a tenant that does not start it on a Monday, and how is a day with nobody on it reported when nothing in the platform declares which days a store opens? |
 | STOREOPS-16 | **Running a pay period is a flow somebody can leave halfway, and the gate it shows is the run's own** | "...and simlar workflow for runnign the payroll with paying attention to details". What are the checks for ONE store in ONE pay period, where does somebody pick up, how does a surface show "ready" without ever disagreeing with the run's own refusal, and what can it honestly say about a run whose record is kept by month rather than by pay period? |
 | CORE-51 | **"How far through is this flow, and where do I pick it up" has one home** | Three flows were asked for in one sentence (employee setup, scheduling, running payroll). Answering the rail, the lamps, the resume and the progress count once per flow is three homes for one question, and the third copy drifts. Who owns a step's status, what makes a missing answer a refusal rather than a silent "not started", and what fails the build when a fourth copy appears? |
+| CORE-52 | **A derivation that answers five for a 1,558-path app has not found the routes** | The in-process control built so that a declared-public link can never be locked out again was sweeping FIVE paths — the docs pages and `/health` — of the 21 declared-public GETs the app really serves, and its own non-vacuity guard was satisfied by `/health`. Two failures at once, neither with a symptom. Who owns "what paths does this app serve", why does the prefix-stripped answer read as a confident "not declared", and what fails the build when a control's derivation goes vacuous? |
 | CORE-33 | **What an employee may reach is one declaration, and the API is what enforces it** | "on ny logistics Manan was able to go past [the clock-in screen] and also see the adjustment hours, this should not be allowed for any sales reps — this is universal across the board". The browser was the only gate: a menu row the viewer could see opened its whole subtree by URL, and the payroll writes behind those pages asked for no authority at all. Who decides what a surface's audience is, and what makes the API refuse a caller the menu would not offer it to? |
 | CORE-42 | **A gate proved in-process is a claim, not a measurement** | "create a testng agent who deciatedly is checking the data leakage, unwanted access to modules even if theya re gated like the case of manan and we discovered by accident, c annot have an accident of this sort, put it on schdule and one module at a time from the front end as though somebnbody was trying to hack in to the system". Every access control here is proved by a harness that imports the handler — which catches a wrong rule and not a right rule that was never reached. Who asks the DEPLOYED platform what it actually answers an unprivileged outsider, one module at a time, and what stops that probe from writing to production or from reporting a pass on a question it never asked? |
 | CORE-32 | **A guard that reads source code must be told f-strings exist** | Found by running the suite on a newer interpreter than CI's: the guard that stops our own setup internals reaching a customer was RED on Python 3.13 and GREEN on 3.11. PEP 701 stopped making an f-string one string token, so it had stopped seeing f-strings — and the same file held a SECOND reader of the same fact that had been taught the new shape. What proves a capability that depends on the interpreter, when CI pins one? |
@@ -26699,6 +26700,7 @@ status word rather than a blank that reads as nil.
 | STOREOPS-12 | storeops, core |
 | STOREOPS-13 | storeops, core |
 | CORE-51 | core |
+| CORE-52 | core |
 | STOREOPS-14 | storeops, hr, core |
 | STOREOPS-15 | storeops, core, notify |
 | STOREOPS-16 | storeops, core |
@@ -53578,3 +53580,125 @@ degrade-by-name path and "reading writes nothing"). Lock: `harness_payroll_run_f
 flows) · §29.12 (the workflow this was asked to resemble) · §14y (what is paying somebody) · §14z
 (the gate and the $0.00 question) · §STOREOPS-07 (the one pay derivation, and the column nothing
 writes) · §CORE-45 (open-stores-only, one spelling) · §3d (the standard filter bar and the Send bar).
+
+
+## §CORE-52. WHAT PATHS THIS APP SERVES HAS ONE HOME, AND A CONTROL STATES ITS OWN FLOOR (measured 2026-11-26)
+
+**Module:** core. **Found by:** the daily adversarial access pass (§CORE-42), run 330, module
+`remediation` — not by the probe's verdicts, which were clean, but by the blast-radius question the
+agent doc requires after them.
+
+### §CORE-52.1 The measurement
+
+`remediation` is clean to a stranger. All six gated paths answer `401 {"detail":"authentication
+required"}` from the middleware, hand-verified one at a time; `GET /api/v1/remediation/whatsapp-webhook`
+answers `403 {"detail":"verification failed"}` and `POST` answers `403 {"detail":"bad signature"}` —
+the handler's own refusals, identical whether the Meta credential is absent or wrong, and the POST
+fails CLOSED when `WHATSAPP_APP_SECRET` is unset. The probe's one finding, `locked_out` on that GET,
+is NOT a defect: the handler was reached, which is all "public" promises.
+
+The defect is in the control that answers the same question in process.
+`tests/integration/test_public_path_reaches_its_handler.py::test_every_declared_public_route_the_app_mounts_is_not_auth_refused`
+was built 2026-11-23 (§CORE-48) so that a declared-public link — the W-9 form a wholesale customer is
+emailed to return — can never again be refused by a router-level auth gate, "with no edit" as new
+public paths appear. Measured:
+
+```
+paths the app serves                  1,558   (1,875 path+method pairs)
+declared-public GETs among them           21
+the control was sweeping                   5   /docs /docs/oauth2-redirect /openapi.json /redoc /health
+of the 21, it checked                      1   /health
+its non-vacuity guard                  checked >= 1   ← satisfied by /health
+```
+
+### §CORE-52.2 The class: TWO failures at once, which is why neither showed
+
+1. **`app.routes` does not hold the routes.** Since fastapi 0.141 `include_router()` leaves ONE lazy
+   `_IncludedRouter` per router, with no `.path` and no `.methods`. `len(app.routes)` is 37 here. A
+   walk reading those attributes gets `None` and skips every module route in silence. This trap is
+   known and documented at length in NINE other files, each with its own copy of the fix.
+2. **The flattened leaf path is PREFIX-STRIPPED, and this half survives the fix for the first.**
+   Descending `.original_router` recovers 1,879 leaf objects, each carrying its path relative to its
+   mount: `/remediation/whatsapp-webhook`, never `/api/v1/remediation/whatsapp-webhook`. Every
+   declaration in this codebase is keyed by the SERVED path and is DEFAULT-DENY, so
+   `public_surface_allows("/remediation/whatsapp-webhook", "GET")` is a confident `False` — "not
+   declared public" — and the caller skips the route and reports clean. **A control wired this way
+   cannot fail**, which is the only kind of broken control nobody notices.
+
+Stated generally: *a fact with nine right copies and one wrong one is the patchwork the house rules
+forbid, and the wrong copy is the one nobody re-reads.* And: *a default-deny declaration answers a
+malformed question with the same word it uses for "no" — so a caller that asks it wrongly reports
+safety.*
+
+### §CORE-52.3 The fix
+
+`backend/app/core/route_table.py` is the ONE home for "what paths does this app serve":
+`route_surface(app)` → `{(served_path, METHOD)}`, plus `served_paths(app, method)` and
+`serves(app, path, method)`. It asks `app.openapi()` — the framework's PUBLIC contract, which
+resolves every prefix and every level of inclusion and is the same document the outside probe reads,
+so the in-process control and the live probe can no longer disagree about which paths exist.
+
+Callers rewired to dereference it, each of which carried its own copy: the security control,
+`harness_whats_new.py`, `harness_training_center.py`, `harness_nav_perf.py`,
+`harness_impersonation.py`, `harness_data_qa_routes.py`, `harness_export_xss_upload.py`,
+`tests/integration/test_goal_rollforward_run_due_endpoint.py`. Two of those (`data_qa_routes`,
+`export_xss_upload`) were found by the new lock, not by review.
+
+The OBJECT-GRAPH form of the question keeps its own existing home,
+`app/core/path_redact.route_table` — it must work on a bare router, must never raise, and runs on the
+logging hot path where building the whole OpenAPI schema is not acceptable. The two homes are
+cross-referenced; neither is a copy of the other. Four harnesses that genuinely need leaf route
+OBJECTS (`path_redact`, `db_resilience`, `pos_onboarding`, `fix_pipeline`) are named with their
+reason in the lock's ratchet.
+
+**The declaration gained two rows, not the code.** With the derivation fixed, two declared-public
+GETs really do refuse an anonymous caller, and both are correct — their handler verifies a credential
+of its own, so an empty request proves nothing:
+
+- `/api/v1/remediation/whatsapp-webhook` — Meta's verify token (GET) and `X-Hub-Signature-256` (POST).
+- `/api/v1/vision/edge` — the analyzer's `x-vision-agent` key plus an HMAC over the raw body under
+  its own enrolled secret, with every failure mode made indistinguishable on purpose.
+
+`tenant_middleware._PUBLIC_SELF_IDENTIFYING` now lists both, and the comment above it states the test
+once: a path whose caller presents a CREDENTIAL OF ITS OWN belongs there, while a path whose caller
+presents a CAPABILITY IT WAS HANDED (a link token in the URL) must not — a bad token there is the
+handler's uniform 404, and a 401/403 means a gate refused before the handler read it. That is the
+§CORE-48 lockout, and it stays reported.
+
+**Stated gap, not an oversight:** the sweep is GET-only. 74 declared-public pairs use another verb
+and ~60 refuse an anonymous caller correctly (a cron secret, an analyzer key, a 2FA self-service
+path). Declaring each is an owner-visible change to the declaration, recorded here as its own work
+rather than smuggled into a test.
+
+### §CORE-52.4 The lock
+
+`backend/harness_route_table.py` (21 checks), CI job `router-gate-standdown` in `security.yml`:
+
+- §A the home exists and answers from the public contract, not private structure;
+- §B the served path is the FULL addressable path, **with a negative control proving the private
+  walk really is prefix-stripped on this FastAPI** — so §B cannot become vacuous if a future version
+  starts flattening again;
+- §C a ratchet: any file outside the two homes carrying `original_router` or `openapi()["paths"]`
+  fails the build; the excuse list may shrink and may not grow past the 6 recorded today;
+- §D the security control dereferences the home, keeps its non-vacuity floor (≥ 10 paths, the W-9
+  link reached BY THE DERIVATION, ≥ 4 distinct modules), and no longer carries `assert checked >= 1`.
+
+### §CORE-52.5 What this run did NOT measure
+
+The `rep` and `cross_tenant` personas were `skipped`, `measured: False`, for the fourth consecutive
+run: the environment still holds no test accounts. **The Manan class itself is unmeasured**, and no
+part of this section should be read as evidence about it. Three `remediation` writes could not be
+measured from outside (the 405 oracle is invalid where the path's own read is not refused). The
+cross-tenant direction of the two newly declared paths is argued from their handlers, not measured.
+
+**The duplicate check (build gate).** Searched the index for an existing mechanism answering "what
+paths does this app serve" before writing one: §CORE-48 (the control itself), §CORE-50 (the derived
+cron allowlist, which reads the route table with the methods), §CORE-42 (the outside probe's
+rotation, derived from `/openapi.json`), and `path_redact.route_table` (§CORE-21). The openapi-based
+copies were FACTORED INTO the new shared helper rather than added to; the object-graph home was left
+in place and cross-referenced rather than merged, for the three reasons stated in §CORE-52.3.
+
+**Cross-references:** §CORE-42 (the outside pass that found it) · §CORE-48 (the W-9 lockout this
+control was built for) · §CORE-50 (a sweep is public for the method it declares) · §CORE-33 (what an
+employee may reach) · §CORE-21 (path redaction's object-graph route table) · §CORE-01.5 (the section
+register).

@@ -719,15 +719,36 @@ def _public_method_ok(path: str, method: str, cron_paths=None) -> bool:
 # ANONYMOUS request is the correct answer there and not a lockout. Allowlisting these skips the
 # middleware's JWT requirement and the org_id rewrite for a reason stated beside each entry above —
 # a multi-tenant login with no active org must still be able to list its companies — but the handler
-# then verifies the token itself. Every OTHER public path authenticates by a CAPABILITY it is given
-# (a one-use link token, an HMAC download token, a QR capability, a cron secret): an anonymous caller
-# IS the intended caller there, so a 401 on one of those is the lockout
-# `security_probe.LOCKED_OUT` reports. Read by the outside probe (§CORE-42) — never copied into it.
+# then verifies the credential itself.
+#
+# THE TEST, stated once (sharpened 2026-11-26, access probe run 330). Ask what the INTENDED caller
+# presents, and what the handler does with a request that presents nothing:
+#   · it presents a CREDENTIAL OF ITS OWN (a JWT, a shared verify token, an HMAC signed under a
+#     secret only it holds) → an empty request proves nothing, so 401/403 is the right answer and
+#     the path belongs HERE;
+#   · it presents a CAPABILITY it was HANDED (a one-use link token, an HMAC download token, a QR
+#     capability) → the token travels IN THE URL, so an anonymous caller IS the intended caller, a
+#     bad token is answered by the handler's own uniform 404, and a 401/403 there means a gate
+#     refused before the handler ever read the token. That is the lockout
+#     `security_probe.LOCKED_OUT` reports, and it is how `/api/v1/pos/public/w9/{token}` — the link
+#     a wholesale customer is emailed to return their Form W-9 — was dead on production.
+# Read by the outside probe (§CORE-42) and by the in-process companion control
+# (tests/integration/test_public_path_reaches_its_handler.py) — never copied into either.
 _PUBLIC_SELF_IDENTIFYING = (
     "/api/v1/core/me",                    # token-verified whoami
     "/api/v1/core/bootstrap",             # the caller's own memberships
     "/api/v1/core/my-tenants",            # the caller's own tenant list
     "/api/v1/core/fix-pipeline",          # DUAL-AUTH: least-privilege secret OR a super-admin JWT
+    # Meta's webhook. GET is the verification handshake — it echoes hub.challenge only when
+    # hub.verify_token equals WHATSAPP_VERIFY_TOKEN, and answers 403 "verification failed" to every
+    # request that cannot show it, identically whether the token is absent or wrong. POST verifies
+    # X-Hub-Signature-256 under WHATSAPP_APP_SECRET and fails CLOSED when the secret is unset.
+    "/api/v1/remediation/whatsapp-webhook",
+    # The vision edge analyzer. Verifies x-vision-agent + an HMAC over the raw body under the
+    # agent's own enrolled secret, and makes every failure mode indistinguishable (401) on purpose
+    # so a guessed agent_key learns nothing. org_id comes from the authenticated agent, never the
+    # request. The whole /edge prefix — config, enroll, heartbeat, ingest, stream — is one door.
+    "/api/v1/vision/edge",
 )
 
 
