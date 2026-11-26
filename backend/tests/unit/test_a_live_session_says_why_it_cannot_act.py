@@ -174,10 +174,12 @@ def test_the_real_session_that_never_signed_in_still_reports_that():
 
 
 def _router_paths():
+    """Resolved from `live_login`'s own location, never by importing the routers — the proof harness
+    that shares these checks runs in a job with no web dependencies, and the two must agree."""
     import os
-    from app.modules.commcalc import router as cr
-    from app.modules.supply import router as sr
-    return {"commcalc": os.path.abspath(cr.__file__), "supply": os.path.abspath(sr.__file__)}
+    modules = os.path.dirname(os.path.dirname(os.path.abspath(ll.__file__)))
+    return {"commcalc": os.path.join(modules, "commcalc", "router.py"),
+            "supply": os.path.join(modules, "supply", "router.py")}
 
 
 def test_the_three_conditions_are_combined_in_exactly_one_place():

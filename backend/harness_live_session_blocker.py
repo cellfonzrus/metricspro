@@ -146,10 +146,14 @@ ok(_weighing_all_three(ll.__file__) == ["act_blocker"],
    "act_blocker is the ONLY function weighing all three facts (the lock)")
 
 print("\n§E  both routers dereference it and word nothing themselves")
-from app.modules.commcalc import router as _cr          # noqa: E402
-from app.modules.supply import router as _sr            # noqa: E402
-for who, mod in (("commcalc", _cr), ("supply", _sr)):
-    code = py_code_only(open(mod.__file__).read())
+# The routers are read as FILES, never imported: this harness must run in a job that has no web
+# dependencies installed (importing `commcalc.router` pulls in fastapi and fails the gate).
+_MODULES = os.path.dirname(os.path.dirname(os.path.abspath(ll.__file__)))   # app/modules
+_ROUTERS = (("commcalc", os.path.join(_MODULES, "commcalc", "router.py")),
+            ("supply", os.path.join(_MODULES, "supply", "router.py")))
+for who, path in _ROUTERS:
+    ok(os.path.exists(path), "%s router found at its expected path" % who)
+    code = py_code_only(open(path).read())
     ok("act_blocker" in code and "cannot_act_note" in code,
        "%s router reads the one home" % who)
     ok("is not signed in yet" not in code.lower(),
