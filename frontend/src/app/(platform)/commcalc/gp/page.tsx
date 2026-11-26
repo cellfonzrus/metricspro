@@ -1108,7 +1108,7 @@ export default function GPReportPage() {
                   </td>
                   {COLS.map(c => {
                     const val = (totals as any)[c.key] || 0
-                    const color = c.highlight ? (val >= 0 ? 'var(--c-fg-86efac)' : 'var(--c-fg-fca5a5)') : c.red ? 'var(--c-fg-fca5a5)' : 'white'
+                    const color = c.highlight ? (val >= 0 ? 'var(--c-fg-86efac)' : 'var(--c-fg-fca5a5)') : c.red ? 'var(--c-fg-fca5a5)' : 'var(--c-fg-ffffff)'
                     return (
                       <td key={c.key} style={{ padding: '10px 10px', textAlign: 'right', color, fontSize: 12,
                         borderLeft: ['comm', 'total_rev', 'rep_pay', 'net_profit'].includes(c.key) ? '2px solid rgba(255,255,255,0.2)' : undefined }}>

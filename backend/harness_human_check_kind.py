@@ -208,7 +208,20 @@ for k, m in ll._HUMAN_CHECK_MESSAGE.items():
 drive = LL_SRC[LL_SRC.index("def _drive("):]
 drive = drive[:drive.index("\n    def ", 10)]
 ok("_human_check_kind" in drive, "_drive asks for the KIND")
-ok("_HUMAN_CHECK_MESSAGE[" in drive, "…and reads the message from the one home")
+ok("human_check_note(" in drive, "…and reads the message from the one home")
+# 2026-11-26: the one home grew a MOMENT axis, because five other callers were spelling the visible
+# sentence by hand and an invisible widget has no box at any of those moments either. The property
+# this harness has always guarded is unchanged — the words come from the home — so it is pinned
+# through the home's current reader rather than its former subscript.
+ok(ll._HUMAN_CHECK_MESSAGE is ll._HUMAN_CHECK_NOTE["at_form"],
+   "the at-form words are the home's own row, not a copy")
+for _moment in ll._HUMAN_CHECK_NOTE:
+    _inv = ll.human_check_note("invisible", _moment)
+    ok("not a robot" not in _inv.lower() and "box on the screen" not in _inv.lower(),
+       "the INVISIBLE wording at '%s' sends nobody hunting for a box" % _moment, _inv)
+    ok(bool(_inv) and len(_inv) < 400, "the invisible wording at '%s' fits a status line" % _moment)
+    ok(ll.human_check_note("", _moment) == "",
+       "no human check is never an instruction at '%s'" % _moment)
 ok("Human check detected" not in drive,
    "…with no message spelled inline, which is how one kind got the other's words", drive[-300:])
 

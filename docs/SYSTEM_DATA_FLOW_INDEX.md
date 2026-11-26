@@ -234,6 +234,7 @@ Primary code homes:
 | STOREOPS-07 | **A correction a human types reaches the figure, or nothing does** | "i just fixed the hours in ny logistics , went in to check it still shows the old hours , check and fix for good platform wide" — and nothing he could have typed could have moved those figures. **616 hand-typed corrections** sat in `storeops.manual_hours` (51 house, 565 LuxeLink; ±4,441h gross), eight of them filed in the ten days before the report, and no pay or hours path read that table at all. All four tenants had declared `count_manual_hours = true` and `resolve_config` forced it FALSE for the three on `schedule_fallback`. The one correction the figure DID honour, `shifts.actual_hours`, is written by nothing in the product — the frontend displays it in seven places and writes it in none. And the mig-914 RPC decided `correction > punch > schedule` in SQL, where it could read neither the corrections nor the declaration. Who owns "what are this person's paid hours that day", what does a correction MEAN when 2,249 of its hours are negative, and what stops a closed month restating the moment the fold is switched on? |
 | STOREOPS-09 | **An expense line per org level, named in the tenant's own words** | "Anybody who is a dm their salary is divided among the stores they are responsible for , similarly for the regional manager or market manager whatever stores they cover their salary is divided amount their stores , add a line in the expenses with the name dm salary and rm salary or mm salary , if we add another level the expense report should automatically add they level and then divide the salary based on the people who report to them" — the mechanism existed (§14t) and booked ONE combined line. Four live tenants declare four different level vocabularies agreeing on not one rung, so whose word names the line, what stops a house default from labelling one tenant's expenses in another's language, and what makes a level added tomorrow appear with no deploy? |
 | STOREOPS-12 | **A package the scanner refused still has its number, and the platform can re-print it** | "sometimes the barcode, which is used to consolidate the packages, do not work properly, and we have packages sitting in the store which are not scanned ... the user should be able to upload the picture to our platform and the platform should generate a barcode using the reference numbers" — the reference is printed under the bars the whole time, so what is lost is a MACHINE-READABLE copy of it. Which symbology does a label actually use (measured, not assumed), what part of this is a published standard and what part is one tenant's description of one vendor's paperwork, and what stops a reference read off a photograph from printing a barcode that scans perfectly into the wrong record? |
+| STOREOPS-13 | **A printed schedule is a line per person, not a picture of the grid** | "the schdule show show line by line which employee is working and thier houre next to their name instaed of in this illegible form" — the export mirrored the SCREEN GRID, so one store-day cell held every name that fell in it and a store's 127 hours sat at the far edge of a landscape page. The LINE is now the unit: one row per person per store, `Employee · Store · Hrs · Mon…Sun`, a day cell holding times only, both views over one builder. Carries the sibling it exposed — the screen and the export each had their own answer to "how long is this shift", so an overnight shift could total differently in the emailed PDF than on screen. |
 | STOREOPS-14 | **Employee setup is a flow somebody can leave halfway, and the tenant's own roles decide it** | "The way we have set up teh closing workflow , it is very easy for a new person to start and then pick up where tehy left off, need similar for the Employee set up in logical steps leading up to onboaring" — six screens each knew its own piece and nothing knew the order, so a half-finished person looked identical to a finished one on every one of them. What are the steps, where does somebody pick up, and what stops a wizard becoming a second writer for every field an employee already has? |
 | STOREOPS-15 | **Scheduling a store-week is a flow somebody can leave halfway, and the week is the tenant's own** | "...and then simlar workflow for scheduling", said of the daily-closing workflow a new person can start and come back to. What are the steps for ONE store in ONE week, where does somebody pick up, what does "the week" mean for a tenant that does not start it on a Monday, and how is a day with nobody on it reported when nothing in the platform declares which days a store opens? |
 | CORE-51 | **"How far through is this flow, and where do I pick it up" has one home** | Three flows were asked for in one sentence (employee setup, scheduling, running payroll). Answering the rail, the lamps, the resume and the progress count once per flow is three homes for one question, and the third copy drifts. Who owns a step's status, what makes a missing answer a refusal rather than a silent "not started", and what fails the build when a fourth copy appears? |
@@ -18293,9 +18294,66 @@ Registered as a feed: `data_lineage_registry.INGEST_TABLES_BY_MODULE["supply"] =
   §L one writer of the snapshot table, both routes call it, commcalc dereferences `SUPPLY_PROCESSOR` (no second
   spelling), `_live_pull` dispatch order, the 301 home + commcalc login reused, mig 1021 creates exactly one table,
   additive/idempotent/REVERT/RLS, logins leave the store without secrets, main.py registration, ONE nav group.
-- `backend/harness_vendor_price_compare.py` §I (**79** total): the kit resolves to the backend home; the zip bundles
-  a byte-identical copy; **a second definition of the pricing logic / reader anywhere in the repo fails** (planted
-  negative control).
+- `backend/harness_vendor_price_compare.py` §I/§J/§K (**107** total): the kit resolves to the backend home; the zip
+  bundles a byte-identical copy; **a second definition of the pricing logic / reader anywhere in the repo fails**
+  (planted negative control); plus the two 2026-11-25 design fixes below.
+
+### 36.9 WHAT ONE ITEM COSTS, AND HOW WE KNOW — one home, three answers (owner 2026-11-25)
+
+> Owner: *"if it shows bulk items with the number of items next to it it should divide to get the cost per item,
+> which the user can see and do by naked eye, the system should do it for them"* — and *"the pdf also shows our
+> chagin invoices"*.
+
+**Class, not instance.** A price carries one of THREE facts and the platform stored two: the vendor states a
+per-item price (`"$5.4000 per EA (10/BDL)"`), or states a pack and leaves us to divide (`$76.20`, pack of 15), or
+says nothing. The third was collapsed into the first — `unit_price` returned the listed price unchanged and the
+surfaces printed the word *each* beside it — so a CASE price sat against a SINGLE price and the difference was
+reported as a saving. Live on 2026-11-25 a 24x18x18 UPS box read **"$71.39 cheaper (94%)"** when the two vendors
+are **27 cents** apart ($5.08 vs $4.81).
+
+| fact | home | callers |
+|---|---|---|
+| what ONE item costs and how we know | `supply/pricing_core.unit_basis` → `UNIT_STATED` \| `UNIT_DIVIDED` \| `UNIT_UNKNOWN` | `pricing_core.unit_price` (DERIVED, no second division), `comparison_rows`, `ordering_logic.offer_from_row` |
+| whether two vendors may be compared at all | `pricing_core.comparison_rows` → `comparable` + `basis` | `GET /supply/compare`, the Price Compare screen, the price-comparison PDF |
+| whether a quantity means units or packs | `comparison_rows.cart_basis` | the Price Compare screen (it had its OWN copy, derived from `pack_qty`, which is how a stated per-each price read as no unit price at all) |
+
+An UNKNOWN per-item cost is **missing, not cheap**: `unit_price` is `None` and the screen says *"pack size not
+stated"* rather than *"each"*. A mixed-basis row (one vendor prices a pack, the other does not) reports a `gap`,
+names **no** winner and reports **no** saving.
+
+### 36.10 A CATALOG READ NEVER LANDS OUR OWN INVOICES (owner 2026-11-25)
+
+**Measured:** 81 of one vendor's 205 "catalog" rows (40%) were read off our OWN order history —
+`ordhist.htm` 24, `ordhistdet.htm` 21, `ordhistlist.htm` 17, `ordhistlistdetail.htm` 11, `cathistsub.htm` 6,
+`itmhistsub.htm` 1, `ordhistlistmth.htm` 1. Only 124 came from the product page `itemdet.htm`. An invoice line's
+price is what we PAID once, not what the vendor charges today.
+
+**Class:** `SAFE_SKIP` answered *"could following this link ACT"* (cart, checkout, logout). Nothing answered
+*"is this page a price list at all"*. One home now does: `supply/catalog_scrape.is_not_a_price_list`
+(`NOT_A_PRICE_LIST`), dereferenced by `VendorScraper._allowed`, overridable per vendor with
+`portal_config.allow_account_pages` — config, never code. Verified against all 509 live URLs: exactly the 81
+history rows refused, all 428 product pages kept. The next scheduled sweep writes a clean run and
+`store.latest_rows` reads only the newest, so no stored row has to be deleted.
+
+**The divisor is a COUNT, nothing else.** Dividing automatically is only a kindness if the number
+divided by is right, and three sources of a wrong one were live the moment the division became
+visible: a money amount (`"$7.8900 per CS"` → a pack of **8,900**), a part number (`"UPS819 Carton
+Sealing Tape"` → **819**) and a weight (`"25LB BAG"` → **25**). `pricing_core.parse_pack` now strips
+money and weight alongside the dimension rule it already had, and refuses digits glued to letters.
+55 stored packs in the live snapshot disagree with the hardened parser; **13 are the artefacts
+above**, the rest are detail-page counts the listing row never carried. Nothing is repaired: each
+sweep writes its own dated run and `store.latest_rows` reads only the newest, so the next read is
+clean.
+
+**Lock:** `harness_vendor_price_compare.py` §J (18) + §K (7) — AST checks that only `pricing_core` divides a price
+by a pack, that `unit_price` is derived from `unit_basis`, that the route passes the basis instead of recomputing
+it, that the screen reads `cart_basis` and never prints a bare `each`, that `_allowed` dereferences the page
+policy, and that neither fact is declared twice. Tests: `backend/tests/unit/test_per_item_cost_is_never_guessed.py`
+(13) + `backend/tests/integration/test_supply_compare_per_item_cost.py` (5).
+
+**Still open (reported, not coded around):** AFFLINK has priced **0** products ever — its saved login is accepted
+but its `catalog_urls` is the shopfront landing page, so the reader walks one page. That is a vendor-config row
+for the owner to point at a real product listing, not a code change.
 - `backend/harness_org_scope_guard.py` LEAK CLASS 5: every chain in `supply/store.py` org-scoped (mutation-proven);
   router / portal / logic hold no query. `org-scope-guard.yml` triggers on `backend/app/modules/supply/**`.
 - `backend/harness_browser_sweep_kinds.py` §6 (**45**; now wired into CI — it was not before): the modules outside
@@ -26635,6 +26693,7 @@ status word rather than a blank that reads as nil.
 | ACCOUNT-06 | account, commcalc |
 | STOREOPS-11 | storeops, account |
 | STOREOPS-12 | storeops, core |
+| STOREOPS-13 | storeops, core |
 | CORE-51 | core |
 | STOREOPS-14 | storeops, hr, core |
 | STOREOPS-15 | storeops, core, notify |
@@ -31284,6 +31343,30 @@ never returns `transparent`, and **no file may hand-roll `% 2` into a background
 on a property whose role is declared) now has teeth it did not have before. Unit tests:
 `src/lib/__tests__/surface.test.ts`.
 
+**THE TABLE THAT ESCAPED THE SWEEP (2026-11-26).** Owner, of the Schedule screen: *"cannot see he
+employee name in white background and white font"*. It read as rows being misaligned — "ss shows
+0.0h even though shifts appear on the row above it" — but nothing was misaligned: every other
+employee's name and weekly total was simply invisible, so each visible name looked like it sat
+beside the wrong row's shifts.
+
+It was the SAME literal, in the one shape this lock could not see:
+
+```ts
+const rowBg = ri % 2 === 1 ? 'var(--surface2)' : 'white'   // …later…  background: rowBg
+```
+
+`STRIPE_IN_BG` reads FORWARD from `background:`, so a stripe computed into a VARIABLE first was
+invisible to §H4 — one level of indirection further out than the backwards-reading hole §C′ closed,
+and the same class. The page now calls `rowStripe(ri)`, and §H4b–H4e widen the EXISTING lock (never
+a second lock beside it) to a `% 2` ternary whose branches are colourish wherever its value is
+computed, with controls that the exact shipped line is caught, that the call through the home is
+not, and that a non-colour alternation (`i % 2 ? 'odd' : 'even'`) is left alone. Verified by putting
+the defect back: §H4b fails, naming the line.
+
+A sibling lock was written first and DELETED before this shipped — this section is the home for
+"a colour on a themed surface is a token", and a second gate asking the same question is the
+duplicate the house rules forbid.
+
 **EVERY TENANT.** Nothing here reads an org: the defect and the fix are in the stylesheet and the
 markup, identical for Cellfonz R Us, LuxeLink and Vzone. Verified by rendering under both themes.
 
@@ -31389,7 +31472,7 @@ rather than erroring.
 | question | home | reader |
 |---|---|---|
 | does a human check gate this page, and of which kind? | `vidapay_sweep._CAPTCHA_SELECTORS` + `_CAPTCHA_TEXT` + `_INVISIBLE_MARK` / `_ARMED_MARK` | `vidapay_sweep.human_check(page)` → `"visible"` / `"invisible"` / `""` |
-| what do we TELL the operator, per kind? | `live_login._HUMAN_CHECK_MESSAGE` | `live_login._human_check_kind(vp, page)` |
+| what do we TELL the operator, per kind AND per moment? | `live_login._HUMAN_CHECK_NOTE` (`_HUMAN_CHECK_MESSAGE` is its `at_form` row, dereferenced) | `live_login.human_check_note(kind, moment)`, over `_human_check_kind(vp, page)` |
 | why was a submit refused while still on the form? | `vidapay_sweep._HUMAN_CHECK_BLOCKED` | `vidapay_sweep.human_check_blocked_message(page)` |
 
 **Three states, not a bool, because the two kinds need different words.** A visible challenge is on
@@ -31441,6 +31524,67 @@ Same class: §19.18 (a mechanism written and its callers left unwired), §19.41 
 record a failure is not a record), §COMMCALC-10 (the stall this made visible), §12a.2a (a connector
 kind carries no host, so its address is per-tenant config), §CORE-03 (where the portal credential is
 sealed), §COMMCALC-07 (the pull loop this login feeds).
+
+### COMMCALC-11.6 THE KIND REACHED ONE OF SIX CALLERS — "it just disappears as soon as you click on it" (owner report 2026-11-26)
+
+> Owner, 2026-11-26, on his reporting portal's live login: *"does not give enough time to do teh
+> captcha"*, then, a minute later, *"it just disappears as soon as you click on it"*.
+
+**There was no box.** That portal's widget is `data-size="invisible"` with a `data-callback` — armed,
+exactly the shape §COMMCALC-11 was written for. The only reCAPTCHA thing painted on such a page is
+the badge, which expands on hover and collapses when clicked. He was told to *"complete the 'I'm not
+a robot' box on the screen"*, went looking for it, clicked the badge and watched it vanish. The
+answer was to press **Sign in** — the check fires on submit — and he was signed in within three
+minutes of being told so.
+
+**THE CLASS. §COMMCALC-11.2 was right, §COMMCALC-11.4 locked ONE caller, and five others were
+spelling the sentence by hand.** The detector answered three states; `_HUMAN_CHECK_MESSAGE` held
+correct separate words for both kinds; `_drive` read them properly and the harness pinned that it
+did. Every OTHER site asked the BOOLEAN `_captcha_present`, discarded the kind, and wrote the visible
+sentence as a literal:
+
+| moment | site | what it said before |
+| --- | --- | --- |
+| at the form | `_drive` | **correct** — read `_HUMAN_CHECK_MESSAGE[kind]` |
+| noticed while the operator drives | the pre-auth upkeep loop | "complete the 'I'm not a robot' box" |
+| anti-automation page after submit | `state == "botwall"` | "solve the 'I'm not a robot' box" |
+| back at the form, check unsolved | `state == "login"` | "solve the 'I'm not a robot' box" |
+| before the code field appeared | the 2FA tail | "complete the 'I'm not a robot' box" |
+| at or after the code step | the code-submit path | "complete the 'I'm not a robot' box" |
+
+So the one home existed, the lock existed, and **the lock covered the one caller that was already
+right**. That is the §19.18 failure in its least visible form: a registry written, dereferenced by
+the caller somebody checked, and copied by the five nobody did.
+
+**THE FIX.** `_HUMAN_CHECK_NOTE` is keyed by **(moment, kind)** and `human_check_note(kind, moment)`
+is the only reader. The MOMENT is a second axis on purpose: the tail genuinely differs — "then Sign
+in" is wrong advice on the code screen — and that difference is precisely why five hand-written
+copies grew. `_HUMAN_CHECK_MESSAGE` survives as the `at_form` row, dereferenced not copied, so the
+proof scripts and `harness_human_check_kind` read the same object they always did. An unknown moment
+falls back to `at_form` rather than inventing words: a new call site still says something TRUE about
+the kind, which is the half that was being got wrong. `""` returns `""`, so "no human check" can
+never become an instruction.
+
+**Locked** — `backend/tests/unit/test_human_check_kind_reaches_the_operator.py`, 14 tests, six armed
+negative controls. The strongest is not a wording scan: **`_captcha_present` now has no caller inside
+`live_login` at all**, and the test fails if one reappears. `kind = "visible" if cap else ""` would
+pass every wording check and still send an invisible-widget tenant hunting for a box; asking the bool
+is the move that precedes the defect, so that is what is forbidden. Also pinned: every moment's
+invisible wording names no box and does say what to press; the two kinds never agree; each of the six
+moments is used by exactly one site; and the at-form row is the home's own object.
+`harness_human_check_kind.py` raised to **88 checks** — its §E now walks every moment rather than
+`at_form` alone, and §F pins the home's current reader rather than its former subscript.
+
+**What this did NOT do.** Nothing here makes a human check easier to pass, and nothing was added to
+help a server-side browser look less like one. The owner's portal was already being detected
+correctly; only what we TOLD him about it was wrong.
+
+### COMMCALC-11.7 Cross-references (11.6)
+
+§COMMCALC-11.2 (the one home this extends), §COMMCALC-11.4 (the lock that covered the right caller),
+§COMMCALC-50.8 (the sibling defect on the same portal: a page judged by how it is BUILT), §19.18 (a
+registry written and its callers left unwired), §COMMCALC-44 (an absence needs the right reason),
+§COMMCALC-48.13 (the status sentence that understated the same login's failures).
 
 ## §COMMCALC-12. WHICH STORE'S TRAILING COMMISSION LEGS ARE RUNNING DOWN, AND IN WHICH RUNG (owner ask 2026-10-15)
 
@@ -52852,6 +52996,88 @@ never asked whose person).
 
 ---
 
+## §STOREOPS-13. A PRINTED SCHEDULE IS A LINE PER PERSON, NOT A PICTURE OF THE GRID (owner 2026-11-26)
+
+Owner, of the exported week of 2026-11-23: *"the schdule show show line by line which employee is
+working and thier houre next to their name instaed of in this illegible form"*. Then, of the week of
+11-30: *"also remove teh number of hours on tehe last time on the printed pdf"*.
+
+### THE INSTANCE, AND THE CLASS ABOVE IT
+
+The instance was one store's Monday cell in the PDF:
+
+> `Manan Ali 16:00-19:00; Hajra Cheema 09:00-19:00; Zohaib Ali 10:00-16:00` … **127.0**
+
+Four people's whole week on one row, with a store total at the far right edge of a landscape page.
+
+**The class** is that `buildScheduleExport` mirrored the SCREEN GRID — one cell per row-per-day,
+holding however many shift chips fell in it, with the name repeated inside every chip. A grid cell
+works on a wide scrolling screen with coloured chips and tooltips; in a fixed-width PDF column it
+wraps into an unreadable paragraph. The shape was wrong for every store, every tenant and every
+week, in the PDF, the Print view, the .xlsx, the .csv and the emailed/WhatsApp'd send alike, because
+all five render from the one payload (§4 export governance).
+
+### THE FIX — THE LINE, NOT THE CELL, IS THE UNIT
+
+`frontend/src/app/(platform)/storeops/lib/scheduleExport.ts` is still the ONE home for "what does a
+printed schedule contain", and it now emits **one line per person per store they work**:
+
+| Employee | Store | Hrs | Mon 11/23 | … | Sun 11/29 |
+|---|---|---|---|---|---|
+| Hajra Cheema | 7710 | 50.0 | `09:00-19:00` | … | |
+| Manan Ali | 7710 | 17.5 | `16:00-19:00` | … | |
+
+- **The hours sit beside the name**, in the third column, which is both what was asked for and what
+  stops the figure from falling off the far edge. Nothing trails the last day column — the owner's
+  second message is the same column, moved rather than removed.
+- **A day cell holds times only.** The name is the line, so repeating it in the cell was the thing
+  making the cell unreadable. A person's split shift stacks on its own line inside the cell; a list
+  of names can no longer be formed at all.
+- **Both on-screen views share one line builder** (`scheduleLines`), so "by store" and "by employee"
+  can never drift into two answers to "who works this week". The view decides the GROUPING only.
+- **A store with nobody scheduled keeps its line** (`NOBODY_SCHEDULED`). The old grid showed that
+  row, and a coverage gap that silently vanishes from the export is worse than an ugly one.
+- Title, subtitle and filename are unchanged — the Send bar, the scheduled-report label and saved
+  filenames key off them.
+
+### THE SIBLING FOUND ALONG THE WAY — ONE HOME FOR "HOW LONG IS THIS SHIFT"
+
+The screen totalled a shift with the page's own `shiftHrs` (recomputed from start/end, overnight
+safe) while the export totalled `scheduled_hours || 0`. Two answers: an overnight shift, or a stale
+or negative stored value, read one way on screen and another in the emailed PDF. `shiftHours` /
+`hoursBetween` in `scheduleExport.ts` are now the one home and `schedule/page.tsx` dereferences
+them; the page defines no hours arithmetic of its own.
+
+### WHAT FAILS THE BUILD
+
+`scheduleExport.lock.test.ts` (CI, `npm run test`):
+
+| | |
+|---|---|
+| A | a day cell contains a person's name, a `;` or a `,` |
+| B | a cell template in the home mentions `employee_name` or `store_code` |
+| C | the hours column stops being column 3, or a second hours/total column appears |
+| D | `schedule/page.tsx` defines `hoursBetween` / `shiftHrs` / `scheduled_hours \|\| 0` / the `24 * 60` wrap again |
+| E | the page stops importing `shiftHours` from the home |
+| F | a fourth mention of `scheduled_hours` appears in the home (a second answer) |
+
+### TESTS
+
+- `frontend/src/app/(platform)/storeops/lib/__tests__/scheduleExport.test.ts` — 21, DB-free: the
+  reported defect reproduced, both views, split shifts, overnight hours, the empty store and the
+  empty employee, **four tenants** with their own store-code and name shapes, a cross-tenant leak
+  case, RULE TWO over the source, and the payload through the real `payloadToCsv` renderer.
+- `frontend/src/app/(platform)/storeops/lib/__tests__/scheduleExport.lock.test.ts` — 8, the gate above.
+- `backend/tests/integration/test_schedule_shifts_export_contract.py` — 14: `GET /storeops/shifts`
+  really returns the six fields a line is built from, one row per shift and never pre-grouped per
+  store-day, for three tenant shapes including one with no shifts at all.
+
+**Cross-references:** §4 (export governance — one payload behind Excel / PDF / Print / CSV / Send) ·
+§14w (`gate_person_rows` — whose shifts a week may contain) · §STOREOPS-05 (the week a tenant
+declares) · §CORE-15 / the Dark theme lock (the white-on-white stripe on the same screen, found in
+the same report — fixed there, through `lib/surface.rowStripe`, not here) · §16–18.
+
+---
 ## §CORE-51. "HOW FAR THROUGH IS THIS FLOW, AND WHERE DO I PICK IT UP" HAS ONE HOME (owner 2026-11-25)
 
 Owner, verbatim: *"The way we have set up teh closing workflow , it is very easy for a new person to
