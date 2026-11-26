@@ -53683,6 +53683,11 @@ rather than smuggled into a test.
 - §D the security control dereferences the home, keeps its non-vacuity floor (≥ 10 paths, the W-9
   link reached BY THE DERIVATION, ≥ 4 distinct modules), and no longer carries `assert checked >= 1`.
 
+The fact is registered in the module graph as `served_route_table`
+(`app/modules/core/module_graph.py`), so "I am changing this — what else answers the same question"
+is one call, and §A0 of the lock READS that ruling rather than restating which file is the home
+(index 19.18: writing a registry and leaving the callers on their literals is not a fix).
+
 ### §CORE-52.5 What this run did NOT measure
 
 The `rep` and `cross_tenant` personas were `skipped`, `measured: False`, for the fourth consecutive

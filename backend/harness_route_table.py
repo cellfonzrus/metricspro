@@ -43,8 +43,14 @@ print("\n§A  the home exists and answers the question")
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 from app.core import route_table                                        # noqa: E402
 
-HOME = "app/core/route_table.py"
-src = read(HOME)
+# The ruling has ONE home and the locks READ it (index 19.18): which file is allowed to answer
+# "what paths does this app serve" is declared in the module graph, never restated here.
+from app.modules.core import module_graph as MG                         # noqa: E402
+
+_HOMES = MG.homes_for("served_route_table")
+ok("A0 the module graph names this fact's home, and this lock dereferences it",
+   _HOMES == ("app/core/route_table.py",), _HOMES)
+src = read(_HOMES[0])
 ok("A1 route_surface / served_paths / serves all exist",
    all(callable(getattr(route_table, n, None)) for n in ("route_surface", "served_paths", "serves")))
 ok("A2 the home asks the framework's PUBLIC contract, not its private structure",
@@ -136,7 +142,7 @@ for dirpath, dirnames, filenames in os.walk(ROOT):
         if not fn.endswith(".py"):
             continue
         rel = os.path.relpath(os.path.join(dirpath, fn), ROOT)
-        if rel == HOME or rel in EXCUSED:
+        if rel in _HOMES or rel in EXCUSED:
             continue
         try:
             body = read(rel)
