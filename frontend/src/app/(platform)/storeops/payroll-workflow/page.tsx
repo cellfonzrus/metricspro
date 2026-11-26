@@ -21,6 +21,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import DateField from '@/components/DateField'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
+import { INCLUDE_INACTIVE_PARAM, rosterIsActive } from '@/lib/roster-visibility'
 import { api } from '@/lib/client'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
@@ -42,6 +44,16 @@ type Step = {
 }
 type StepDecl = { key: string; title: string; why: string; required: boolean; screen: string }
 type StatusDecl = { key: string; label: string }
+/** WHAT EACH COLUMN SORTS ON. `Steps done` sorts on the COUNT, not the rendered "3 of 7", so 10
+ *  does not fall between 1 and 2; a store whose progress was never computed sorts as -1, because
+ *  never-computed is not none (§STOREOPS-16). No money column is sortable here: the pay figures are
+ *  the Payroll Report's own and a pay-gated caller is served none at all. */
+const periodCell = (r: StorePeriod, f: string): string | number | boolean =>
+  f === 'store' ? r.store_code
+  : f === 'payroll' ? r.label
+  : f === 'resume_title' ? r.resume_title
+  : f === 'done' ? (r.progress ? r.progress.done : -1)
+  : ''
 type StorePeriod = {
   store_code: string
   address?: string
@@ -134,7 +146,7 @@ export default function PayrollWorkflowPage() {
     if (period.start && period.end) { q.set('start', period.start); q.set('end', period.end) }
     if (filter.stores?.length) q.set('stores', filter.stores.join(','))
     if (filter.markets?.length) q.set('markets', filter.markets.join(','))
-    if (filter.showInactive) q.set('include_inactive', 'true')
+    if (filter.showInactive) q.set(INCLUDE_INACTIVE_PARAM, 'true')
     const qs = q.toString()
     return '/api/v1/storeops/payroll-workflow' + (qs ? `?${qs}` : '')
   }, [period, filter])
@@ -150,6 +162,7 @@ export default function PayrollWorkflowPage() {
   const reload = useCallback(() => { setBusy(true); void load() }, [load])
 
   const rows = useMemo(() => data?.rows || [], [data])
+  const ps = useTableSort(rows, periodCell)
   const steps = useMemo(() => data?.steps || [], [data])
   const stepTitle = useMemo(() => {
     const m: Record<string, string> = {}
@@ -306,10 +319,10 @@ export default function PayrollWorkflowPage() {
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
           <thead>
             <tr>
-              <th style={th}>Store</th>
-              <th style={th}>Payroll</th>
-              <th style={th}>Picks up at</th>
-              <th style={th}>Steps done</th>
+              <SortableTh field="store" sort={ps.sort} onSort={ps.toggle} style={th}>Store</SortableTh>
+              <SortableTh field="payroll" sort={ps.sort} onSort={ps.toggle} style={th}>Payroll</SortableTh>
+              <SortableTh field="resume_title" sort={ps.sort} onSort={ps.toggle} style={th}>Picks up at</SortableTh>
+              <SortableTh field="done" sort={ps.sort} onSort={ps.toggle} style={th}>Steps done</SortableTh>
               <th style={th} />
             </tr>
           </thead>
@@ -319,14 +332,14 @@ export default function PayrollWorkflowPage() {
                 No stores match these filters.
               </td></tr>
             )}
-            {rows.map(r => {
+            {ps.sorted.map(r => {
               const isOpen = open === r.store_code
               return (
                 <tr key={r.store_code} style={{ borderTop: '1px solid var(--border)' }}>
                   <td style={td}>
                     <div style={{ fontWeight: 600 }}>
                       {r.store_code}
-                      {r.is_active === false && <span style={{ ...chip, marginLeft: 6 }}>closed</span>}
+                      {!rosterIsActive(r) && <span style={{ ...chip, marginLeft: 6 }}>closed</span>}
                     </div>
                     <div style={{ fontSize: 11, color: 'var(--text2)' }}>{r.market || ''}</div>
                   </td>
@@ -343,7 +356,7 @@ export default function PayrollWorkflowPage() {
                 </tr>
               )
             })}
-            {rows.map(r => open === r.store_code && (
+            {ps.sorted.map(r => open === r.store_code && (
               <tr key={`${r.store_code}-rail`}>
                 <td style={{ ...td, background: 'var(--bg)' }} colSpan={5}>
                   {r.refused && <div style={{ fontSize: 13, marginBottom: 8 }}>{r.refused}</div>}
