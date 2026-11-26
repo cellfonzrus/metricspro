@@ -202,6 +202,10 @@ def _run_records(org_id, months, blockers):
 
 
 def _stores(org_id, blockers, *, include_inactive=False, store_code=None):
+    """The roster, read once. `market` is carried for DISPLAY beside a store the caller already
+    chose — nothing here filters or buckets by it, and no money figure on this board is bucketed by
+    market either; the market filter is `router.scope_keyset` (§14x), the canonical resolution.
+    Pinned ROSTER in `harness_market_resolution_guard.py`."""
     eqs = {"store_code": store_code} if store_code else {}
     rows = _rows("stores", "store_code,address,market,is_active", org_id, blockers, **eqs)
     return _rv.visible(rows, include_inactive=include_inactive), (_rv.hidden_count(rows) if rows
