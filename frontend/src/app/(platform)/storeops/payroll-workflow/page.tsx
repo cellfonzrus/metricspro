@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import StandardFilterBar from '@/components/StandardFilterBar'
+import DateField from '@/components/DateField'
 import { api } from '@/lib/client'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
@@ -199,9 +200,9 @@ export default function PayrollWorkflowPage() {
       </div>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '14px 0 0' }}>
-        <input type="date" value={period.start} onChange={e => setPeriod(p => ({ ...p, start: e.target.value }))}
+        <DateField value={period.start} onChange={e => setPeriod(p => ({ ...p, start: e.target.value }))}
           style={{ ...btn, cursor: 'text' }} aria-label="Period start" />
-        <input type="date" value={period.end} onChange={e => setPeriod(p => ({ ...p, end: e.target.value }))}
+        <DateField value={period.end} onChange={e => setPeriod(p => ({ ...p, end: e.target.value }))}
           style={{ ...btn, cursor: 'text' }} aria-label="Period end" />
         {(period.start || period.end) && (
           <button style={btn} onClick={() => setPeriod(EMPTY_PERIOD)} disabled={busy}>
