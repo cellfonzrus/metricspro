@@ -18,7 +18,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 |---|---|---|
 | `access-probe-rotation.yml` | 1 | `schedule`, `workflow_dispatch` |
 | `branch-base-guard.yml` | 1 | `pull_request_target`, `workflow_dispatch` |
-| `carrier-vocab-guard.yml` | 50 | `pull_request`, `push`, `workflow_dispatch` |
+| `carrier-vocab-guard.yml` | 51 | `pull_request`, `push`, `workflow_dispatch` |
 | `data-qa-guard.yml` | 4 | `pull_request`, `push`, `workflow_dispatch` |
 | `deploy-reachability.yml` | 1 | `deployment_status`, `workflow_dispatch` |
 | `deploy-website.yml` | 1 | `push`, `workflow_dispatch` |
@@ -33,7 +33,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 643 gates
+## Gated — 644 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -300,6 +300,7 @@ the Runs on column is how you can tell.
 | `harness_gp_store_identity.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_gp_totals_reconcile.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_grant_model.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_guided_workflow.py` | `carrier-vocab-guard.yml` | Guided workflow lock (one home for a resumable flow; Employee Setup dereferences it) (`guided-workflow-lock`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_helpdesk_export.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_hours_correction_reaches_figure.py` | `tests.yml` | Proof harnesses, group 4 of 4 (`harness-suite-4`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_hours_correction_wiring.py` | `tests.yml` | Proof harnesses, group 4 of 4 (`harness-suite-4`) | `pull_request`, `push`, `workflow_dispatch` |

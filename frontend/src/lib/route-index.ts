@@ -352,6 +352,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/storeops/closing', label: 'Store Closing', aliases: ['store closing', 'close the store'] },
   { path: '/storeops/dm-accessory-attribution', label: 'Accessory Attribution by Manager', aliases: ['dm accessory', 'accessory attribution'] },
   { path: '/storeops/dropoff-barcode' },
+  { path: '/storeops/setup/employee-workflow' },
   { path: '/storeops/employees' },
   { path: '/storeops/hours-budget' },
   { path: '/storeops/payroll' },

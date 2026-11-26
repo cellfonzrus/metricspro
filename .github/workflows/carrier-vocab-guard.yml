@@ -707,6 +707,13 @@ on:
       - "backend/app/modules/closing/unfinished_day.py"
       - "backend/app/modules/closing/submit_refusal.py"
       - "backend/app/modules/closing/dedup_key.py"
+      # index §CORE-51 / §STOREOPS-13 — the guided-workflow lock reads the shared home, the
+      # Employee Setup flow and its endpoint surface, HR's stage-word home and HR's router
+      - "backend/harness_guided_workflow.py"
+      - "backend/app/modules/core/guided_workflow.py"
+      - "backend/app/modules/storeops/employee_setup_flow.py"
+      - "backend/app/modules/storeops/employee_setup_api.py"
+      - "backend/app/modules/hr/onboarding_stages.py"
       # index §29.13 — one store-day takes one closing; the lock reads the router, the grain
       # registry, the dedup key, migration 1080 and the Management Review screen
       - "backend/harness_closing_store_day_grain.py"
@@ -3146,6 +3153,23 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_closing_unfinished_day.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE GUIDED-WORKFLOW LOCK (index §CORE-51 / §STOREOPS-13) imports the pure shared home, the
+  # Employee Setup flow and `storeops/clock_variance`, and reads four modules as source. DB-free,
+  # but it needs the backend's dependencies because the flow's neighbours import them.
+  guided-workflow-lock:
+    name: Guided workflow lock (one home for a resumable flow; Employee Setup dereferences it)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the guided-workflow lock (the rail, the resume and the lamps have ONE home; no fourth copy of the status vocabulary; the tenant's roles are a required argument — index §CORE-51 / §STOREOPS-13)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_guided_workflow.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE SETUP-DOCUMENTS PROOF (index §39) imports the real setup_documents / setup_router / import_health modules (the
   # document rules, automation history, gate, reminders, the super-admin edit validation), so it runs in its own job with
