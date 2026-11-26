@@ -28,6 +28,9 @@ from app.modules.storeops import payroll_salary
 from app.modules.storeops import pay_visibility as _payvis
 # THE ONE HOME for "is this store / this person still active" (index §CORE-45).
 from app.modules.core import roster_visibility as _rv
+# THE ONE HOME for the six onboarding stage words (index §STOREOPS-14) — pure, framework-free, so a
+# harness and the employee-setup flow can read the same vocabulary this router moves through.
+from app.modules.hr import onboarding_stages as _stages
 # THE ONE HOME for "which hours is this employee paid for, and on what basis" (index §14y).
 from app.modules.storeops import payroll_hours_basis as _hours_basis
 # THE ONE punch/correction read on the pay path, and the interlock that gates paying from it (§14y).
@@ -1867,12 +1870,12 @@ def public_onboarding_delete_document(token: str, task_id: str, file_id: str, va
 #   • Auto-provisioning (create login + assign role + email credentials), gated on docs_verified.
 # All storeops.*; every endpoint degrades gracefully (clear 400, never 500) if 077 isn't applied.
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-WORKFLOW_STATUSES = ["invited", "in_progress", "docs_submitted", "docs_verified", "provisioned", "active"]
-STATUS_ORDER = {s: i for i, s in enumerate(WORKFLOW_STATUSES)}
-STATUS_LABELS = {
-    "invited": "Invited", "in_progress": "In progress", "docs_submitted": "Docs submitted",
-    "docs_verified": "Docs verified", "provisioned": "Provisioned", "active": "Active",
-}
+# The six stages live in `hr/onboarding_stages` (pure, framework-free) so a reader that is not a
+# web module — a proof harness, the employee-setup flow that ends at this pack — can dereference
+# them instead of typing the words again. These names are the SAME objects, not a copy.
+WORKFLOW_STATUSES = _stages.WORKFLOW_STATUSES
+STATUS_ORDER = _stages.STATUS_ORDER
+STATUS_LABELS = _stages.STATUS_LABELS
 INTAKE_FIELD_COLS = ["key", "label", "section", "field_type", "options", "required",
                      "propagate_to", "sensitive", "help_text", "sort_order", "is_active"]
 # storeops.employees columns an intake field is allowed to propagate into (allow-list — a config
