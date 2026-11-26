@@ -1794,7 +1794,32 @@ _all_routes = _flatten_routes(real_app.routes)
 # MISS the row the event belongs to — the rule the Meta status handler established in 2026-07-18 and
 # which both webhooks now share through one write path (harness_whatsapp_delivery_truth.py §H).
 # A webhook's payload is never trusted to name a tenant; the row it matches is.
-# 1872 -> 1873, 2026-11-26 (PR for §COMMCALC-85, one report declaration applied to every login).
+# 1872 -> 1874, 2026-11-26 (PR for §CORE-51 / §STOREOPS-14, "employee setup is a flow somebody can
+# leave halfway"). RE-VERIFIED THE HOUSE WAY, not assumed: `git fetch origin main` FIRST (see the
+# trap noted above), then `git diff origin/main -- backend/ | grep -E '^[+-].*@router\.'` shows
+# exactly TWO added routes and none removed:
+#   GET /storeops/employee-setup                 — the board: where every person's setup got to
+#   GET /storeops/employee-setup/{employee_id}   — one person's six steps and what each waits on
+# Gate: `storeops/router.gate_person_rows(... people_fields=("employee_id",),
+# store_fields=("home_store",))`, this module's EXISTING person-keyed gate (§14w). No new gate was
+# written. The by-id route applies the same gate and answers 403 when it returns nothing, and 404
+# for an id this organisation does not carry — so one tenant cannot even learn that another's
+# employee id exists (proved both directions in
+# backend/tests/integration/test_employee_setup_endpoint.py).
+# Money: NONE, and structurally so. Both routes are GETs and the whole surface carries no writer at
+# all — `harness_guided_workflow.py` §G2b/§G2c fail the build if `.insert(` / `.update(` /
+# `.upsert(` / `.delete(` appears here or if a route stops being a GET. Nothing reads or moves a
+# payout, rate, plan, statement, GP, commission, payable or tax figure; the only pay column read is
+# an employee's own `pay_rate` / `pay_amount`, and only to ask "is one on file", through
+# `clock_variance.employees_without_rate` (§14z).
+# Cross-tenant negatives: every read is org-scoped AT the query, and the ROLE VOCABULARY the flow
+# measures an employee against is a REQUIRED argument read per organisation from `storeops.roles`
+# with NO house default (owner 2026-10-30) — so a tenant that has declared none is told so rather
+# than measured against another tenant's words. The integration test proves, over two
+# organisations, that each board carries only its own people, that one tenant's declared role is
+# NOT valid in the other, and that nothing a tenant with no declarations is shown contains another
+# tenant's role word; `harness_guided_workflow.py` §E locks the same four facts DB-free.
+# 1874 -> 1875, 2026-11-26 (PR for §COMMCALC-85, one report declaration applied to every login).
 # RE-VERIFIED THE HOUSE WAY, not assumed: `git fetch origin main` FIRST (see the stale-ref trap
 # noted above), then `git diff origin/main -- backend/ | grep -E '^[+-]@router\.'` shows exactly ONE
 # added route and none removed:
@@ -1815,7 +1840,7 @@ _all_routes = _flatten_routes(real_app.routes)
 # caller cannot win another connector's landings by claiming to be it (harness_report_landing.py §B
 # and §C). A read that FAILED returns 409 rather than reporting success over logins it never
 # touched.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1873"))
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1875"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
