@@ -20,6 +20,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import { INCLUDE_INACTIVE_PARAM, rosterIsActive } from '@/lib/roster-visibility'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
 import DateField from '@/components/DateField'
+import { FixItNotice, useFixGuide } from '@/lib/fix-it'
 import { api } from '@/lib/client'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
@@ -165,6 +166,10 @@ export default function ScheduleWorkflowPage() {
   const reload = useCallback(() => { setBusy(true); void load() }, [load])
 
   const rows = useMemo(() => data?.rows || [], [data])
+  // Asked for ONLY while the server says the gap is open, so a company that has declared its week
+  // never fetches a remedy it does not need — and the key is all the browser knows about it.
+  const weekStartFix = useFixGuide(
+    data && !data.declared.week_start_declared ? 'work_week_start' : null, 'Scheduling workflow')
   const ws = useTableSort(rows, weekCell)
   const steps = useMemo(() => data?.steps || [], [data])
   const stepTitle = useMemo(() => {
@@ -241,10 +246,18 @@ export default function ScheduleWorkflowPage() {
       {data && (
         <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 8 }}>
           Week of <strong>{data.week_start}</strong> to <strong>{data.week_end}</strong> — this
-          company&apos;s week starts on <strong>{data.declared.week_start_day}</strong>
-          {!data.declared.week_start_declared && ' (not set up yet, so the column default is being used)'}.
+          company&apos;s week starts on <strong>{data.declared.week_start_day}</strong>.
         </div>
       )}
+
+      {/* THE WEEK START IS NOT DECLARED. The SERVER says so (`declared.week_start_declared`), and the
+          remedy is the server's too — one home, `core/setup_fix`, which also answers whether THIS
+          viewer may close it and, when they may not, who to ask. Nothing about the gap is worded here:
+          a parenthetical the reader cannot act on is the dead end §CORE-39 exists to remove. */}
+      <div style={{ marginTop: 8 }}>
+        <FixItNotice fix={weekStartFix} compact
+          lead="The weeks below are grouped on the column&rsquo;s own starting day." />
+      </div>
 
       <div style={{ marginTop: 12 }}>
         <StandardFilterBar

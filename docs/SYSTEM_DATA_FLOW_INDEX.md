@@ -47749,7 +47749,8 @@ Two further facts make it a class rather than a list:
 
 - **ONE REGISTRY, `core/setup_fix.py`.** Per gap: `title`, `consequence` (what the surface therefore
   cannot say — never "zero"), `steps` in plain words, `page` (the screen that closes it) and `gate`.
-  Eleven gaps are declared. RULE TWO holds throughout: every word is the app's own vocabulary — a
+  **Thirteen** gaps are declared — the thirteenth, `work_week_start`, added 2026-11-26 with
+  §STOREOPS-15 (see there). RULE TWO holds throughout: every word is the app's own vocabulary — a
   screen, a field, a button — and the lock fails on a carrier, tenant or product name (§E).
 - **THREE GATE KINDS AND NO FOURTH.** A registered settings area; `ADMIN` (no grantable area — a
   full-scope administrator, spelled as an UNREGISTERED area key so `can_edit_setting`'s own default
@@ -53265,6 +53266,15 @@ so a tenant whose week starts on Thursday was sent a Mon–Sun grid while its sc
 Thu–Wed. It now dereferences the same two homes. Locked by §G5 of the harness, which fails the
 build if any schedule-week bucket goes back to weekday arithmetic of its own.
 
+**An UNDECLARED week start is actionable, not a parenthetical.** The board first read
+*"(not set up yet, so the column default is being used)"* — correct, and nothing the reader could
+press, which is exactly the dead end §CORE-39 exists to remove (its §I ratchet caught it in CI
+before it shipped). The remedy is not worded on this page: the server declares the gap
+(`declared.week_start_declared`) and `core/setup_fix`'s new `work_week_start` entry carries the
+steps, the screen that closes it (Pay Period & Work-Week), and the `pay_period` settings area that
+says who may — so a scheduler who cannot change it is shown the steps and offered the person in
+their own company who can, through the app's one chat path.
+
 **Nothing here writes.** Every step is a READ of state the platform already holds, so there is
 nothing half-saved to go stale and no second writer for a shift. `harness_schedule_week_flow.py`
 §G2 fails the build if `.insert(` / `.update(` / `.upsert(` / `.delete(` appears in either module,
@@ -53291,7 +53301,8 @@ week starts, both cross-tenant directions, the standard filters, the degrade-by-
 "reading writes nothing"). Lock: `harness_schedule_week_flow.py` (60), CI job
 `schedule-week-workflow-lock`.
 
-**Cross-references:** §CORE-51 (the shared home) · §STOREOPS-14 (the first caller) · §29.12 (the
+**Cross-references:** §CORE-51 (the shared home) · §CORE-39 (the `work_week_start` gap and its
+one-home remedy) · §STOREOPS-14 (the first caller) · §29.12 (the
 workflow this was asked to resemble) · §STOREOPS-07 (the column nothing writes) · §14x (which stores
 reach this login) · §CORE-45 (open-stores-only, one spelling) · §3d (the standard filter bar and the
 Send bar).
