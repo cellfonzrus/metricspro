@@ -18290,7 +18290,7 @@ Registered as a feed: `data_lineage_registry.INGEST_TABLES_BY_MODULE["supply"] =
   §L one writer of the snapshot table, both routes call it, commcalc dereferences `SUPPLY_PROCESSOR` (no second
   spelling), `_live_pull` dispatch order, the 301 home + commcalc login reused, mig 1021 creates exactly one table,
   additive/idempotent/REVERT/RLS, logins leave the store without secrets, main.py registration, ONE nav group.
-- `backend/harness_vendor_price_compare.py` §I/§J/§K (**100** total): the kit resolves to the backend home; the zip
+- `backend/harness_vendor_price_compare.py` §I/§J/§K (**107** total): the kit resolves to the backend home; the zip
   bundles a byte-identical copy; **a second definition of the pricing logic / reader anywhere in the repo fails**
   (planted negative control); plus the two 2026-11-25 design fixes below.
 
@@ -18331,7 +18331,17 @@ price is what we PAID once, not what the vendor charges today.
 history rows refused, all 428 product pages kept. The next scheduled sweep writes a clean run and
 `store.latest_rows` reads only the newest, so no stored row has to be deleted.
 
-**Lock:** `harness_vendor_price_compare.py` §J (11) + §K (7) — AST checks that only `pricing_core` divides a price
+**The divisor is a COUNT, nothing else.** Dividing automatically is only a kindness if the number
+divided by is right, and three sources of a wrong one were live the moment the division became
+visible: a money amount (`"$7.8900 per CS"` → a pack of **8,900**), a part number (`"UPS819 Carton
+Sealing Tape"` → **819**) and a weight (`"25LB BAG"` → **25**). `pricing_core.parse_pack` now strips
+money and weight alongside the dimension rule it already had, and refuses digits glued to letters.
+55 stored packs in the live snapshot disagree with the hardened parser; **13 are the artefacts
+above**, the rest are detail-page counts the listing row never carried. Nothing is repaired: each
+sweep writes its own dated run and `store.latest_rows` reads only the newest, so the next read is
+clean.
+
+**Lock:** `harness_vendor_price_compare.py` §J (18) + §K (7) — AST checks that only `pricing_core` divides a price
 by a pack, that `unit_price` is derived from `unit_basis`, that the route passes the basis instead of recomputing
 it, that the screen reads `cart_basis` and never prints a bare `each`, that `_allowed` dereferences the page
 policy, and that neither fact is declared twice. Tests: `backend/tests/unit/test_per_item_cost_is_never_guessed.py`

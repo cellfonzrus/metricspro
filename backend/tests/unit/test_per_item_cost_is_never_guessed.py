@@ -188,3 +188,54 @@ def test_a_vendor_may_declare_that_its_catalog_lives_there_anyway():
     assert s._allowed("https://v.example/shopfront3.0/ordhist.htm", hosts) is False
     s.v = dict(v, allow_account_pages=True)
     assert s._allowed("https://v.example/shopfront3.0/ordhist.htm", hosts) is True
+
+
+# ── 6. THE COUNT WE DIVIDE BY IS A COUNT, NOT A PRICE OR A SKU OR A WEIGHT ──────────────────────
+# Dividing automatically is only a kindness if the divisor is right. Found on the live 2026-11-25
+# snapshot the moment the division became visible:
+#
+#   "… (12 RL/CS) $7.8900 per CS"              → read as a pack of 8,900 — the PRICE's own decimals
+#   "Item #: 2436NEWS … $66.6400 per CS"       → read as a pack of 6,400 — same cause, no count at all
+#   "Item #: UPS819 Carton Sealing Tape, …"    → read as a pack of 819 — digits inside the ITEM NUMBER
+#   "24X36 NEWSPRINT PAPER SHEETS 25LB BAG"    → read as a pack of 25 — that is the bag's WEIGHT
+#
+# Three sources of a number that is not a count: a money amount, a part number, a unit of weight.
+# None is vendor-specific and all three are in the one home, so every caller is wrong together and
+# right together.
+LIVE_PACKS = [
+    ("Item #: TNBEC305 Cust Item #: SW-EXC-5-115 STRETCH FILM 5X1000FT 80GA [45058112BPQW] "
+     "(12 RL/CS) $7.8900 per CS Add to Cart", 12),
+    ('Item #: 2436NEWS Cust Item #: CU-24X36-NEWS Newsprint, 24"x36", Unprinted $66.6400 per CS', None),
+    ('Item #: UPS819 Carton Sealing Tape, 2"x40YD, UPS, With Dispenser $20.0000 per CS', None),
+    ("24X36 NEWSPRINT PAPER SHEETS 25LB BAG 25# BAG", None),
+    ("Item #: JL2SS BUBBLE MAILER GOLDEN S/S 8.5 X12 #2 (100/CS) $31.0000 per CS", 100),
+    ("CTN RSC 10X10X48 200K (10/BDL) $5.4000 per EA", 10),
+    ('Pack Rite - 2"x40yds Tan Tape in a dispenser with cutter - 6/PK', 6),
+    ("36 rolls/case", 36),
+    ("pack of 25", 25),
+    ("100 ct", 100),
+]
+
+
+@pytest.mark.parametrize("text,want", LIVE_PACKS)
+def test_the_divisor_is_a_count_and_nothing_else(text, want):
+    assert core.parse_pack(text) == want
+
+
+def test_a_money_amount_never_supplies_the_pack():
+    """"$7.8900 per CS" is a PRICE per case, not a case of 8,900."""
+    assert core.parse_pack("$7.8900 per CS") is None
+    assert core.parse_pack("$66.6400 per CS") is None
+    # …and the same sentence with a real count still reads it
+    assert core.parse_pack("(12 RL/CS) $7.8900 per CS") == 12
+
+
+def test_digits_glued_to_letters_are_a_part_number_not_a_count():
+    assert core.parse_pack("UPS819 Carton Sealing Tape") is None
+    assert core.parse_pack("SKU12PK Widget") is None
+    assert core.parse_pack("Widget 12 PK") == 12          # standing alone, it IS a count
+
+
+def test_a_weight_is_not_a_count():
+    for text in ["25LB BAG", "25# BAG", "50 lb case", "80GA roll"]:
+        assert core.parse_pack(text) is None, text

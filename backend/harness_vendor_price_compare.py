@@ -305,6 +305,19 @@ check("J9 the screen never prints 'each' beside a price with no stated per-item 
 check("J10 the screen shows a non-comparable row as a gap, never as a saving",
       "not comparable" in _page and "r.comparable === false" in _page)
 
+# The divisor itself. Automatic division is only a kindness if the number divided by is a COUNT.
+# Every string below is live product text from 2026-11-25; each wrong answer shipped before the fix.
+for _txt, _want, _why in [
+    ("(12 RL/CS) $7.8900 per CS", 12, "the price's own decimals read as a pack of 8,900"),
+    ("$66.6400 per CS", None, "a price with no count at all read as a pack of 6,400"),
+    ("UPS819 Carton Sealing Tape", None, "digits inside the item number read as a pack of 819"),
+    ("24X36 NEWSPRINT PAPER SHEETS 25LB BAG", None, "the bag's WEIGHT read as a pack of 25"),
+    ("CTN RSC 10X10X48 200K (10/BDL) $5.4000 per EA", 10, "a real bundle count must survive"),
+    ("BUBBLE MAILER 8.5 X12 #2 (100/CS) $31.0000 per CS", 100, "a real case count must survive"),
+    ('Pack Rite - 2"x40yds Tan Tape - 6/PK', 6, "a real pack count must survive"),
+]:
+    check(f"J11 divisor: {_why}", core.parse_pack(_txt) == _want, core.parse_pack(_txt))
+
 print("§K A CATALOG READ NEVER LANDS OUR OWN INVOICES (owner 2026-11-25)")
 # Measured on the live snapshot of 2026-11-25: 81 of one vendor's 205 catalog rows came from our own
 # order-history pages. SAFE_SKIP answered "could this link ACT"; nothing answered "is this page a
