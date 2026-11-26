@@ -466,19 +466,24 @@ def compare(q: str = "", only_compared: bool = False, limit: int = 1000, vendor:
     def _offer(p):
         if not p:
             return None
+        # unit_price / unit_basis come WITH the offer (ordering_logic.offer_from_row reads
+        # pricing_core.unit_basis). Recomputing either here would be the second copy.
         return {k: p.get(k) for k in ("row_id", "name", "sku", "price", "list_price", "pack_qty", "availability",
-                                      "stock_qty", "url", "item_key", "min_order_qty", "order_multiple")} \
-            | {"unit_price": core.unit_price(p)}
+                                      "stock_qty", "url", "item_key", "min_order_qty", "order_multiple",
+                                      "unit_price", "unit_basis")}
 
     out = []
     for r in compared:
         out.append({"product": r["product"], "match": r["match"], "match_method": r["match_method"],
-                    "basis": r["basis"], "best_vendor": r["best_vendor"], "best_price": r["best_price"],
+                    "basis": r["basis"], "comparable": r["comparable"], "cart_basis": r["cart_basis"],
+                    "gap": r["gap"], "best_vendor": r["best_vendor"], "best_price": r["best_price"],
                     "next_price": r["next_price"], "savings": r["savings"], "savings_pct": r["savings_pct"],
                     "note": r["note"], "offers": {vid: _offer(r.get(vid)) for vid in vids if r.get(vid)}})
     if not only_compared:
         for p in singles:
-            out.append({"product": p["name"], "match": "only one vendor", "match_method": "", "basis": "listed price",
+            out.append({"product": p["name"], "match": "only one vendor", "match_method": "",
+                        "basis": p.get("unit_basis") or core.UNIT_UNKNOWN, "comparable": False,
+                        "cart_basis": "units" if p.get("unit_price") is not None else "packs", "gap": None,
                         "best_vendor": p["vendor"] if p.get("availability") != "out_of_stock" else None,
                         "best_price": p.get("price"), "next_price": None, "savings": None, "savings_pct": None,
                         "note": "", "offers": {p["vendor"]: _offer(p)}})

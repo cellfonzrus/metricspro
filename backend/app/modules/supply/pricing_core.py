@@ -52,15 +52,36 @@ _PACK_PATTERNS = [
 ]
 
 
+#: A NUMBER THAT IS NOT A COUNT. Four kinds, all found in live product text on 2026-11-25 the moment
+#: the automatic division became visible on screen, and all removed BEFORE the pack patterns run —
+#: a divisor is worth nothing if it is the price's own decimals.
+#:   a dimension   "12 x 12 x 12"                      (the original rule)
+#:   a money amount "$7.8900 per CS"  → a pack of 8,900
+#:   a weight       "25LB BAG", "80GA"                 → a pack of 25
+#: and separately, digits GLUED to letters are a part number ("UPS819 Carton …" → a pack of 819),
+#: which the patterns reject with a preceding-character guard rather than by deletion, because the
+#: part number is often the only text between a real count and its pack word.
+_DIMENSION = re.compile(r"\d+(?:\.\d+)?\s*(?:\"|in\b|inch(?:es)?)?\s*[x×]\s*\d+(?:\.\d+)?"
+                        r"(?:\s*(?:\"|in\b|inch(?:es)?)?\s*[x×]\s*\d+(?:\.\d+)?)?", re.I)
+_MONEY_AMOUNT = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?")
+_WEIGHT = re.compile(r"\d+(?:\.\d+)?\s*(?:(?:lbs?|oz|kg|g(?:sm|a)?)\b|#)", re.I)
+#: Nothing that could glue digits to a word may sit immediately before a count.
+_NOT_BEFORE = re.compile(r"[A-Za-z#]$")
+
+
 def parse_pack(text):
     """Units per sellable pack from product text, or None when the text does not say.
 
-    A dimension like '12 x 12 x 12' is never read as a pack size."""
-    t = re.sub(r"\d+(?:\.\d+)?\s*(?:\"|in\b|inch(?:es)?)?\s*[x×]\s*\d+(?:\.\d+)?(?:\s*(?:\"|in\b|inch(?:es)?)?\s*[x×]\s*\d+(?:\.\d+)?)?",
-               " ", str(text or ""), flags=re.I)
+    The divisor behind every "cost per item" on the platform, so it is deliberately shy: a number it
+    cannot vouch for is left as None (the surface then says the pack is not stated) rather than
+    guessed. A dimension, a money amount, a weight and a part number are never read as a pack."""
+    t = _DIMENSION.sub(" ", str(text or ""))
+    t = _MONEY_AMOUNT.sub(" ", t)
+    t = _WEIGHT.sub(" ", t)
     for pat in _PACK_PATTERNS:
-        m = pat.search(t)
-        if m:
+        for m in pat.finditer(t):
+            if _NOT_BEFORE.search(t[:m.start(1)]):
+                continue                      # the digits belong to a part number, not to a count
             n = int(m.group(1))
             if 1 < n <= 100000:
                 return n
@@ -321,12 +342,48 @@ def group_products(products, threshold=0.45):
     return groups
 
 
-def unit_price(p):
+# ── What does ONE of these cost, and how do we know ──────────────────────────────────────────────
+# THE one home (owner 2026-11-25: *"if it shows bulk items with the number of items next to it it
+# should divide to get the cost per item … the system should do it for them"*).
+#
+# There are THREE answers and the platform used to store two. A vendor either states a per-item price
+# ("$5.4000 per EA (10/BDL)"), or states a pack and leaves the division to us ("$76.20", pack of 15),
+# or says nothing. The third was collapsed into the first — the listed price was returned unchanged
+# and the surfaces printed the word "each" next to it — so a CASE price could sit against a SINGLE
+# price and the difference be reported as a saving (live 2026-11-25: a 24x18x18 UPS box read "$71.39
+# cheaper (94%)" when the two vendors are 27 cents apart).
+#
+# Every surface dereferences this; none of them may divide `price` by `pack_qty` itself.
+UNIT_STATED = "per item (the vendor states it)"
+UNIT_DIVIDED = "per item (divided from the pack)"
+UNIT_UNKNOWN = "per-item cost not stated"
+
+
+def unit_basis(p):
+    """(cost of ONE item, how we know) — or (None, UNIT_UNKNOWN) when the vendor did not say.
+
+    UNKNOWN is never silently the listed price: an unstated per-item cost is MISSING, not cheap."""
     price = p.get("price")
-    pack = p.get("pack_qty")
     if price is None:
-        return None
-    return round(price / pack, 4) if pack else price
+        return None, UNIT_UNKNOWN
+    pack = p.get("pack_qty")
+    if pack and pack > 1:
+        return round(price / pack, 4), UNIT_DIVIDED
+    text = " ".join(str(p.get(k) or "") for k in ("name", "description"))
+    if price_is_per_unit(text):
+        return round(price, 4), UNIT_STATED
+    return None, UNIT_UNKNOWN
+
+
+def unit_price(p):
+    """The per-item cost when the vendor states one, else the listed price — for RANKING only.
+
+    DERIVED from `unit_basis` so the two can never drift. A caller that must know whether the number
+    is a real per-item cost reads `unit_basis` and looks at the basis, never this."""
+    per, _ = unit_basis(p)
+    if per is not None:
+        return per
+    return p.get("price")
 
 
 def _rank_key(p):
@@ -348,17 +405,41 @@ def comparison_rows(groups, vendors):
             singles.extend(mem.values())
             continue
         priced = [p for p in mem.values() if p.get("price") is not None]
-        basis = "per unit" if priced and all(p.get("pack_qty") for p in priced) else "listed price"
-        val = (lambda p: unit_price(p)) if basis == "per unit" else (lambda p: p.get("price"))
+        # THE basis rule, read from the one home above. Three outcomes, never two:
+        #   every vendor states what ONE costs  → compare per item;
+        #   NO vendor states a pack             → two plain listed prices, comparable but SAID to be;
+        #   MIXED                               → a case against a single. NOT a saving, and refused.
+        bases = [unit_basis(p)[1] for p in priced]
+        all_known = bool(bases) and all(b != UNIT_UNKNOWN for b in bases)
+        all_unknown = bool(bases) and all(b == UNIT_UNKNOWN for b in bases)
+        comparable = all_known or all_unknown
+        if all_known:
+            basis = UNIT_DIVIDED if any(b == UNIT_DIVIDED for b in bases) else UNIT_STATED
+        elif all_unknown:
+            basis = "listed price (no vendor states a pack)"
+        else:
+            basis = "not comparable — one vendor prices a pack, another does not"
+        val = (lambda p: unit_price(p)) if all_known else (lambda p: p.get("price"))
         ranked = sorted(priced, key=lambda p: (_rank_key(p)[0] == 3, val(p)))
         row = {"product": max((p.get("name") or "" for p in mem.values()), key=len),
                "match": confidence_label(g["score"]), "match_score": g["score"], "match_method": g["method"],
-               "basis": basis, "best_vendor": None, "best_price": None, "next_price": None,
-               "savings": None, "savings_pct": None, "note": ""}
+               "basis": basis, "comparable": comparable,
+               # Units can only be counted when every vendor's per-item cost is known; otherwise the
+               # quantity means PACKS. The cart, the PO and the screen all read this one answer.
+               "cart_basis": "units" if all_known else "packs",
+               "best_vendor": None, "best_price": None,
+               "next_price": None, "savings": None, "savings_pct": None, "gap": None, "note": ""}
         for v in vendors:
             p = mem.get(v)
             row[v] = p
-        if ranked:
+        if ranked and not comparable:
+            # Say the gap, never call it a saving, and name NO winner — picking one on two different
+            # bases is the same defect wearing a hat.
+            vals = sorted(p.get("price") for p in priced)
+            row["gap"] = round(vals[-1] - vals[0], 4)
+            row["note"] = ("one vendor prices a pack and the other does not — confirm the pack size "
+                           "before treating the difference as a saving")
+        elif ranked:
             best = ranked[0]
             row["best_vendor"] = best["vendor"]
             row["best_price"] = val(best)

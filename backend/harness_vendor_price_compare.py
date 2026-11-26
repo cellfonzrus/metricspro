@@ -25,6 +25,7 @@ HOME = os.path.join(HERE, "app", "modules", "supply")
 sys.path.insert(0, HERE)
 
 from app.modules.supply import pricing_core as core  # noqa: E402  (THE one copy)
+from app.modules.supply import ordering_logic as L  # noqa: E402
 
 FAILS = []
 N = 0
@@ -99,7 +100,7 @@ check("E3 deterministic", [sorted(g["members"]) for g in core.group_products([a_
       == [sorted(g["members"]) for g in groups])
 compared, singles = core.comparison_rows(groups, ["a", "b"])
 box = next(r for r in compared if r["a"] is a_box)
-check("E4 per-unit basis when both packs known", box["basis"] == "per unit")
+check("E4 per-item basis when both packs known", box["basis"] == core.UNIT_DIVIDED and box["comparable"] is True, box["basis"])
 check("E5 cheapest per unit", box["best_vendor"] == "a" and abs(box["best_price"] - 0.676) < 1e-9, box)
 check("E6 savings", abs(box["savings"] - 0.074) < 1e-9, box["savings"])
 tape = next(r for r in compared if r["a"] is a_tape)
@@ -108,7 +109,17 @@ check("E8 single listed", singles == [b_box10])
 only_cheap_oos = core.comparison_rows(core.group_products([P("a", "Widget blue 5", 10.0, "W5"), P("b", "Widget blue 5", 8.0, "w-5", avail="out_of_stock")]), ["a", "b"])[0][0]
 check("E9 cheaper-but-out-of-stock is said", only_cheap_oos["best_vendor"] == "a" and "out of stock" in only_cheap_oos["note"], only_cheap_oos)
 mixed = core.comparison_rows(core.group_products([P("a", "Widget blue 5 - 10 ct", 10.0, "W5"), P("b", "Widget blue 5", 8.0, "w-5")]), ["a", "b"])[0][0]
-check("E10 listed-price basis when a pack is unknown", mixed["basis"] == "listed price")
+# A pack against a no-pack is a CASE against a SINGLE. It is refused as a saving, not re-based:
+# reporting the listed gap as a saving is the 2026-11-25 defect (a 27-cent difference read as 94%).
+check("E10 a pack against an unstated pack is NOT comparable", mixed["comparable"] is False, mixed["basis"])
+check("E10b …and reports no saving and no winner", mixed["savings"] is None and mixed["savings_pct"] is None
+      and mixed["best_vendor"] is None, mixed)
+check("E10c …but states the gap and why it is not a saving", mixed["gap"] == 2.0 and "pack" in mixed["note"], mixed)
+both_unstated = core.comparison_rows(core.group_products(
+    [P("a", "Widget blue 5", 10.0, "W5"), P("b", "Widget blue 5", 8.0, "w-5")]), ["a", "b"])[0][0]
+check("E10d neither states a pack → two listed prices DO compare, and the row says so",
+      both_unstated["comparable"] is True and both_unstated["savings"] == 2.0
+      and "listed price" in both_unstated["basis"], both_unstated)
 
 print("§F order plan")
 plan = core.plan_order([{"search": "12x12x12 box", "qty": 3}, {"search": "packing tape", "qty": 2},
@@ -224,6 +235,122 @@ with tempfile.TemporaryDirectory() as td:
 ign2 = open(os.path.join(KIT, ".gitignore")).read().split()
 check("I10 the bundled copies and the built zip are git-ignored (never a committed second copy)",
       "pricecompare/_bundled/" in ign2 and "dist/" in ign2)
+
+print("§J PER-ITEM COST — one home, dereferenced; it cannot un-wire (owner 2026-11-25)")
+# The defect this locks: the platform knew three things about a price (stated per item / divide the
+# pack / not stated) and stored two, so an unstated cost was printed as "each" and a case was
+# compared with a single. Each rule below was verified to go RED when the fix is removed.
+import ast as _ast  # noqa: E402
+
+_SUPPLY = os.path.join(REPO, "backend", "app", "modules", "supply")
+_FRONT = os.path.join(REPO, "frontend", "src")
+
+
+def _divides_price_by_pack(src):
+    """Any `<something>price / <something>pack…` — the division that belongs to unit_basis alone."""
+    hits = []
+    for node in _ast.walk(_ast.parse(src)):
+        if isinstance(node, _ast.BinOp) and isinstance(node.op, _ast.Div):
+            txt = (_ast.dump(node.left) + "|" + _ast.dump(node.right)).lower()
+            if "price" in txt and "pack" in txt:
+                hits.append(getattr(node, "lineno", 0))
+    return hits
+
+
+_offenders = []
+for _fn in sorted(os.listdir(_SUPPLY)):
+    if not _fn.endswith(".py") or _fn == "pricing_core.py":
+        continue
+    _h = _divides_price_by_pack(open(os.path.join(_SUPPLY, _fn)).read())
+    if _h:
+        _offenders.append((_fn, _h))
+check("J1 only pricing_core divides a price by a pack", not _offenders, _offenders)
+check("J2 negative control: a planted division IS caught",
+      _divides_price_by_pack("x = row['price'] / row['pack_qty']\n"))
+
+_core_src = open(os.path.join(HOME, "pricing_core.py")).read()
+_fns = {n.name: n for n in _ast.walk(_ast.parse(_core_src)) if isinstance(n, _ast.FunctionDef)}
+
+
+def _divides_in(node):
+    return [getattr(b, "lineno", 0) for b in _ast.walk(node)
+            if isinstance(b, _ast.BinOp) and isinstance(b.op, _ast.Div)
+            and "price" in (_ast.dump(b.left) + _ast.dump(b.right)).lower()
+            and "pack" in (_ast.dump(b.left) + _ast.dump(b.right)).lower()]
+
+
+check("J3 unit_price is DERIVED from unit_basis, never its own division",
+      "unit_price" in _fns and not _divides_in(_fns["unit_price"])
+      and "unit_basis" in _ast.dump(_fns["unit_price"]), "unit_price grew its own division")
+check("J3b the division lives in unit_basis and only there", bool(_divides_in(_fns["unit_basis"])))
+check("J4 the three answers are named constants, not literals strewn about",
+      all(hasattr(core, k) for k in ("UNIT_STATED", "UNIT_DIVIDED", "UNIT_UNKNOWN")))
+check("J5 an unstated per-item cost is None, never the listed price",
+      core.unit_basis({"price": 4.81, "name": "plain box"}) == (None, core.UNIT_UNKNOWN))
+
+# The offer carries the fact to every surface, and the HTTP layer passes it rather than recomputing.
+_offer = L.offer_from_row({"vendor_id": "v", "price": 76.20, "pack_qty": 15, "name": "box"})
+check("J6 every offer carries its per-item cost and basis",
+      _offer["unit_price"] == 5.08 and _offer["unit_basis"] == core.UNIT_DIVIDED, _offer)
+_router = open(os.path.join(_SUPPLY, "router.py")).read()
+check("J7 the compare route passes the basis through instead of recomputing it",
+      '"unit_basis"' in _router and "core.unit_price(" not in _router)
+
+# The screen may not re-derive any of it. This is where the second copy lived.
+_page = open(os.path.join(_FRONT, "app", "(platform)", "supply", "compare", "page.tsx")).read()
+check("J8 the Price Compare screen reads cart_basis instead of re-deriving it from pack_qty",
+      "r.cart_basis" in _page and "o.pack_qty || 0) > 1" not in _page)
+check("J9 the screen never prints 'each' beside a price with no stated per-item cost",
+      "' each'" not in _page and "o.unit_basis" in _page, "a bare 'each' literal is back")
+check("J10 the screen shows a non-comparable row as a gap, never as a saving",
+      "not comparable" in _page and "r.comparable === false" in _page)
+
+# The divisor itself. Automatic division is only a kindness if the number divided by is a COUNT.
+# Every string below is live product text from 2026-11-25; each wrong answer shipped before the fix.
+for _txt, _want, _why in [
+    ("(12 RL/CS) $7.8900 per CS", 12, "the price's own decimals read as a pack of 8,900"),
+    ("$66.6400 per CS", None, "a price with no count at all read as a pack of 6,400"),
+    ("UPS819 Carton Sealing Tape", None, "digits inside the item number read as a pack of 819"),
+    ("24X36 NEWSPRINT PAPER SHEETS 25LB BAG", None, "the bag's WEIGHT read as a pack of 25"),
+    ("CTN RSC 10X10X48 200K (10/BDL) $5.4000 per EA", 10, "a real bundle count must survive"),
+    ("BUBBLE MAILER 8.5 X12 #2 (100/CS) $31.0000 per CS", 100, "a real case count must survive"),
+    ('Pack Rite - 2"x40yds Tan Tape - 6/PK', 6, "a real pack count must survive"),
+]:
+    check(f"J11 divisor: {_why}", core.parse_pack(_txt) == _want, core.parse_pack(_txt))
+
+print("§K A CATALOG READ NEVER LANDS OUR OWN INVOICES (owner 2026-11-25)")
+# Measured on the live snapshot of 2026-11-25: 81 of one vendor's 205 catalog rows came from our own
+# order-history pages. SAFE_SKIP answered "could this link ACT"; nothing answered "is this page a
+# price list at all". Verified RED when the guard is removed from _allowed.
+_HIST = ["ordhist.htm", "ordhistdet.htm?ponbr=1", "ordhistlist.htm?itmnbr=X", "ordhistlistdetail.htm",
+         "ordhistlistmth.htm", "itmhistsub.htm", "cathistsub.htm", "index.php?main_page=account_history"]
+_CATALOG = ["itemdet.htm?mbritm=X", "subcatlist4.htm?cat=8002", "index.php?main_page=product_info&products_id=8",
+            "index.php?main_page=products_all", "index.php?main_page=index&cPath=1_115",
+            "index.php?main_page=site_map", "catalog/boxes"]
+check("K1 every live order-history URL shape is refused",
+      all(_s.is_not_a_price_list("https://v.example/x/" + u) for u in _HIST),
+      [u for u in _HIST if not _s.is_not_a_price_list("https://v.example/x/" + u)])
+check("K2 every live product-page URL shape is still followed",
+      not any(_s.is_not_a_price_list("https://v.example/x/" + u) for u in _CATALOG),
+      [u for u in _CATALOG if _s.is_not_a_price_list("https://v.example/x/" + u)])
+
+_allowed_fn = next((n for n in _ast.walk(_ast.parse(open(os.path.join(_SUPPLY, "catalog_scrape.py")).read()))
+                    if isinstance(n, _ast.FunctionDef) and n.name == "_allowed"), None)
+check("K3 the crawler DEREFERENCES the policy (it cannot un-wire silently)",
+      _allowed_fn is not None and "is_not_a_price_list" in _ast.dump(_allowed_fn))
+check("K4 …and the vendor escape hatch is config, not code",
+      _allowed_fn is not None and "allow_account_pages" in _ast.dump(_allowed_fn))
+
+_scraper = _s.VendorScraper.__new__(_s.VendorScraper)
+_scraper.v = {"key": "k", "start_urls": ["https://v.example/x/subcatlist4.htm"]}
+check("K5 an order-history link is not followed", _scraper._allowed("https://v.example/x/ordhist.htm", {"v.example"}) is False)
+_scraper.v = dict(_scraper.v, allow_account_pages=True)
+check("K6 a vendor that declares otherwise IS followed", _scraper._allowed("https://v.example/x/ordhist.htm", {"v.example"}) is True)
+_needle = "NOT_A_PRICE" + "_LIST = re.compile"      # split so this harness is not its own second copy
+_copies = [os.path.relpath(os.path.join(_d, _f), REPO)
+           for _d, _sub, _fs in os.walk(os.path.join(REPO, "backend")) for _f in _fs
+           if _f.endswith(".py") and _needle in open(os.path.join(_d, _f), errors="ignore").read()]
+check("K7 the policy is declared exactly once in the repo", _copies == ["backend/app/modules/supply/catalog_scrape.py"], _copies)
 
 print(f"\n{N - len(FAILS)}/{N} passed")
 sys.exit(1 if FAILS else 0)
