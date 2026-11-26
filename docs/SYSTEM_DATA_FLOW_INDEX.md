@@ -41561,7 +41561,43 @@ still in development mode — 163 historic
 received anything. Both fixes are Meta-console steps for the owner; the app now says so on the screen
 where the failure appears.
 
-**LOCK: `backend/harness_notify_send_outcome.py`** — 53 checks, DB-free, driving the REAL module over
+**THE EXTENSION, 2026-11-26 — AN OVERLOADED CODE IS NOT A REASON, AND A SECOND SPELLING IS NOT A
+SECOND FACT.** The owner pasted a WhatsApp failure the Send box had shown with **no reason and no
+remedy**, 245 consecutive times between 2026-11-01 16:00Z and 2026-11-26 03:32Z. Two faults in
+`provider_code`, both of the class the house rules name:
+
+1. **One fact, two spellings, one of them unread.** Meta states its code as `(#133010)` inside the
+   message for some errors and as only `"code":100` in the JSON body for others. `provider_code` read
+   the `(#…)` form alone, so an entire family of errors was *unruled by construction* — and the inline
+   `'"code":190'` test that sat beside it was a SECOND COPY of the same fact for one code. Both
+   spellings are now read in the one place (`_META_CODE` / `_META_CODE_JSON`), and the private literal
+   is gone. `"code"` must carry its opening quote, so `"error_subcode"` and a trace id can never be
+   mistaken for the code, and `\d+` so a template's `"language":{"code":"en"}` cannot be either.
+2. **A code that covers two faults is not a reason.** Meta's `#100` is BOTH "a value you sent is
+   invalid" (remedy: the recipient's number) AND "the object in your request URL does not exist or
+   your token cannot load it" — which is OUR configured sending number. They have **opposite**
+   remedies, and the single ruling in place would have sent a human hunting through the recipient's
+   phone number while the fault was in the platform's own environment. The second shape is keyed
+   **`100_object`** (disambiguated by the message, not by the code) and its remedy names
+   `WHATSAPP_PHONE_NUMBER_ID`, the WhatsApp Manager → API Setup page where the Phone number ID and the
+   WhatsApp Business Account ID are shown side by side, the System-User token pairing as the other
+   possibility, and `GET /notify/whatsapp-account` as the diagnostic that already exists.
+
+**THE SIBLING, checked not excused.** `notify/channels/whatsapp_meta.classify_send_result` reads the
+same Meta response for the delivery ladder. An object-not-found must read there as a plain `error` so
+the ladder advances to the approved template, never as a window error that would stop it; §H10/H11
+pin that with an armed control.
+
+**THE LIVE FINDING, REPORTED not hidden (read-only on production).** `notify.send_log`, WhatsApp
+channel: **63 sends succeeded up to 2026-10-23 15:00Z**; `#133010` from 2026-10-24 to 2026-10-31
+(the token/phone-number pairing, broken by the 2026-10-22 rotation); and from **2026-11-01 16:00Z**
+every attempt is `#100` on object `1076582715548644`, i.e. the configured phone number ID is one the
+current token cannot load at all. So the ID was changed on 1 Nov and is either not a phone number ID
+or belongs to another Meta account. Owner console steps, not a code fix. Separately
+`notify.whatsapp_window` is **empty** — Meta's inbound webhook has never recorded a single inbound, so
+every send takes the approved-template rung only.
+
+**LOCK: `backend/harness_notify_send_outcome.py`** — 69 checks, DB-free, driving the REAL module over
 the REAL production error strings, with the owner's exact 16 rows as the regression (§D: 6 ok, 5
 failed, every one named, one deduped fix, and the 10 attempts still stated). The un-wiring locks, each
 with an armed control: an **AST scan of every `return {…}` in `notify/router.py` whose keys include
