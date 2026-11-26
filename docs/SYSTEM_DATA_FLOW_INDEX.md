@@ -52995,6 +52995,11 @@ A failed read of the login list returns **409**, never success: a read that FAIL
 connector has no logins" (§COMMCALC-82's class), and reporting success over an empty list would tell
 an operator 27 logins were configured when none were.
 
+The fan-out writes once per login in one request, so the login count IS the work, and it is bounded
+by a declared ceiling (`router.MAX_FANOUT_LOGINS`, 300 against a real largest shape of 27). Above it
+the request is **refused with the count and writes nothing** — applying to the first N and reporting
+success is the same silent-drop defect, and the ceiling is deliberately not a truncation.
+
 | what | where |
 | --- | --- |
 | the landings (one home, no copy of any target) | `backend/app/modules/commcalc/report_landing.py` |

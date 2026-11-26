@@ -199,3 +199,16 @@ def test_it_refuses_rather_than_report_success_when_the_logins_cannot_be_read(ap
     res = _post(api_client, ORG_A)
     assert res.status_code == 409
     assert "nothing was declared" in res.json()["note"]
+
+
+def test_more_logins_than_one_request_applies_to_is_refused_not_truncated(api_client, wired):
+    """One post writes once per login, so the login count IS the work. Above the ceiling it writes
+    NOTHING and says so: applying to the first N and reporting success is the silent-drop defect
+    §COMMCALC-83 exists to prevent — "27 declared" must never mean 20."""
+    from app.modules.commcalc import router as r
+    many = [_login(ORG_A, "s%d" % i, "B-%04d" % i) for i in range(r.MAX_FANOUT_LOGINS + 1)]
+    wired.seed(TABLE, many)
+    res = _post(api_client, ORG_A)
+    assert res.status_code == 400
+    assert "Nothing was declared" in res.text
+    assert all(not row.get("portal_reports") for row in wired.rows(TABLE))

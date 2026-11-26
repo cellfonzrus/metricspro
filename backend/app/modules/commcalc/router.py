@@ -44580,6 +44580,15 @@ def save_data_source_reports(sid: str, body: dict = Body(...), org_id: str = ORG
     return {"ok": True, **_save_source_reports(client, org_id, rows[0], sent)}
 
 
+#: THE CEILING ON ONE FAN-OUT. A declaration is written once per login, in one request, so an org
+#: with an unbounded number of logins on a connector would turn one post into that many sequential
+#: writes. 300 is far above the real shape (27 ePay logins, the largest tenant on the platform) and
+#: the refusal above it is EXPLICIT: it reports the count and writes nothing, rather than silently
+#: applying to the first N — "27 declared" must never mean 20, the same rule §COMMCALC-83 applies to
+#: a paste. Raise it when a tenant genuinely needs more; do not turn it into a truncation.
+MAX_FANOUT_LOGINS = 300
+
+
 class DeclareReportsIn(LaxModel):
     processor: Any = None
     reports: Any = None
@@ -44628,6 +44637,12 @@ def declare_reports_across_logins(body: DeclareReportsIn, org_id: str = ORG_ID,
     if not rows:
         return {"ok": True, "filled": 0, "overwritten": 0, "logins": [],
                 "note": "This company has no logins on that connector."}
+    if len(rows) > MAX_FANOUT_LOGINS:
+        # REFUSED, not truncated: applying to the first 300 and reporting success would be the
+        # silent-drop defect §COMMCALC-83 exists to prevent.
+        raise HTTPException(400, "This connector has %d logins, more than the %d one request "
+                                 "applies to. Nothing was declared."
+                                 % (len(rows), MAX_FANOUT_LOGINS))
     out, filled, overwritten, skipped, failed = [], 0, 0, 0, 0
     for src in rows:
         who = str(src.get("store_code") or src.get("label") or src.get("id") or "")

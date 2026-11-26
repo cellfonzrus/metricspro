@@ -151,6 +151,16 @@ ck("(f) a declaration saved with no landing SAYS its rows cannot be stored",
    "cannot be stored" in fan)
 ck("(f) no logins on that connector is answered plainly, not as success over nothing",
    "no logins on that connector" in fan)
+# One post writes once per login, so the login count is the work. It is BOUNDED, and the bound
+# REFUSES rather than truncates — applying to the first N and reporting success is the silent-drop
+# defect §COMMCALC-83 exists to prevent.
+_ceiling = next((n.value.value for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                 and any(getattr(t, "id", "") == "MAX_FANOUT_LOGINS" for t in n.targets)
+                 and isinstance(n.value, ast.Constant)), None)
+ck("(f) the fan-out is bounded by a declared ceiling", "MAX_FANOUT_LOGINS" in fan
+   and isinstance(_ceiling, int) and _ceiling > 0, repr(_ceiling))
+ck("(f) …and above it nothing is written, rather than the first N",
+   "Nothing was declared" in fan)
 
 print("§G  negative controls — each check fails on the shape it forbids")
 ck("(g) a writer that dropped the target would be caught",
