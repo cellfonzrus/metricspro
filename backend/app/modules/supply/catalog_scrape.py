@@ -31,6 +31,31 @@ SAFE_SKIP = re.compile(
     r"address_book|\.pdf$|\.jpe?g$|\.png$|\.gif$|mailto:|javascript:|tel:",
     re.I)
 
+# Pages that are READ-ONLY but are NOT A PRICE LIST — our own order history, invoices, statements,
+# account screens. SAFE_SKIP above answers "could following this link DO something"; this answers
+# "is what is on this page the vendor's price". They are different questions, and only the first had
+# an answer until 2026-11-25, when 81 of one vendor's 205 "catalog" rows turned out to be our own
+# past invoices: a price we PAID once, landed and compared as the price charged today.
+#
+# A house POLICY (what a catalog is), identical for every vendor and every tenant, so it lives here
+# beside SAFE_SKIP and not in any one vendor's config — the per-vendor version of this would be the
+# patchwork the house rules forbid. A vendor whose real listings genuinely sit under such a path
+# declares `allow_account_pages: true` in its own portal_config: config, never code.
+NOT_A_PRICE_LIST = re.compile(
+    r"(?:ord|order|item|itm|cat|purchase|buy)hist|(?:^|[/_?&=.-])hist(?:ory)?|history|"
+    r"my[_-]?orders|past[_-]?orders|order[_-]?status|order[_-]?track|"
+    r"invoice|statement|packing[_-]?slip|credit[_-]?memo|my[_-]?account|account[_-]?history",
+    re.I)
+
+
+def is_not_a_price_list(url):
+    """True when the URL is one of OUR OWN records rather than the vendor's catalog.
+
+    THE one home for that question (index §34/§36). The crawler reads it, and so does anything else
+    that must not mistake an invoice for a price."""
+    return bool(NOT_A_PRICE_LIST.search(str(url or "")))
+
+
 LOGGED_IN_HINT = re.compile(r"log\s*off|log\s*out|sign\s*out|my\s*account|welcome\b", re.I)
 
 # Runs inside each page/frame. Finds every element holding a dollar price, climbs to the product
@@ -325,6 +350,10 @@ class VendorScraper:
 
     def _allowed(self, url, hosts):
         if not url or SAFE_SKIP.search(url):
+            return False
+        # Our own order history / invoices are not the vendor's price list. Overridable per vendor
+        # (config, never code) for a portal whose listings really do live under such a path.
+        if not self.v.get("allow_account_pages") and is_not_a_price_list(url):
             return False
         pu = urlparse(url)
         if pu.scheme not in ("http", "https") or pu.hostname not in hosts:
