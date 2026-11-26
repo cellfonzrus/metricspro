@@ -132,6 +132,10 @@ PINNED = {
     # board's market FILTER is `router.scope_keyset` (§14x), which is the canonical resolution, so
     # overlaying here would be a second answer to a question already answered upstream.
     "storeops/schedule_week_api.py": {"_stores": "ROSTER"},
+    # §STOREOPS-16 — the payroll board's roster read, the same shape and the same reason: `market`
+    # is DISPLAY beside a store the caller already selected, the market filter is
+    # `router.scope_keyset` (§14x), and no money figure on that board is bucketed by market.
+    "storeops/payroll_run_api.py": {"_stores": "ROSTER"},
     "storeops/google_reviews.py": {"sweep_org": "ROSTER"},
     "storevisit/router.py": {"stores_in_market": "OVERLAY"},
     "pos/router.py": {"tax_code_markets": "OVERLAY", "tax_code_store_grid": "OVERLAY"},

@@ -238,6 +238,7 @@ Primary code homes:
 | STOREOPS-13 | **A printed schedule is a line per person, not a picture of the grid** | "the schdule show show line by line which employee is working and thier houre next to their name instaed of in this illegible form" — the export mirrored the SCREEN GRID, so one store-day cell held every name that fell in it and a store's 127 hours sat at the far edge of a landscape page. The LINE is now the unit: one row per person per store, `Employee · Store · Hrs · Mon…Sun`, a day cell holding times only, both views over one builder. Carries the sibling it exposed — the screen and the export each had their own answer to "how long is this shift", so an overnight shift could total differently in the emailed PDF than on screen. |
 | STOREOPS-14 | **Employee setup is a flow somebody can leave halfway, and the tenant's own roles decide it** | "The way we have set up teh closing workflow , it is very easy for a new person to start and then pick up where tehy left off, need similar for the Employee set up in logical steps leading up to onboaring" — six screens each knew its own piece and nothing knew the order, so a half-finished person looked identical to a finished one on every one of them. What are the steps, where does somebody pick up, and what stops a wizard becoming a second writer for every field an employee already has? |
 | STOREOPS-15 | **Scheduling a store-week is a flow somebody can leave halfway, and the week is the tenant's own** | "...and then simlar workflow for scheduling", said of the daily-closing workflow a new person can start and come back to. What are the steps for ONE store in ONE week, where does somebody pick up, what does "the week" mean for a tenant that does not start it on a Monday, and how is a day with nobody on it reported when nothing in the platform declares which days a store opens? |
+| STOREOPS-16 | **Running a pay period is a flow somebody can leave halfway, and the gate it shows is the run's own** | "...and simlar workflow for runnign the payroll with paying attention to details". What are the checks for ONE store in ONE pay period, where does somebody pick up, how does a surface show "ready" without ever disagreeing with the run's own refusal, and what can it honestly say about a run whose record is kept by month rather than by pay period? |
 | CORE-51 | **"How far through is this flow, and where do I pick it up" has one home** | Three flows were asked for in one sentence (employee setup, scheduling, running payroll). Answering the rail, the lamps, the resume and the progress count once per flow is three homes for one question, and the third copy drifts. Who owns a step's status, what makes a missing answer a refusal rather than a silent "not started", and what fails the build when a fourth copy appears? |
 | CORE-33 | **What an employee may reach is one declaration, and the API is what enforces it** | "on ny logistics Manan was able to go past [the clock-in screen] and also see the adjustment hours, this should not be allowed for any sales reps — this is universal across the board". The browser was the only gate: a menu row the viewer could see opened its whole subtree by URL, and the payroll writes behind those pages asked for no authority at all. Who decides what a surface's audience is, and what makes the API refuse a caller the menu would not offer it to? |
 | CORE-42 | **A gate proved in-process is a claim, not a measurement** | "create a testng agent who deciatedly is checking the data leakage, unwanted access to modules even if theya re gated like the case of manan and we discovered by accident, c annot have an accident of this sort, put it on schdule and one module at a time from the front end as though somebnbody was trying to hack in to the system". Every access control here is proved by a harness that imports the handler — which catches a wrong rule and not a right rule that was never reached. Who asks the DEPLOYED platform what it actually answers an unprivileged outsider, one module at a time, and what stops that probe from writing to production or from reporting a pass on a question it never asked? |
@@ -26700,6 +26701,7 @@ status word rather than a blank that reads as nil.
 | CORE-51 | core |
 | STOREOPS-14 | storeops, hr, core |
 | STOREOPS-15 | storeops, core, notify |
+| STOREOPS-16 | storeops, core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -53494,3 +53496,85 @@ one-home remedy) · §STOREOPS-14 (the first caller) · §29.12 (the
 workflow this was asked to resemble) · §STOREOPS-07 (the column nothing writes) · §14x (which stores
 reach this login) · §CORE-45 (open-stores-only, one spelling) · §3d (the standard filter bar and the
 Send bar).
+
+
+---
+
+## §STOREOPS-16. RUNNING A PAY PERIOD IS A FLOW SOMEBODY CAN LEAVE HALFWAY (owner 2026-11-25)
+
+**What was asked for.** *"...and simlar workflow for runnign the payroll with paying attention to
+details"*, said of the daily-closing workflow a new person can start and come back to. The eight
+steps were confirmed the same evening. This is the THIRD of the three flows and the THIRD caller of
+the shared home (§CORE-51) — the point at which a copied rail would have become permanent, which is
+why the lock harness fails the build on a third copy of the step keys or the status words.
+
+**The subject is a STORE's PAY PERIOD.** "Pick the pay period and the stores" — the first item on
+the confirmed list — is how a person CHOOSES the subject, so it is the page's filter and the seven
+below are the checks.
+
+| # | step | the question it answers | the door |
+|---|---|---|---|
+| 1 | `punches` | Nobody still clocked in, and anybody who worked clocked in at all? | `/storeops/timeclock` |
+| 2 | `basis` | How much of the paid time stands on a punch rather than the schedule? | `/storeops/payroll/clock-variances` |
+| 3 | `exceptions` | Clock variances still uncorrected, hand-typed hours nothing has counted | `/storeops/payroll/clock-variances` |
+| 4 | `approval` | The DM signed off, then HR | `/storeops/payroll/approvals` |
+| 5 | `rates` | Nobody this run would pay is priced at $0.00 | `/storeops/setup/employees` |
+| 6 | `preflight` | The run's own refusal, repeated verbatim | `/storeops/payroll` |
+| 7 | `run` | The run is recorded, with its employer tax and its expenses | `/storeops/payroll` |
+
+**The gate is ASKED, never re-decided.** Step 6 calls `clock_variance.payroll_run_gate` (§14z) and
+carries its `reason` to the person character for character. A second opinion here would be a surface
+that says "ready" while the run itself refuses — and the harness pins the two strings equal.
+
+**The run record is month-grained, and this does not pretend otherwise.**
+`payroll_gross_ledger`, `payroll_tax_ledger` and `payroll_expense_item` are all keyed on
+`period = "YYYY-MM"` (migs 404, 405), while an approval row is keyed on `period_start`/`period_end`.
+A tenant paying fortnightly therefore has pay periods that do not line up with the record of the
+push, so step 7 answers "has the month this period falls in been run" and
+`detail['grain_note']` says that in words. Reading a per-period run would be reading something
+nothing writes — the `shifts.actual_hours` defect (§STOREOPS-07) a third time.
+
+**The pay period is the tenant's own.** `period_start` / `period_end` are REQUIRED arguments to the
+flow, and the endpoint resolves them through `payroll_approval._resolve_period`, which returns the
+last COMPLETE pay period of the tenant's declared cycle. A house fortnight answering for a weekly
+tenant would ask somebody to approve half a pay period, which is the defect that module's §② already
+records.
+
+**The money is gated, not assumed.** Step 7 reports what the run pushed, which is pay, so its
+`wages` / `employer_tax` / `expenses` ride `pay_visibility.can_see_pay` (mig 434). A caller without
+it is told WHETHER the month ran, with the amounts removed and `detail['money_withheld']` saying so
+— a blank is indistinguishable from $0.00, and the response carries `X-Can-See-Pay-Rates` so an
+export cannot carry what the screen hides (RULE FOUR). Both gates fail CLOSED: an unreadable store
+gate shows no store, an unreadable pay gate withholds the figures.
+
+**Nothing here writes, and it cannot run payroll.** Every route is a GET and the surface carries no
+writer; `harness_payroll_run_flow.py` §G2 fails the build if that changes, which is what keeps a
+"run it" button off a surface whose job is to say whether a run may happen.
+
+**The duplicate check (build gate).** Reused rather than rebuilt: `core/guided_workflow` (§CORE-51),
+`storeops/router.get_payroll` (the ONE pay derivation, called in-process — §STOREOPS-07),
+`clock_variance_api._assemble` (the punches, shifts, manual rows and variances the clock-variance
+board itself reads), `clock_variance.payroll_run_gate` and `employees_without_rate` (§14z),
+`payroll_hours_basis.row_is_paid` / `basis_is_measurement` / `basis_reason` (§14y),
+`payroll_salary.derive_salary_pay`, `payroll_approval._resolve_period`, `core/roster_visibility`
+(§CORE-45), `storeops/router.scope_keyset` (§14x) and `storeops/pay_visibility` (mig 434). Nothing
+new was derived, and there is no migration.
+
+**Where it lives.**
+
+| the question | the home |
+|---|---|
+| what the seven checks mean, and what each waits on | `backend/app/modules/storeops/payroll_run_flow.py` (pure) |
+| the board, and one store's rail | `backend/app/modules/storeops/payroll_run_api.py` — `GET /storeops/payroll-workflow`, `GET /storeops/payroll-workflow/{store_code}` |
+| the screen | `frontend/src/app/(platform)/storeops/payroll-workflow/page.tsx` (Workforce hub tile, scopes `all` + `market`) |
+
+**Tests.** `backend/tests/unit/test_payroll_run_flow.py` (54) and
+`backend/tests/integration/test_payroll_workflow_endpoint.py` (30, over a weekly and a fortnightly
+tenant, both cross-tenant directions, the money gate in both states, the standard filters, the
+degrade-by-name path and "reading writes nothing"). Lock: `harness_payroll_run_flow.py` (69), CI job
+`payroll-run-workflow-lock`.
+
+**Cross-references:** §CORE-51 (the shared home) · §STOREOPS-14 and §STOREOPS-15 (the other two
+flows) · §29.12 (the workflow this was asked to resemble) · §14y (what is paying somebody) · §14z
+(the gate and the $0.00 question) · §STOREOPS-07 (the one pay derivation, and the column nothing
+writes) · §CORE-45 (open-stores-only, one spelling) · §3d (the standard filter bar and the Send bar).

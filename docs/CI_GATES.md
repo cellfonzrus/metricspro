@@ -18,7 +18,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 |---|---|---|
 | `access-probe-rotation.yml` | 1 | `schedule`, `workflow_dispatch` |
 | `branch-base-guard.yml` | 1 | `pull_request_target`, `workflow_dispatch` |
-| `carrier-vocab-guard.yml` | 52 | `pull_request`, `push`, `workflow_dispatch` |
+| `carrier-vocab-guard.yml` | 53 | `pull_request`, `push`, `workflow_dispatch` |
 | `data-qa-guard.yml` | 4 | `pull_request`, `push`, `workflow_dispatch` |
 | `deploy-reachability.yml` | 1 | `deployment_status`, `workflow_dispatch` |
 | `deploy-website.yml` | 1 | `push`, `workflow_dispatch` |
@@ -33,7 +33,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 647 gates
+## Gated — 648 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -456,6 +456,7 @@ the Runs on column is how you can tell.
 | `harness_payroll_log_identity_lock.py` | `org-scope-guard.yml` | Employee pay writes + change-log identity (`employee-write-locks`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_payroll_lunch_adjustment.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_payroll_row_merge.py` | `tests.yml` | Proof harnesses, group 4 of 4 (`harness-suite-4`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_payroll_run_flow.py` | `carrier-vocab-guard.yml` | Payroll run workflow lock (a pay period picks up where it was left; the gate is asked, the money is gated) (`payroll-run-workflow-lock`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_payroll_salary.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_payroll_salary_router_integration.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_peer_comparison.py` | `carrier-vocab-guard.yml` | Customer master proof (DB-free, the real functions) (`customer-master-proof`) | `pull_request`, `push`, `workflow_dispatch` |
