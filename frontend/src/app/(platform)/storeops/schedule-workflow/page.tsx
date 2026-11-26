@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { INCLUDE_INACTIVE_PARAM, rosterIsActive } from '@/lib/roster-visibility'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 import DateField from '@/components/DateField'
 import { api } from '@/lib/client'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
@@ -40,6 +41,16 @@ type Step = {
 }
 type StepDecl = { key: string; title: string; why: string; required: boolean; screen: string }
 type StatusDecl = { key: string; label: string }
+/** WHAT EACH COLUMN SORTS ON. Hours and `Steps done` sort on the NUMBER, not the rendered string,
+ *  so 10 does not fall between 1 and 2. A store whose hours were never measured, or whose progress
+ *  was never computed, sorts as -1 rather than 0: never-measured is not zero (§STOREOPS-15). */
+const weekCell = (r: StoreWeek, f: string): string | number | boolean =>
+  f === 'store' ? r.store_code
+  : f === 'scheduling' ? r.label
+  : f === 'resume_title' ? r.resume_title
+  : f === 'hours' ? (typeof r.scheduled_hours === 'number' ? r.scheduled_hours : -1)
+  : f === 'done' ? (r.progress ? r.progress.done : -1)
+  : ''
 type StoreWeek = {
   store_code: string
   address?: string
@@ -154,6 +165,7 @@ export default function ScheduleWorkflowPage() {
   const reload = useCallback(() => { setBusy(true); void load() }, [load])
 
   const rows = useMemo(() => data?.rows || [], [data])
+  const ws = useTableSort(rows, weekCell)
   const steps = useMemo(() => data?.steps || [], [data])
   const stepTitle = useMemo(() => {
     const m: Record<string, string> = {}
@@ -316,11 +328,11 @@ export default function ScheduleWorkflowPage() {
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
           <thead>
             <tr>
-              <th style={th}>Store</th>
-              <th style={th}>Scheduling</th>
-              <th style={th}>Picks up at</th>
-              <th style={th}>Hours</th>
-              <th style={th}>Steps done</th>
+              <SortableTh field="store" sort={ws.sort} onSort={ws.toggle} style={th}>Store</SortableTh>
+              <SortableTh field="scheduling" sort={ws.sort} onSort={ws.toggle} style={th}>Scheduling</SortableTh>
+              <SortableTh field="resume_title" sort={ws.sort} onSort={ws.toggle} style={th}>Picks up at</SortableTh>
+              <SortableTh field="hours" sort={ws.sort} onSort={ws.toggle} style={th}>Hours</SortableTh>
+              <SortableTh field="done" sort={ws.sort} onSort={ws.toggle} style={th}>Steps done</SortableTh>
               <th style={th} />
             </tr>
           </thead>
@@ -330,7 +342,7 @@ export default function ScheduleWorkflowPage() {
                 No stores match these filters.
               </td></tr>
             )}
-            {rows.map(r => {
+            {ws.sorted.map(r => {
               const isOpen = open === r.store_code
               return (
                 <tr key={r.store_code} style={{ borderTop: '1px solid var(--border)' }}>
@@ -355,7 +367,7 @@ export default function ScheduleWorkflowPage() {
                 </tr>
               )
             })}
-            {rows.map(r => open === r.store_code && (
+            {ws.sorted.map(r => open === r.store_code && (
               <tr key={`${r.store_code}-rail`}>
                 <td style={{ ...td, background: 'var(--bg)' }} colSpan={6}>
                   {r.refused && <div style={{ fontSize: 13, marginBottom: 8 }}>{r.refused}</div>}
