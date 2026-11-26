@@ -3723,6 +3723,37 @@ FACTS: dict[str, dict] = {
             'app/modules/supply/portal.py': ('vp',),
         },
     },
+    # ── §CORE-52 (access probe run 330, 2026-11-26) — what paths this app actually serves ────────
+    'served_route_table': {
+        "question": 'WHAT PATHS DOES THIS APPLICATION SERVE, as a caller addresses them? Ten files '
+                    'each carried their own walk over `app.routes`; nine were right and the tenth '
+                    'was the SECURITY control built so a declared-public link (the emailed W-9 '
+                    'form, §CORE-48) could never again be refused by a router-level gate. It swept '
+                    'FIVE paths of an app serving 1,558 — one of the 21 declared-public GETs — and '
+                    'its own non-vacuity guard, `checked >= 1`, was satisfied by `/health`. TWO '
+                    'traps, which is why neither showed: `app.routes` holds one lazy '
+                    '`_IncludedRouter` per included router with no `.path` and no `.methods`, so '
+                    'module routes are skipped silently; and flattening that — the known fix, '
+                    'documented in nine files — still yields PREFIX-STRIPPED paths '
+                    '(`/remediation/whatsapp-webhook`), while every declaration here is keyed by '
+                    'the SERVED path and is DEFAULT-DENY, so the wrong-shaped question is answered '
+                    'with the same confident `False` the declaration uses for "no" and the route is '
+                    'skipped again. A control wired that way CANNOT FAIL. `route_surface` asks '
+                    '`app.openapi()`, the framework\'s public contract, which resolves every '
+                    'prefix and every level of inclusion and is the same document the outside probe '
+                    '(§CORE-42) reads — so the in-process control and the live probe can no longer '
+                    'disagree about which paths exist. The OBJECT-GRAPH form of the same question '
+                    'keeps its own home, `path_redact.route_table`: it must work on a bare router, '
+                    'must never raise, and runs on the logging hot path where building the whole '
+                    'schema is not acceptable. Two homes for two settings, cross-referenced, '
+                    'neither a copy of the other.',
+        "homes": ('app/core/route_table.py',),
+        "index": ('CORE-52',),
+        "locks": ('harness_route_table.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {},
+    },
+
     # ── §COMMCALC-13 (found 2026-10-15) — what a finished live login leaves on the row ───────────
     'live_login_terminal_status': {
         "question": 'What `data_source.auth_status` does a live login leave behind, and when is an '

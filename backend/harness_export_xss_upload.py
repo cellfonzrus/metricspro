@@ -809,7 +809,9 @@ if not _BASE:
         skip(_n, f"PR-review blast-radius check against a MERGED base ({BASE_REF}): {_d}. "
                  f"Re-run with XSS_BASE_REF=<ref> to measure a live changeset.")
 else:
-    _surface = {(pth, m.upper()) for pth, ops in APP.openapi()["paths"].items() for m in ops}
+    # ONE HOME (2026-11-26, §CORE-52): the route surface is read from app/core/route_table.py.
+    from app.core.route_table import route_surface                     # noqa: E402
+    _surface = route_surface(APP)
     _pinned_routes = os.environ.get("EXPECT_ROUTES")
     if _pinned_routes:
         ok(f"G2  route surface matches the pinned {_pinned_routes}",

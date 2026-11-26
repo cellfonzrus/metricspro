@@ -48,7 +48,14 @@ def ok(cond, label):
 from app.main import app                                      # noqa: E402
 from app.modules.core import data_qa_registry as reg          # noqa: E402
 
-SCHEMA = app.openapi()["paths"]
+# ONE HOME (2026-11-26, §CORE-52): "which paths does this app serve" is read from
+# app/core/route_table.py, so this harness and the security control cannot disagree about it.
+from app.core.route_table import route_surface, served_paths   # noqa: E402
+
+SCHEMA = set(served_paths(app))
+_METHODS = {}
+for _p, _m in route_surface(app):
+    _METHODS.setdefault(_p, set()).add(_m.lower())
 
 print(f"\n── the app serves {len(SCHEMA)} paths; the registry declares {len(reg.keys())} questions")
 
@@ -60,7 +67,7 @@ for k in reg.keys():
 # ── §B and every one of them is GET-able; the assistant is read-only ───────────────────────────
 for k in reg.keys():
     path = reg.question(k)["path"]
-    methods = {m.lower() for m in SCHEMA.get(path, {})}
+    methods = _METHODS.get(path, set())
     ok("get" in methods, f"B1[{k}] '{path}' supports GET")
     # The reader only ever issues GET (harness_data_qa_lock.py §B1). This is the other half: a path
     # whose ONLY verb is a mutation could never be read, and would be a declaration that lies.
@@ -70,9 +77,9 @@ for k in reg.keys():
 # ── §C the assistant's own endpoints are mounted, once, at the right depth ─────────────────────
 ok("/api/v1/core/data-qa" in SCHEMA, "C1 POST /api/v1/core/data-qa is mounted")
 ok("/api/v1/core/data-qa/status" in SCHEMA, "C2 GET /api/v1/core/data-qa/status is mounted")
-ok("post" in {m.lower() for m in SCHEMA.get("/api/v1/core/data-qa", {})},
+ok("post" in _METHODS.get("/api/v1/core/data-qa", set()),
    "C3 asking a question is a POST")
-ok("get" in {m.lower() for m in SCHEMA.get("/api/v1/core/data-qa/status", {})},
+ok("get" in _METHODS.get("/api/v1/core/data-qa/status", set()),
    "C4 the status read is a GET")
 doubled = [p for p in SCHEMA if "core/core" in p or p.count("/data-qa") > 1]
 ok(not doubled,
