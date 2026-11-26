@@ -235,6 +235,8 @@ Primary code homes:
 | STOREOPS-09 | **An expense line per org level, named in the tenant's own words** | "Anybody who is a dm their salary is divided among the stores they are responsible for , similarly for the regional manager or market manager whatever stores they cover their salary is divided amount their stores , add a line in the expenses with the name dm salary and rm salary or mm salary , if we add another level the expense report should automatically add they level and then divide the salary based on the people who report to them" — the mechanism existed (§14t) and booked ONE combined line. Four live tenants declare four different level vocabularies agreeing on not one rung, so whose word names the line, what stops a house default from labelling one tenant's expenses in another's language, and what makes a level added tomorrow appear with no deploy? |
 | STOREOPS-12 | **A package the scanner refused still has its number, and the platform can re-print it** | "sometimes the barcode, which is used to consolidate the packages, do not work properly, and we have packages sitting in the store which are not scanned ... the user should be able to upload the picture to our platform and the platform should generate a barcode using the reference numbers" — the reference is printed under the bars the whole time, so what is lost is a MACHINE-READABLE copy of it. Which symbology does a label actually use (measured, not assumed), what part of this is a published standard and what part is one tenant's description of one vendor's paperwork, and what stops a reference read off a photograph from printing a barcode that scans perfectly into the wrong record? |
 | STOREOPS-13 | **A printed schedule is a line per person, not a picture of the grid** | "the schdule show show line by line which employee is working and thier houre next to their name instaed of in this illegible form" — the export mirrored the SCREEN GRID, so one store-day cell held every name that fell in it and a store's 127 hours sat at the far edge of a landscape page. The LINE is now the unit: one row per person per store, `Employee · Store · Hrs · Mon…Sun`, a day cell holding times only, both views over one builder. Carries the sibling it exposed — the screen and the export each had their own answer to "how long is this shift", so an overnight shift could total differently in the emailed PDF than on screen. |
+| STOREOPS-14 | **Employee setup is a flow somebody can leave halfway, and the tenant's own roles decide it** | "The way we have set up teh closing workflow , it is very easy for a new person to start and then pick up where tehy left off, need similar for the Employee set up in logical steps leading up to onboaring" — six screens each knew its own piece and nothing knew the order, so a half-finished person looked identical to a finished one on every one of them. What are the steps, where does somebody pick up, and what stops a wizard becoming a second writer for every field an employee already has? |
+| CORE-51 | **"How far through is this flow, and where do I pick it up" has one home** | Three flows were asked for in one sentence (employee setup, scheduling, running payroll). Answering the rail, the lamps, the resume and the progress count once per flow is three homes for one question, and the third copy drifts. Who owns a step's status, what makes a missing answer a refusal rather than a silent "not started", and what fails the build when a fourth copy appears? |
 | CORE-33 | **What an employee may reach is one declaration, and the API is what enforces it** | "on ny logistics Manan was able to go past [the clock-in screen] and also see the adjustment hours, this should not be allowed for any sales reps — this is universal across the board". The browser was the only gate: a menu row the viewer could see opened its whole subtree by URL, and the payroll writes behind those pages asked for no authority at all. Who decides what a surface's audience is, and what makes the API refuse a caller the menu would not offer it to? |
 | CORE-42 | **A gate proved in-process is a claim, not a measurement** | "create a testng agent who deciatedly is checking the data leakage, unwanted access to modules even if theya re gated like the case of manan and we discovered by accident, c annot have an accident of this sort, put it on schdule and one module at a time from the front end as though somebnbody was trying to hack in to the system". Every access control here is proved by a harness that imports the handler — which catches a wrong rule and not a right rule that was never reached. Who asks the DEPLOYED platform what it actually answers an unprivileged outsider, one module at a time, and what stops that probe from writing to production or from reporting a pass on a question it never asked? |
 | CORE-32 | **A guard that reads source code must be told f-strings exist** | Found by running the suite on a newer interpreter than CI's: the guard that stops our own setup internals reaching a customer was RED on Python 3.13 and GREEN on 3.11. PEP 701 stopped making an f-string one string token, so it had stopped seeing f-strings — and the same file held a SECOND reader of the same fact that had been taught the new shape. What proves a capability that depends on the interpreter, when CI pins one? |
@@ -26691,6 +26693,8 @@ status word rather than a blank that reads as nil.
 | STOREOPS-11 | storeops, account |
 | STOREOPS-12 | storeops, core |
 | STOREOPS-13 | storeops, core |
+| CORE-51 | core |
+| STOREOPS-14 | storeops, hr, core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -53111,3 +53115,138 @@ declares) · §CORE-15 / the Dark theme lock (the white-on-white stripe on the s
 the same report — fixed there, through `lib/surface.rowStripe`, not here) · §16–18.
 
 ---
+## §CORE-51. "HOW FAR THROUGH IS THIS FLOW, AND WHERE DO I PICK IT UP" HAS ONE HOME (owner 2026-11-25)
+
+Owner, verbatim: *"The way we have set up teh closing workflow , it is very easy for a new person to
+start and then pick up where tehy left off, need similar for the Employee set up in logical steps
+leading up to onboaring and then simlar workflow for scheduling andn simlar workflow for runnign the
+payroll with paying attention to details"*
+
+**THE CLASS, NOT THE INSTANCE.** Three flows were asked for in one sentence. The instance is
+"employee setup has no workflow"; the class is that **the platform has no answer to *how far through
+a flow is this, and where do I pick it up*** — and answering it once per flow is three homes for one
+question, the sibling derivation the index rules forbid. The third copy would drift from the first
+two, and a flow a new person abandons halfway is exactly what must not drift.
+
+**ONE FACT, ONE HOME.** `core/guided_workflow.py` (PURE — no I/O, no client, no framework import, no
+tenant's words and no policy) is the only place that decides a step's status or a flow's shape:
+
+| it owns | the answer |
+|---|---|
+| the vocabulary | `STATUSES` = `not_started` · `in_progress` · `needs_input` · `skipped` · `done`, with `LABELS`, `OPEN_STATUSES` and `SETTLED_STATUSES`. Nobody else spells one |
+| one step's status | `status_of(verdict)` — `done` beats everything; **`skipped` is NEVER rendered as done** (a tenant that runs no time clock must not read like one whose clock is set up); a NAMED gap beats "in progress", because "started" tells a person nothing they can act on |
+| declaring a flow | `step()` / `declare()` — a step may only depend on a step declared BEFORE it, which makes a cycle impossible to express and makes the declared order the real order |
+| the rail | `rail(steps, verdicts)` — status, label, the reasons, `blocked_by`, and the `screen` where that work is actually done |
+| where to pick up | `resume_key` — the first OPEN step nothing is blocking. A step whose dependency is unsettled is never offered, even when something was typed into it: sending a new person into step 4 while step 2 is empty is how a flow gets abandoned |
+| how far along | `progress` (required steps counted separately), `blocking`, `is_finished`, `describe` |
+| the board | `summarize(describes)` — the count per status and `stuck_at`, the step people are actually stopping at |
+
+**A MISSING ANSWER IS A REFUSAL, NEVER A SILENT "NOT STARTED".** `rail` raises when a flow has not
+answered a step it declared, and when it answers a step it did not declare. A flow that forgot to
+look would otherwise render as a flow nobody has begun — a plausible-looking answer, which is the
+kind that hides (owner's 2026-10-30 rule). A `needs_input` with nothing named is refused for the
+same reason, and a REQUIRED step cannot be answered `skipped`.
+
+**WHAT IS ALREADY TRUE, AND SO IS NOT REBUILT HERE (the duplicate-check build gate).**
+
+- `closing/unfinished_day` (§29.12) is the shape this was modelled on and is **not** a caller: it
+  answers *what happened to one store-day's closing submits*, for a flow with ONE step. Folding its
+  four states into a generic rail would put a closing refusal in front of readers that have nothing
+  to do with closings.
+- `commcalc/onboarding_intake.rail` (§30) is the nearest sibling and is **EXCUSED, with the reason
+  stated** rather than left implicit: its statuses describe *an uploaded source's verification*
+  (`verified` / `retired` — a source can be retired, a step cannot), and its rail carries a
+  stage × instance dimension (twelve commission statements under one stage) that no per-subject flow
+  has. Folding it in would widen this home to carry a dimension two of its three callers do not
+  have. **§G3 of the lock fails the build if a FOURTH copy of the vocabulary appears**, so the
+  excuse cannot quietly become a precedent.
+- `core/onboarding.build_status` is per-TENANT module setup — one checklist per org,
+  predicate-evaluated against tables. A task list, not a stepped flow, and it has no resume.
+
+**Lock: `backend/harness_guided_workflow.py` — 56 checks, DB-free**, CI job `guided-workflow-lock`
+in `carrier-vocab-guard.yml`. §A the vocabulary, §B `status_of`, §C the rail/resume/count including
+the refusals, §D the regression, §E the tenant rule, §F the dereferences, **§G the wiring locks that
+fail the build**: the home imports no framework/client/HTTP library and opens no socket (G1); the
+flow and the endpoint surface carry no writer and every route is a GET (G2); **no module outside the
+home declares the five status words (G3 — the fourth-copy lock)**; the flow spells no status string
+of its own (G4); `hr/router` holds no literal copy of the stage words (G5); every step names a
+screen that EXISTS (G6); the endpoint publishes every status word so the screen invents none (G7).
+**Verified to BITE 2026-11-26:** adding one status literal to the flow turns G4 red, and a planted
+five-word module turns G3 red.
+
+**Cross-references:** §STOREOPS-14 (the first caller) · §29.12 (the flow this was modelled on) ·
+§30 (the excused sibling) · §CORE-45 (active-only, one spelling) · §14z (the $0.00 payroll question).
+
+---
+
+## §STOREOPS-14. EMPLOYEE SETUP IS A FLOW SOMEBODY CAN LEAVE HALFWAY (owner 2026-11-25)
+
+Owner, verbatim, of the daily-closing workflow: *"The way we have set up teh closing workflow , it
+is very easy for a new person to start and then pick up where tehy left off, need similar for the
+Employee set up in logical steps leading up to onboaring"*. Asked the same evening whether the
+login, access and incentive-plan steps should BLOCK the onboarding pack, the owner answered
+**skippable with a warning**, and that is what ships.
+
+**THE DEFECT.** Setting up a new person touches six screens, each of which knew its own piece and
+none of which knew the ORDER — so a half-finished person looked identical to a finished one on
+every one of them, and nothing anywhere could say what was left. There was no "where did I get to".
+
+**SIX STEPS, in the order the work can actually be done in** (`storeops/employee_setup_flow.py`,
+PURE):
+
+| # | step | required | what settles it | the door |
+|---|---|---|---|---|
+| 1 | `identity` — Who and where | yes | name · employee ID · home store · role, the role checked against **this organisation's own declared roles**; hire date / email / phone are asked for and do not hold it open | `/storeops/setup/employees` |
+| 2 | `pay` — How they are paid | yes | hourly: a `pay_rate`, **asked of `clock_variance.employees_without_rate` (§14z)**, so this and the payroll preflight gate can never disagree about the same person. Salary: a `pay_amount`. A blank basis reads as hourly, as it does platform-wide | `/storeops/setup/employees` |
+| 3 | `login` — Login and time clock | **no** | an active `storeops.app_users` row linked by `employee_id`. A login that has never been used is `in_progress` with `waiting_on` — it is waiting on the EMPLOYEE, and a lamp that asks somebody for what they cannot give is what this flow exists to stop | `/admin/roles` |
+| 4 | `access` — What they can open | **no** | a store or market pin (no pin = they open the app and see nothing) and a role that AGREES with the employee record; a disagreement is reported, never silently accepted | `/admin/roles` |
+| 5 | `plan` — Incentive plan | **no** | an assignment, **asked of `commcalc/router.commission_plan_roster`** — never a second read of `commission_plan_assignment`, which is keyed on the rep NAME and not the employee id. A tenant that declares no plan has the step `skipped` **with the reason**, never `done` | `/commcalc/commission-plans` |
+| 6 | `onboarding` — Onboarding pack | yes | `provisioned` or `active` AND no mandatory document outstanding, the stage words **dereferenced from `hr/onboarding_stages`**. An unknown stage word is REPORTED, not coerced | `/hr/onboarding` |
+
+**SKIPPABLE WITH A WARNING, built as the owner asked it.** Steps 3–5 do not block finishing — and
+the thing nobody would otherwise notice is said instead: a person who reaches `provisioned` with no
+login carries *"This person has no login yet, so they cannot sign in or clock in"* on the onboarding
+step's `warnings`. Optional does not mean unmentioned.
+
+**THIS SURFACE WRITES NOTHING, AND THAT IS THE DESIGN.** Every step is a READ of state the platform
+already holds, plus the address of the screen that already does that work. A wizard that typed an
+employee's details again would be a second writer for every field that already has one — and
+**"resume where you left off" needs no saved draft when the state IS the data**: there is nothing to
+half-save, and nothing can go stale. `harness_guided_workflow.py` §G2 fails the build if a writer
+appears, or if a route on this surface stops being a GET.
+
+**THE TENANT RULE (owner 2026-10-30).** `declared['roles']` is a **REQUIRED argument with no house
+default**: a caller that has not asked the organisation for its role names cannot answer whether an
+employee's role is one of them. An organisation that has declared none is TOLD so, and no other
+tenant's role word appears in what it says. Proved at the HTTP boundary over two organisations in
+`tests/integration/test_employee_setup_endpoint.py`, which also proves the inverse — one tenant's
+declared role is NOT valid in the other. `pays_incentive_plans` and `hours_from_clock` are POLICY,
+resolved from the existing config homes, and change which steps APPLY, never a word.
+
+**ONE HOME FOR THE STAGE WORDS.** The six onboarding stages had been right since mig `073` and lived
+inside `hr/router.py`, a FastAPI module — so a pure reader could not dereference them without
+importing the whole web framework, and the only remaining way to use them was to type them again.
+`hr/onboarding_stages.py` (pure) is now their one definition; `hr/router`'s `WORKFLOW_STATUSES` /
+`STATUS_ORDER` / `STATUS_LABELS` are **the same objects**, proved by identity in the integration
+test, and §G5 of the lock fails the build on a literal copy.
+
+| surface | what it answers |
+|---|---|
+| `GET /storeops/employee-setup` | the BOARD: every person's status, where each picks up, `summary` (count per status + `stuck_at`), the six step declarations, every status word, `inactive_hidden`, `blockers`. ALL the standard filters (`stores` / `markets` / `reps`) plus `status`, and **active-only by default through `core/roster_visibility` with `include_inactive` as the one spelling** (§CORE-45) |
+| `GET /storeops/employee-setup/{employee_id}` | one person's rail: the six steps, what each is waiting on, and where to go and do it. An INACTIVE person is readable and says so — a 404 there would read as "this person does not exist" |
+| screen `/storeops/setup/employee-workflow` | "Employee Setup Workflow", a Workforce-hub tile (`tileOnly`, scopes `all`/`market` — the same audience as the form it leads into). Exports + the Send bar, the standard filter bar, the step list, the board, and one person's rail inline. It words **no status of its own**: `statuses` arrives with the response |
+
+No migration, no table, no money. The flow reads `storeops.employees`, `storeops.app_users`,
+`storeops.roles`, `storeops.employee_onboarding(_profile)`, `storeops.onboarding_task` and
+`commcalc.commission_plan`, every read org-scoped, and gates people through
+`storeops/router.gate_person_rows` (§14w). A failed read is REPORTED in `blockers` rather than
+rendering a clean board — absence is never zero.
+
+**Tests.** 44 unit (`tests/unit/test_employee_setup_flow.py`, including every tenant shape and the
+no-leak rule) + 35 unit for the shared home (`tests/unit/test_guided_workflow.py`) + 23 integration
+(`tests/integration/test_employee_setup_endpoint.py`, two organisations at the HTTP boundary), all
+run by `tests.yml`. Lock: `harness_guided_workflow.py` (56), CI job `guided-workflow-lock`.
+
+**Cross-references:** §CORE-51 (the shared home) · §29.12 (the workflow this was asked to resemble) ·
+§14z (the $0.00 payroll question) · §CORE-45 (active-only, one spelling) · §CORE-33 (what an
+employee may reach) · §3d (the standard filter bar and the Send bar).

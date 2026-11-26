@@ -1062,6 +1062,10 @@ export const NAV: NavGroup[] = [
     // the combined Admin page stays (backward compat — bookmarks/help docs) with a banner pointing
     // at the two. Same module + scopes on all three, so no role re-seeding.
     { href: '/storeops/setup/stores', label: 'Store Setup', icon: '🏬', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
+    // Employee Setup WORKFLOW (index §STOREOPS-14). Same module and scopes as the form it leads
+    // into: it reads an employee's own setup state and nothing else, so anybody who may open the
+    // form may read where it got to.
+    { href: '/storeops/setup/employee-workflow', label: 'Employee Setup Workflow', icon: '🧭', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
     { href: '/storeops/setup/employees', label: 'Employee Setup', icon: '🧑‍🔧', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
     // Insurance & Leases (owner directive 2026-09-05, migs 964-967): ONE insurance policy covering
     // MANY stores, its document + AI reading, and the lease/COI expiry notices. Same module +
@@ -1551,6 +1555,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/storeops', 'ops'], ['/storeops/schedule', 'ops'], ['/storeops/timeoff', 'ops'], ['/storeops/swaps', 'ops'],
   ['/storeops/shift-extensions', 'ops'], ['/storeops/timeclock-permissions', 'ops'], ['/storeops/hours-budget', 'ops'], ['/storeops/timeclock', 'ops'],
   ['/storeops/attendance', 'ops'], ['/storeops/dropoff-barcode', 'ops'],
+  ['/storeops/setup/employee-workflow', 'ops'],
   ['/storeops/employees', 'ops'], ['/storeops/team', 'ops'], ['/storeops/visits', 'ops'], ['/storeops/reports', 'ops'],
   ['/storeops/visits/plan', 'ops'],
   ['/closing', 'ops'], ['/closing/verify', 'ops'], ['/closing/management', 'ops'], ['/closing/recon', 'ops'],
