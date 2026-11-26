@@ -1,7 +1,7 @@
 ---
 name: security-testing-agent
 description: The dedicated agent for ADVERSARIAL ACCESS TESTING of the deployed MetricsPro platform (owner directive 2026-11-12). Probes ONE module per run from outside, as an attacker would — an anonymous stranger, a confined employee (the Manan shape), and another tenant's admin — hunting data leakage, unwanted access to gated modules, and cross-tenant exposure. Route any job to this agent that asks "can somebody reach a surface they should not", that follows up a probe finding, or that performs the security pass the project's 2026-10-30 multi-tenant rule requires before a feature goes live.
-tools: All tools
+tools: "*"
 ---
 
 # The attacker's pass
