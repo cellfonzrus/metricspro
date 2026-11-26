@@ -31383,7 +31383,7 @@ rather than erroring.
 | question | home | reader |
 |---|---|---|
 | does a human check gate this page, and of which kind? | `vidapay_sweep._CAPTCHA_SELECTORS` + `_CAPTCHA_TEXT` + `_INVISIBLE_MARK` / `_ARMED_MARK` | `vidapay_sweep.human_check(page)` → `"visible"` / `"invisible"` / `""` |
-| what do we TELL the operator, per kind? | `live_login._HUMAN_CHECK_MESSAGE` | `live_login._human_check_kind(vp, page)` |
+| what do we TELL the operator, per kind AND per moment? | `live_login._HUMAN_CHECK_NOTE` (`_HUMAN_CHECK_MESSAGE` is its `at_form` row, dereferenced) | `live_login.human_check_note(kind, moment)`, over `_human_check_kind(vp, page)` |
 | why was a submit refused while still on the form? | `vidapay_sweep._HUMAN_CHECK_BLOCKED` | `vidapay_sweep.human_check_blocked_message(page)` |
 
 **Three states, not a bool, because the two kinds need different words.** A visible challenge is on
@@ -31435,6 +31435,67 @@ Same class: §19.18 (a mechanism written and its callers left unwired), §19.41 
 record a failure is not a record), §COMMCALC-10 (the stall this made visible), §12a.2a (a connector
 kind carries no host, so its address is per-tenant config), §CORE-03 (where the portal credential is
 sealed), §COMMCALC-07 (the pull loop this login feeds).
+
+### COMMCALC-11.6 THE KIND REACHED ONE OF SIX CALLERS — "it just disappears as soon as you click on it" (owner report 2026-11-26)
+
+> Owner, 2026-11-26, on his reporting portal's live login: *"does not give enough time to do teh
+> captcha"*, then, a minute later, *"it just disappears as soon as you click on it"*.
+
+**There was no box.** That portal's widget is `data-size="invisible"` with a `data-callback` — armed,
+exactly the shape §COMMCALC-11 was written for. The only reCAPTCHA thing painted on such a page is
+the badge, which expands on hover and collapses when clicked. He was told to *"complete the 'I'm not
+a robot' box on the screen"*, went looking for it, clicked the badge and watched it vanish. The
+answer was to press **Sign in** — the check fires on submit — and he was signed in within three
+minutes of being told so.
+
+**THE CLASS. §COMMCALC-11.2 was right, §COMMCALC-11.4 locked ONE caller, and five others were
+spelling the sentence by hand.** The detector answered three states; `_HUMAN_CHECK_MESSAGE` held
+correct separate words for both kinds; `_drive` read them properly and the harness pinned that it
+did. Every OTHER site asked the BOOLEAN `_captcha_present`, discarded the kind, and wrote the visible
+sentence as a literal:
+
+| moment | site | what it said before |
+| --- | --- | --- |
+| at the form | `_drive` | **correct** — read `_HUMAN_CHECK_MESSAGE[kind]` |
+| noticed while the operator drives | the pre-auth upkeep loop | "complete the 'I'm not a robot' box" |
+| anti-automation page after submit | `state == "botwall"` | "solve the 'I'm not a robot' box" |
+| back at the form, check unsolved | `state == "login"` | "solve the 'I'm not a robot' box" |
+| before the code field appeared | the 2FA tail | "complete the 'I'm not a robot' box" |
+| at or after the code step | the code-submit path | "complete the 'I'm not a robot' box" |
+
+So the one home existed, the lock existed, and **the lock covered the one caller that was already
+right**. That is the §19.18 failure in its least visible form: a registry written, dereferenced by
+the caller somebody checked, and copied by the five nobody did.
+
+**THE FIX.** `_HUMAN_CHECK_NOTE` is keyed by **(moment, kind)** and `human_check_note(kind, moment)`
+is the only reader. The MOMENT is a second axis on purpose: the tail genuinely differs — "then Sign
+in" is wrong advice on the code screen — and that difference is precisely why five hand-written
+copies grew. `_HUMAN_CHECK_MESSAGE` survives as the `at_form` row, dereferenced not copied, so the
+proof scripts and `harness_human_check_kind` read the same object they always did. An unknown moment
+falls back to `at_form` rather than inventing words: a new call site still says something TRUE about
+the kind, which is the half that was being got wrong. `""` returns `""`, so "no human check" can
+never become an instruction.
+
+**Locked** — `backend/tests/unit/test_human_check_kind_reaches_the_operator.py`, 14 tests, six armed
+negative controls. The strongest is not a wording scan: **`_captcha_present` now has no caller inside
+`live_login` at all**, and the test fails if one reappears. `kind = "visible" if cap else ""` would
+pass every wording check and still send an invisible-widget tenant hunting for a box; asking the bool
+is the move that precedes the defect, so that is what is forbidden. Also pinned: every moment's
+invisible wording names no box and does say what to press; the two kinds never agree; each of the six
+moments is used by exactly one site; and the at-form row is the home's own object.
+`harness_human_check_kind.py` raised to **88 checks** — its §E now walks every moment rather than
+`at_form` alone, and §F pins the home's current reader rather than its former subscript.
+
+**What this did NOT do.** Nothing here makes a human check easier to pass, and nothing was added to
+help a server-side browser look less like one. The owner's portal was already being detected
+correctly; only what we TOLD him about it was wrong.
+
+### COMMCALC-11.7 Cross-references (11.6)
+
+§COMMCALC-11.2 (the one home this extends), §COMMCALC-11.4 (the lock that covered the right caller),
+§COMMCALC-50.8 (the sibling defect on the same portal: a page judged by how it is BUILT), §19.18 (a
+registry written and its callers left unwired), §COMMCALC-44 (an absence needs the right reason),
+§COMMCALC-48.13 (the status sentence that understated the same login's failures).
 
 ## §COMMCALC-12. WHICH STORE'S TRAILING COMMISSION LEGS ARE RUNNING DOWN, AND IN WHICH RUNG (owner ask 2026-10-15)
 

@@ -128,6 +128,9 @@ def test_the_live_session_builds_the_message_from_both_homes():
     times in this repo (index §19.18)."""
     import inspect
     drive = inspect.getsource(ll.LiveLoginSession._drive)
-    assert "_HUMAN_CHECK_MESSAGE[" in drive, "the kind still comes from its one home"
+    # The one home grew a MOMENT axis on 2026-11-26 (five other callers were spelling the visible
+    # sentence by hand, and an invisible widget has no box at any of those moments either). Same
+    # property, pinned through the home's current reader rather than its former subscript.
+    assert "human_check_note(" in drive, "the kind still comes from its one home"
     assert "_prefill_note" in drive, "…and what is in the form comes from its one home"
     assert "filled in" not in drive, "no wording spelled at the call site"
