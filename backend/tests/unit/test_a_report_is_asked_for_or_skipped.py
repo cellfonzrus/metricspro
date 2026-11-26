@@ -23,6 +23,9 @@ from app.modules.commcalc import portal_report_pull as prp          # noqa: E402
 from app.modules.commcalc import pos_report_sweep as sweep          # noqa: E402
 from app.modules.commcalc import report_declaration as rd           # noqa: E402
 
+# The connector these rows belong to. `columns` REQUIRES it since §COMMCALC-85.
+PROCESSOR = "pos_report"
+
 A = {"key": "alpha", "label": "Alpha", "nav": ["Reporting", "Alpha"], "export": "csv"}
 B = {"key": "bravo", "label": "Bravo", "nav": ["Reporting", "Bravo"], "export": "csv"}
 
@@ -146,12 +149,12 @@ def test_the_editor_offers_the_switch_as_a_field():
 def test_ticked_on_is_the_absence_of_a_declaration():
     """Storing `pull: true` on every report would rewrite every declaration written before the field
     existed, and `columns(rows(src))` being the identity is what makes this editor safe to open."""
-    reports, _ = rd.columns(rd.rows(_src(A)))
+    reports, _ = rd.columns(rd.rows(_src(A)), processor=PROCESSOR)
     assert "pull" not in reports[0]
 
 
 def test_switched_off_is_stored():
-    reports, _ = rd.columns(rd.rows(_src(dict(A, pull=False))))
+    reports, _ = rd.columns(rd.rows(_src(dict(A, pull=False))), processor=PROCESSOR)
     assert reports[0]["pull"] is False
 
 
@@ -159,8 +162,9 @@ def test_the_round_trip_is_still_the_identity_with_the_switch():
     src = _src(A, dict(B, pull=False),
                **{"alpha": {"params": [{"selector": "#d", "kind": "fill",
                                         "value": "{date}", "label": "From"}]}})
-    once = rd.columns(rd.rows(src), src["portal_calibration"])
-    twice = rd.columns(rd.rows({"portal_reports": once[0], "portal_calibration": once[1]}), once[1])
+    once = rd.columns(rd.rows(src), src["portal_calibration"], processor=PROCESSOR)
+    twice = rd.columns(rd.rows({"portal_reports": once[0], "portal_calibration": once[1]}),
+                       once[1], processor=PROCESSOR)
     assert once == twice
 
 
@@ -174,7 +178,7 @@ def test_switching_a_report_off_keeps_everything_mapped_about_it():
                             "unit_basis": "row", "export_selector": "#x"}})
     rows = rd.rows(src)
     rows[0]["pull"] = False
-    reports, cal = rd.columns(rows, src["portal_calibration"])
+    reports, cal = rd.columns(rows, src["portal_calibration"], processor=PROCESSOR)
     assert reports[0]["pull"] is False
     assert reports[0]["line_map"] == {"NDA": "overnight"}
     assert reports[0]["nav"] == ["Reporting", "Alpha"]

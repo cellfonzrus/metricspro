@@ -35,6 +35,7 @@ in their database, and this module could not tell you one of them.
 
 Proof: `backend/harness_report_declaration.py` — DB-free and browser-free.
 """
+from app.modules.commcalc import report_landing as _landing
 from app.modules.commcalc import pos_report_sweep as _sweep
 from app.modules.commcalc import portal_report_pull as _prp
 from app.modules.commcalc import pos_report_feed as _feed
@@ -196,11 +197,16 @@ def row_problems(row):
     return out
 
 
-def row(item, calibration=None):
+def row(item, calibration=None, processor=""):
     """ONE editor row from one declared report plus its calibration entry. PURE.
 
     Accepts both declared shapes `pos_report_sweep.report_specs` accepts — the object and the bare
     string — because a tenant who declared bare keys must be able to open the editor too.
+
+    `processor` is the connector this login belongs to, and it decides which landing targets are
+    legal (§COMMCALC-85). Omitted, no target is legal and the row reads as having none declared —
+    which is the honest answer to "which landings does an unnamed connector have", and is why the
+    callers that know the connector pass it.
     """
     cal = dict(calibration or {})
     if isinstance(item, str):
@@ -221,6 +227,12 @@ def row(item, calibration=None):
         # should see the hint their declaration actually gives the navigation.
         nav = tuple(w for w in key.split("_") if len(w) > 2)
     out = {"key": key, "label": label, "nav": list(nav),
+           # WHERE ITS ROWS LAND (§COMMCALC-85). Read back through the one cleaner, so a target the
+           # connector no longer lands shows as undeclared on the screen rather than as a setting
+           # that works. Until 2026-11-26 this field was not carried at all and every save dropped
+           # it, which is why no report on the platform had one.
+           "target": _landing.clean_target(processor, (item.get("target")
+                                                       if isinstance(item, dict) else "")),
            # Absence is YES, read through the pull's own reader so the tick box can never show one
            # answer while the loop acts on another.
            "pull": _prp.report_requested({"portal_reports": [item]}, key),
@@ -236,6 +248,11 @@ def row(item, calibration=None):
         out[field] = _clean_control(cal.get(field))
     out["per_day"] = any("{date}" in str(p.get("value") or "") for p in out["params"])
     out["problems"] = row_problems(out)
+    # Advice, in the operator's words, from the home that owns the fact — never a second opinion
+    # here about which landings exist.
+    landing_said = _landing.target_problem(processor, out["target"])
+    if landing_said:
+        out["problems"] = list(out["problems"]) + [landing_said]
     return out
 
 
@@ -251,8 +268,9 @@ def rows(src_row):
         declared = [declared]
     cal = src.get("portal_calibration") if isinstance(src.get("portal_calibration"), dict) else {}
     out, seen = [], set()
+    processor = str(src.get("processor") or "")
     for item in declared:
-        r = row(item, (cal or {}).get(_sweep.spec_key(item)))
+        r = row(item, (cal or {}).get(_sweep.spec_key(item)), processor)
         if not r or r["key"] in seen:
             continue
         seen.add(r["key"])
@@ -262,8 +280,14 @@ def rows(src_row):
     return out
 
 
-def columns(editor_rows, existing_calibration=None):
+def columns(editor_rows, existing_calibration=None, *, processor):
     """The two stored columns from editor rows. PURE. The inverse of `rows`.
+
+    `processor` IS REQUIRED, with no default (§COMMCALC-85). A default would be one connector's
+    vocabulary standing in for every other's, which is the one place the house-default pattern is
+    banned — and the specific failure it would cause is silent: a caller that had not said which
+    connector it was saving would write every target away as illegal and the declaration would look
+    saved while its rows had nowhere to land.
 
     `existing_calibration` is folded through UNTOUCHED for every key it carries beyond `params`, and
     for keys the editor did not show. A calibration entry may hold things this editor does not edit
@@ -283,6 +307,13 @@ def columns(editor_rows, existing_calibration=None):
         export = str(item.get("export") or "csv").strip().lower()
         spec = {"key": key, "label": str(item.get("label") or key)[:120],
                 "nav": list(nav), "export": export if export in EXPORTS else "csv"}
+        # WRITTEN ONLY WHEN DECLARED, so `columns(rows(src)) == src` still holds for every
+        # declaration written before this field existed. "" is nothing declared, and the key is
+        # dropped rather than stored empty — the readers already treat absence as "do not store
+        # these rows, and say so".
+        target = _landing.clean_target(processor, item.get("target"))
+        if target:
+            spec["target"] = target
         # WRITTEN ONLY WHEN SWITCHED OFF. Absence already means "pull it", so storing `pull: true`
         # on every report would rewrite every declaration written before this field existed — and
         # `columns(rows(src))` being the identity is the property that makes this editor safe to
