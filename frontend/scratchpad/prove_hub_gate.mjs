@@ -42,7 +42,7 @@ const litHrefs = src => {
 }
 const kpiHrefs = src => [...src.matchAll(/<StatTile\b[\s\S]*?href="([^"]+)"/g)].map(m => m[1])
 const WF_TILES = litHrefs(WF), WF_KPI = kpiHrefs(WF), PR_TILES = litHrefs(PR)
-// RE-PINNED 22 -> 23 on 2026-11-26: the Employee Setup WORKFLOW tile (index §STOREOPS-13). The pin
+// RE-PINNED 22 -> 23 on 2026-11-26: the Employee Setup WORKFLOW tile (index §STOREOPS-14). The pin
 // exists so that a page reaching reps is a WRITTEN decision — this one is scoped ['all','market'],
 // exactly like the Employee Setup form it leads into, so it is gated away from a store-scoped rep
 // and that is counted in §1 below.

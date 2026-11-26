@@ -1,4 +1,4 @@
-"""Unit: Employee Setup as a flow somebody can leave halfway (index §STOREOPS-13).
+"""Unit: Employee Setup as a flow somebody can leave halfway (index §STOREOPS-14).
 
 Six steps, in the order the work can actually be done in, ending at the onboarding pack that already
 exists. Every step is a READ of state the platform already holds — this flow is a projection and a

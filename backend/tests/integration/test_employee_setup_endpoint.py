@@ -1,4 +1,4 @@
-"""Integration: the Employee Setup workflow endpoints through the REAL app (index §STOREOPS-13).
+"""Integration: the Employee Setup workflow endpoints through the REAL app (index §STOREOPS-14).
 
 Real routing, real middleware, the real endpoint bodies — over the in-memory database double, with
 conftest blocking every outbound socket. "Integration" here means the app, not a real database

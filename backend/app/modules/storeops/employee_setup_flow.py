@@ -1,4 +1,4 @@
-"""EMPLOYEE SETUP AS A FLOW SOMEBODY CAN LEAVE HALFWAY (index §STOREOPS-13).
+"""EMPLOYEE SETUP AS A FLOW SOMEBODY CAN LEAVE HALFWAY (index §STOREOPS-14).
 
 Owner 2026-11-25, verbatim: *"The way we have set up teh closing workflow , it is very easy for a
 new person to start and then pick up where tehy left off, need similar for the Employee set up in

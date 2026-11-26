@@ -1,4 +1,4 @@
-"""THE ONBOARDING STAGE VOCABULARY — one home, reachable without the framework (index §STOREOPS-13).
+"""THE ONBOARDING STAGE VOCABULARY — one home, reachable without the framework (index §STOREOPS-14).
 
 The six stages a new hire's onboarding passes through have been right since migration 073. They
 lived inside `hr/router.py`, which is a FastAPI module: a pure reader — a proof harness, or the

@@ -112,7 +112,7 @@ const GROUPS: HubGroup[] = [
     icon: '🧑‍🔧',
     desc: 'Names, IDs, home stores, contact info, active flags — plus bulk upload.',
     items: [
-      // THE GUIDED WORKFLOW (index §STOREOPS-13) is listed FIRST, because it is the step list a new
+      // THE GUIDED WORKFLOW (index §STOREOPS-14) is listed FIRST, because it is the step list a new
       // person should start from; the form below it is step 1's own door.
       { href: '/storeops/setup/employee-workflow', icon: '🧭', label: 'Employee Setup Workflow', desc: 'Six steps to a person being ready, ending with onboarding — leave it half-done and pick up where you left off.' },
       { href: '/storeops/setup/employees', icon: '🧑‍🔧', label: 'Employee Setup', desc: 'Names, IDs, home stores, contact info, active flags — plus bulk upload.' },

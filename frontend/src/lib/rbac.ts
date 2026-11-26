@@ -1062,7 +1062,7 @@ export const NAV: NavGroup[] = [
     // the combined Admin page stays (backward compat — bookmarks/help docs) with a banner pointing
     // at the two. Same module + scopes on all three, so no role re-seeding.
     { href: '/storeops/setup/stores', label: 'Store Setup', icon: '🏬', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
-    // Employee Setup WORKFLOW (index §STOREOPS-13). Same module and scopes as the form it leads
+    // Employee Setup WORKFLOW (index §STOREOPS-14). Same module and scopes as the form it leads
     // into: it reads an employee's own setup state and nothing else, so anybody who may open the
     // form may read where it got to.
     { href: '/storeops/setup/employee-workflow', label: 'Employee Setup Workflow', icon: '🧭', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },

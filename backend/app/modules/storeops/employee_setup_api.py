@@ -1,4 +1,4 @@
-"""THE ENDPOINTS for Employee Setup as a guided, resumable flow (index §STOREOPS-13).
+"""THE ENDPOINTS for Employee Setup as a guided, resumable flow (index §STOREOPS-14).
 
 Owner 2026-11-25: *"need similar for the Employee set up in logical steps leading up to onboaring"*,
 said of the daily-closing workflow a new person can start and come back to.
@@ -6,9 +6,9 @@ said of the daily-closing workflow a new person can start and come back to.
 EVERY DECISION ALREADY LIVES IN A PURE MODULE AND IS DEREFERENCED HERE, never re-derived:
 
     the rail, lamps, resume, progress        `core/guided_workflow`            (index §CORE-51)
-    what each of the six steps means         `storeops/employee_setup_flow`    (index §STOREOPS-13)
+    what each of the six steps means         `storeops/employee_setup_flow`    (index §STOREOPS-14)
     "priced at $0.00 by a payroll run"       `storeops/clock_variance`         (index §14z)
-    the six onboarding stage words           `hr/onboarding_stages`            (index §STOREOPS-13)
+    the six onboarding stage words           `hr/onboarding_stages`            (index §STOREOPS-14)
     which plan is assigned to a person       `commcalc/router.commission_plan_roster`
     is this person still active              `core/roster_visibility`          (index §CORE-45)
     who may read which people                `storeops/router.gate_person_rows`

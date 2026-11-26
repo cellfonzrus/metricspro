@@ -1,5 +1,5 @@
 'use client'
-// Employee Setup — the GUIDED, RESUMABLE workflow (index §STOREOPS-13).
+// Employee Setup — the GUIDED, RESUMABLE workflow (index §STOREOPS-14).
 //
 // Owner 2026-11-25: *"The way we have set up teh closing workflow , it is very easy for a new person
 // to start and then pick up where tehy left off, need similar for the Employee set up in logical

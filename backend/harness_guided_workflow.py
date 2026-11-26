@@ -1,5 +1,5 @@
 """Offline proof harness — A MULTI-STEP FLOW SOMEBODY CAN LEAVE HALFWAY HAS ONE HOME, and Employee
-Setup dereferences it (index §CORE-51 / §STOREOPS-13). Drives the PURE `core/guided_workflow` and
+Setup dereferences it (index §CORE-51 / §STOREOPS-14). Drives the PURE `core/guided_workflow` and
 `storeops/employee_setup_flow`, and reads the endpoint surface and HR's router as source. No live
 database, no network, no framework import.
 

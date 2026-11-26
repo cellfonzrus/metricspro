@@ -28,7 +28,7 @@ from app.modules.storeops import payroll_salary
 from app.modules.storeops import pay_visibility as _payvis
 # THE ONE HOME for "is this store / this person still active" (index §CORE-45).
 from app.modules.core import roster_visibility as _rv
-# THE ONE HOME for the six onboarding stage words (index §STOREOPS-13) — pure, framework-free, so a
+# THE ONE HOME for the six onboarding stage words (index §STOREOPS-14) — pure, framework-free, so a
 # harness and the employee-setup flow can read the same vocabulary this router moves through.
 from app.modules.hr import onboarding_stages as _stages
 # THE ONE HOME for "which hours is this employee paid for, and on what basis" (index §14y).

@@ -1794,7 +1794,7 @@ _all_routes = _flatten_routes(real_app.routes)
 # MISS the row the event belongs to — the rule the Meta status handler established in 2026-07-18 and
 # which both webhooks now share through one write path (harness_whatsapp_delivery_truth.py §H).
 # A webhook's payload is never trusted to name a tenant; the row it matches is.
-# 1872 -> 1874, 2026-11-26 (PR for §CORE-51 / §STOREOPS-13, "employee setup is a flow somebody can
+# 1872 -> 1874, 2026-11-26 (PR for §CORE-51 / §STOREOPS-14, "employee setup is a flow somebody can
 # leave halfway"). RE-VERIFIED THE HOUSE WAY, not assumed: `git fetch origin main` FIRST (see the
 # trap noted above), then `git diff origin/main -- backend/ | grep -E '^[+-].*@router\.'` shows
 # exactly TWO added routes and none removed:
