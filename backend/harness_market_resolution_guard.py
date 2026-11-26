@@ -127,6 +127,11 @@ PINNED = {
         "google_reviews_dm_dashboard": "ROSTER", "google_review_store_detail": "ROSTER",
         "google_review_employee_detail": "ROSTER", "google_reviews_employee_summary": "ROSTER",
     },
+    # §STOREOPS-15 — the scheduling board's roster read. `market` is carried for DISPLAY beside a
+    # store the caller already selected; nothing on this read filters or buckets by market. The
+    # board's market FILTER is `router.scope_keyset` (§14x), which is the canonical resolution, so
+    # overlaying here would be a second answer to a question already answered upstream.
+    "storeops/schedule_week_api.py": {"_stores": "ROSTER"},
     "storeops/google_reviews.py": {"sweep_org": "ROSTER"},
     "storevisit/router.py": {"stores_in_market": "OVERLAY"},
     "pos/router.py": {"tax_code_markets": "OVERLAY", "tax_code_store_grid": "OVERLAY"},

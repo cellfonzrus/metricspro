@@ -103,6 +103,11 @@ def _declarations(org_id, blockers) -> dict:
 # THE FACTS, read once for the whole board
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 def _stores(org_id, blockers, *, include_inactive=False, store_code=None):
+    """The roster, read once. `market` is carried for DISPLAY beside a store the caller already
+    chose — nothing here filters or buckets by it, because the board's market filter is
+    `router.scope_keyset` (§14x), the canonical resolution. Pinned ROSTER in
+    `harness_market_resolution_guard.py`; overlaying the canonical map here would be a second
+    answer to a question already answered upstream."""
     eqs = {"store_code": store_code} if store_code else {}
     rows = _rows("stores", "store_code,address,market,is_active", org_id, blockers, **eqs)
     hidden = _rv.hidden_count(rows) if rows else 0
