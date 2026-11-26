@@ -2395,10 +2395,14 @@ FACTS: dict[str, dict] = {
         },
     },
     'work_week': {
-        "question": 'WHICH SEVEN DAYS IS A WEEK HERE, and which days is this store open? '
-                    '`storeops.tenants.work_week_start_dow` (mig 085) held ONE answer per tenant, '
+        # THE COLUMN AND ITS MIGRATION, named HERE and not in the question's text: the setup-internals
+        # lock (§19.36) reads every backend string, and a registry's prose is still a backend string.
+        # The one answer per tenant lived in `storeops.tenants.work_week_start_dow` (mig 085); the
+        # market grain and the open-days columns arrive in mig 1132.
+        "question": 'WHICH SEVEN DAYS IS A WEEK HERE, and which days is this store open? One week '
+                    'start per tenant held ONE answer, '
                     'and Luxelink is one tenant whose markets ARE its two companies: measured on '
-                    'production 2026-11-26 its column read 3 (Thursday), right for its 10 open '
+                    'production 2026-11-26 its stored start read 3 (Thursday), right for its 10 open '
                     'Chicago stores and wrong for its 10 open NY ones, which the owner says run '
                     'Mon-Sun \u2014 with no row in which to say so. The same number anchors the '
                     'schedule grid, the weekly hours ceiling, the period an approvals board opens '
