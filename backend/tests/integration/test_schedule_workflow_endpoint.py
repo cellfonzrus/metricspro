@@ -64,6 +64,11 @@ SHIFTS = [
     _shift(4, ORG_B, "L-1", "L9", "2026-11-19"),
 ]
 
+# §STOREOPS-17 — ONE TENANT, TWO WEEKS. Org A's week is Monday, but its NYC market declares
+# Thursday, which is the Luxelink shape (Chicago Thu–Wed / NY Mon–Sun) the owner described on
+# 2026-11-26. LI declares nothing and must keep answering with its tenant's Monday.
+MARKET_WEEKS = [{"org_id": ORG_A, "market": "NYC", "work_week_start_dow": 3}]
+
 SENDS = [{"org_id": ORG_A, "report_key": "storeops_schedule", "channel": "email",
           "target": "team@x.test", "status": "sent",
           "filters": {"week_start": MON_WEEK, "store_code": "B-117"},
@@ -77,6 +82,10 @@ def wired(monkeypatch, fake_supabase):
     monkeypatch.setattr("app.modules.storeops.router.get_supabase", lambda: fake_supabase)
     monkeypatch.setattr("app.modules.storeops.payroll_approval.get_supabase",
                         lambda: fake_supabase)
+    # THE ONE HOME for "which seven days is this store's week" (§STOREOPS-17). Patched here too, or
+    # it reads the real client and every tenant silently answers the house Monday — which is exactly
+    # the failure this suite exists to catch.
+    monkeypatch.setattr("app.modules.storeops.work_week.get_supabase", lambda: fake_supabase)
     fake_supabase.seed("storeops.tenants", TENANTS)
     fake_supabase.seed("storeops.stores", STORES)
     fake_supabase.seed("storeops.hours_budget", BUDGETS)
@@ -86,6 +95,7 @@ def wired(monkeypatch, fake_supabase):
     fake_supabase.seed("storeops.shift_swap_requests", [])
     fake_supabase.seed("storeops.budget_override", [])
     fake_supabase.seed("notify.send_log", SENDS)
+    fake_supabase.seed("storeops.market_work_week", MARKET_WEEKS)
     return fake_supabase
 
 
@@ -354,3 +364,90 @@ def test_the_emailed_rota_uses_the_tenants_week_and_not_a_house_monday(wired):
     src = inspect.getsource(report_registry._storeops_schedule)
     assert "start.weekday()" not in src
     assert "week_start_of" in src and "_week_start_dow" in src
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# §STOREOPS-17 — ONE TENANT, TWO WEEKS. Org A's week is Monday; its NYC market declares Thursday.
+# This is the Luxelink shape the owner described on 2026-11-26 (Chicago Thu–Wed, NY Mon–Sun), and
+# before mig 1132 there was no row in which to say it.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+def test_two_markets_of_one_tenant_report_two_different_weeks_on_one_board(wired, api_client):
+    b = _board(api_client)
+    assert _row(b, "B-200")["week_start"] == THU_WEEK      # NYC declared Thursday
+    assert _row(b, "B-117")["week_start"] == MON_WEEK      # LI declared nothing: the tenant's Monday
+
+
+def test_the_board_says_it_holds_more_than_one_week_rather_than_implying_one(wired, api_client):
+    """The header's week is the TENANT's. A screen that showed only that would be telling an NYC
+    manager their week starts on Monday while the row beneath it runs Thursday to Wednesday."""
+    b = _board(api_client)
+    assert b["declared"]["week_start_day"] == "Monday"
+    assert b["declared"]["weeks_on_this_board"] == sorted({MON_WEEK, THU_WEEK})
+
+
+def test_each_row_says_WHERE_its_week_came_from(wired, api_client):
+    b = _board(api_client)
+    assert _row(b, "B-200")["week_start_level"] == "market"
+    assert _row(b, "B-117")["week_start_level"] == "tenant"
+
+
+def test_one_store_week_is_cut_over_ITS_OWN_seven_days(wired, api_client):
+    """B-200's only shift is Tue 24 Nov, which falls inside both weeks — so the hours alone cannot
+    prove this. The days the rail is laid over are what must be the market's."""
+    r = api_client.get(f"{BOARD}/B-200?org_id={ORG_A}&week_start={WED}")
+    assert r.status_code == 200, r.text
+    one = r.json()
+    assert one["week_start"] == THU_WEEK
+    assert [d["date"] for d in one["days"]][0] == THU_WEEK
+    assert one["declared"]["week_start_day"] == "Thursday"
+    assert one["declared"]["week_start_level"] == "market"
+
+
+def test_a_market_declaration_in_one_tenant_never_answers_for_another(wired, api_client):
+    """★ CROSS-TENANT. Org A declares NYC = Thursday. Org B's only store is in market 'NJ' and its
+    tenant says Thursday too — but it must get there through ITS OWN tenant row, never through org
+    A's market table."""
+    b = _board(api_client, org=ORG_B)
+    row = _row(b, "L-1")
+    assert row["week_start"] == THU_WEEK
+    assert row["week_start_level"] == "tenant"
+
+
+def test_a_store_in_a_market_nobody_declared_keeps_its_tenants_week(wired, api_client):
+    assert _row(_board(api_client), "B-117")["week_start_level"] == "tenant"
+
+
+# ── open days: undeclared NAMES the uncovered day; declared turns it into a gap ──────────────────
+def test_with_nothing_declared_the_board_says_the_open_days_are_not_declared(wired, api_client):
+    b = _board(api_client)
+    assert b["declared"]["open_days_declared"] is False
+    assert all(r.get("open_days_declared") is False for r in b["rows"])
+
+
+def test_a_tenant_declaring_seven_days_makes_every_row_say_so(wired, api_client, monkeypatch):
+    """The owner's 2026-11-26 statement, declared: "All store open 7 days a week". The scheduling
+    flow's coverage step then reports an uncovered day as a GAP, with no code change — which is what
+    §STOREOPS-15 said would happen once `open_dows` existed."""
+    wired.seed("storeops.tenants", [dict(t, open_dows=[0, 1, 2, 3, 4, 5, 6]) for t in TENANTS])
+    b = _board(api_client)
+    assert all(r.get("open_days_declared") is True for r in b["rows"])
+
+
+def test_one_store_may_declare_fewer_days_than_its_tenant(wired, api_client):
+    wired.seed("storeops.tenants", [dict(t, open_dows=[0, 1, 2, 3, 4, 5, 6]) for t in TENANTS])
+    wired.seed("storeops.stores", [dict(s, open_dows=[0, 1, 2, 3, 4]) if s["store_code"] == "B-117"
+                                   else s for s in STORES])
+    r = api_client.get(f"{BOARD}/B-117?org_id={ORG_A}&week_start={WED}")
+    assert r.status_code == 200, r.text
+    assert r.json()["declared"]["open_dows"] == [0, 1, 2, 3, 4]
+
+
+def test_the_endpoint_still_reads_and_writes_nothing_when_the_new_table_is_absent(wired,
+                                                                                 api_client):
+    """DEGRADES UNTIL ITS MIGRATION LANDS (§POS-01): code ships on merge and mig 1132 waits for the
+    owner, so with no `market_work_week` every store must fall back to its tenant's week rather
+    than the board 500ing or quietly answering Monday for everybody."""
+    wired.seed("storeops.market_work_week", [])
+    b = _board(api_client)
+    assert b["declared"]["weeks_on_this_board"] == [MON_WEEK]
+    assert all(r["week_start_level"] == "tenant" for r in b["rows"])

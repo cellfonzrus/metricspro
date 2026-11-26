@@ -2394,6 +2394,39 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/dlar_sweep.py': ('_cell',),
         },
     },
+    'work_week': {
+        # THE COLUMN AND ITS MIGRATION, named HERE and not in the question's text: the setup-internals
+        # lock (§19.36) reads every backend string, and a registry's prose is still a backend string.
+        # The one answer per tenant lived in `storeops.tenants.work_week_start_dow` (mig 085); the
+        # market grain and the open-days columns arrive in mig 1132.
+        "question": 'WHICH SEVEN DAYS IS A WEEK HERE, and which days is this store open? One week '
+                    'start per tenant held ONE answer, '
+                    'and Luxelink is one tenant whose markets ARE its two companies: measured on '
+                    'production 2026-11-26 its stored start read 3 (Thursday), right for its 10 open '
+                    'Chicago stores and wrong for its 10 open NY ones, which the owner says run '
+                    'Mon-Sun \u2014 with no row in which to say so. The same number anchors the '
+                    'schedule grid, the weekly hours ceiling, the period an approvals board opens '
+                    'on and the grid a rota is emailed as, so one wrong answer was wrong in four '
+                    'places at once. FIVE modules each selected that column for themselves, which '
+                    'is why widening the grain had to land in one home rather than four. Which '
+                    'days a store OPENS was not declarable at all, so the scheduling flow named '
+                    'uncovered days and refused to call them gaps; it is now a store-level '
+                    'declaration with the tenant behind it, and NOTHING behind that \u2014 '
+                    'undeclared stays undeclared. Resolution is MARKET, then tenant, then the '
+                    'house Monday, and every answer reports which level gave it.',
+        "homes": ('app/modules/storeops/work_week.py',),
+        "index": ('STOREOPS-17',),
+        "locks": ('harness_work_week.py',),
+        # SNAPSHOT \u2014 written BY HAND (\u00a750: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
+        "callers": {
+            # The scheduling board: one declaration per MARKET, each store-week cut over its own days.
+            'app/modules/storeops/schedule_week_api.py': ('_ww',),
+            # `_week_start_dow` kept its name (the rota imports it) and now delegates here.
+            'app/modules/storeops/payroll_approval.py': ('_ww',),
+            # `_work_week_bounds`, which the hours-budget ceiling is enforced over.
+            'app/modules/storeops/router.py': ('_ww',),
+        },
+    },
     'payroll_hours_basis': {
         "question": 'Which hours is this person paid for on this day, and on what BASIS — a closed '
                     'punch, a human correction, a measured zero, the schedule they are ticked to be '
@@ -3049,6 +3082,11 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_people_visibility_lock.py',),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
+            # §STOREOPS-17 — which MARKET a store belongs to, so a market's own declared work week
+            # can be found for it. Asked of `market_by_code` (the canonical union index), never of a
+            # single vocabulary: a week start keyed on a second spelling of a market would be a
+            # phantom market with its own calendar.
+            'app/modules/storeops/work_week.py': ('market_by_code',),
             'app/modules/account/device_payable.py': ('store_market_resolver',),
             'app/modules/account/device_purchases.py': ('store_market_resolver',),
             'app/modules/account/residual_subs.py': ('_cscope',),

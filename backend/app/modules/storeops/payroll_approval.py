@@ -38,6 +38,7 @@ from fastapi import APIRouter, Header, HTTPException
 from app.core.database import get_supabase
 from app.core.schemas import LaxModel
 from app.modules.storeops import pay_visibility as _payvis
+from app.modules.storeops import work_week as _ww   # the ONE home for "which seven days" (§STOREOPS-17)
 from app.modules.core import tenant_identity  # one home for the tenant's name (§POS-02)
 
 router = APIRouter()
@@ -161,19 +162,19 @@ def _num(v):
 # The canonical period math is core.router.pay_period_for and is IMPORTED, never reimplemented — the
 # same read-only dependency payroll_salary.py already takes. A second copy of this arithmetic is how
 # two payroll surfaces come to disagree about which fortnight is being paid.
-def _week_start_dow(org_id):
-    """The tenant's work-week start as a Python weekday (0=Mon .. 6=Sun).
+def _week_start_dow(org_id, *, store_code=None, market=None):
+    """The work-week start as a Python weekday (0=Mon .. 6=Sun), from the ONE home.
 
-    `work_week_start_dow` is ALREADY 0=Monday (see ① above) — it is returned as-is, not converted.
-    A tenant with nothing configured falls back to Monday, matching the column's own default and
-    `_pp_settings`' documented "Monday week today"."""
-    try:
-        rows = (sb().table("tenants").select("work_week_start_dow")
-                .eq("org_id", org_id).limit(1).execute().data) or []
-        raw = rows[0].get("work_week_start_dow") if rows else None
-    except Exception:
-        raw = None
-    return (0 if raw is None else int(raw)) % 7
+    `work_week_start_dow` is ALREADY 0=Monday (see ① above) and is never converted here.
+
+    ①① AND THE ANSWER IS NO LONGER THE TENANT'S ALONE (owner 2026-11-26, index §STOREOPS-17).
+    A tenant whose markets run different weeks — Luxelink: Chicago Thu–Wed, NY Mon–Sun — could not
+    say so, because the column holds one value per tenant. `storeops/work_week` resolves MARKET, then
+    tenant, then the house Monday, and is the only module that reads either store. Pass `store_code`
+    or `market` to get that store's week; with neither, this answers for the tenant as before, so
+    every existing caller keeps its meaning.
+    """
+    return _ww.start_dow_for(org_id, store_code=store_code, market=market)["dow"]
 
 
 def _pay_settings(org_id):

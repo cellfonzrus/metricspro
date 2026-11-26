@@ -12,8 +12,11 @@
 // the hours-budget page, the time-off board, the schedule grid — so this is a map and a set of
 // doors, never a second place to lay out a shift.
 //
-// THE WEEK IS THE TENANT'S OWN. The server reads this company's declared week start and sends back
-// the seven dates; this page never snaps to a Monday of its own.
+// THE WEEK IS THE TENANT'S OWN — OR ITS MARKET'S. The server reads the declared week start and
+// sends back the seven dates; this page never snaps to a Monday of its own. Since §STOREOPS-17 a
+// MARKET may run a different week from its company (Luxelink: Chicago Thu–Wed, NY Mon–Sun), so a
+// board can legitimately hold more than one week. Each row therefore carries its OWN `week_start`,
+// and the header says when they differ rather than implying one week for everybody.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import StandardFilterBar from '@/components/StandardFilterBar'
@@ -59,6 +62,10 @@ type StoreWeek = {
   is_active?: boolean
   week_start: string
   week_end: string
+  /** WHERE this row's week came from: its market's declaration, its company's, or the house. */
+  week_start_day?: string
+  week_start_level?: string | null
+  open_days_declared?: boolean
   scheduled_hours: number
   status: string
   label: string
@@ -79,8 +86,11 @@ type Board = {
     week_start_dow: number
     week_start_day: string
     week_start_declared: boolean
+    week_start_level?: string | null
     open_dows: number[]
     open_days_declared: boolean
+    /** More than one means the header's week is the COMPANY's and each row carries its own. */
+    weeks_on_this_board?: string[]
   }
   steps: StepDecl[]
   statuses: StatusDecl[]
@@ -247,6 +257,9 @@ export default function ScheduleWorkflowPage() {
         <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 8 }}>
           Week of <strong>{data.week_start}</strong> to <strong>{data.week_end}</strong> — this
           company&apos;s week starts on <strong>{data.declared.week_start_day}</strong>.
+          {(data.declared.weeks_on_this_board || []).length > 1 && (
+            <> Some markets here run a different week, so each row below shows its own.</>
+          )}
         </div>
       )}
 
@@ -286,7 +299,8 @@ export default function ScheduleWorkflowPage() {
           <strong>Which days each store opens is not set up yet.</strong>
           <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 4 }}>
             So a day with nobody on it is listed for you to look at, rather than treated as a gap —
-            a seven-day week is not assumed on your behalf.
+            a seven-day week is not assumed on your behalf. Declare the days a store opens and the
+            same check starts reporting an empty day as a gap.
           </div>
         </div>
       )}
@@ -365,6 +379,15 @@ export default function ScheduleWorkflowPage() {
                       {!rosterIsActive(r) && <span style={{ ...chip, marginLeft: 6 }}>closed</span>}
                     </div>
                     <div style={{ fontSize: 11, color: 'var(--text2)' }}>{r.market || ''}</div>
+                    {/* ONLY WHEN THE BOARD HOLDS MORE THAN ONE WEEK (§STOREOPS-17). With every row
+                        on the same week the header already says it, and repeating it per row would
+                        be noise; with two weeks in play, leaving it off would be a wrong implication. */}
+                    {(data?.declared?.weeks_on_this_board || []).length > 1 && (
+                      <div style={{ fontSize: 11, color: 'var(--text2)' }}>
+                        {r.week_start} to {r.week_end}
+                        {r.week_start_day ? ` · ${r.week_start_day} week` : ''}
+                      </div>
+                    )}
                   </td>
                   <td style={td}><Dot status={r.status} />{r.label}</td>
                   <td style={td}>

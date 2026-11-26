@@ -2536,6 +2536,9 @@ def payroll_over_hours(start: str, end: str, authorization: str = Header(default
     cur = start
     guard = 0
     while cur <= end and guard < 60:
+        # BOARD-WIDE, so this is the TENANT's week (§STOREOPS-17). A board spanning markets whose
+        # weeks start on different days cannot be one window; the per-store answer is on the
+        # scheduling workflow board, and widening this listing is its own change.
         ws, we = _work_week_bounds(org_id, cur)
         if not weeks or weeks[-1][0] != ws:
             weeks.append((ws, we))
@@ -8049,17 +8052,18 @@ def _hours_between(start, end):
         return 0.0
 
 
-def _work_week_bounds(org_id, date_str):
-    """(week_start_iso, week_end_iso) for the 7-day work-week containing date_str, per the tenant's
-    work_week_start_dow (mig 085; default Monday=0)."""
+def _work_week_bounds(org_id, date_str, store_code=None):
+    """(week_start_iso, week_end_iso) for the 7-day work-week containing date_str.
+
+    THE WEEK IS NOT ALWAYS THE TENANT'S (owner 2026-11-26, index §STOREOPS-17). This read used to
+    select `work_week_start_dow` off `tenants` itself — one of FIVE private copies of that question.
+    It now asks `storeops/work_week`, which resolves the STORE'S MARKET first (Luxelink: Chicago
+    Thu–Wed, NY Mon–Sun), then the tenant, then the house Monday. `store_code` is optional so every
+    existing caller keeps its tenant-wide meaning; a caller that knows the store should pass it,
+    because an hours budget enforced over the wrong seven days is enforced against the wrong week."""
     from datetime import date as _d
-    dow = 0
-    try:
-        t = (sb().table("tenants").select("work_week_start_dow").eq("org_id", org_id).limit(1).execute().data) or []
-        if t and t[0].get("work_week_start_dow") is not None:
-            dow = int(t[0]["work_week_start_dow"]) % 7
-    except Exception:
-        pass
+    from app.modules.storeops import work_week as _ww
+    dow = _ww.start_dow_for(org_id, store_code=store_code)["dow"]
     d = _d.fromisoformat(str(date_str)[:10])
     ws = d - timedelta(days=(d.weekday() - dow) % 7)
     return ws.isoformat(), (ws + timedelta(days=6)).isoformat()
@@ -8135,7 +8139,9 @@ def _enforce_hours_budget(org_id, shift, exclude_id=None):
         budget = _store_budget(org_id, store)
         if budget is None:
             return
-        ws, we = _work_week_bounds(org_id, sdate)
+        # THIS STORE'S week, not its tenant's (§STOREOPS-17). A budget is a ceiling over seven
+        # specific days, so enforcing it over a market's wrong seven days counts the wrong shifts.
+        ws, we = _work_week_bounds(org_id, sdate, store_code=store)
         new_h = shift.get("scheduled_hours")
         if new_h is None:
             new_h = _hours_between(shift.get("start_time"), shift.get("end_time"))
@@ -8159,6 +8165,7 @@ def list_hours_budgets(week: str = "", authorization: str = Header(default=""), 
     except Exception:
         pass
     ref = (week or datetime.now(timezone.utc).astimezone(_biz_tz_for(org_id)).date().isoformat())
+    # BOARD-WIDE: the TENANT's week, for the same reason as the weekly listing above (§STOREOPS-17).
     ws, we = _work_week_bounds(org_id, ref)
     budgets = {b["store_code"]: float(b.get("weekly_hours") or 0)
                for b in (sb().table("hours_budget").select("store_code,weekly_hours").eq("org_id", org_id).execute().data or [])}
