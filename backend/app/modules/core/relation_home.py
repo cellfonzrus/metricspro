@@ -490,6 +490,7 @@ SCHEMA_OF = {
     "late_clockin_strike": "storeops",
     "letter_template": "storeops",
     "manual_hours": "storeops",
+    "market_work_week": "storeops",
     "onboarding_category": "storeops",
     "onboarding_event": "storeops",
     "onboarding_intake_field": "storeops",
