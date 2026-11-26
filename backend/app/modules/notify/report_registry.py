@@ -465,15 +465,21 @@ async def _storeops_schedule(org_id, f):
     # tenant whose week starts on Thursday (Luxelink, dow=3) was emailed a Mon–Sun grid while its
     # schedule page ran Thu–Wed — a house Monday answering for a tenant's own declaration, which is
     # the one place a default is banned (owner 2026-10-30). Both reads are the existing one homes.
+    #
+    # AND A SEND FOR ONE STORE IS THAT STORE'S WEEK (§STOREOPS-17, owner 2026-11-26). The week start
+    # is the MARKET's where one is declared, so a store-scoped send of a Luxelink NY rota is now a
+    # Mon–Sun grid while a Chicago one stays Thu–Wed. A whole-tenant send has no store to resolve,
+    # so it keeps the tenant's week — and the scheduling flow's last step matches a send against the
+    # week start recorded in its own filters, so the two cannot disagree about what was sent.
     from app.modules.storeops.payroll_approval import _week_start_dow
     from app.modules.storeops.schedule_hours import week_start_of
-    start = week_start_of(start, _week_start_dow(org_id))
+    sc = (f or {}).get("store_code")
+    start = week_start_of(start, _week_start_dow(org_id, store_code=sc or None))
     end = start + timedelta(days=6)
     q = (get_supabase().schema("storeops").table("shifts").select("*")
          .eq("org_id", org_id)
          .eq("is_deleted", False)
          .gte("shift_date", start.isoformat()).lte("shift_date", end.isoformat()))
-    sc = (f or {}).get("store_code")
     if sc:
         q = q.eq("store_code", sc)
     shifts = q.order("shift_date").execute().data or []

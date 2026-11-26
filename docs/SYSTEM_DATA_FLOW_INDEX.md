@@ -239,6 +239,7 @@ Primary code homes:
 | STOREOPS-14 | **Employee setup is a flow somebody can leave halfway, and the tenant's own roles decide it** | "The way we have set up teh closing workflow , it is very easy for a new person to start and then pick up where tehy left off, need similar for the Employee set up in logical steps leading up to onboaring" — six screens each knew its own piece and nothing knew the order, so a half-finished person looked identical to a finished one on every one of them. What are the steps, where does somebody pick up, and what stops a wizard becoming a second writer for every field an employee already has? |
 | STOREOPS-15 | **Scheduling a store-week is a flow somebody can leave halfway, and the week is the tenant's own** | "...and then simlar workflow for scheduling", said of the daily-closing workflow a new person can start and come back to. What are the steps for ONE store in ONE week, where does somebody pick up, what does "the week" mean for a tenant that does not start it on a Monday, and how is a day with nobody on it reported when nothing in the platform declares which days a store opens? |
 | STOREOPS-16 | **Running a pay period is a flow somebody can leave halfway, and the gate it shows is the run's own** | "...and simlar workflow for runnign the payroll with paying attention to details". What are the checks for ONE store in ONE pay period, where does somebody pick up, how does a surface show "ready" without ever disagreeing with the run's own refusal, and what can it honestly say about a run whose record is kept by month rather than by pay period? |
+| STOREOPS-17 | **A work week belongs to a market, and which days a store opens is declarable** | "Work week for all companies starts on a Monday and the nds kn a Sunday , luxelink Chicago stores start on Thursday and end on Wednesday , luxelink ny stores are Monday to Sunday" and "All store open 7 days a week". Which seven days is THIS STORE's week when its tenant has one answer and its markets need two, which days is it expected to be covered, and how does a board holding more than one week avoid implying one? |
 | CORE-51 | **"How far through is this flow, and where do I pick it up" has one home** | Three flows were asked for in one sentence (employee setup, scheduling, running payroll). Answering the rail, the lamps, the resume and the progress count once per flow is three homes for one question, and the third copy drifts. Who owns a step's status, what makes a missing answer a refusal rather than a silent "not started", and what fails the build when a fourth copy appears? |
 | CORE-33 | **What an employee may reach is one declaration, and the API is what enforces it** | "on ny logistics Manan was able to go past [the clock-in screen] and also see the adjustment hours, this should not be allowed for any sales reps — this is universal across the board". The browser was the only gate: a menu row the viewer could see opened its whole subtree by URL, and the payroll writes behind those pages asked for no authority at all. Who decides what a surface's audience is, and what makes the API refuse a caller the menu would not offer it to? |
 | CORE-42 | **A gate proved in-process is a claim, not a measurement** | "create a testng agent who deciatedly is checking the data leakage, unwanted access to modules even if theya re gated like the case of manan and we discovered by accident, c annot have an accident of this sort, put it on schdule and one module at a time from the front end as though somebnbody was trying to hack in to the system". Every access control here is proved by a harness that imports the handler — which catches a wrong rule and not a right rule that was never reached. Who asks the DEPLOYED platform what it actually answers an unprivileged outsider, one module at a time, and what stops that probe from writing to production or from reporting a pass on a question it never asked? |
@@ -26702,6 +26703,7 @@ status word rather than a blank that reads as nil.
 | STOREOPS-14 | storeops, hr, core |
 | STOREOPS-15 | storeops, core, notify |
 | STOREOPS-16 | storeops, core |
+| STOREOPS-17 | storeops, core, notify |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -53578,3 +53580,99 @@ degrade-by-name path and "reading writes nothing"). Lock: `harness_payroll_run_f
 flows) · §29.12 (the workflow this was asked to resemble) · §14y (what is paying somebody) · §14z
 (the gate and the $0.00 question) · §STOREOPS-07 (the one pay derivation, and the column nothing
 writes) · §CORE-45 (open-stores-only, one spelling) · §3d (the standard filter bar and the Send bar).
+
+---
+
+## §STOREOPS-17. A WORK WEEK BELONGS TO A MARKET (owner 2026-11-26)
+
+**What was asked for.** *"Work week for all companies starts on a Monday and the nds kn a Sunday ,
+luxelink Chicago stores start on Thursday and end on Wednesday , luxelink ny stores are Monday to
+Sunday"* and *"All store open 7 days a week"*.
+
+**THE DEFECT THAT SENTENCE EXPOSED, measured on production the same day.**
+`storeops.tenants.work_week_start_dow` (mig 085) holds ONE week start per tenant. Luxelink is one
+tenant with two markets, and those markets ARE its two companies (Chicago 13 stores / 10 open, NY 11
+/ 10 open). Its column reads **3 (Thursday)** — right for Chicago, wrong for every NY store. So
+until this change 10 open NY stores were bucketed Thu–Wed while the owner says they run Mon–Sun, and
+there was no row in which to say otherwise. The other three tenants read 0 (Monday), which matches
+the owner's "all companies start on a Monday".
+
+That one number anchors **four** things at once: the schedule grid, the weekly hours ceiling, the
+period an approvals board opens on, and the grid a rota is emailed as. A wrong week is wrong in all
+four.
+
+**The class, not the instance — two of them.**
+
+1. **A fact at the wrong grain cannot be stated at all.** "Which seven days is a week" was modelled
+   per TENANT because the first tenant to need it had one answer. The grain widens to the MARKET,
+   with the tenant behind it. Special-casing Luxelink in code would be the per-tenant CODE that
+   RULE TWO forbids; a config row is not a patch, per-tenant code is.
+2. **The same fact was read from FIVE places** — `storeops/payroll_approval._week_start_dow`,
+   `storeops/router` TWICE (the tenant-settings read and a private `_work_week_bounds` copy),
+   `storeops/payroll_run_api` and `storeops/schedule_week_api`. Widening four of them would leave
+   the fifth answering the old way: the same defect wearing a hat. So it lands in ONE home.
+
+**One home, dereferenced.** `backend/app/modules/storeops/work_week.py` resolves **MARKET, then
+tenant, then the house Monday**, and every answer reports WHICH LEVEL gave it — so a surface can say
+where its week came from instead of implying a declaration that does not exist. The market a store
+belongs to is asked of `app/core/scope.market_by_code`, the canonical union index (§14x), never of a
+vocabulary of its own; markets are compared case-folded, because a second spelling of a market would
+be a phantom market with its own calendar (§13e).
+
+**A house default stays right for the week, and is BANNED behind the open days.** The 2026-10-30
+directive bans a default that is really one tenant's VOCABULARY; it names a POLICY — a rate, a
+window, a switch — as exactly where a house default belongs. Monday is the week start's documented
+house default (mig 085) and stays one. Open days are a tenant's own statement about its own stores,
+so NOTHING stands behind them: undeclared returns `()` with `declared=False`, and the scheduling
+flow then NAMES the days with nobody on rather than calling them gaps (§STOREOPS-15). An EMPTY
+declared set is a real answer and stays distinguishable from NULL, because "we have not said" and
+"never" must not read the same.
+
+**A board may now hold more than one week, and says so.** The scheduling board resolves one
+declaration per market, cuts each store-week over ITS OWN seven days, and reads the org-wide facts
+(double booking, time off, sends) over the UNION of every market's week — or a Thursday-week store's
+Wednesday would read as empty rather than as unread. Each row carries its own `week_start`,
+`week_end` and `week_start_level`, the payload carries `weeks_on_this_board`, and the gate is asked
+over the whole span so a Thursday-week store is not gated out by a Monday window.
+
+**What this change does NOT do, stated rather than hidden.** The **pay period** still resolves its
+week start per TENANT. `work_week_start_dow` is one field of the pay-cycle bundle
+(`pay_period_type` / `payday_dow` / `biweekly_anchor`) that `core.router.pay_period_for` turns into
+dates, and a payroll board resolves ONE period for all of its stores — splitting that by market
+would give one board several pay periods, which is money-adjacent and needs its own PR and the
+owner's sight. The consequence to be aware of: a Luxelink NY store's SCHEDULE is now Mon–Sun while
+its approvals board still opens on a Thursday-anchored period. Those two reads are pinned as named
+excusals in `harness_work_week.py` §B, so they cannot drift unnoticed, and §B2 deletes a pin that
+stops being real. Two **board-wide** hours-budget listings also keep the tenant's week, for the same
+structural reason (one window cannot be several); the per-store answer is on the workflow board, and
+budget ENFORCEMENT — the read that matters — is per store.
+
+**The duplicate check (build gate).** Reused rather than rebuilt: `app/core/scope.market_by_code`
+(which market a store is in — §14x), `storeops/schedule_hours.week_start_of` (the week bucket),
+`storeops/payroll_approval._week_start_dow` (kept as the name the rota imports, now delegating),
+`core/guided_workflow` (§CORE-51) and `storeops/schedule_week_flow` untouched. Nothing new was
+derived, and the five private reads were REMOVED rather than left beside the new home.
+
+**Where it lives.**
+
+| the question | the home |
+|---|---|
+| which seven days is this store's week, and where did that answer come from | `backend/app/modules/storeops/work_week.py` — `start_dow_for`, `resolve_start_dow` (pure) |
+| which days is this store expected to be covered | the same module — `open_dows_for` / `open_dows_map`, `resolve_open_dows` (pure) |
+| the declarations themselves | `storeops.market_work_week` + `storeops.stores.open_dows` / `storeops.tenants.open_dows` (migration 1132) |
+
+**Degrades until its migration lands (§POS-01).** Code ships on merge and a migration waits for the
+owner, so every read falls back to the tenant column when `market_work_week` or `open_dows` is not
+there yet — which is exactly today's behaviour, not a different one.
+
+**Tests.** `backend/tests/unit/test_work_week.py` (18, the pure order of resolution) and 10 added to
+`backend/tests/integration/test_schedule_workflow_endpoint.py` (two markets of one tenant reporting
+two weeks on one board, each row saying where its week came from, a market declaration in one tenant
+never answering for another, open days declared and undeclared, and the pre-migration fallback).
+Lock: `harness_work_week.py` (51), CI job `work-week-lock`.
+
+**Cross-references:** §STOREOPS-15 (the scheduling flow, whose `open_dows` this fills in) §
+§STOREOPS-16 (the payroll flow, whose pay period is the stated exclusion) § §14x (which market a
+store is in) § §13e (a second spelling is a phantom entity) § §CORE-39 (the Fix It notice the
+scheduling board shows while the week start is undeclared) § mig 085 (the tenant column this widens).
+

@@ -725,6 +725,13 @@ on:
       - "backend/harness_payroll_run_flow.py"
       - "backend/app/modules/storeops/payroll_run_flow.py"
       - "backend/app/modules/storeops/payroll_run_api.py"
+      # index §STOREOPS-17 — the work-week lock reads the ONE home for "which seven days is this
+      # store's week", its migration, and the five places that each used to answer it themselves
+      - "backend/harness_work_week.py"
+      - "backend/app/modules/storeops/work_week.py"
+      - "backend/app/modules/storeops/payroll_approval.py"
+      - "backend/app/modules/storeops/router.py"
+      - "database/migrations/1132_per_market_work_week_and_open_days.sql"
       # index §29.13 — one store-day takes one closing; the lock reads the router, the grain
       # registry, the dedup key, migration 1080 and the Management Review screen
       - "backend/harness_closing_store_day_grain.py"
@@ -3225,6 +3232,26 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_payroll_run_flow.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE WORK-WEEK LOCK (index §STOREOPS-17) imports the pure core of `storeops/work_week` and reads
+  # its five former callers as source. DB-free, but it needs the backend's dependencies because the
+  # home dereferences `app/core/scope` for the canonical market. The two checks that matter most:
+  # §B1 fails the build if any module outside the home SELECTS `work_week_start_dow` / `open_dows`
+  # or reads `market_work_week` (the sixth-copy lock — there were five), and §E refuses a house
+  # seven-day default behind a tenant's own statement about its own stores.
+  work-week-lock:
+    name: Work week lock (one home for which seven days a week is; a market may differ from its tenant; open days are declared, never assumed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the work-week lock (market then tenant then the house Monday; no sixth copy of the column; a typo is not Monday; nothing declared is never seven days — index §STOREOPS-17)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_work_week.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE SETUP-DOCUMENTS PROOF (index §39) imports the real setup_documents / setup_router / import_health modules (the
   # document rules, automation history, gate, reminders, the super-admin edit validation), so it runs in its own job with

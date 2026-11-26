@@ -36,6 +36,7 @@ from app.core.database import get_supabase
 from app.modules.core import guided_workflow as gw
 from app.modules.core import roster_visibility as _rv
 from app.modules.storeops import schedule_week_flow as _flow
+from app.modules.storeops import work_week as _ww
 
 router = APIRouter()
 
@@ -77,26 +78,30 @@ def _rows(table, select, org_id, blockers, *, schema=None, **eqs):
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # THE ORGANISATION'S DECLARATIONS
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-def _declarations(org_id, blockers) -> dict:
-    """The tenant's own week, and the opening days it has not declared.
+def _declarations(org_id, blockers, *, market=None, open_dows=None) -> dict:
+    """The week this MARKET runs, and the days its stores are declared open.
 
-    `week_start_dow` is read through the ONE home that already answers it
-    (`payroll_approval._week_start_dow`, which documents why the column is already 0=Monday), so
-    this board and the payroll board can never disagree about which seven days a week is.
+    BOTH ANSWERS COME FROM THE ONE HOME, `storeops/work_week` (§STOREOPS-17), which is the only
+    module that reads either store. It resolves MARKET first, then the tenant, then the house
+    Monday — so a tenant whose markets run different weeks (Luxelink: Chicago Thu–Wed, NY Mon–Sun)
+    is answered per market, and this board, the hours budget and the emailed rota cannot disagree
+    about which seven days a store's week is.
+
+    `open_dows` is passed in when the caller has already resolved it for a whole board in one read.
+    Undeclared stays UNDECLARED: the coverage step then NAMES the days with nobody on instead of
+    calling them gaps, because a seven-day assumption would be the house answering for a tenant.
     """
-    from app.modules.storeops.payroll_approval import _week_start_dow
-    declared_week = False
     try:
-        rows = (sb().table("tenants").select("work_week_start_dow")
-                .eq("org_id", org_id).limit(1).execute().data) or []
-        declared_week = bool(rows) and rows[0].get("work_week_start_dow") is not None
-    except Exception as e:
+        w = _ww.start_dow_for(org_id, market=market)
+    except Exception as e:                        # degrades by NAME, never 500s
         blockers.append({"table": "tenants", "reason": type(e).__name__})
-    return {"week_start_dow": _week_start_dow(org_id),
-            "week_start_declared": declared_week,
-            # NOT DECLARED ANYWHERE TODAY — see the module header. Sent empty on purpose, so the
-            # coverage step reports uncovered days rather than judging them.
-            "open_dows": ()}
+        w = {"dow": _ww.HOUSE_START_DOW, "level": _ww.LEVEL_HOUSE, "declared": False}
+    od = open_dows if open_dows is not None else {"dows": (), "declared": False, "level": None}
+    return {"week_start_dow": w["dow"],
+            "week_start_declared": bool(w["declared"]),
+            "week_start_level": w["level"],
+            "open_dows": tuple(od.get("dows") or ()),
+            "open_days_level": od.get("level")}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -204,6 +209,7 @@ def _sends_for_week(org_id, week_start, blockers):
 
 def _assemble(org_id, week_start_in, *, include_inactive=False, store_code=None):
     blockers = []
+    # THE TENANT'S OWN WEEK, for the picker's header and for the window the org-wide reads use.
     declared = _declarations(org_id, blockers)
     try:
         days = _flow.week_days(week_start_in or date.today(), declared)
@@ -212,10 +218,39 @@ def _assemble(org_id, week_start_in, *, include_inactive=False, store_code=None)
 
     stores, hidden = _stores(org_id, blockers, include_inactive=include_inactive,
                              store_code=store_code)
+
+    # ONE DECLARATION PER MARKET, resolved once (§STOREOPS-17). A board can span markets whose weeks
+    # start on different days, so a single seven-day window would be wrong for one of them — each
+    # store-week below is cut over ITS OWN seven days. Markets are few, the open days are read in one
+    # go, so this costs two reads whatever the board's size.
+    opens = {}
+    try:
+        opens = _ww.open_dows_map(org_id, [_s(r.get("store_code")) for r in stores])
+    except Exception as e:
+        blockers.append({"table": "stores", "reason": type(e).__name__})
+    by_market, anchor = {}, (week_start_in or date.today())
+    for r in stores:
+        mk = _ww._market_key(r.get("market"))
+        if mk in by_market:
+            continue
+        d = _declarations(org_id, blockers, market=_s(r.get("market")))
+        try:
+            by_market[mk] = (d, _flow.week_days(anchor, d))
+        except ValueError:
+            by_market[mk] = (declared, days)
+    # The org-wide reads (double-booking, time off, sends) must cover EVERY market's week, or a
+    # Thursday-week store's Wednesday would be read as empty rather than as unread.
+    spans = [days] + [v[1] for v in by_market.values()]
+    span = [min(x[0] for x in spans), max(x[-1] for x in spans)]
+    read_days = []
+    cur = span[0]
+    while cur <= span[1]:
+        read_days.append(cur)
+        cur = cur + timedelta(days=1)
     # The shifts and the people's whereabouts are read for the WHOLE org's week, because the
     # double-booking check asks where else the same person is — a per-store read cannot answer it.
-    shifts = _shifts_in_week(org_id, days, blockers)
-    time_off = _time_off_in_week(org_id, days, blockers)
+    shifts = _shifts_in_week(org_id, read_days, blockers)
+    time_off = _time_off_in_week(org_id, read_days, blockers)
     home = _home_stores(org_id, blockers)
     week_shift_ids = {}
     for s in shifts:
@@ -224,23 +259,38 @@ def _assemble(org_id, week_start_in, *, include_inactive=False, store_code=None)
     swaps = _swaps_for_week(org_id, week_shift_ids, blockers)
     budgets = {_s(b.get("store_code")).upper(): b
                for b in _rows("hours_budget", "store_code,weekly_hours", org_id, blockers)}
-    overrides = _overrides_for_week(org_id, days[0], blockers)
-    sends_by_store, sends_all = _sends_for_week(org_id, days[0], blockers)
+    # Keyed BY WEEK START, because the board can hold more than one (§STOREOPS-17): an override or a
+    # rota send belongs to a specific store-week, and matching a Thursday week's send against a
+    # Monday week's start would report "not sent" for a week that was sent.
+    week_starts = sorted({days[0]} | {v[1][0] for v in by_market.values()})
+    overrides = {ws: _overrides_for_week(org_id, ws, blockers) for ws in week_starts}
+    sends = {ws: _sends_for_week(org_id, ws, blockers) for ws in week_starts}
 
-    return {"declared": declared, "days": days, "stores": stores, "inactive_hidden": hidden,
+    return {"declared": declared, "days": days, "by_market": by_market, "opens": opens,
+            "read_days": read_days,
+            "stores": stores, "inactive_hidden": hidden,
             "home_stores": home,
             "shifts": shifts, "time_off": time_off, "swaps": swaps, "budgets": budgets,
-            "overrides": overrides, "sends_by_store": sends_by_store, "sends_all": sends_all,
+            "overrides": overrides, "sends": sends,
             "blockers": blockers}
 
 
+def _for_store(store, a):
+    """(declaration, days) for ONE store — its market's week, with the tenant's behind it."""
+    return a["by_market"].get(_ww._market_key(store.get("market")), (a["declared"], a["days"]))
+
+
 def _facts_for(store, a) -> dict:
-    """One store-week's facts, cut out of the week that was read once."""
+    """One store-week's facts, cut out of the span that was read once — over THIS STORE'S seven
+    days, which are its market's (§STOREOPS-17), not necessarily its tenant's."""
     code = _s(store.get("store_code"))
     key = code.upper()
-    mine = [s for s in a["shifts"] if _s(s.get("store_code")).upper() == key]
+    _d, my_days = _for_store(store, a)
+    my_set = {d for d in my_days}
+    in_week = [s for s in a["shifts"] if _day(s.get("shift_date")) in my_set]
+    mine = [s for s in in_week if _s(s.get("store_code")).upper() == key]
     people = {_s(s.get("employee_id")) for s in mine if _s(s.get("employee_id"))}
-    elsewhere = [s for s in a["shifts"]
+    elsewhere = [s for s in in_week
                  if _s(s.get("store_code")).upper() != key
                  and _s(s.get("employee_id")) in people]
     # A request belongs to this store-week if the person is ON this week's rota here, or if this is
@@ -249,13 +299,15 @@ def _facts_for(store, a) -> dict:
     off = [r for r in a["time_off"]
            if _s(r.get("employee_id")) in people
            or home.get(_s(r.get("employee_id"))) == key]
-    return {"store_code": code, "week_start": a["days"][0],
+    ws = my_days[0]
+    by_store, all_stores = a["sends"].get(ws, ({}, []))
+    return {"store_code": code, "week_start": ws,
             "budget": a["budgets"].get(key),
             "time_off": off,
             "swaps": [w for w in a["swaps"] if _s(w.get("store_code")) == key],
             "shifts": mine, "other_shifts": elsewhere,
-            "override": a["overrides"].get(key),
-            "sends": (a["sends_by_store"].get(key) or []) + a["sends_all"]}
+            "override": (a["overrides"].get(ws) or {}).get(key),
+            "sends": (by_store.get(key) or []) + all_stores}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -305,12 +357,20 @@ def schedule_workflow_board(week_start: str = None, include_inactive: bool = Fal
     a = _assemble(org_id, week_start, include_inactive=include_inactive)
     days, declared = a["days"], a["declared"]
     visible = _apply_filters(a["stores"], markets=markets, stores_filter=stores)
-    visible = _gate(visible, authorization, org_id, days)
+    # The gate is asked over the WHOLE span read, so a Thursday-week store is not gated out by a
+    # Monday window that does not contain the days it worked (§STOREOPS-17).
+    visible = _gate(visible, authorization, org_id, a["read_days"])
 
     rows = []
     for store in visible:
+        # EACH STORE'S OWN DECLARATION, which is its market's. One tenant-wide declaration would
+        # describe a Mon–Sun store against a Thu–Wed week.
+        my_declared, my_days = _for_store(store, a)
+        my_declared = dict(my_declared,
+                           open_dows=tuple((a["opens"].get(_s(store.get("store_code"))) or {})
+                                           .get("dows") or my_declared.get("open_dows") or ()))
         try:
-            row = _flow.describe(declared, _facts_for(store, a))
+            row = _flow.describe(my_declared, _facts_for(store, a))
         except ValueError as e:
             # The flow REFUSES rather than guessing. Report it against the store instead of
             # dropping it off the board.
@@ -322,6 +382,12 @@ def schedule_workflow_board(week_start: str = None, include_inactive: bool = Fal
         row["address"] = _s(store.get("address"))
         row["market"] = _s(store.get("market"))
         row["is_active"] = store.get("is_active") is not False
+        # SAID PER ROW, so a board holding two different weeks never implies one.
+        row["week_start"] = my_days[0].isoformat()
+        row["week_end"] = my_days[-1].isoformat()
+        row["week_start_day"] = _flow.DAY_NAMES[my_declared["week_start_dow"]]
+        row["week_start_level"] = my_declared.get("week_start_level")
+        row["open_days_declared"] = bool(my_declared.get("open_dows"))
         rows.append(row)
 
     if status:
@@ -339,9 +405,14 @@ def schedule_workflow_board(week_start: str = None, include_inactive: bool = Fal
             "declared": {"week_start_dow": declared["week_start_dow"],
                          "week_start_day": _flow.DAY_NAMES[declared["week_start_dow"]],
                          "week_start_declared": declared["week_start_declared"],
+                         "week_start_level": declared.get("week_start_level"),
                          "open_dows": list(declared["open_dows"]),
                          # Said in the payload, so the screen never has to assume it.
-                         "open_days_declared": bool(declared["open_dows"])},
+                         "open_days_declared": bool(declared["open_dows"]),
+                         # WHETHER THE ROWS BELOW SHARE THIS WEEK. More than one means the header's
+                         # week is the tenant's and each row carries its own (§STOREOPS-17).
+                         "weeks_on_this_board": sorted({r.get("week_start") for r in rows
+                                                        if r.get("week_start")})},
             "steps": [{"key": s["key"], "title": s["title"], "why": s["why"],
                        "required": s["required"], "screen": s["screen"]}
                       for s in _flow.steps(declared)],
@@ -368,12 +439,18 @@ def schedule_workflow_one(store_code: str, week_start: str = None,
     a = _assemble(org_id, week_start, include_inactive=True, store_code=code)
     if not a["stores"]:
         raise HTTPException(404, "No store with that code in this organisation.")
-    if not _gate(a["stores"], authorization, org_id, a["days"]):
+    if not _gate(a["stores"], authorization, org_id, a["read_days"]):
         raise HTTPException(403, "You cannot read this store's schedule.")
 
     store = a["stores"][0]
+    # THIS STORE'S OWN WEEK AND OPEN DAYS — its market's, with the tenant's behind them
+    # (§STOREOPS-17). A rail laid out over the tenant's week would send somebody to the wrong days.
+    my_declared, my_days = _for_store(store, a)
+    my_declared = dict(my_declared,
+                       open_dows=tuple((a["opens"].get(_s(store.get("store_code"))) or {})
+                                       .get("dows") or my_declared.get("open_dows") or ()))
     try:
-        out = _flow.describe(a["declared"], _facts_for(store, a))
+        out = _flow.describe(my_declared, _facts_for(store, a))
     except ValueError as e:
         raise HTTPException(409, str(e))
     out["address"] = _s(store.get("address"))
@@ -382,10 +459,17 @@ def schedule_workflow_one(store_code: str, week_start: str = None,
     out["ready"] = not a["blockers"]
     out["blockers"] = a["blockers"]
     out["days"] = [{"date": d.isoformat(), "name": _flow.DAY_NAMES[d.weekday()]}
-                   for d in a["days"]]
-    out["declared"] = {"week_start_dow": a["declared"]["week_start_dow"],
-                       "week_start_day": _flow.DAY_NAMES[a["declared"]["week_start_dow"]],
-                       "open_days_declared": bool(a["declared"]["open_dows"])}
+                   for d in my_days]
+    out["week_start"] = my_days[0].isoformat()
+    out["week_end"] = my_days[-1].isoformat()
+    out["declared"] = {"week_start_dow": my_declared["week_start_dow"],
+                       "week_start_day": _flow.DAY_NAMES[my_declared["week_start_dow"]],
+                       "week_start_declared": bool(my_declared.get("week_start_declared")),
+                       # WHERE the answer came from, so the screen states it rather than implying a
+                       # declaration that may not exist.
+                       "week_start_level": my_declared.get("week_start_level"),
+                       "open_dows": list(my_declared.get("open_dows") or ()),
+                       "open_days_declared": bool(my_declared.get("open_dows"))}
     out["statuses"] = [{"key": s, "label": gw.LABELS[s]} for s in gw.STATUSES]
     if response is not None:
         response.headers["Cache-Control"] = "no-store"
