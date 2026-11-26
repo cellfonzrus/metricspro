@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import StandardFilterBar from '@/components/StandardFilterBar'
+import { INCLUDE_INACTIVE_PARAM, rosterIsActive } from '@/lib/roster-visibility'
 import DateField from '@/components/DateField'
 import { api } from '@/lib/client'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
@@ -138,7 +139,7 @@ export default function ScheduleWorkflowPage() {
     q.set('week_start', week)
     if (filter.stores?.length) q.set('stores', filter.stores.join(','))
     if (filter.markets?.length) q.set('markets', filter.markets.join(','))
-    if (filter.showInactive) q.set('include_inactive', 'true')
+    if (filter.showInactive) q.set(INCLUDE_INACTIVE_PARAM, 'true')
     return `/api/v1/storeops/schedule-workflow?${q.toString()}`
   }, [week, filter])
 
@@ -336,7 +337,7 @@ export default function ScheduleWorkflowPage() {
                   <td style={td}>
                     <div style={{ fontWeight: 600 }}>
                       {r.store_code}
-                      {r.is_active === false && <span style={{ ...chip, marginLeft: 6 }}>closed</span>}
+                      {!rosterIsActive(r) && <span style={{ ...chip, marginLeft: 6 }}>closed</span>}
                     </div>
                     <div style={{ fontSize: 11, color: 'var(--text2)' }}>{r.market || ''}</div>
                   </td>
