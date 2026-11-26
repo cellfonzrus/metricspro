@@ -71,10 +71,17 @@ def test_the_pull_is_the_phase_the_defect_hid_behind():
 
 
 def test_the_two_gates_dereference_it_rather_than_keeping_a_phase_tuple():
+    """The chain, not one link of it. §COMMCALC-11.8 moved the three-fact decision into
+    `act_blocker`, so the gates now dereference THAT and `act_blocker` dereferences `signed_in()`.
+    Both rungs are asserted here, because checking only the gate would pass a future `act_blocker`
+    that grew its own phase list."""
     for fn in (ll.LiveLoginSession.can_pull, ll.LiveLoginSession.can_calibrate):
         src = inspect.getsource(fn)
-        assert "signed_in()" in src, fn.__name__
+        assert "act_blocker" in src, fn.__name__
         assert '"authenticated"' not in src, "%s still keeps its own phase list" % fn.__name__
+    blocker = inspect.getsource(ll.act_blocker)
+    assert "signed_in()" in blocker, "act_blocker stopped asking the one home"
+    assert '"authenticated"' not in blocker, "act_blocker grew its own phase list"
 
 
 def test_the_state_payload_publishes_it_so_a_surface_need_not_guess():
