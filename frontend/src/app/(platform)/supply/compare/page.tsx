@@ -63,11 +63,10 @@ export default function SupplyComparePage() {
   // The item dropdown: every product name on the page, for the search box's suggestion list.
   const itemNames = useMemo(() => Array.from(new Set(rows.map(r => r.product))).sort().slice(0, 500), [rows])
 
-  // Same rule as the cart optimizer: the quantity is UNITS only when every vendor states its pack size.
-  const unitsBasis = (r: CompareRow) => {
-    const os = Object.values(r.offers).filter(o => o.price != null)
-    return os.length > 0 && os.every(o => (o.pack_qty || 0) > 1)
-  }
+  // The cart basis is DECIDED by pricing_core (comparison_rows.cart_basis) and read here. This page
+  // used to re-derive it from pack_qty, which is how a vendor that states "$5.40 per EA" was treated
+  // as having no unit price at all.
+  const unitsBasis = (r: CompareRow) => r.cart_basis === 'units' 
   const cartItem = (r: CompareRow, n: number) => {
     const ids = Object.values(r.offers).map(o => o.row_id).filter(Boolean)
     return { key: ids.slice().sort().join('|'), label: r.product, qty: n, offer_ids: ids, basis: unitsBasis(r) ? 'units' : 'packs' }
@@ -160,7 +159,7 @@ export default function SupplyComparePage() {
                 </td>
                 <td style={cell}>
                   <div>{r.product}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text2)' }}>{r.match}{r.basis === 'per unit' ? ' · compared per unit' : ''}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text2)' }}>{r.match} · {r.basis}</div>
                   {r.note && <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>{r.note}</div>}
                   {r.favorite && r.reorder_qty ? <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>Reorder quantity: {r.reorder_qty}</div> : null}
                 </td>
@@ -170,8 +169,10 @@ export default function SupplyComparePage() {
                   const rules = orderRules(o)
                   return (
                     <td key={v.id} style={{ ...cell, background: r.best_vendor === v.id ? 'rgba(22,163,74,.08)' : undefined }}>
-                      <div style={{ fontWeight: r.best_vendor === v.id ? 700 : 400 }}>{fmtMoney(o.price)}{o.pack_qty ? ` / ${o.pack_qty}` : ' each'}</div>
-                      {o.pack_qty ? <div style={{ fontSize: 11, color: 'var(--text2)' }}>{fmtMoney(o.unit_price)} each</div> : null}
+                      <div style={{ fontWeight: r.best_vendor === v.id ? 700 : 400 }}>{fmtMoney(o.price)}{o.pack_qty ? ` / pack of ${o.pack_qty}` : ''}</div>
+                      {o.unit_price != null
+                        ? <div style={{ fontSize: 11, color: 'var(--text2)' }}>{fmtMoney(o.unit_price)} each — {o.unit_basis}</div>
+                        : <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>pack size not stated — per-item cost unknown</div>}
                       {rules && <div style={{ fontSize: 11, color: 'var(--c-fg-2563eb)' }}>Order {rules}</div>}
                       {o.sku && <div style={{ fontSize: 10, color: 'var(--text2)' }}>#{o.sku}</div>}
                       <div style={{ fontSize: 11, color: AVAIL_COLOR[o.availability] || 'var(--c-fg-6b7280)' }}>
@@ -182,7 +183,11 @@ export default function SupplyComparePage() {
                   )
                 })}
                 <td style={cell}>{r.best_vendor ? names[r.best_vendor] || '—' : '—'}</td>
-                <td style={cell}>{r.savings ? `${fmtMoney(r.savings)}${r.savings_pct ? ` (${Math.round(r.savings_pct * 100)}%)` : ''}` : '—'}</td>
+                <td style={cell}>{r.savings
+                  ? `${fmtMoney(r.savings)}${r.savings_pct ? ` (${Math.round(r.savings_pct * 100)}%)` : ''}`
+                  : r.comparable === false && r.gap != null
+                    ? <span style={{ color: 'var(--c-fg-b45309)' }}>{fmtMoney(r.gap)} apart — not comparable</span>
+                    : '—'}</td>
                 <td style={cell}>
                   <div style={{ display: 'flex', gap: 4 }}>
                     <input style={{ ...input, width: 64 }} inputMode="numeric" placeholder={r.reorder_qty ? String(r.reorder_qty) : '1'} value={qty[i] || ''}

@@ -18290,9 +18290,66 @@ Registered as a feed: `data_lineage_registry.INGEST_TABLES_BY_MODULE["supply"] =
   §L one writer of the snapshot table, both routes call it, commcalc dereferences `SUPPLY_PROCESSOR` (no second
   spelling), `_live_pull` dispatch order, the 301 home + commcalc login reused, mig 1021 creates exactly one table,
   additive/idempotent/REVERT/RLS, logins leave the store without secrets, main.py registration, ONE nav group.
-- `backend/harness_vendor_price_compare.py` §I (**79** total): the kit resolves to the backend home; the zip bundles
-  a byte-identical copy; **a second definition of the pricing logic / reader anywhere in the repo fails** (planted
-  negative control).
+- `backend/harness_vendor_price_compare.py` §I/§J/§K (**107** total): the kit resolves to the backend home; the zip
+  bundles a byte-identical copy; **a second definition of the pricing logic / reader anywhere in the repo fails**
+  (planted negative control); plus the two 2026-11-25 design fixes below.
+
+### 36.9 WHAT ONE ITEM COSTS, AND HOW WE KNOW — one home, three answers (owner 2026-11-25)
+
+> Owner: *"if it shows bulk items with the number of items next to it it should divide to get the cost per item,
+> which the user can see and do by naked eye, the system should do it for them"* — and *"the pdf also shows our
+> chagin invoices"*.
+
+**Class, not instance.** A price carries one of THREE facts and the platform stored two: the vendor states a
+per-item price (`"$5.4000 per EA (10/BDL)"`), or states a pack and leaves us to divide (`$76.20`, pack of 15), or
+says nothing. The third was collapsed into the first — `unit_price` returned the listed price unchanged and the
+surfaces printed the word *each* beside it — so a CASE price sat against a SINGLE price and the difference was
+reported as a saving. Live on 2026-11-25 a 24x18x18 UPS box read **"$71.39 cheaper (94%)"** when the two vendors
+are **27 cents** apart ($5.08 vs $4.81).
+
+| fact | home | callers |
+|---|---|---|
+| what ONE item costs and how we know | `supply/pricing_core.unit_basis` → `UNIT_STATED` \| `UNIT_DIVIDED` \| `UNIT_UNKNOWN` | `pricing_core.unit_price` (DERIVED, no second division), `comparison_rows`, `ordering_logic.offer_from_row` |
+| whether two vendors may be compared at all | `pricing_core.comparison_rows` → `comparable` + `basis` | `GET /supply/compare`, the Price Compare screen, the price-comparison PDF |
+| whether a quantity means units or packs | `comparison_rows.cart_basis` | the Price Compare screen (it had its OWN copy, derived from `pack_qty`, which is how a stated per-each price read as no unit price at all) |
+
+An UNKNOWN per-item cost is **missing, not cheap**: `unit_price` is `None` and the screen says *"pack size not
+stated"* rather than *"each"*. A mixed-basis row (one vendor prices a pack, the other does not) reports a `gap`,
+names **no** winner and reports **no** saving.
+
+### 36.10 A CATALOG READ NEVER LANDS OUR OWN INVOICES (owner 2026-11-25)
+
+**Measured:** 81 of one vendor's 205 "catalog" rows (40%) were read off our OWN order history —
+`ordhist.htm` 24, `ordhistdet.htm` 21, `ordhistlist.htm` 17, `ordhistlistdetail.htm` 11, `cathistsub.htm` 6,
+`itmhistsub.htm` 1, `ordhistlistmth.htm` 1. Only 124 came from the product page `itemdet.htm`. An invoice line's
+price is what we PAID once, not what the vendor charges today.
+
+**Class:** `SAFE_SKIP` answered *"could following this link ACT"* (cart, checkout, logout). Nothing answered
+*"is this page a price list at all"*. One home now does: `supply/catalog_scrape.is_not_a_price_list`
+(`NOT_A_PRICE_LIST`), dereferenced by `VendorScraper._allowed`, overridable per vendor with
+`portal_config.allow_account_pages` — config, never code. Verified against all 509 live URLs: exactly the 81
+history rows refused, all 428 product pages kept. The next scheduled sweep writes a clean run and
+`store.latest_rows` reads only the newest, so no stored row has to be deleted.
+
+**The divisor is a COUNT, nothing else.** Dividing automatically is only a kindness if the number
+divided by is right, and three sources of a wrong one were live the moment the division became
+visible: a money amount (`"$7.8900 per CS"` → a pack of **8,900**), a part number (`"UPS819 Carton
+Sealing Tape"` → **819**) and a weight (`"25LB BAG"` → **25**). `pricing_core.parse_pack` now strips
+money and weight alongside the dimension rule it already had, and refuses digits glued to letters.
+55 stored packs in the live snapshot disagree with the hardened parser; **13 are the artefacts
+above**, the rest are detail-page counts the listing row never carried. Nothing is repaired: each
+sweep writes its own dated run and `store.latest_rows` reads only the newest, so the next read is
+clean.
+
+**Lock:** `harness_vendor_price_compare.py` §J (18) + §K (7) — AST checks that only `pricing_core` divides a price
+by a pack, that `unit_price` is derived from `unit_basis`, that the route passes the basis instead of recomputing
+it, that the screen reads `cart_basis` and never prints a bare `each`, that `_allowed` dereferences the page
+policy, and that neither fact is declared twice. Tests: `backend/tests/unit/test_per_item_cost_is_never_guessed.py`
+(13) + `backend/tests/integration/test_supply_compare_per_item_cost.py` (5).
+
+**Still open (reported, not coded around):** AFFLINK has priced **0** products ever — its saved login is accepted
+but its `catalog_urls` is the shopfront landing page, so the reader walks one page. That is a vendor-config row
+for the owner to point at a real product listing, not a code change.
 - `backend/harness_org_scope_guard.py` LEAK CLASS 5: every chain in `supply/store.py` org-scoped (mutation-proven);
   router / portal / logic hold no query. `org-scope-guard.yml` triggers on `backend/app/modules/supply/**`.
 - `backend/harness_browser_sweep_kinds.py` §6 (**45**; now wired into CI — it was not before): the modules outside

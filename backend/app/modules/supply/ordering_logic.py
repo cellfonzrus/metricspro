@@ -367,15 +367,24 @@ def map_kit_vendor(kit_key, vendors):
 def offer_from_row(row):
     """A snapshot row → the product dict pricing_core compares (vendor = the po_vendor id). Pack / step read
     through pricing_core.effective_pack, so rows landed before the per-each rule read right too."""
-    _eff = core.effective_pack({"pack_qty": _int(row.get("pack_qty")), "order_multiple": _int(row.get("order_multiple")),
+    # The bundle count the owner can read with the naked eye — "(10/BDL)", "(100/CS)" — sits in the
+    # product NAME. A stored row that predates the landing-time parse carries neither pack nor step,
+    # so it is recovered here through the SAME two functions the lander uses (never a second rule),
+    # and the row then reads right without a re-sweep.
+    _pack = _int(row.get("pack_qty")) or core.parse_pack(f"{row.get('name') or ''} {row.get('description') or ''}")
+    _eff = core.effective_pack({"pack_qty": _pack, "order_multiple": _int(row.get("order_multiple")),
                                 "name": row.get("name"), "description": row.get("description")})
-    return {"vendor": row.get("vendor_id"), "row_id": row.get("id"), "name": row.get("name") or "",
+    offer = {"vendor": row.get("vendor_id"), "row_id": row.get("id"), "name": row.get("name") or "",
             "sku": row.get("sku") or "", "price": _num(row.get("price")), "list_price": _num(row.get("list_price")),
             "pack_qty": _eff[0], "availability": row.get("availability") or "unknown",
             "min_order_qty": _int(row.get("min_order_qty")), "order_multiple": _eff[1],
             "item_key": row.get("item_key"),
             "stock_qty": _int(row.get("stock_qty")), "url": row.get("url") or "",
             "description": row.get("description") or "", "seen_at": row.get("seen_at")}
+    # The per-item cost travels WITH the offer, read from pricing_core's one home, so no surface
+    # (the Price Compare screen, a PDF, a cart) re-derives it or prints "each" over an unknown.
+    offer["unit_price"], offer["unit_basis"] = core.unit_basis(offer)
+    return offer
 
 
 # ══ CART OPTIMIZER ═══════════════════════════════════════════════════════════════════════════════════

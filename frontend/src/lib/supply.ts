@@ -27,12 +27,18 @@ export interface Vendor {
 }
 export interface Offer {
   row_id: string; name: string; sku?: string; price: number | null; list_price?: number | null
-  pack_qty?: number | null; availability: string; stock_qty?: number | null; url?: string; unit_price?: number | null
+  pack_qty?: number | null; availability: string; stock_qty?: number | null; url?: string
+  // What ONE item costs and how we know it — read from the backend's one home
+  // (pricing_core.unit_basis). null unit_price means the vendor did not say; it is never "each".
+  unit_price?: number | null; unit_basis?: string | null
   // The vendor's order rules from its product page (mig 1032): order at least min_order_qty, in steps of order_multiple.
   item_key?: string; min_order_qty?: number | null; order_multiple?: number | null
 }
 export interface CompareRow {
   product: string; match: string; match_method: string; basis: string
+  // comparable=false means the vendors priced on different bases (a case against a single), so the
+  // difference is a `gap`, never a saving. cart_basis says whether a quantity means units or packs.
+  comparable?: boolean; cart_basis?: string; gap?: number | null
   best_vendor: string | null; best_price: number | null; next_price: number | null
   savings: number | null; savings_pct: number | null; note: string; offers: Record<string, Offer>
   // Starred (any vendor offer of this row is a favourite) and the quantity saved for reordering.
