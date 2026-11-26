@@ -40,6 +40,7 @@ const GROUPS: HubGroup[] = [
     icon: '📅',
     desc: 'Build the week and manage every change to it.',
     items: [
+      { href: '/storeops/schedule-workflow', icon: '🧭', label: 'Scheduling Workflow', desc: 'Five steps to a store\u2019s week being scheduled and the team told — leave it half-done and pick up where you left off.' },
       { href: '/storeops/schedule', icon: '📅', label: 'Schedule', desc: 'Build and edit weekly shifts — the week defaults to the current pay period.' },
       { href: '/storeops/timeoff', icon: '🌴', label: 'Time Off', desc: 'Requests & approvals — PTO, sick, unpaid.' },
       { href: '/storeops/swaps', icon: '🔄', label: 'Shift Swaps', desc: 'Swap requests & approvals; approving reassigns the shift(s).' },

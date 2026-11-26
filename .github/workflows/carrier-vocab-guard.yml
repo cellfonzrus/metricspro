@@ -714,6 +714,12 @@ on:
       - "backend/app/modules/storeops/employee_setup_flow.py"
       - "backend/app/modules/storeops/employee_setup_api.py"
       - "backend/app/modules/hr/onboarding_stages.py"
+      # index §STOREOPS-15 — the scheduling-workflow lock reads the store-week flow, its endpoint
+      # surface and the notify report builder whose house Monday it locks shut
+      - "backend/harness_schedule_week_flow.py"
+      - "backend/app/modules/storeops/schedule_week_flow.py"
+      - "backend/app/modules/storeops/schedule_week_api.py"
+      - "backend/app/modules/notify/report_registry.py"
       # index §29.13 — one store-day takes one closing; the lock reads the router, the grain
       # registry, the dedup key, migration 1080 and the Management Review screen
       - "backend/harness_closing_store_day_grain.py"
@@ -3170,6 +3176,25 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_guided_workflow.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE SCHEDULING-WORKFLOW LOCK (index §STOREOPS-15) imports the pure store-week flow and
+  # `storeops/schedule_hours`, and reads the endpoint surface and the notify report builder as
+  # source. DB-free, but it needs the backend's dependencies because the flow's neighbours import
+  # them. §G5 is the one that matters most here: it fails the build if any schedule-week bucket
+  # goes back to a house Monday instead of the tenant's declared week start.
+  schedule-week-workflow-lock:
+    name: Scheduling workflow lock (a store-week picks up where it was left; the week is the tenant's own)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the scheduling-workflow lock (five steps over one store-week; no second copy of the step keys; no house Monday; an uncovered day is reported, not judged — index §STOREOPS-15)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_schedule_week_flow.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE SETUP-DOCUMENTS PROOF (index §39) imports the real setup_documents / setup_router / import_health modules (the
   # document rules, automation history, gate, reminders, the super-admin edit validation), so it runs in its own job with

@@ -461,7 +461,13 @@ async def _storeops_schedule(org_id, f):
         start = date.fromisoformat(str(ws)[:10]) if ws else date.today()
     except Exception:
         start = date.today()
-    start = start - timedelta(days=start.weekday())   # snap to Monday
+    # THE WEEK IS THE TENANT'S OWN (§STOREOPS-15). This snapped to Monday until 2026-11-26, so a
+    # tenant whose week starts on Thursday (Luxelink, dow=3) was emailed a Mon–Sun grid while its
+    # schedule page ran Thu–Wed — a house Monday answering for a tenant's own declaration, which is
+    # the one place a default is banned (owner 2026-10-30). Both reads are the existing one homes.
+    from app.modules.storeops.payroll_approval import _week_start_dow
+    from app.modules.storeops.schedule_hours import week_start_of
+    start = week_start_of(start, _week_start_dow(org_id))
     end = start + timedelta(days=6)
     q = (get_supabase().schema("storeops").table("shifts").select("*")
          .eq("org_id", org_id)

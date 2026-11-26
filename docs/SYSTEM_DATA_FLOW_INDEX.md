@@ -235,6 +235,7 @@ Primary code homes:
 | STOREOPS-09 | **An expense line per org level, named in the tenant's own words** | "Anybody who is a dm their salary is divided among the stores they are responsible for , similarly for the regional manager or market manager whatever stores they cover their salary is divided amount their stores , add a line in the expenses with the name dm salary and rm salary or mm salary , if we add another level the expense report should automatically add they level and then divide the salary based on the people who report to them" — the mechanism existed (§14t) and booked ONE combined line. Four live tenants declare four different level vocabularies agreeing on not one rung, so whose word names the line, what stops a house default from labelling one tenant's expenses in another's language, and what makes a level added tomorrow appear with no deploy? |
 | STOREOPS-12 | **A package the scanner refused still has its number, and the platform can re-print it** | "sometimes the barcode, which is used to consolidate the packages, do not work properly, and we have packages sitting in the store which are not scanned ... the user should be able to upload the picture to our platform and the platform should generate a barcode using the reference numbers" — the reference is printed under the bars the whole time, so what is lost is a MACHINE-READABLE copy of it. Which symbology does a label actually use (measured, not assumed), what part of this is a published standard and what part is one tenant's description of one vendor's paperwork, and what stops a reference read off a photograph from printing a barcode that scans perfectly into the wrong record? |
 | STOREOPS-14 | **Employee setup is a flow somebody can leave halfway, and the tenant's own roles decide it** | "The way we have set up teh closing workflow , it is very easy for a new person to start and then pick up where tehy left off, need similar for the Employee set up in logical steps leading up to onboaring" — six screens each knew its own piece and nothing knew the order, so a half-finished person looked identical to a finished one on every one of them. What are the steps, where does somebody pick up, and what stops a wizard becoming a second writer for every field an employee already has? |
+| STOREOPS-15 | **Scheduling a store-week is a flow somebody can leave halfway, and the week is the tenant's own** | "...and then simlar workflow for scheduling", said of the daily-closing workflow a new person can start and come back to. What are the steps for ONE store in ONE week, where does somebody pick up, what does "the week" mean for a tenant that does not start it on a Monday, and how is a day with nobody on it reported when nothing in the platform declares which days a store opens? |
 | CORE-51 | **"How far through is this flow, and where do I pick it up" has one home** | Three flows were asked for in one sentence (employee setup, scheduling, running payroll). Answering the rail, the lamps, the resume and the progress count once per flow is three homes for one question, and the third copy drifts. Who owns a step's status, what makes a missing answer a refusal rather than a silent "not started", and what fails the build when a fourth copy appears? |
 | CORE-33 | **What an employee may reach is one declaration, and the API is what enforces it** | "on ny logistics Manan was able to go past [the clock-in screen] and also see the adjustment hours, this should not be allowed for any sales reps — this is universal across the board". The browser was the only gate: a menu row the viewer could see opened its whole subtree by URL, and the payroll writes behind those pages asked for no authority at all. Who decides what a surface's audience is, and what makes the API refuse a caller the menu would not offer it to? |
 | CORE-42 | **A gate proved in-process is a claim, not a measurement** | "create a testng agent who deciatedly is checking the data leakage, unwanted access to modules even if theya re gated like the case of manan and we discovered by accident, c annot have an accident of this sort, put it on schdule and one module at a time from the front end as though somebnbody was trying to hack in to the system". Every access control here is proved by a harness that imports the handler — which catches a wrong rule and not a right rule that was never reached. Who asks the DEPLOYED platform what it actually answers an unprivileged outsider, one module at a time, and what stops that probe from writing to production or from reporting a pass on a question it never asked? |
@@ -26636,6 +26637,7 @@ status word rather than a blank that reads as nil.
 | STOREOPS-12 | storeops, core |
 | CORE-51 | core |
 | STOREOPS-14 | storeops, hr, core |
+| STOREOPS-15 | storeops, core, notify |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -52985,3 +52987,85 @@ run by `tests.yml`. Lock: `harness_guided_workflow.py` (56), CI job `guided-work
 **Cross-references:** §CORE-51 (the shared home) · §29.12 (the workflow this was asked to resemble) ·
 §14z (the $0.00 payroll question) · §CORE-45 (active-only, one spelling) · §CORE-33 (what an
 employee may reach) · §3d (the standard filter bar and the Send bar).
+
+
+---
+
+## §STOREOPS-15. SCHEDULING A STORE-WEEK IS A FLOW SOMEBODY CAN LEAVE HALFWAY (owner 2026-11-25)
+
+**What was asked for.** *"The way we have set up teh closing workflow , it is very easy for a new
+person to start and then pick up where tehy left off, need similar for the Employee set up in
+logical steps leading up to onboaring and then simlar workflow for scheduling andn simlar workflow
+for runnign the payroll with paying attention to details"*. The five steps were confirmed the same
+evening. This is the SECOND of the three flows, and the second caller of the shared home
+(§CORE-51) — the rail, the lamps, the resume and the progress count are not rebuilt here.
+
+**The subject is a STORE-WEEK**, the scheduling analogue of the closing module's store-DAY
+(§29.12). "Pick the week and the stores" — the first item on the confirmed list — is how a person
+CHOOSES the subject, so it is the page's filter rather than a step that can be open or done, and the
+board carries one row per store-week.
+
+| # | step | the question it answers | the door |
+|---|---|---|---|
+| 1 | `budget` | Is this store's weekly hours ceiling declared? | `/storeops/hours-budget` |
+| 2 | `availability` | Is any time-off request or cover swap still awaiting a decision? | `/storeops/timeoff` |
+| 3 | `shifts` | Is anybody actually on the rota? | `/storeops/schedule` |
+| 4 | `coverage` | Over budget · somebody in two places · somebody on approved leave · (reported) days with nobody on | `/storeops/schedule` |
+| 5 | `tell` | Has the week's rota been sent? (optional) | `/storeops/schedule` |
+
+**There is no "published" state in this platform, and this does not invent one.** A shift is
+`scheduled` the moment it is created; there is no draft and no publish. A step claiming to check
+publication would be reading a column nothing writes — which is the `shifts.actual_hours` defect
+(§STOREOPS-07) a second time, where seven screens displayed a column no writer filled. The honest
+last step is whether the week's rota was SENT, and that IS recorded: `notify.send_log` carries one
+row per send of report `storeops_schedule` with the filters it was sent under.
+
+**An uncovered day is REPORTED, not judged.** Nothing in the platform declares which days a store
+is open, so `declared['open_dows']` arrives empty, the coverage step NAMES the days with nobody on,
+and the payload and the screen both say why it is not calling them gaps. Treating a seven-day week
+as the expectation would be a house assumption standing in for a tenant's own declaration — the one
+place a default is banned (owner 2026-10-30). Declare `open_dows` and the same step starts refusing,
+with no code change; the harness proves both sides.
+
+**The tenant's own week is a REQUIRED argument.** `week_start_dow` is read per organisation from
+`storeops.tenants.work_week_start_dow` through the reader that already answers it
+(`storeops/payroll_approval._week_start_dow`), so this board and the payroll board can never
+disagree about which seven days a week is. A house Monday answering for a Thursday-week tenant
+mis-buckets every shift at the week boundary.
+
+**The sibling this exposed and fixed in the same PR.** `notify/report_registry._storeops_schedule`
+— the emailed/WhatsApp'd rota — snapped to Monday with `start - timedelta(days=start.weekday())`,
+so a tenant whose week starts on Thursday was sent a Mon–Sun grid while its schedule page ran
+Thu–Wed. It now dereferences the same two homes. Locked by §G5 of the harness, which fails the
+build if any schedule-week bucket goes back to weekday arithmetic of its own.
+
+**Nothing here writes.** Every step is a READ of state the platform already holds, so there is
+nothing half-saved to go stale and no second writer for a shift. `harness_schedule_week_flow.py`
+§G2 fails the build if `.insert(` / `.update(` / `.upsert(` / `.delete(` appears in either module,
+or if a route on the surface stops being a GET.
+
+**The duplicate check (build gate).** Reused rather than rebuilt: `core/guided_workflow` (the rail,
+lamps, resume, progress — §CORE-51), `storeops/schedule_hours.shift_hours` / `total_hours` /
+`week_start_of` (a shift's hours and the week bucket), `storeops/payroll_approval._week_start_dow`
+(the tenant's declared week start), `core/roster_visibility` (open-stores-only, one spelling —
+§CORE-45), `storeops/router.scope_keyset` (which stores reach this login — §14x), and
+`notify.send_log` (what a send is). Nothing new was derived.
+
+**Where it lives.**
+
+| the question | the home |
+|---|---|
+| what the five steps mean, and what each is waiting on | `backend/app/modules/storeops/schedule_week_flow.py` (pure) |
+| the board, and one store-week's rail | `backend/app/modules/storeops/schedule_week_api.py` — `GET /storeops/schedule-workflow`, `GET /storeops/schedule-workflow/{store_code}` |
+| the screen | `frontend/src/app/(platform)/storeops/schedule-workflow/page.tsx` (Workforce hub tile, scopes `all` + `market`) |
+
+**Tests.** `backend/tests/unit/test_schedule_week_flow.py` (52) and
+`backend/tests/integration/test_schedule_workflow_endpoint.py` (27, over two tenants with different
+week starts, both cross-tenant directions, the standard filters, the degrade-by-name path and
+"reading writes nothing"). Lock: `harness_schedule_week_flow.py` (60), CI job
+`schedule-week-workflow-lock`.
+
+**Cross-references:** §CORE-51 (the shared home) · §STOREOPS-14 (the first caller) · §29.12 (the
+workflow this was asked to resemble) · §STOREOPS-07 (the column nothing writes) · §14x (which stores
+reach this login) · §CORE-45 (open-stores-only, one spelling) · §3d (the standard filter bar and the
+Send bar).

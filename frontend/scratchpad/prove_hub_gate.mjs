@@ -42,11 +42,11 @@ const litHrefs = src => {
 }
 const kpiHrefs = src => [...src.matchAll(/<StatTile\b[\s\S]*?href="([^"]+)"/g)].map(m => m[1])
 const WF_TILES = litHrefs(WF), WF_KPI = kpiHrefs(WF), PR_TILES = litHrefs(PR)
-// RE-PINNED 22 -> 23 on 2026-11-26: the Employee Setup WORKFLOW tile (index §STOREOPS-14). The pin
-// exists so that a page reaching reps is a WRITTEN decision — this one is scoped ['all','market'],
-// exactly like the Employee Setup form it leads into, so it is gated away from a store-scoped rep
-// and that is counted in §1 below.
-ok('parsed the Workforce tile literal', WF_TILES.length === 23, `${WF_TILES.length} items`)
+// RE-PINNED 22 -> 23 -> 24 on 2026-11-26: the Employee Setup WORKFLOW tile (index §STOREOPS-14) and
+// then the SCHEDULING WORKFLOW tile (§STOREOPS-15). The pin exists so that a page reaching reps is a
+// WRITTEN decision — both are scoped ['all','market'], exactly like the surfaces they lead into, so
+// both are gated away from a store-scoped rep and that is counted in §1 below.
+ok('parsed the Workforce tile literal', WF_TILES.length === 24, `${WF_TILES.length} items`)
 ok('parsed the Workforce KPI row', WF_KPI.length === 6, `${WF_KPI.length} tiles`)
 ok('parsed the Payroll tile literal', PR_TILES.length > 10, `${PR_TILES.length} items`)
 
@@ -106,10 +106,10 @@ const dead = (perms, hrefs) => hrefs.filter(h => !canOpen(perms, h))
 const rep = ROLES.find(r => r.who === 'Cellfonz sales_rep').perms
 const deadTiles = dead(rep, WF_TILES), deadKpi = dead(rep, WF_KPI)
 console.log(`    Cellfonz sales_rep: ${deadTiles.length}/${WF_TILES.length} tile links and ${deadKpi.length}/${WF_KPI.length} KPI tiles bounce`)
-// RE-PINNED 11 -> 12 on 2026-11-26 for the same tile: a management surface offered to a rep who
-// cannot open it is the defect this harness was written for, and the GATE (not the literal) is what
-// keeps it off their hub — proved per role in §2.
-ok('§1 a store-scoped rep saw 12 of 23 tile links that bounce', deadTiles.length === 12, deadTiles.join(' '))
+// RE-PINNED 11 -> 12 -> 13 on 2026-11-26 for those two tiles: a management surface offered to a rep
+// who cannot open it is the defect this harness was written for, and the GATE (not the literal) is
+// what keeps it off their hub — proved per role in §2.
+ok('§1 a store-scoped rep saw 13 of 24 tile links that bounce', deadTiles.length === 13, deadTiles.join(' '))
 ok('§1 ...and 2 of 6 KPI tiles that bounce', deadKpi.length === 2, deadKpi.join(' '))
 for (const h of ['/storeops/employees', '/storeops/attendance', '/storeops/setup/stores', '/storeops/reports'])
   ok(`§1 ${h} was offered and bounces`, WF_TILES.includes(h) && !canOpen(rep, h))
