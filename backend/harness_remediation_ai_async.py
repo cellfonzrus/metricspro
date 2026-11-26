@@ -537,18 +537,39 @@ if base_src:
     # delivery webhook this router has held since 2026-07-18, its delivery arithmetic was FACTORED
     # OUT to `notify/send_record` rather than copied for the second provider, so
     # `_merge_delivery_status` and `_flatten_delivery_errors` are now names bound to that home
-    # instead of definitions here. Named, not waved through: the departure is asserted to be exactly
-    # those two, and that each is still REACHABLE from this module and still answers the same way,
-    # so "the function left" cannot stand in for "the behaviour left".
+    # instead of definitions here. Named, not waved through: no function may appear or vanish except
+    # those two, and each is still asserted REACHABLE from this module and still answering the same
+    # way, so "the function left" cannot stand in for "the behaviour left".
+    #
+    # 2026-11-26 — WHY THIS IS A SUBSET AND NOT AN EQUALITY. The baseline is `origin/main`, so the
+    # moment §NOTIFY-02 MERGED, main stopped defining the two as well and the departure correctly
+    # became empty. Written as an equality the rule therefore went red on main itself and blocked
+    # every open PR — a check that passes only while its own change is unmerged is self-falsifying.
+    # `<=` is the claim that was always meant: nothing left this file that is not on the named list.
+    # It is not a loosening — the "nothing was ADDED" half stays exact, and F3d/F3e below are what
+    # actually hold the two names to their new home, on both sides of the merge.
     FACTORED_OUT = {"_merge_delivery_status", "_flatten_delivery_errors"}
-    check("F3 no function added or removed vs origin/main but the two factored out",
-          set(now_fns) - set(base_fns) == set()
-          and set(base_fns) - set(now_fns) == FACTORED_OUT,
-          f"diff={set(base_fns) ^ set(now_fns)}")
+    def _surface_ok(base, now):
+        """THE rule, as one expression, so the negative controls below exercise the real thing."""
+        return set(now) - set(base) == set() and set(base) - set(now) <= FACTORED_OUT
+
+    _added, _gone = set(now_fns) - set(base_fns), set(base_fns) - set(now_fns)
+    check("F3 no function added, and none gone but the named factored-out two",
+          _surface_ok(base_fns, now_fns),
+          f"added={_added} gone={_gone} unexplained={_gone - FACTORED_OUT}")
+    # Negative controls on the SAME predicate — a loosened rule that waves anything through would
+    # fail these, which is what stops `<=` becoming "no check at all".
+    _keep = ["_a", "_b"]
+    check("F3a control: an unexplained REMOVAL is caught",
+          not _surface_ok(_keep + ["_vanished"], _keep))
+    check("F3b control: an unannounced ADDITION is caught",
+          not _surface_ok(_keep, _keep + ["_brand_new"]))
+    check("F3c control: the two named departures are allowed, before and after their merge",
+          _surface_ok(_keep + sorted(FACTORED_OUT), _keep) and _surface_ok(_keep, _keep))
     import app.modules.remediation.router as _rr
-    check("F3b each factored-out name is still reachable here, bound to the one home",
+    check("F3d each factored-out name is still reachable here, bound to the one home",
           all(callable(getattr(_rr, n, None)) for n in FACTORED_OUT))
-    check("F3c and still answers the same way (the behaviour moved, it did not change)",
+    check("F3e and still answers the same way (the behaviour moved, it did not change)",
           _rr._merge_delivery_status("read", "failed") == "failed"
           and _rr._merge_delivery_status("read", "delivered") == "read"
           and "131026" in _rr._flatten_delivery_errors([{"code": 131026, "title": "undeliverable"}]))
