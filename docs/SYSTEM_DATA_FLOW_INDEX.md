@@ -234,6 +234,7 @@ Primary code homes:
 | STOREOPS-07 | **A correction a human types reaches the figure, or nothing does** | "i just fixed the hours in ny logistics , went in to check it still shows the old hours , check and fix for good platform wide" — and nothing he could have typed could have moved those figures. **616 hand-typed corrections** sat in `storeops.manual_hours` (51 house, 565 LuxeLink; ±4,441h gross), eight of them filed in the ten days before the report, and no pay or hours path read that table at all. All four tenants had declared `count_manual_hours = true` and `resolve_config` forced it FALSE for the three on `schedule_fallback`. The one correction the figure DID honour, `shifts.actual_hours`, is written by nothing in the product — the frontend displays it in seven places and writes it in none. And the mig-914 RPC decided `correction > punch > schedule` in SQL, where it could read neither the corrections nor the declaration. Who owns "what are this person's paid hours that day", what does a correction MEAN when 2,249 of its hours are negative, and what stops a closed month restating the moment the fold is switched on? |
 | STOREOPS-09 | **An expense line per org level, named in the tenant's own words** | "Anybody who is a dm their salary is divided among the stores they are responsible for , similarly for the regional manager or market manager whatever stores they cover their salary is divided amount their stores , add a line in the expenses with the name dm salary and rm salary or mm salary , if we add another level the expense report should automatically add they level and then divide the salary based on the people who report to them" — the mechanism existed (§14t) and booked ONE combined line. Four live tenants declare four different level vocabularies agreeing on not one rung, so whose word names the line, what stops a house default from labelling one tenant's expenses in another's language, and what makes a level added tomorrow appear with no deploy? |
 | STOREOPS-12 | **A package the scanner refused still has its number, and the platform can re-print it** | "sometimes the barcode, which is used to consolidate the packages, do not work properly, and we have packages sitting in the store which are not scanned ... the user should be able to upload the picture to our platform and the platform should generate a barcode using the reference numbers" — the reference is printed under the bars the whole time, so what is lost is a MACHINE-READABLE copy of it. Which symbology does a label actually use (measured, not assumed), what part of this is a published standard and what part is one tenant's description of one vendor's paperwork, and what stops a reference read off a photograph from printing a barcode that scans perfectly into the wrong record? |
+| STOREOPS-13 | **A printed schedule is a line per person, not a picture of the grid** | "the schdule show show line by line which employee is working and thier houre next to their name instaed of in this illegible form" — the export mirrored the SCREEN GRID, so one store-day cell held every name that fell in it and a store's 127 hours sat at the far edge of a landscape page. The LINE is now the unit: one row per person per store, `Employee · Store · Hrs · Mon…Sun`, a day cell holding times only, both views over one builder. Carries the sibling it exposed — the screen and the export each had their own answer to "how long is this shift", so an overnight shift could total differently in the emailed PDF than on screen. |
 | CORE-33 | **What an employee may reach is one declaration, and the API is what enforces it** | "on ny logistics Manan was able to go past [the clock-in screen] and also see the adjustment hours, this should not be allowed for any sales reps — this is universal across the board". The browser was the only gate: a menu row the viewer could see opened its whole subtree by URL, and the payroll writes behind those pages asked for no authority at all. Who decides what a surface's audience is, and what makes the API refuse a caller the menu would not offer it to? |
 | CORE-42 | **A gate proved in-process is a claim, not a measurement** | "create a testng agent who deciatedly is checking the data leakage, unwanted access to modules even if theya re gated like the case of manan and we discovered by accident, c annot have an accident of this sort, put it on schdule and one module at a time from the front end as though somebnbody was trying to hack in to the system". Every access control here is proved by a harness that imports the handler — which catches a wrong rule and not a right rule that was never reached. Who asks the DEPLOYED platform what it actually answers an unprivileged outsider, one module at a time, and what stops that probe from writing to production or from reporting a pass on a question it never asked? |
 | CORE-32 | **A guard that reads source code must be told f-strings exist** | Found by running the suite on a newer interpreter than CI's: the guard that stops our own setup internals reaching a customer was RED on Python 3.13 and GREEN on 3.11. PEP 701 stopped making an f-string one string token, so it had stopped seeing f-strings — and the same file held a SECOND reader of the same fact that had been taught the new shape. What proves a capability that depends on the interpreter, when CI pins one? |
@@ -26689,6 +26690,7 @@ status word rather than a blank that reads as nil.
 | ACCOUNT-06 | account, commcalc |
 | STOREOPS-11 | storeops, account |
 | STOREOPS-12 | storeops, core |
+| STOREOPS-13 | storeops, core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -31334,6 +31336,30 @@ really did miss the shipped line; and §H1–H7: `rowStripe` is declared, spells
 never returns `transparent`, and **no file may hand-roll `% 2` into a background**. `B1` (no literal
 on a property whose role is declared) now has teeth it did not have before. Unit tests:
 `src/lib/__tests__/surface.test.ts`.
+
+**THE TABLE THAT ESCAPED THE SWEEP (2026-11-26).** Owner, of the Schedule screen: *"cannot see he
+employee name in white background and white font"*. It read as rows being misaligned — "ss shows
+0.0h even though shifts appear on the row above it" — but nothing was misaligned: every other
+employee's name and weekly total was simply invisible, so each visible name looked like it sat
+beside the wrong row's shifts.
+
+It was the SAME literal, in the one shape this lock could not see:
+
+```ts
+const rowBg = ri % 2 === 1 ? 'var(--surface2)' : 'white'   // …later…  background: rowBg
+```
+
+`STRIPE_IN_BG` reads FORWARD from `background:`, so a stripe computed into a VARIABLE first was
+invisible to §H4 — one level of indirection further out than the backwards-reading hole §C′ closed,
+and the same class. The page now calls `rowStripe(ri)`, and §H4b–H4e widen the EXISTING lock (never
+a second lock beside it) to a `% 2` ternary whose branches are colourish wherever its value is
+computed, with controls that the exact shipped line is caught, that the call through the home is
+not, and that a non-colour alternation (`i % 2 ? 'odd' : 'even'`) is left alone. Verified by putting
+the defect back: §H4b fails, naming the line.
+
+A sibling lock was written first and DELETED before this shipped — this section is the home for
+"a colour on a themed surface is a token", and a second gate asking the same question is the
+duplicate the house rules forbid.
 
 **EVERY TENANT.** Nothing here reads an org: the defect and the fix are in the stylesheet and the
 markup, identical for Cellfonz R Us, LuxeLink and Vzone. Verified by rendering under both themes.
@@ -52961,3 +52987,88 @@ module by module, judged one surface at a time — not as a defect list.
 composition of a declared-public route and a router-level gate) · §13a (the one store resolver) ·
 §11914 (the redeem token: the URL is the credential) · §STOREOPS-07.65 (a person-keyed read that
 never asked whose person).
+
+---
+
+## §STOREOPS-13. A PRINTED SCHEDULE IS A LINE PER PERSON, NOT A PICTURE OF THE GRID (owner 2026-11-26)
+
+Owner, of the exported week of 2026-11-23: *"the schdule show show line by line which employee is
+working and thier houre next to their name instaed of in this illegible form"*. Then, of the week of
+11-30: *"also remove teh number of hours on tehe last time on the printed pdf"*.
+
+### THE INSTANCE, AND THE CLASS ABOVE IT
+
+The instance was one store's Monday cell in the PDF:
+
+> `Manan Ali 16:00-19:00; Hajra Cheema 09:00-19:00; Zohaib Ali 10:00-16:00` … **127.0**
+
+Four people's whole week on one row, with a store total at the far right edge of a landscape page.
+
+**The class** is that `buildScheduleExport` mirrored the SCREEN GRID — one cell per row-per-day,
+holding however many shift chips fell in it, with the name repeated inside every chip. A grid cell
+works on a wide scrolling screen with coloured chips and tooltips; in a fixed-width PDF column it
+wraps into an unreadable paragraph. The shape was wrong for every store, every tenant and every
+week, in the PDF, the Print view, the .xlsx, the .csv and the emailed/WhatsApp'd send alike, because
+all five render from the one payload (§4 export governance).
+
+### THE FIX — THE LINE, NOT THE CELL, IS THE UNIT
+
+`frontend/src/app/(platform)/storeops/lib/scheduleExport.ts` is still the ONE home for "what does a
+printed schedule contain", and it now emits **one line per person per store they work**:
+
+| Employee | Store | Hrs | Mon 11/23 | … | Sun 11/29 |
+|---|---|---|---|---|---|
+| Hajra Cheema | 7710 | 50.0 | `09:00-19:00` | … | |
+| Manan Ali | 7710 | 17.5 | `16:00-19:00` | … | |
+
+- **The hours sit beside the name**, in the third column, which is both what was asked for and what
+  stops the figure from falling off the far edge. Nothing trails the last day column — the owner's
+  second message is the same column, moved rather than removed.
+- **A day cell holds times only.** The name is the line, so repeating it in the cell was the thing
+  making the cell unreadable. A person's split shift stacks on its own line inside the cell; a list
+  of names can no longer be formed at all.
+- **Both on-screen views share one line builder** (`scheduleLines`), so "by store" and "by employee"
+  can never drift into two answers to "who works this week". The view decides the GROUPING only.
+- **A store with nobody scheduled keeps its line** (`NOBODY_SCHEDULED`). The old grid showed that
+  row, and a coverage gap that silently vanishes from the export is worse than an ugly one.
+- Title, subtitle and filename are unchanged — the Send bar, the scheduled-report label and saved
+  filenames key off them.
+
+### THE SIBLING FOUND ALONG THE WAY — ONE HOME FOR "HOW LONG IS THIS SHIFT"
+
+The screen totalled a shift with the page's own `shiftHrs` (recomputed from start/end, overnight
+safe) while the export totalled `scheduled_hours || 0`. Two answers: an overnight shift, or a stale
+or negative stored value, read one way on screen and another in the emailed PDF. `shiftHours` /
+`hoursBetween` in `scheduleExport.ts` are now the one home and `schedule/page.tsx` dereferences
+them; the page defines no hours arithmetic of its own.
+
+### WHAT FAILS THE BUILD
+
+`scheduleExport.lock.test.ts` (CI, `npm run test`):
+
+| | |
+|---|---|
+| A | a day cell contains a person's name, a `;` or a `,` |
+| B | a cell template in the home mentions `employee_name` or `store_code` |
+| C | the hours column stops being column 3, or a second hours/total column appears |
+| D | `schedule/page.tsx` defines `hoursBetween` / `shiftHrs` / `scheduled_hours \|\| 0` / the `24 * 60` wrap again |
+| E | the page stops importing `shiftHours` from the home |
+| F | a fourth mention of `scheduled_hours` appears in the home (a second answer) |
+
+### TESTS
+
+- `frontend/src/app/(platform)/storeops/lib/__tests__/scheduleExport.test.ts` — 21, DB-free: the
+  reported defect reproduced, both views, split shifts, overnight hours, the empty store and the
+  empty employee, **four tenants** with their own store-code and name shapes, a cross-tenant leak
+  case, RULE TWO over the source, and the payload through the real `payloadToCsv` renderer.
+- `frontend/src/app/(platform)/storeops/lib/__tests__/scheduleExport.lock.test.ts` — 8, the gate above.
+- `backend/tests/integration/test_schedule_shifts_export_contract.py` — 14: `GET /storeops/shifts`
+  really returns the six fields a line is built from, one row per shift and never pre-grouped per
+  store-day, for three tenant shapes including one with no shifts at all.
+
+**Cross-references:** §4 (export governance — one payload behind Excel / PDF / Print / CSV / Send) ·
+§14w (`gate_person_rows` — whose shifts a week may contain) · §STOREOPS-05 (the week a tenant
+declares) · §CORE-15 / the Dark theme lock (the white-on-white stripe on the same screen, found in
+the same report — fixed there, through `lib/surface.rowStripe`, not here) · §16–18.
+
+---

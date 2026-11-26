@@ -94,16 +94,20 @@ const base = { weekStartLabel: 'August 3, 2026', weekStartIso: '2026-08-03', wee
 section('1. UNFILTERED (view=store) — all stores, all markets present (behaviour unchanged)')
 {
   const p = buildScheduleExport({ ...base, view: 'store', filterMarkets: [], filteredStores: allStores, filteredEmps: allEmps })
-  ok('3 rows (one per store)', p.sheets[0].rows.length === 3, p.sheets[0].rows.length)
+  // 2026-11-26 (index §STOREOPS-13): a line is a PERSON, not a store. S300 has two employees
+  // scheduled, so three stores produce FOUR lines — that is the redesign, not a leak. The privacy
+  // claim this proof exists for is unchanged and asserted below: scope in, scope out.
+  ok('4 rows (one per person per store they work)', p.sheets[0].rows.length === 4, p.sheets[0].rows.length)
   ok('both markets present', [...NORTH_TOKENS, ...SOUTH_TOKENS].every(t => payloadText(p).includes(t)))
-  ok('subtitle carries no market filter', p.subtitle === 'By store', p.subtitle)
+  ok('subtitle names the grouping and NO market', p.subtitle === 'By store · one line per employee', p.subtitle)
+  ok('…and no market name reaches the subtitle', !/North|South/.test(p.subtitle), p.subtitle)
 }
 
 section('2. MARKET filter (view=store) — the exact bug: North selected, South must NOT leak')
 {
   const p = buildScheduleExport({ ...base, view: 'store', filterMarkets: ['North'], filteredStores: byMarket('North'), filteredEmps: empsByMarket('North') })
   const t = payloadText(p)
-  ok('2 rows (S100, S200 only)', p.sheets[0].rows.length === 2, p.sheets[0].rows.length)
+  ok('2 rows (S100, S200 — one employee each)', p.sheets[0].rows.length === 2, p.sheets[0].rows.length)
   ok('North stores/employees present', NORTH_TOKENS.every(x => t.includes(x)))
   const leaked = SOUTH_TOKENS.filter(x => t.includes(x))
   ok('South store/employees NOT present anywhere in the payload', leaked.length === 0, `leaked: ${leaked.join(', ')}`)
@@ -124,6 +128,15 @@ section('3. STORE filter (view=employee) — single store, single market\'s empl
   const t = payloadText(p)
   ok('2 rows (Carol, Dan — S300 only)', p.sheets[0].rows.length === 2, p.sheets[0].rows.length)
   ok('no North employee leaks in', !t.includes('Alice Anderson') && !t.includes('Bob Brown'))
+  // The line shape itself, asserted where the privacy proof already has the scoped payload in hand:
+  // a day cell carries a TIME RANGE and never a name, which is what made the printed week legible.
+  ok('a day cell is times only, never a name',
+    p.sheets[0].rows.every(r => r.cells.every(c => !/[A-Za-z]/.test(c))),
+    JSON.stringify(p.sheets[0].rows.map(r => r.cells)))
+  ok('the hours sit beside the name, and nothing trails the last day',
+    p.sheets[0].columns.map(c => c.header).slice(0, 3).join('|') === 'Employee|Store|Hrs'
+    && p.sheets[0].columns[p.sheets[0].columns.length - 1].header === 'Sun 8/9',
+    p.sheets[0].columns.map(c => c.header).join(' · '))
 }
 
 section('4. Filter matching nobody → zero rows exported (never falls back to "everyone")')
