@@ -21,6 +21,8 @@ import { SendReportButton } from '@/lib/send-report'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 // A reader never meets a table name: the one home for a data source's plain words (§19.38).
 import { sourceLabel } from '@/lib/sourceLabels'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
+import { rosterIsActive } from '@/lib/roster-visibility'
 
 type Step = {
   key: string
@@ -50,6 +52,16 @@ type Person = {
   steps: Step[]
   refused?: string
 }
+/** WHAT EACH COLUMN SORTS ON. `Steps done` sorts on the COUNT, not on the "3 of 6" string, so 10
+ *  does not fall between 1 and 2; a person whose progress was never computed sorts as -1 rather
+ *  than 0, because never-computed is not none (§CORE-51). */
+const personCell = (p: Person, f: string): string | number | boolean =>
+  f === 'employee' ? (p.employee_name || p.employee_id)
+  : f === 'home_store' ? (p.home_store || '')
+  : f === 'setup' ? p.label
+  : f === 'resume_title' ? p.resume_title
+  : f === 'done' ? (p.progress ? p.progress.done : -1)
+  : ''
 type Stuck = { key: string; title: string; count: number }
 type Board = {
   ready: boolean
@@ -132,6 +144,7 @@ export default function EmployeeSetupWorkflowPage() {
   const reload = useCallback(() => { setBusy(true); void load() }, [load])
 
   const rows = useMemo(() => data?.rows || [], [data])
+  const ps = useTableSort(rows, personCell)
   const steps = useMemo(() => data?.steps || [], [data])
   const stepTitle = useMemo(() => {
     const m: Record<string, string> = {}
@@ -272,11 +285,11 @@ export default function EmployeeSetupWorkflowPage() {
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
           <thead>
             <tr>
-              <th style={th}>Employee</th>
-              <th style={th}>Home store</th>
-              <th style={th}>Setup</th>
-              <th style={th}>Picks up at</th>
-              <th style={th}>Steps done</th>
+              <SortableTh field="employee" sort={ps.sort} onSort={ps.toggle} style={th}>Employee</SortableTh>
+              <SortableTh field="home_store" sort={ps.sort} onSort={ps.toggle} style={th}>Home store</SortableTh>
+              <SortableTh field="setup" sort={ps.sort} onSort={ps.toggle} style={th}>Setup</SortableTh>
+              <SortableTh field="resume_title" sort={ps.sort} onSort={ps.toggle} style={th}>Picks up at</SortableTh>
+              <SortableTh field="done" sort={ps.sort} onSort={ps.toggle} style={th}>Steps done</SortableTh>
               <th style={th} />
             </tr>
           </thead>
@@ -286,14 +299,14 @@ export default function EmployeeSetupWorkflowPage() {
                 No people match these filters.
               </td></tr>
             )}
-            {rows.map(p => {
+            {ps.sorted.map(p => {
               const isOpen = open === p.employee_id
               return (
                 <tr key={p.employee_id} style={{ borderTop: '1px solid var(--border)' }}>
                   <td style={td}>
                     <div style={{ fontWeight: 600 }}>
                       {p.employee_name || p.employee_id}
-                      {!p.is_active && <span style={{ ...chip, marginLeft: 6 }}>inactive</span>}
+                      {!rosterIsActive(p) && <span style={{ ...chip, marginLeft: 6 }}>inactive</span>}
                     </div>
                     <div style={{ fontSize: 11, color: 'var(--text2)' }}>{p.employee_id}</div>
                   </td>
@@ -313,7 +326,7 @@ export default function EmployeeSetupWorkflowPage() {
                 </tr>
               )
             })}
-            {rows.map(p => open === p.employee_id && (
+            {ps.sorted.map(p => open === p.employee_id && (
               <tr key={`${p.employee_id}-rail`}>
                 <td style={{ ...td, background: 'var(--bg)' }} colSpan={6}>
                   {p.refused && (
