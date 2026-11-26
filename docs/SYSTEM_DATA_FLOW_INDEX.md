@@ -36807,10 +36807,49 @@ driving the live login) runs it and confirms the declaration onto the source row
 would make a confirmed declaration the house default for the next tenant of this kind — is still
 unbuilt, and §COMMCALC-38.8 carries that same note.
 
+### COMMCALC-39.7 "GO" MATCHED INSIDE "CATEGORY" — a control was identified by letters, not by words (owner's own page, measured 2026-11-26)
+
+His live-login capture declared the **Product Category dropdown** as the report's RUN control, and
+the real **Go** button as the To-date box. Neither was a close call: `control_purpose` compared its
+vocabulary with `word in hay`, a plain SUBSTRING test, over a vocabulary that contains two-letter
+words (`"go"` under `run`, `"to"` under `date_to`). Measured against the real control names on that
+page:
+
+| control | read as | why |
+| --- | --- | --- |
+| `ProductCategoryDropDown` | `run` | cate**go**ry |
+| `GoButton` | `date_to` | Bu**tto**n |
+| `DateToTextBox` | `date` | `"date to"` keeps its space after `norm`, so only `"date"` matched |
+
+**THE CLASS. A page's controls are usually named by a framework, and a framework's name is a list of
+words written without the spaces.** `norm` lowercases and collapses punctuation — correctly, it is
+§COMMCALC-38's one spelling rule — but it cannot know that `DropDown` is two words, so a camel-cased
+id arrives as one long token in which any short word can be found. This was never one portal's
+problem: it is every portal whose controls are named the way nearly all of them are.
+
+**THE FIX, two halves, and both are needed** — either alone still gets that page wrong.
+`_split_identifier` reads an identifier as words BEFORE normalizing (`GoButton` → `Go Button`), and
+`_says` matches a vocabulary word on WORD BOUNDARIES over the result. `control_haystack` is the one
+assembly of "what is this control called", so nothing builds those words a second way. `norm` itself
+is untouched and still dereferenced, so the column side of §COMMCALC-38 reads exactly what it read
+before — splitting is a no-op on a human label like `Amount before tax`.
+
+**Longest phrase still wins, and it still has to.** The ordering is by normalized length, pinned on
+a case where the two rules disagree rather than a tie: `Export to CSV` says both `"export"` and the
+date word `"to"`, and only longest-first stops a download button being declared as a date box.
+
+**Locked** — `backend/tests/unit/test_a_control_is_matched_on_words.py`, 15 tests, four armed
+negative controls (substring matching returns · identifiers stop being split · the haystack rebuilt
+in place · the length ordering dropped). Every control on the owner's real page is asserted by name,
+including the three the vocabulary has no word for, which must stay **unrecognised** rather than
+become a closest-looking guess — the operator sees a blank and declares it, and a wrong verb is
+harder to spot than a missing one.
+
 ### COMMCALC-39.6 Cross-references
 
 Same home, other axes: §COMMCALC-07 (the one pull loop), §COMMCALC-37 (the declared filters this
-capture writes for), §COMMCALC-38 (the one normalizer and the invoice feed). Neighbours:
+capture writes for), §COMMCALC-38 (the one normalizer and the invoice feed), §COMMCALC-48.11 (the
+controls a capture suggests into). Neighbours:
 §COMMCALC-24 (which process may answer), §COMMCALC-27 / §COMMCALC-31 (the operator's input leads the
 tick, which is why a capture is a queued command and not a second thread), §COMMCALC-13 (what a
 finished session leaves on the row).
