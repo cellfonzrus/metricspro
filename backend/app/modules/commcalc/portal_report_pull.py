@@ -562,12 +562,51 @@ def control_selector(control):
     return '[name="%s"]' % nm.replace('\\', '\\\\').replace('"', '\\"')
 
 
+_CAMEL_RUN = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
+def _split_identifier(v):
+    """`"GoButton"` → `"Go Button"`. An identifier is a list of words written without the spaces.
+
+    A framework's generated control id is the only name many portal controls have — the page prints
+    a label beside the box, not on it — so an id has to be read as words or it is one long token.
+    Harmless on a human label: `"Amount before tax"` has no camel run to split, so the column side
+    of §COMMCALC-38 sees exactly what it saw before."""
+    return _CAMEL_RUN.sub(" ", str(v or ""))
+
+
+def control_haystack(control):
+    """The words this control is known by — label, id and name, read as words. PURE.
+
+    Split before normalizing, because `report_columns.norm` collapses punctuation and lowercases but
+    cannot know that `DropDown` is two words; and normalizing first would destroy the capital that
+    says where one ends."""
+    return _norm_words(" ".join(_split_identifier((control or {}).get(f))
+                                for f in ("label", "id", "name")))
+
+
+def _says(word, hay):
+    """Does `hay` SAY `word` — as a word or a run of words, not as letters inside one? PURE.
+
+    THE defect this exists for (owner's own report page, measured 2026-11-26): the test used to be
+    `word in hay`, a plain substring, over a vocabulary that contains two-letter words. So "go" fired
+    inside "Cate**go**ry" and "to" inside "Bu**tto**n" — the Product Category dropdown was declared
+    as the report's RUN control and the real `Go` button was read as the To-date box. Every portal,
+    every tenant: a capture is only worth confirming if its guesses are the operator's own words."""
+    w = _norm_words(word)
+    if not w:
+        return False
+    return (" %s " % w) in (" %s " % hay)
+
+
 def control_purpose(control, words=None):
     """What this control is FOR, by the words printed beside it — or None. PURE.
 
     Longest phrase first, so "from date" beats "date" and "run report" beats "run". A control whose
     label matches nothing returns None and is reported as unrecognised: the operator sees it and
     declares it, which is strictly better than this function picking the closest-looking purpose.
+
+    Matched on WORD boundaries over the control's words — see `_says` for the defect that is.
     """
     syn = dict(CONTROL_WORDS)
     for purpose, extra in (words or {}).items():
@@ -576,13 +615,12 @@ def control_purpose(control, words=None):
         if isinstance(extra, str):
             extra = (extra,)
         syn[purpose] = tuple(extra) + tuple(syn.get(purpose, ()))
-    hay = _norm_words(" ".join(str((control or {}).get(f) or "")
-                               for f in ("label", "id", "name")))
+    hay = control_haystack(control)
     if not hay:
         return None
-    pairs = sorted(((len(w), w, p) for p, ws in syn.items() for w in ws), reverse=True)
+    pairs = sorted(((len(_norm_words(w)), w, p) for p, ws in syn.items() for w in ws), reverse=True)
     for _n, w, purpose in pairs:
-        if _norm_words(w) in hay:
+        if _says(w, hay):
             return purpose
     return None
 
