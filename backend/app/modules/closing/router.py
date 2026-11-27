@@ -3752,8 +3752,14 @@ def seed_standard_counts(org_id: str = ORG_ID, authorization: str = Header(defau
 # by the closing form, the incentive-rule editor and the targets editor. A surface that builds its own
 # category list has reproduced the vocabulary — `harness_metric_catalog_lock.py` fails the build.
 
-def _metric_catalog(client, org_id, *, include_inactive=False, with_tenders=True):
-    """The tenant's catalog. THE single construction site — every endpoint below routes through it."""
+def _metric_catalog(client, org_id, *, include_inactive=False, with_tenders=True, item_defs=None):
+    """The tenant's catalog. THE single construction site — every endpoint below routes through it.
+
+    `item_defs` are the tenant's uploaded ITEM vocabulary (owner 2026-11-27), read by the caller that
+    needs them through `pos_report_feed.declared_items`. It is passed IN rather than loaded here for
+    the reason the 2026-10-30 directive gives: an item list is a tenant's own words, so a surface
+    that has not asked the org must not be able to answer with items. Every existing caller passes
+    nothing and is byte-for-byte unmoved."""
     from . import count_config
     cdefs = count_config.load_count_config(client, org_id, include_inactive=include_inactive)
     tdefs = []
@@ -3763,7 +3769,7 @@ def _metric_catalog(client, org_id, *, include_inactive=False, with_tenders=True
             tdefs, _maps = tender_config.load_tender_config(client, org_id)
         except Exception:
             tdefs = []
-    return _metrics.build(cdefs, tender_defs=tdefs)
+    return _metrics.build(cdefs, tender_defs=tdefs, item_defs=item_defs)
 
 
 def _metric_lines(client, org_id, store_code, close_date, date_to=None, limit=None):
