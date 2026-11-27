@@ -30494,7 +30494,7 @@ a bare prefix is hidden on arrival with nothing said.
 the only way to a `tileOnly` page — and the complementary failure: there, a tile offered a page its viewer
 could not open; here, a page a viewer may open had no tile and no row.
 
-#### CORE-06.5 THE FIX — one home, and the row says exactly what it means
+### CORE-06.6 THE FIX — one home, and the row says exactly what it means
 
 - **`frontend/src/lib/tile-hubs.ts::tileOnlySkipped`** is the ONE home for *"may the sidebar skip this row?"*,
   dereferenced by `(platform)/layout.tsx`, which keeps no copy of the rule. The skip now holds only while the
@@ -30513,7 +30513,7 @@ could not open; here, a page a viewer may open had no tile and no row.
   surviving pages now reach the sidebar directly. A CONFIG row, not code: no business type, tenant or page is
   branched on anywhere (RULE TWO). No schema change, no relation created, money-neutral.
 
-#### CORE-06.5 PROOF AND THE LOCK
+### CORE-06.7 PROOF AND THE LOCK
 
 - **`backend/harness_nav_reachability.py` (27)** — the build lock, wired into `carrier-vocab-guard.yml`.
   §B **THE INVARIANT**: for every house business type, every page it leaves visible is reachable. §D the
