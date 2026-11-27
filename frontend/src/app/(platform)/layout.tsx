@@ -23,6 +23,7 @@ import PlatformBanners from '@/components/PlatformBanners'
 import FlowReturnBar from '@/components/FlowReturnBar'
 import { apiUrl } from '@/lib/apiBase'
 import { menuFrame, useNarrowViewport } from '@/lib/viewport'
+import { tileOnlySkipped } from '@/lib/tile-hubs'
 // ONE findable world for BOTH search boxes (§54.12). The sidebar's ⌘K search used to build its own
 // index from NAV alone and rank it with its own private ladder, so 27 menu-less pages could not be
 // found here while ⌘/ found every one of them. Both now gate and fold through `viewerCatalog` and
@@ -540,7 +541,15 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
             // (itemOrder/group/sub) does not resurrect it: the skip is unconditional because the
             // designer never persists an explicit `hidden: false` (it stores `hidden: true` or omits
             // the key — see admin/menu setHidden), so there is no "un-hide" flag to mirror.
-            const shown = (it: NavItem) => !it.tileOnly || REPORT_CAT_NAMES.has(group)
+            // §CORE-06.5 (owner report 2026-11-27): the skip's PRECONDITION is that the group's hub
+            // dashboard still covers the page. When a gate removed the hub — the tenant vertical's
+            // hide-list, a tenant menu layout, its own module/scopes — nothing covers it and the skip
+            // strands every surviving page in the group (the `return null` below drops the header too).
+            // ONE home: lib/tile-hubs.tileOnlySkipped, which derives the hub href the same way
+            // /hub/[group] resolves it. It reveals nothing a gate hid: `items` is already gated.
+            const declaredItems = NAV.find(g => g.group === group)?.items
+            const shown = (it: NavItem) =>
+              !tileOnlySkipped(it, group, declaredItems, items, REPORT_CAT_NAMES.has(group))
             // Sub-categories (tenant layout, roadmap #5). `items` carries EVERY item in the group, so
             // the loose list is whatever no sub claimed — that keeps a group with no subs identical to
             // before, and an item whose sub was deleted still renders instead of vanishing.
