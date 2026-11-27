@@ -399,8 +399,24 @@ def run(tree, truth, migs):
         if body is None:
             check(f"E {fn} still exists to be checked ({what})", False, path)
             continue
+        # FOLLOW ONE DELEGATION HOP. 2026-11-27: `_caller_rep_keys` became a thin wrapper over
+        # `_caller_rep_identity` (which must also return the caller's own NAME, not just their
+        # keys), and this check went red although the dereference had simply moved one line down
+        # with the rest of the body. A lock that reads only a named function's own body answers
+        # "has this code moved", not "is the fact still dereferenced" — so it fails every honest
+        # refactor and, worse, a lock whose reachability is wrong can DELETE its own assertion
+        # instead of failing it (the §CORE-05 browser-service guard, same month). The fix is the
+        # lock's reach, never its expectation: a body that delegates is satisfied by the body it
+        # delegates TO.
+        _bodies = [body]
+        if "_relation_home." not in body and "relation_home." not in body:
+            _others = {nm: n for nm, n in functions(src) if nm != fn}
+            for _nm, _n in _others.items():
+                if re.search(r"\b%s\s*\(" % re.escape(_nm), body):
+                    _bodies.append(seg(src, _n))
         check(f"E {fn} reads through relation_home — {what}",
-              "_relation_home." in body or "relation_home." in body, body[:160])
+              any("_relation_home." in b or "relation_home." in b for b in _bodies),
+              body[:160])
     return P, F
 
 

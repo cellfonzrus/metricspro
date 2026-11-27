@@ -460,15 +460,61 @@ def rule_line_total(explain):
 REP_NAME_FIELDS = ("storeops_name", "epay_salesperson", "salesperson", "rep")
 
 
+def name_fold(v) -> str:
+    """The order-free, accent-folded key for ONE rep spelling, prefixed so it can never collide with
+    an UPPER raw name in the same set. PURE.
+
+    ★ WHY THIS WAS ADDED (owner 2026-11-27, §CORE-33.5), and why it is ADDITIVE. ★
+    `rep_row_keys` folded a name with `.upper()` and the alias map alone, so two spellings of ONE
+    person failed to match unless somebody had hand-entered an alias row:
+
+      · "Antunez, Diana" (the POS) vs "Diana Antunez" (the roster) — the 2026-09-02 finding, which
+        had already silently zeroed every per-employee daily target for a whole tenant once.
+      · "Díana Antúnez" vs "Diana Antunez" — the Martínez finding; `str.isalnum()` is True for 'í',
+        so every plain fold in this codebase used to keep it.
+
+    On a payout read that mismatch is a LOCKOUT, not a leak: the rep is refused their OWN rows and
+    the screen tells them they earned nothing. That is the worse failure of the two, and it is why
+    this is fixed in the shared home rather than worked around per surface.
+
+    It only ever ADDS a key. Every key `rep_row_keys` produced before is still produced, so nothing
+    that matched stops matching and no caller can newly be refused. It admits exactly the spellings
+    that differ by word order, punctuation or accents — the ones `folded_token_key` already treats as
+    one person — and NOT a dropped middle initial ("Caba, David, A" vs "Caba, David"), which that
+    key refuses on purpose because merging those is a judgement a human makes.
+
+    ⚠️ IT IS NOT AN IDENTITY ON ITS OWN. The fold discards WORD ORDER, so "Mark Kellie" and
+    "Kellie Mark" — a pair `person_identity.token_key` cites as live data — share a key. For a JOIN
+    that merge costs a wrong figure and is accepted; as an AUTHORIZATION equality it is one employee
+    reading another's pay. So a caller may add this key to its OWN key set only after proving the
+    fold names exactly one person on the roster (`router._fold_names_one_person`), and a handler that
+    SELECTS per-rep rows must select under the roster's own spelling rather than the text it was
+    given (`router._caller_rep_identity`). Both are §CORE-33.5; both were found by the security pass
+    on the change that introduced this function, before it shipped.
+
+    NEVER RAISES. It defers an import, and its only caller's enclosing `except` treats failure as
+    UNRESTRICTED — so an exception here would fail OPEN. An unfoldable value yields no key, which
+    fails closed."""
+    try:
+        from app.modules.core import person_identity as _pi
+        k = _pi.folded_token_key(v)
+    except Exception as e:                                     # pragma: no cover - fail-closed guard
+        print(f"WARN payout_audience.name_fold failed: {e}")
+        return ""
+    return ("fold:" + k) if k else ""
+
+
 def rep_row_keys(row, canon=None, fields=REP_NAME_FIELDS):
     """Every UPPER name key a row could be known by: each name field as written, plus its canonical
-    form when a `canon` callable is supplied. PURE."""
+    form when a `canon` callable is supplied, plus each one's accent-folded order-free key
+    (`name_fold`) so that two spellings of one person match without an alias row. PURE."""
     out = set()
     for f in fields or ():
         v = str((row or {}).get(f) or "").strip()
         if not v:
             continue
         out.add(v.upper())
+        out.add(name_fold(v))
         if canon is not None:
             try:
                 c = str(canon(v) or "").strip()
@@ -476,6 +522,8 @@ def rep_row_keys(row, canon=None, fields=REP_NAME_FIELDS):
                 c = ""
             if c:
                 out.add(c.upper())
+                out.add(name_fold(c))
+    out.discard("")
     return out
 
 
@@ -494,6 +542,35 @@ def mine_only(rows, rep_keys, canon=None, fields=REP_NAME_FIELDS):
     if rep_keys is None:
         return rows
     return [r for r in (rows or []) if row_is_mine(r, rep_keys, canon=canon, fields=fields)]
+
+
+def mine_names(names, rep_keys, canon=None):
+    """-> (names_this_caller_may_be_OFFERED, unmatched_self). PURE.
+
+    `mine_only`'s sibling for a list of bare NAME STRINGS rather than rows — what a rep picker may
+    offer. Owner 2026-11-27: *"under my targets it should only shpow the name of the person whoc is
+    logged in not all reps, that needs to chnage across teh paltform"*.
+
+    Several feed spellings of one person collapse to ONE entry, first spelling winning, so the caller
+    keeps its own display order and a rep is never offered their own name three times.
+
+    `unmatched_self` is the LOCKOUT state, reported rather than rendered as an empty page: this
+    caller is a real identifiable person, names were on offer, and none of them is theirs. A surface
+    shows it and points at the rep-merge screen; it must never widen back to everybody. It is False
+    for a manager (`rep_keys is None`) and False when nothing was on offer in the first place."""
+    if rep_keys is None:
+        return list(names or []), False
+    seen, out = set(), []
+    for n in (names or []):
+        keys = rep_row_keys({"rep": n}, canon=canon, fields=("rep",))
+        if not keys & set(rep_keys):
+            continue
+        fold = name_fold(n) or str(n).strip().upper()
+        if fold in seen:
+            continue
+        seen.add(fold)
+        out.append(n)
+    return out, bool(rep_keys) and not out and bool(names)
 
 
 def requested_rep_is_mine(requested, rep_keys, canon=None):
