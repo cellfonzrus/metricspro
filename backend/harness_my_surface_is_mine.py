@@ -251,11 +251,57 @@ ok("cmap" in _amb and "who.add" in _amb,
 # accident.
 ok("_admissible_fold_keys" in _ident,
    "the caller's key set gets its folds from the ONE producer that gates them")
-ok("name_fold" not in _ident,
-   "…and computes NO fold of its own, so there is nowhere to add an un-gated one — that was hole 3")
+
+# THE LOCK'S OWN HOLE, found by the THIRD security pass. The check here used to be the single
+# absence `"name_fold" not in _ident` — and the same commit shipped a SECOND SPELLING of that call,
+# `_pa_fold_key`, a helper of mine two functions below. `keys.add(_pa_fold_key(alias))` is hole 3
+# restored verbatim and contains no "name_fold", so it passed. `_pi.folded_token_key(...)` and
+# `keys |= {something}` passed too. An absence that names one identifier is not an absence; the
+# evasion was a function I had just written and documented as "reached by name".
+#
+# So the lock is now a WHITELIST of what may join the key set, read off the AST: every `keys.add(X)`
+# and `keys |= X` in the identity builder must have an X from this list, verbatim. A new
+# contributor to a caller's authorization keys — by any spelling, through any helper, computed any
+# way — fails the build and has to be added here deliberately. There is nothing left to dodge,
+# because the check no longer asks what the code must NOT say.
+_ALLOWED_KEY_SOURCES = {
+    "name.upper()",                                     # the caller's own roster spelling
+    "str(alias).strip().upper()",                       # a spelling a human DECLARED to be them
+    "_admissible_fold_keys(org_id, mine, cmap=cmap)",   # folds, each one gated
+}
+_contributors = []
+for _n in ast.walk(_fns["_caller_rep_identity"]):
+    # `keys.add(X)`
+    if (isinstance(_n, ast.Call) and isinstance(_n.func, ast.Attribute)
+            and _n.func.attr in ("add", "update")
+            and isinstance(_n.func.value, ast.Name) and _n.func.value.id == "keys"):
+        _contributors += [ast.get_source_segment(_src, a) or "?" for a in _n.args]
+    # `keys |= X`, `keys = keys | X`
+    if (isinstance(_n, ast.AugAssign) and isinstance(_n.target, ast.Name)
+            and _n.target.id == "keys"):
+        _contributors.append(ast.get_source_segment(_src, _n.value) or "?")
+    if (isinstance(_n, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "keys" for t in _n.targets)
+            and not isinstance(_n.value, (ast.Call, ast.Set, ast.Dict))
+            and (ast.get_source_segment(_src, _n.value) or "") not in ("set()",)):
+        _contributors.append(ast.get_source_segment(_src, _n.value) or "?")
+_unexpected = [c for c in _contributors if c.strip() not in _ALLOWED_KEY_SOURCES]
+ok(_contributors, "the identity builder does assemble a key set that can be audited")
+ok(not _unexpected,
+   "EVERY contributor to the caller's authorization key set is on the whitelist — unexpected: %r. "
+   "A fold may only arrive through `_admissible_fold_keys`, which gates it; that was hole 3, and a "
+   "second SPELLING of the same call was the hole in this lock." % (_unexpected,))
+ok(len(re.findall(r"name_fold", _ident)) == 0,
+   "…and the identity builder still names no fold producer directly")
+# The indirection that defeated the old absence check is GONE, not merely unused: a named wrapper
+# round `name_fold` is a second spelling waiting to be called.
+ok("_pa_fold_key" not in _code,
+   "no named indirection to `name_fold` survives in the router — the thing that made the previous "
+   "spelling of this lock passable")
 _prod = py_code_only(ast.get_source_segment(_src, _fns["_admissible_fold_keys"]) or "")
-ok("_fold_is_one_identity" in _prod and "_pa_fold_key" in _prod,
-   "every fold the producer returns passed the gate")
+ok("_fold_is_one_identity" in _prod and "name_fold" in _prod,
+   "every fold the producer returns passed the gate — and the producer is the one place in the "
+   "router where a caller's fold is computed at all")
 ok(len(re.findall(r"\badd\(", _prod)) == 1 and "out.discard" in _prod,
    "…and it has exactly one add site, inside the gate's own branch")
 # ARMED: the producer really does refuse the ambiguous pair and keep the unambiguous one. Pure, so

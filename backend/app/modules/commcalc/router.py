@@ -17683,7 +17683,12 @@ def _caller_rep_identity(authorization: str, org_id: str):
             keys.add(name.upper())
             # The caller's declared aliases — a human's explicit "these are the same person" — are
             # exact keys in their own right and need no proof beyond the declaration.
-            cmap = {}
+            # `cmap` stays None until the alias map has actually been READ. None means UNKNOWN, and
+            # the gate refuses an unknown universe — because a universe missing half its
+            # declarations can hold FEWER identities than really exist, and fewer identities is
+            # what OPENS the gate. "No aliases exist" and "I could not find out" are different
+            # answers, and only the first one is safe to act on.
+            cmap = None
             mine = [name]
             try:
                 cmap = _rep_canon_map(sb(), org_id)
@@ -17692,7 +17697,7 @@ def _caller_rep_identity(authorization: str, org_id: str):
                         keys.add(str(alias).strip().upper())
                         mine.append(str(alias))
             except Exception:
-                cmap = {}
+                cmap = None
             # …and the ORDER-FREE, accent-folded form, so the feed's own spelling of the caller
             # matches without an alias row (§CORE-33.5). BOTH sides of the comparison gain this key
             # — `payout_audience.rep_row_keys` adds it for the row — and folding only one side
@@ -17737,19 +17742,13 @@ def _admissible_fold_keys(org_id: str, names, cmap=None) -> set:
     `names` are all spellings of the SAME person (their roster name and their declared aliases), so
     they normally share one fold and this costs one gate call.
     """
+    from app.modules.commcalc import payout_audience as _pa_fold
     out = set()
-    for fold in {_pa_fold_key(v) for v in (names or [])}:
+    for fold in {_pa_fold.name_fold(v) for v in (names or [])}:
         if fold and _fold_is_one_identity(org_id, fold, cmap=cmap):
             out.add(fold)
     out.discard("")
     return out
-
-
-def _pa_fold_key(v) -> str:
-    """`payout_audience.name_fold`, reached by name so the one producer above stays the one place a
-    fold is computed for a key set. Deferred import: see `_fold_is_one_identity`'s note."""
-    from app.modules.commcalc import payout_audience as _pa_fold
-    return _pa_fold.name_fold(v)
 
 
 def _fold_is_one_identity(org_id: str, fold: str, cmap=None) -> bool:
@@ -17769,9 +17768,13 @@ def _fold_is_one_identity(org_id: str, fold: str, cmap=None) -> bool:
     via `_rep_canon_map`). Each such name is reduced to its CANONICAL spelling first, so a rep's
     own three declared spellings count as one identity while two separate employees count as two.
 
-    Fails CLOSED in every uncertain case: an unreadable or incompletely-read roster, or a roster
-    that does not contain the fold at all, returns False, so the caller matches on their exact
-    spelling and declared aliases only. That can cost them the feed's other spelling of their name —
+    Fails CLOSED in every uncertain case, and BOTH halves of the universe count: an unreadable or
+    incompletely-read roster, an alias map that was never read (`cmap is None` — "no aliases exist"
+    and "I could not find out" are different answers, and only the first is safe to act on), or a
+    universe that does not contain the fold at all, all return False, so the caller matches on their
+    exact spelling and declared aliases only. The asymmetry here was the third security pass's
+    observation: a universe missing half its declarations holds FEWER identities than really exist,
+    and fewer identities is exactly what OPENS this gate. That can cost them the feed's other spelling of their name —
     which the `unmatched_self` channel REPORTS and a rep-merge row fixes — and never costs somebody
     else their privacy.
 
@@ -17786,12 +17789,18 @@ def _fold_is_one_identity(org_id: str, fold: str, cmap=None) -> bool:
     # raised NameError — and that function's enclosing `except` treats failure as UNRESTRICTED, so
     # the bug failed OPEN and handed every caller everybody's rows. Caught by the integration tests
     # on the first run. Same class as `name_fold`'s own never-raises note.
-    from app.modules.commcalc import payout_audience as _pa_fold
-    from app.modules.core import feed_read as _feed_read
     want = str(fold or "").strip()
     if not want:
         return False
+    if cmap is None:
+        # The alias half of the universe was never read. See `_caller_rep_identity`'s note.
+        return False
     try:
+        # INSIDE the try: `_caller_rep_identity`'s enclosing `except` treats any failure as
+        # UNRESTRICTED, so an import that escaped this function would fail OPEN. Everything that
+        # can raise belongs on this side of the guard.
+        from app.modules.commcalc import payout_audience as _pa_fold
+        from app.modules.core import feed_read as _feed_read
         # Read through the shared paged home, which RAISES rather than returning a short list. A
         # `.limit(20000)` here would have been a silent truncation, and a truncation that drops the
         # second colliding identity turns two people into one and OPENS the gate — the one failure
@@ -17802,7 +17811,6 @@ def _fold_is_one_identity(org_id: str, fold: str, cmap=None) -> bool:
     except Exception as e:                                      # pragma: no cover - I/O guard
         print(f"WARN _fold_is_one_identity roster read failed: {e}")
         return False
-    cmap = cmap if isinstance(cmap, dict) else {}
     universe = [r.get("name") for r in rows]
     universe += list(cmap.keys()) + list(cmap.values())
     # Count DISTINCT IDENTITIES, not names and not rows. A name is reduced to its canonical

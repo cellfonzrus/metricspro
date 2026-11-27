@@ -47938,7 +47938,7 @@ have no targets of their own, and the all-reps view belongs on the Targets overv
 | A row's narrowing | `payout_audience.mine_only` / `row_is_mine` |
 | A requested `rep=` | `payout_audience.requested_rep_is_mine` |
 | Whether a fold may be an AUTH key | `commcalc.router._admissible_fold_keys` → `_fold_is_one_identity` |
-| Proof / tests | `backend/harness_my_surface_is_mine.py` (82), `backend/tests/integration/test_my_targets_is_the_viewers_own.py` (33) |
+| Proof / tests | `backend/harness_my_surface_is_mine.py` (85), `backend/tests/integration/test_my_targets_is_the_viewers_own.py` (33) |
 | CI gate | carrier-vocab-guard.yml, "Run the \"My\" surface proof" |
 
 ### CORE-33.5a The fix had three holes of its own, and the fold was all three (security pass)
@@ -47984,6 +47984,34 @@ count as one identity while two employees count as two. It reads through `core/f
 which RAISES rather than returning a short list: the first version's `.limit(20000)` was a silent
 truncation, and a truncation that drops the second colliding identity turns two people into one and
 OPENS the gate.
+
+**AND THE LOCK ITSELF HAD A DOOR BESIDE IT — the third pass.** The lock for hole 3 was a single
+textual absence: `name_fold` must not appear in `_caller_rep_identity`. The same commit shipped a
+SECOND SPELLING of that call — a small named helper, documented in its own docstring as *"reached by
+name"* — which contains no `name_fold`, lives in a different AST segment, and is therefore invisible
+to the check. `keys.add(_pa_fold_key(alias))` is hole 3 restored verbatim and passed every check in
+the section. So did folding through `person_identity.folded_token_key` directly, and so did
+`keys |= {…}`. **An absence that names one identifier is not an absence**, and the ready-made evasion
+was a function written in the same commit as the lock.
+
+The lock is now a **WHITELIST of what may join a caller's authorization key set**, read off the AST:
+every `keys.add(X)` / `keys.update(X)` / `keys |= X` in the identity builder must carry an `X` from a
+list of three verbatim sources — the caller's roster spelling, a spelling a human DECLARED to be
+them, and `_admissible_fold_keys(...)`. A new contributor by any spelling, through any helper,
+computed any way, fails the build and has to be added to the list deliberately. The question the lock
+asks changed from *what must the code not say* (endlessly evadable) to *what is the code allowed to
+say* (closed). Both evasions above were planted and both now turn it red; the named indirection was
+deleted rather than left unused, because a wrapper round `name_fold` is a second spelling waiting to
+be called.
+
+**BOTH HALVES OF THE UNIVERSE NOW FAIL CLOSED.** The same pass noticed that an alias map which could
+not be read was treated as *"no aliases exist"*: `_rep_canon_map` swallows each table's failure and
+returns a silently partial map. A universe missing half its declarations holds FEWER identities than
+really exist, and fewer identities is exactly what OPENS this gate. `cmap` is now `None` until the
+alias map has actually been read, and the gate refuses an unknown universe. *"No aliases exist"* and
+*"I could not find out"* are different answers and only the first is safe to act on. The gate's two
+deferred imports also moved inside its `try`, since an import escaping it would have reached
+`_caller_rep_identity`'s fail-OPEN `except`.
 
 **RESIDUAL, NOT CLOSED, stated rather than left to be rediscovered.** The universe is what the
 platform has declared. A rep name appearing ONLY in a feed and in no declaration — a contractor never
