@@ -390,6 +390,34 @@ def blinded_verdict(body=""):
     return NOT_MEASURED if any(mark in text for mark in BLINDED_MARKS) else None
 
 
+# ── ★ AND THE SAME RULE FOR THE OTHER WAY AN ANSWER CAN BE UNJUDGEABLE ★ ─────────────────────────
+# `blinded_verdict` catches a DIFFERENT DOOR having stopped us. This catches the other half: an
+# expectation whose verdict turns on WHOSE ROWS came back cannot be judged when no marker names
+# another tenant's content. Found 2026-11-27 (§CORE-53) while wiring the first real rep accounts:
+# `EXPECT_NO_FOREIGN_ROWS` refused to judge such a body and `EXPECT_REACH` fell through to OK, so
+# one branch honoured this module's own stated rule — "an empty marker set is never read as clean,
+# because nothing declared means nothing identified" (owner 2026-10-30) — and the other did not.
+# That is the one-branch-checks-and-another-does-not shape `_foreign_in` was made to close, in the
+# EMPTY-SET direction, and it had no symptom because it only bites when exactly ONE tenant is
+# declared — the state the platform enters the moment the first tenant's accounts exist and before
+# the second's do.
+#
+# IT IS ASKED PER-BRANCH, NOT UP FRONT, AND THAT PLACEMENT IS THE POINT. A LOCKOUT is a fact about
+# the DOOR and a refusal is a fact about the GATE; both are judgeable with no markers whatsoever.
+# Refusing to judge them would trade one blind spot for another, and ★ NO LOCKOUT ★ is a defect of
+# equal weight to a leak. So each branch answers its own door question FIRST and asks this only
+# before it would read a body.
+MARKER_DEPENDENT = frozenset({EXPECT_REACH, EXPECT_NO_FOREIGN_ROWS})
+
+
+def judgeable_verdict(expect, foreign_markers=()):
+    """NOT_MEASURED when this expectation's verdict turns on markers and none were declared; None
+    when the answer can be judged. PURE. ONE home, so a branch cannot keep its own rule."""
+    if expect in MARKER_DEPENDENT and not tuple(m for m in (foreign_markers or ()) if str(m).strip()):
+        return NOT_MEASURED
+    return None
+
+
 def _foreign_in(text, markers):
     """Is another tenant's content in this body? ONE home, so every expectation that can receive a
     body asks the same question the same way — a second copy of this loop is how one branch ends up
@@ -469,6 +497,11 @@ def verdict(probe, status, body="", foreign_markers=()):
         # so a schedule or time-clock screen a rep is SUPPOSED to reach could hand back another
         # tenant's rows and the probe would call it clean. Whose rows came back is a separate
         # question from whether the door opened, and every answered body is now asked both.
+        # The door opened. Whose rows came out is a SEPARATE question, and it cannot be asked at
+        # all without a marker — so it is reported as the gap it is rather than as a clean answer.
+        blind = judgeable_verdict(expect, foreign_markers)
+        if blind:
+            return blind
         leak = _foreign_in(text, foreign_markers)
         if leak:
             return FOREIGN_ROWS
@@ -476,9 +509,10 @@ def verdict(probe, status, body="", foreign_markers=()):
 
     if expect == EXPECT_NO_FOREIGN_ROWS:
         if code in REFUSAL_CODES:
-            return OK
-        if not foreign_markers:
-            return UNKNOWN
+            return OK                       # the gate answered; no marker was needed to judge that
+        blind = judgeable_verdict(expect, foreign_markers)
+        if blind:
+            return blind                    # was `UNKNOWN` — a thing we could not ASK is a GAP, and
         return FOREIGN_ROWS if _foreign_in(text, foreign_markers) else OK
 
     return UNKNOWN
