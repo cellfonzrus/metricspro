@@ -30463,6 +30463,76 @@ dereference it, with controls proving an un-wired hub goes red.
   KPI rows are gated too, §E eight negative controls proving each check bites.
 
 
+### CORE-06.5 THE OTHER SIDE OF THE SAME QUESTION — a door that ASKS PERMISSION vs a door that EXISTS (owner report 2026-11-27)
+
+Owner, in the NY LOGISTICS tenant: *"i cannot see the targtet setting dashboard and the incentives
+dashboard in ny logistcis - why is that and fix it"*.
+
+Nothing was switched off for that tenant, and no licence flag, entitlement or feature gate was involved.
+`NavItem.tileOnly` means, in `rbac.ts`'s own words, *"the page is covered by a master tile on its hub
+dashboard, so the sidebar's default rendering SKIPS it"*. **That is a PRECONDITION, not a property** — and
+nothing checked it. A business type's hide-list (`core.tenant_vertical.nav_hidden`, mig 1020) names group
+HUBS; when the hub goes, nothing covers the group's pages, `(platform)/layout.tsx` drops the group whole
+(`loose.length === 0 && shownSubs.length === 0` — whose own comment said that state was *"possible only via
+a tenant layout that regrouped hidden items"*), and every page the hide-list **deliberately left visible**
+loses its only door while `verticalPathOK` would still open it by URL.
+
+Measured on the `ups_store` business type before the fix, over the real NAV: **33 pages had no door.**
+
+| group | hub hidden | pages stranded |
+|---|---|---|
+| Management Overview | `/hub/management-overview` | 12 |
+| Targets & Coaching | `/hub/targets-coaching` | 7 — Target Settings among them |
+| Incentives | `/hub/incentives` | 6 |
+| Assets | `/hub/assets` | 5 |
+| Incentive Payout Plans | `/hub/incentive-payout-plans` | 3 — **Daily Incentive Rules**, the mig-1072 daily-incentive mechanism built FOR this business type, and What a Day Pays |
+
+**A SECOND over-reach, in the row.** `href_hidden` reads a bare entry as *"this page and everything under
+it"*. `/commcalc/targets` was written without the exact `$` marker eight of its siblings use, so one intended
+hide (Daily Targets) also hid six pages nobody named: `targets/settings` (the report), `targets/my`,
+`targets/report-cards`, `targets/action-plan`, `targets/accessories`, `targets/rep-map`. A page shipped under
+a bare prefix is hidden on arrival with nothing said.
+
+**§CORE-06 asked whether a door ASKS PERMISSION. This asks whether a door EXISTS.** Same subject — a tile is
+the only way to a `tileOnly` page — and the complementary failure: there, a tile offered a page its viewer
+could not open; here, a page a viewer may open had no tile and no row.
+
+### CORE-06.6 THE FIX — one home, and the row says exactly what it means
+
+- **`frontend/src/lib/tile-hubs.ts::tileOnlySkipped`** is the ONE home for *"may the sidebar skip this row?"*,
+  dereferenced by `(platform)/layout.tsx`, which keeps no copy of the rule. The skip now holds only while the
+  group's hub is among the items the viewer can see. The hub is **read off the group** (`groupHubItem` — its
+  one `/hub/…` item), not rebuilt from the group's title; the tests pin that reading it and deriving it
+  (`'/hub/' + slugGroup(group)`) agree for every converted group, so the sidebar and the `/hub/[group]` route
+  can never disagree about which page is a group's dashboard. A group with a hand-woven front door
+  (Store Operations → `/franchise`, Workforce → `/storeops`, Payroll & HR → `/payroll`) declares no hub and is
+  deliberately untouched.
+- **It reveals nothing a gate hid.** The caller is only ever asked about rows that already survived the gate;
+  this stops a row being SKIPPED, it does not admit one. Every pre-existing gate still answers first.
+- **Migration 1134** re-declares the `ups_store` hide-list: `/commcalc/targets` → `/commcalc/targets$` (one
+  page, no children), and three group hub dashboards removed — `/hub/incentives`,
+  `/hub/incentive-payout-plans`, `/hub/targets-coaching` — each of whose groups keeps pages this business type
+  uses. `/hub/management-overview`, `/hub/assets` and `/hub/distributors` stay hidden: not reported, and their
+  surviving pages now reach the sidebar directly. A CONFIG row, not code: no business type, tenant or page is
+  branched on anywhere (RULE TWO). No schema change, no relation created, money-neutral.
+
+### CORE-06.7 PROOF AND THE LOCK
+
+- **`backend/harness_nav_reachability.py` (27)** — the build lock, wired into `carrier-vocab-guard.yml`.
+  §B **THE INVARIANT**: for every house business type, every page it leaves visible is reachable. §D the
+  **swept-children ratchet** — each bare hide-list entry's NAV children are pinned, so adding a page under one
+  fails the build until somebody decides (it caught the six `/commcalc/targets` children on the planted
+  revert). §E the sidebar dereferences the one home and no copy of the old skip survives. §F negative
+  controls, including the pre-fix skip reproducing all 33.
+- **`frontend/src/lib/__tests__/nav-hub-reachability.test.ts` (11)** — the predicate's four gates, written
+  FIRST and shown red, plus the real-NAV assertions above.
+- **`backend/tests/integration/test_vertical_nav_reachability.py` (9)** — the hide-list is a ROW, and a mirror
+  agreeing with itself proves nothing about the read: this asks the production functions
+  (`load_vocab` → `resolve_vertical` → `payload`) over the in-memory double, for **four tenants in one table**
+  — the franchise type, the default, one declaring nothing and one declaring nonsense — so a cross-tenant leak
+  surfaces as the wrong type's pages going missing. Verified red against the bare `/commcalc/targets` entry.
+
+
 ## §CORE-07. A LOGIN IS NOBODY UNTIL IT IS LINKED TO ITS PERSON (owner report 2026-10-14)
 
 Owner: *"all stores should be able to see their dashboard with commissions earned and their schedules

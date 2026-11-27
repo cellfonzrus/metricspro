@@ -104,6 +104,16 @@ for _fn in sorted((f for f in os.listdir(_mig_dir) if re.match(r"^\d+_.*\.sql$",
                           re.sub(r"(?m)^\s*--.*$", "", read(f"database/migrations/{_fn}"))):   # statements only
         seed_mods[_m.group(2)] = [x for x in _m.group(1).split(",") if x]
 seed_mods = {k: v for k, v in seed_mods.items() if v}      # '{}' = any vertical = absent from the mirror
+# A later migration may also re-declare a vertical's nav_hidden (mig 1134 made the Daily Targets entry EXACT
+# and gave three group hubs back — §CORE-06.5). Fold those the same way, in migration order, so the mirror is
+# checked against what the database holds after EVERY applied migration and not against the 1020 seed alone.
+for _fn in sorted((f for f in os.listdir(_mig_dir) if re.match(r"^\d+_.*\.sql$", f) and int(f.split("_", 1)[0]) > 1020),
+                  key=lambda f: int(f.split("_", 1)[0])):
+    for _m in re.finditer(r"SET nav_hidden = '\{([^}]*)\}'\s*WHERE key = '([a-z_]+)'",
+                          re.sub(r"(?m)^\s*--.*$", "", read(f"database/migrations/{_fn}"))):   # statements only
+        for _r in seed_rows:
+            if _r["key"] == _m.group(2):
+                _r["nav_hidden"] = [h for h in _m.group(1).split(",") if h]
 _closing = parse_closing(read(MIG_CLOSING))
 for _r in seed_rows:
     _r["closing_hidden"] = _closing.get(_r["key"], [])
