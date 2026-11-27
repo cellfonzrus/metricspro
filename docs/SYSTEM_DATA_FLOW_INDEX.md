@@ -48345,6 +48345,84 @@ wrong-shaped question).
 
 ---
 
+### CORE-33.7 A rep's tiles are the tenant's BUSINESS TYPE too, and the shelf is the store they are standing in (owner 2026-11-27)
+
+Three reports in the hour after §CORE-33.6 went live, all on the same employee — a rep of the NY
+LOGISTICS tenant, which is registered as **The UPS Store (franchise)**.
+
+**WHAT WAS ACTUALLY WRONG, measured before changing anything.**
+
+| The report | The finding |
+|---|---|
+| *"his targets ar also not appearing"* | **Not a defect.** That tenant's `sales_rep` role carries `/commcalc/targets/my: false`, `/commcalc/targets/action-plan: false` and `/commcalc/targets: false` — the owner's own switches, obeyed since §CORE-33.6 that afternoon |
+| *"inventory aging is not showing under the employee as a tile, i checked ali it is not there"* | It was a CARD on `/commcalc/targets/my`, so the switch above took it away with the page. And that tenant holds **0** rows in `commcalc.inventory_aging_device`, against 1,402 / 1,654 / 455 units on hand for the three wireless tenants |
+| *"barcode resue does not belong to the wireless stors it is only for the ups store"* | True, and the reverse of *"device history look up is not rwequired ont eh portal"* ten minutes earlier: both are right, because **they are about different kinds of tenant** |
+
+**THE CLASS — the third subtraction this declaration had to learn.** `rep_surface` decides what an
+individual contributor may reach; §CORE-33.6 taught it that a tenant's ADMIN may subtract from that.
+What a tenant **IS** was the other subtraction, and it was already declared
+(`core.tenant_vertical.nav_hidden`, §35) and already obeyed by the sidebar — **the tiles never
+asked.** The one viewer with no menu was therefore the only one still being offered a page their own
+business type hides. One answer now, asked by all three gates:
+
+```
+rep_surface.page_off(address, role_perms, nav_hidden)
+    role's own switch  → roles.permissions["pages"][href] is False   (§CORE-33.6)
+    tenant's type      → verticals.href_hidden(address, nav_hidden)  (§35, dereferenced)
+```
+
+`tiles()`, `pages()`, `page_allowed()`, `api_allowed()` and `surface_for_api()` all read it; `/me`
+passes the `nav_hidden` already resolved on the tenant payload for the nav gate (no second read), and
+the API middleware caches it beside the role's switches. Both subtractions can only SUBTRACT, the
+`UNIVERSAL_API` shell and the password surface are never subtracted, and this file still spells no
+vertical key — the UPS/wireless split is **migration 1136**, two config rows:
+
+- `wireless_retail` hides `/storeops/dropoff-barcode` (the UPS counter job, opened to reps 2026-11-20
+  for that tenant and never scoped to it).
+- `ups_store` hides `/commcalc/asset/my-shelf` (a store that sells no handsets gets no phone-aging
+  tile — a tile that can only read empty is worse than no tile).
+
+**TWO NEW TILES, each its own page.**
+
+- **Phones on my shelf** → `/commcalc/asset/my-shelf`, reading the same `GET /commcalc/my-shelf`.
+  The card itself moved to `components/ShelfAging` and is rendered by BOTH that page and My targets:
+  one card, two doors, never two answers. A thing the owner wants every rep to see on sign-in cannot
+  hang off another screen's permission, which is exactly how the switch above hid it.
+- **Device lookup** → `/commcalc/device-history`, `GET` only. It carries no money for this viewer:
+  the per-period commission/rebate table in that payload is gated by the `device_commission` data
+  grant, which no confined employee holds. Removed from the kiosk that morning (§CORE-33.3) because
+  the API refused it; the fix for "the browser must not offer what the API refuses" is to grant the
+  surface the rep is meant to have, and let the business type decide which reps those are.
+
+**AND THE SHELF IS NOW WHERE THEY ARE STANDING.** *"every sales rep should be show which phones ar
+sititng in thier store inventory hwere they are currenly clocked in so they an address those on a top
+priortiy."* While a rep is ON the clock, `my_shelf` narrows to the ONE store of their open punch;
+off the clock it stays the whole evidence-based span, because then there is no "here" to narrow to and
+a blank page would be worse. The narrowing is applied AFTER `scope_keyset`, so a punch at a store the
+login does not reach can only subtract, never widen. A punch at a store with no stock falls back to
+the span rather than reading as "your shelf is clear", and the payload says which store it is showing
+(`clocked_in_at`, `scoped_to_store`, `devices_at_other_stores_in_span`) so the card states it.
+
+**"Where is this person right now" has ONE home:** `storeops.router.open_punch(org_id, employee_id)`,
+with `clocked_in_store(authorization, org_id)` over it. The kiosk's own `GET
+/storeops/timeclock/status` was the only reader and now dereferences it, so the two surfaces cannot
+come to disagree about which store someone is in.
+
+**Locks/tests.** `harness_rep_surface_lock.py` §6f (a hidden page has no tile, no page and no API;
+the matching rule is dereferenced and not copied; `page_off` is the one answer every caller asks; the
+shell survives; the split is in the migration and no vertical key is in the declaration),
+§6e3/§6e3b (a read two surfaces declare closes only when both pages do), `harness_rep_surface.py`
+A13/A17/A21–A21e/A22–A23 (157), `harness_tenant_vertical.py` (84, §A folds mig 1136 back),
+`tests/integration/test_rep_surface_gate.py` (both tenants, a business type declared by the test
+itself: no tile, no read, and the shell intact), `frontend/tools/rep-surface-nav-proof.mjs` (57).
+Migration 1135 is config-only, idempotent, additive, money-neutral.
+
+Cross-references: §CORE-33.6 (the role's switch — the same one answer) · §CORE-33.3 (the kiosk offers
+no surface the gate refuses) · §CORE-33.4 (a granted page with no tile) · §35 (the business type) ·
+§COMMCALC-35 (the aging snapshot the shelf reads) · §CORE-06.5 (the UPS hide-list's over-reach).
+
+---
+
 ## §CORE-34. A PROOF THAT CANNOT START IS NOT A PASSING PROOF — one compiler and one source reader for the frontend proofs (2026-11-04)
 
 Four of the twelve `frontend/tools/*-proof.mjs` programs were red on the shrink-only register

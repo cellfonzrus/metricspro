@@ -4,9 +4,13 @@
  * OWNER 2026-10-26: "invenotry aging in luxeliunk shodul say sell within 10 days of receiving the
  * phones in stock and it should be on every sales reps daSHBOARDS WHEN TEHY LOG IN".
  *
- * WHY HERE. `/commcalc/targets/my` is the configured home for the `sales_rep` role (mig 015), so this
- * is the first screen a rep sees after signing in — not a new page they would have to find. The card
- * sits ABOVE the targets and OUTSIDE the "no store assigned" early return, because the endpoint's
+ * WHY IT LIVES IN components/ (moved 2026-11-27, §CORE-33.7). It was a private card of
+ * `/commcalc/targets/my`, and when a tenant switched My Targets off for its reps the shelf went with
+ * it — a screen the owner wants every rep to see on sign-in cannot hang off another screen's
+ * permission. It is now ALSO its own page, `/commcalc/asset/my-shelf`, with its own tile, and both
+ * pages render THIS one card: a second copy would be two answers to "what is on my shelf".
+ *
+ * The card sits OUTSIDE the targets page's "no store assigned" early return, because the endpoint's
  * store span is evidence-based (where the person was scheduled or clocked in) and therefore answers
  * for a rep whose login carries no store pin: 9 of Luxelink's 32 active rep logins are in that state.
  *

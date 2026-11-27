@@ -7,7 +7,7 @@ import { SendReportButton } from '@/lib/send-report'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import AreaTargets from './_components/AreaTargets'
-import ShelfAging from './_components/ShelfAging'
+import ShelfAging from '@/components/ShelfAging'
 import { LinkedText } from '@/components/ScreenLink'
 import { useTargetAxis, BUILTIN_HINTS } from '@/lib/target-axis'
 import DrillDownPanel, {

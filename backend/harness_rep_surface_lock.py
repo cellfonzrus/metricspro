@@ -307,6 +307,13 @@ DECLARED_PAGES = {
     "/closing/submit",
     "/commcalc/targets/action-plan",
     "/commcalc/targets/my",
+    # The rep's own phone shelf and the counter device lookup, each its own page with its own tile
+    # (owner 2026-11-27, §CORE-33.7). The shelf was a CARD on My targets and went with it when a
+    # tenant switched that page off; the lookup is a page the UPS business type hides and the
+    # wireless one does not, which is the whole of the owner's "not on the portal" / "missing from
+    # Ali's dashboard" pair.
+    "/commcalc/asset/my-shelf",
+    "/commcalc/device-history",
     "/employee/**",
     "/helpdesk/**",
     "/helpdesk/dashboard",
@@ -484,9 +491,17 @@ check("6e1 the switch closes the TILE",
       and "targets" not in [t["key"] for t in _rs.tiles(OFF)])
 check("6e2 …the PAGE", _rs.page_allowed("/commcalc/targets/my")
       and not _rs.page_allowed("/commcalc/targets/my", OFF))
-check("6e3 …and the API the page calls",
+# The shelf read is granted by TWO surfaces now (the targets page still carries the card, and the
+# shelf has its own page), so closing one of them must not close the read — and closing BOTH must.
+OFF_BOTH = {"pages": {"/commcalc/targets/my": False, "/commcalc/asset/my-shelf": False}}
+check("6e3 …and the API the page calls, once every page that calls it is closed",
       _rs.api_allowed("/api/v1/commcalc/my-shelf", "GET")
-      and not _rs.api_allowed("/api/v1/commcalc/my-shelf", "GET", role_perms=OFF))
+      and _rs.api_allowed("/api/v1/commcalc/my-shelf", "GET", role_perms=OFF)
+      and not _rs.api_allowed("/api/v1/commcalc/my-shelf", "GET", role_perms=OFF_BOTH))
+check("6e3b …and the device lookup goes with its own page",
+      _rs.api_allowed("/api/v1/commcalc/device-history", "GET")
+      and not _rs.api_allowed("/api/v1/commcalc/device-history", "GET",
+                              role_perms={"pages": {"/commcalc/device-history": False}}))
 check("6e4 a switch can only SUBTRACT — turning a refused page ON does not grant it",
       not _rs.page_allowed("/commcalc/report-cards", {"pages": {"/commcalc/report-cards": True}})
       and not _rs.api_allowed("/api/v1/commcalc/report-cards", "GET",
@@ -520,6 +535,48 @@ check("6e11 the switch has ONE home — nothing else reads the permissions key",
       and "def switched_off" in RS and RBAC.count("rep_surface") >= 1
       and '"pages"]' not in TM)
 ctl("6e can go red", _rs.page_allowed("/commcalc/targets/my"))
+
+# ── 6f. AND THE TENANT'S BUSINESS TYPE ───────────────────────────────────────────────────────────
+# The owner, 2026-11-27, on a rep of the NY LOGISTICS tenant — which is registered as The UPS Store:
+# *"barcode resue does not belong to the wireless stors it is only for the ups store, also the device
+# history is also missing from alis dashbpard"*. Both halves are one fact: what a tenant IS was
+# already declared (`core.tenant_vertical.nav_hidden`, §35) and already obeyed by the sidebar; the
+# tiles never asked. These pin that they ask, that they ask through the ONE matching rule, and that
+# this file still spells no vertical (RULE TWO).
+print("\n6f the tenant's business type")
+VERT = read("backend", "app", "modules", "core", "verticals.py")
+MIG = read("database", "migrations", "1136_business_type_rep_tiles.sql")
+_HIDE = ["/commcalc/asset/my-shelf", "/commcalc/device-history", "/storeops/dropoff-barcode"]
+check("6f1 a hidden page has no tile",
+      {"shelf", "device_history", "dropoff"} <= {t["key"] for t in _rs.tiles()}
+      and not ({"shelf", "device_history", "dropoff"} & {t["key"] for t in _rs.tiles(None, _HIDE)}))
+check("6f2 …nor its page", _rs.page_allowed("/storeops/dropoff-barcode")
+      and not _rs.page_allowed("/storeops/dropoff-barcode", nav_hidden=_HIDE))
+check("6f3 …nor the API that page calls",
+      _rs.api_allowed("/api/v1/storeops/dropoff-label/read", "POST")
+      and not _rs.api_allowed("/api/v1/storeops/dropoff-label/read", "POST", nav_hidden=_HIDE))
+check("6f4 the matching rule is verticals.href_hidden, dereferenced — not a second copy here",
+      "href_hidden" in RS and "def href_hidden" in VERT and RS.count("def href_hidden") == 0)
+check("6f5 both subtractions are ONE answer every caller asks",
+      "def page_off" in RS and RS.count("def page_off") == 1
+      and all(f"page_off(" in RS.split(f"def {fn}(")[1].split("\ndef ")[0]
+              for fn in ("tiles", "pages", "surface_switched_off")))
+check("6f6 the shell is never subtracted by a business type",
+      all(_rs.api_allowed(u, "GET", nav_hidden=[_rs.tile_page(p) for p in _rs.pages()])
+          for u in _rs.UNIVERSAL_API))
+check("6f7 /me hands the tiles the SAME nav_hidden the nav gate reads, with no second read",
+      "nav_hidden=_nav_hidden" in CORE and '("vertical") or {}).get("nav_hidden")' in CORE)
+check("6f8 the API gate asks it too, cached beside the role's switches",
+      "_tenant_nav_hidden(" in TM and "def _tenant_nav_hidden" in TM
+      and "nav_hidden=hidden" in TM)
+# THE SPLIT ITSELF IS CONFIG. The migration is the only place the two business types' page lists
+# live (plus the byte-equal mirror the vertical harness parses back), and no vertical key appears in
+# any declaration or gate.
+check("6f9 the UPS/wireless split is a config row, not code",
+      "/storeops/dropoff-barcode" in MIG and "wireless_retail" in MIG
+      and "/commcalc/asset/my-shelf" in MIG and "ups_store" in MIG
+      and "wireless_retail" not in RS and "ups_store" not in RS)
+ctl("6f can go red", _rs.page_allowed("/storeops/dropoff-barcode"))
 
 # ── 7. RULE TWO + EVERY TENANT ───────────────────────────────────────────────────────────────────
 print("\n7. house policy, not a tenant's words")

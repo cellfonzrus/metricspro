@@ -963,6 +963,11 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/asset/dashboard', label: 'Charges Dashboard', icon: '📊', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/asset/owed-weekly', label: 'Weekly Owed-to-Distributor', icon: '📅', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/asset/aging', label: 'Inventory Aging', icon: '⏳', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
+    // PHONES ON MY SHELF (owner 2026-11-27, §CORE-33.7) — the per-rep view of the same aging data,
+    // narrowed server-side to the store the viewer is clocked into. Scoped to every tier INCLUDING
+    // 'self', because the individual contributor is who it is for; the tile on /my opens it, and the
+    // business type that sells no handsets hides it through its own nav_hidden row (mig 1136).
+    { href: '/commcalc/asset/my-shelf', label: 'Phones on My Shelf', icon: '📦', module: 'asset', scopes: ['all', 'market', 'store', 'self'], tileOnly: true },
     { href: '/commcalc/asset/missing-phones', label: 'Missing Phones', icon: '📵', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/asset/aging-rebate', label: 'Aging · Rebate Received', icon: '💵', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
     // Per-DEVICE equipment reimbursement vs cost vs what the store charged (index §65, owner ask
