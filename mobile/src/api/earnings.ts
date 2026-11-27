@@ -61,11 +61,32 @@ export type EmployeeDashboard = {
   chargebacks: unknown[]
   hours?: {
     scheduled_hours?: number
-    actual_hours?: number
+    actual_hours?: number | null
     pay_rate?: number
     scheduled_pay?: number
     actual_pay?: number
     shifts?: number
+    // ── The honest-hours keys (owner 2026-11-27, index §14y). `actual_hours` now means WHAT A
+    // CLOCK MEASURED and is NULL when nothing did — never 0, because a measured zero and an
+    // unmeasured day must not read the same. `paid_hours` is what the org's declared basis owes
+    // (it can exceed the measured hours on a schedule-fallback org) and `actual_pay` is derived
+    // from THAT, absent entirely when the period is refused. A screen rendering these must read
+    // `state`/`sentence` rather than printing a bare number.
+    unmeasured_hours?: number | null
+    paid_hours?: number | null
+    state?: 'measured' | 'partly_measured' | 'nothing_measured' | 'no_shifts' | 'refused'
+    sentence?: string | null
+    refusal?: string | null
+    coverage_note?: string | null
+    hours_basis?: string | null
+    hours_basis_reason?: string | null
+    hours_basis_mixed?: boolean
+    measured_shifts?: number
+    unmeasured_shifts?: number
+    window_start?: string
+    window_end?: string
+    window_label?: string
+    window_basis?: 'pay_period' | 'calendar_month'
   }
   report_card: ReportCard
   targets: { acc_target?: number | null; acc_comm?: number | null }

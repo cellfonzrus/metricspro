@@ -222,7 +222,9 @@ export type EmployeeDashboard = {
   period?: string
   commission?: Dict | null
   commission_tracking?: { period?: string; total_payout?: number; tier?: string | number }[] | null
-  hours?: { scheduled_hours?: number; actual_hours?: number; pay_rate?: number; scheduled_pay?: number; actual_pay?: number; shifts?: number } | null
+  // See earnings.ts' EmployeeDashboard.hours for what these mean: `actual_hours` is the MEASURED
+  // figure and is null when nothing was clocked (owner 2026-11-27, index §14y).
+  hours?: { scheduled_hours?: number; actual_hours?: number | null; pay_rate?: number; scheduled_pay?: number; actual_pay?: number; shifts?: number; unmeasured_hours?: number | null; paid_hours?: number | null; state?: string; sentence?: string | null; hours_basis?: string | null; hours_basis_reason?: string | null; hours_basis_mixed?: boolean; window_label?: string } | null
   schedule?: { date?: string; store_code?: string; start_time?: string; end_time?: string; [k: string]: unknown }[] | null
   targets?: { acc_target?: number; acc_comm?: number } | null
   report_card?: { tier?: string | number; kpis_met?: number; total_kpis?: number; commission_earned?: number; flags_count?: number; chargebacks_count?: number; chargebacks_total?: number } | null

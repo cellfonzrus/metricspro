@@ -14,7 +14,7 @@ import DrillDownPanel, {
 import { narrowPanel, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { currentPeriodFromSettingsResponse, isFullCalendarMonth, monthRange, rangeLabel, stepPeriod, type PayPeriodSettings } from '../lib/pay-period'
-import { PAY_BASIS_LABEL, type PayBasis } from '../lib/pay-basis'
+import { PAY_BASIS_LABEL, hoursBasisLabel, type PayBasis } from '../lib/pay-basis'
 import { employerTotals } from '../lib/payroll-cost-tiles'
 import { buildStoreMarket, marketsFromRoster } from '@/lib/store-market'
 
@@ -40,16 +40,9 @@ const chip: React.CSSProperties = { padding: '5px 10px', borderRadius: 7, border
 // index §14y) and are shown as the human phrase here. Deliberately a DISPLAY map only: the decision,
 // the vocabulary and the explaining sentence all live server-side, and an unknown word falls through
 // to itself rather than being hidden — a basis this page has not been taught about is still a fact.
-const BASIS_LABEL: Record<string, string> = {
-  clocked: 'Clocked in',
-  clocked_corrected: 'Corrected by hand',
-  clocked_reconciled: 'Clock records reconciled',
-  clocked_override: 'Overridden, with a reason',
-  measured_zero: 'Measured — nothing worked',
-  schedule_opt_in: 'From the schedule (ticked)',
-  not_measured_unpaid: 'Not measured — unpaid',
-  punch_unusable: 'Punch unusable — reported',
-}
+// BASIS_LABEL moved to ../lib/pay-basis as HOURS_BASIS_LABEL on 2026-11-27: /storeops/reports
+// shows the same "Actual Hrs" column and had no reason beside it, so the same figure read as
+// measured on one screen and unexplained on the other. One map, every surface.
 
 // WHAT A READER NEEDS BESIDE EACH PERSON IN A PANEL — read off the row's own `fields`, which the
 // server composed (§CORE-17.3x). The basis sentence is the payroll engine's own words, so this
@@ -59,9 +52,9 @@ const PAYROLL_DRILL_COLUMNS: DrillExtraColumn[] = [
     sortValue: r => (r.fields?.store as string) || '' },
   { header: 'Hours basis', get: r => {
       const b = r.fields?.['hours basis'] as string | undefined
-      if (!b) return '—'
-      const label = BASIS_LABEL[b] || String(b).replace(/_/g, ' ')
-      return r.fields?.['mixed basis'] ? `${label} · mixed` : label
+      // The drill row keeps its em dash for an absent basis (a panel cell is never blank here),
+      // while the label itself is the shared one.
+      return b ? hoursBasisLabel(b, !!r.fields?.['mixed basis']) : '—'
     }, sortValue: r => (r.fields?.['hours basis'] as string) || '' },
   { header: 'Why these hours', get: r => (r.fields?.['why these hours'] as string) || '—' },
 ]
@@ -262,14 +255,11 @@ export default function PayrollPage() {
     // its sentence come from the server (`payroll_hours_basis.basis_reason`), never composed here, so
     // the screen and the API cannot disagree. A period that mixes punched and scheduled days says
     // "mixed" rather than picking a winner. Absent on an older backend, where the column reads blank.
-    { header: 'Hours basis (why)', field: 'hours_basis', get: r => {
-        const b = (r as any).hours_basis
-        if (!b) return ''
-        const label = BASIS_LABEL[b] || String(b).replace(/_/g, ' ')
-        // "Mixed" is said OUT LOUD, not resolved. A fortnight with punched days and scheduled days
-        // has no single basis, and printing the dominant one alone would be the tidier lie.
-        return (r as any).hours_basis_mixed ? `${label} · mixed` : label
-      } },
+    // "Mixed" is said OUT LOUD, not resolved (see `hoursBasisLabel`): a fortnight with punched days
+    // and scheduled days has no single basis, and printing the dominant one alone would be the
+    // tidier lie.
+    { header: 'Hours basis (why)', field: 'hours_basis',
+      get: r => hoursBasisLabel((r as any).hours_basis, (r as any).hours_basis_mixed) },
     // Lunch-break auto-deduction (owner directive 2026-07-27, Deliverable 3) — HONESTY: an explicit
     // line, never folded silently into Actual Hrs (which is already the NET/post-deduction figure —
     // see GET /payroll). 0 for the common case (feature off, or no day qualified this period).

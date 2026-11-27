@@ -484,7 +484,15 @@ def coverage_sentence(res):
     if not sched:
         return None
     measured = int(cov.get("measured_days") or 0)
-    pct = float(cov.get("pct") or 0.0)
+    # ── `measured_pct` IS THE KEY `coverage()` RETURNS (fixed 2026-11-27) ───────────────────────
+    # This read `cov.get("pct")`, a key `payroll_hours_basis.coverage` has never returned (it
+    # returns `measured_pct`, and `interlock` beside it reads that name correctly). So the one
+    # sentence whose whole job is to state the coverage stated **"is 0.00%"** for every real caller,
+    # on every period, however well measured — including on the P&L wage line's note (`coa.py:801`).
+    # It passed its proof because `harness_labour_cost_one_home` fed a HAND-BUILT dict spelling
+    # `pct`: a check asserted against a shape the producer never emits. The harness now builds its
+    # fixture from `coverage()` itself, so this cannot go vacuous again.
+    pct = float(cov.get("measured_pct") or 0.0)
     if measured >= sched:
         return None
     gap = sched - measured

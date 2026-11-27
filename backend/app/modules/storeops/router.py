@@ -1657,14 +1657,14 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
     # home — never a sentence composed here, so screen and API cannot disagree. The tally stays
     # alongside, because a period that mixes punched and scheduled days has no single answer and
     # collapsing it to one word would be the lie this key exists to prevent.
+    #
+    # THE FOLD ITSELF IS NO LONGER HERE (2026-11-27). It is `payroll_hours_basis.fold_bases`,
+    # because the employee dashboard's "Hours Worked" card needs the same answer and a second copy
+    # would be a future divergence about the word "mixed". This loop now only applies it.
     for r in rows:
-        bt = {k: v for k, v in (r.get("hours_by_basis") or {}).items() if v}
-        if not bt:
+        if not {k: v for k, v in (r.get("hours_by_basis") or {}).items() if v}:
             continue
-        dom = max(bt.items(), key=lambda kv: kv[1])[0]
-        r["hours_basis"] = dom
-        r["hours_basis_reason"] = _hours_basis.basis_reason(dom)
-        r["hours_basis_mixed"] = len(bt) > 1
+        r.update(_hours_basis.fold_bases(r.get("hours_by_basis")))
     return sorted(rows, key=lambda x: x["name"])
 
 
