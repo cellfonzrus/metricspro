@@ -2453,9 +2453,17 @@ FACTS: dict[str, dict] = {
             'app/modules/account/coa.py': ('_hours_basis',),
             'app/modules/commcalc/labour_coverage.py': ('_hours_basis',),
             'app/modules/hr/router.py': ('_hours_basis',),
+            # §14y.2 — the workforce report prints an hours figure, so it must say which of
+            # those hours a clock MEASURED. It asks this home (`basis_is_measurement`)
+            # rather than deciding for itself which bases count as measured.
+            'app/modules/notify/workforce_reports.py': ('_hb',),
             'app/modules/storeops/clock_feed.py': ('_basis',),
             'app/modules/storeops/clock_variance.py': ('_basis',),
             'app/modules/storeops/clock_variance_api.py': ('_hb',),
+            # §14y.2 — the "Hours Worked (this month)" card. It holds measured, unmeasured and
+            # paid hours apart and never sums them, so it needs the basis vocabulary itself:
+            # `fold_bases` for the mixed case, and whether a basis is a measurement or a plan.
+            'app/modules/storeops/hours_worked_card.py': ('_hb',),
             'app/modules/storeops/payroll_evidence.py': ('_hb',),
             # §CORE-17.3x — the payroll drill-down reads the basis VOCABULARY (the bases, the paying
             # allowlist and the measured set) to answer which relation a person's hours came out of,
