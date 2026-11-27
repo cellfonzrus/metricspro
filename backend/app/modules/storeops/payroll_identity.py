@@ -410,3 +410,31 @@ def link_proposals(rows, matcher):
                        "bound": len(bound),
                        "unmatched_hours": round(sum(c["hours"] for c in unmatched.values()), 2),
                        "proposed_hours": round(sum(c["hours"] for c in proposals.values()), 2)}}
+
+
+def own_id_forms(business_id, employees):
+    """Every id FORM under which THIS ONE PERSON's rows can be stored — PURE, and nothing else.
+
+    WHY THIS EXISTS (owner 2026-11-27, *"under employee login it does not show the employee thier own
+    schdule"*). A surface that shows a person only their OWN rows has to know which strings are them.
+    A shift created on the Schedule page stores the NUMERIC `employees.id` ("45"); a login, a clock
+    punch and the roster all carry the BUSINESS id ("E45"). Asking the question with one form answers
+    ZERO for half the rows, which looks exactly like "nothing is scheduled".
+
+    So the question is asked HERE, once, on top of `business_id_alias_map` — including its collision
+    guard, which is the whole reason this is a dereference and not a two-line pairing at the call
+    site: a numeric id can BE a different employee's own all-digit business id, and claiming it would
+    put THEIR rows inside this person's gate. An ambiguous numeric form is left unclaimed, so the
+    person sees one form of their own rows rather than two people's.
+
+    `employees` is ONE org's roster, as the caller already read it; this function reads nothing, so it
+    cannot reach across tenants and has no org to be given. Returns a frozenset — empty for a caller
+    with no business id, which is DENY-ALL at every call site and never "everyone"."""
+    biz = str(business_id or "").strip()
+    if not biz:
+        return frozenset()
+    forms = {biz}
+    for numeric_s, canonical in business_id_alias_map(employees).items():
+        if canonical == biz:
+            forms.add(numeric_s)
+    return frozenset(forms)

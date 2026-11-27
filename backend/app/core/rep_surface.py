@@ -99,7 +99,21 @@ SURFACES = (
     },
     {
         "key": "schedule", "tile": True, "label": "My schedule", "icon": "📅",
-        "pages": ("/storeops/timeoff", "/storeops/swaps"),
+        # OWNER 2026-11-27: *"under employee login it does not show the employee thier own schdule"*
+        # … *"it shows your next shift at the bottom on the main page it shoudl also show in schedule
+        # whic his made for teh next 2 weeks or one week"*.
+        #
+        # `/my/schedule` IS FIRST, AND THAT IS THE FIX. A tile's link is `pages[0]` (see `tiles()`),
+        # so the tile labelled "My schedule" opened `/storeops/timeoff` — the time-off REQUEST FORM.
+        # The only schedule an employee could see was the four-row "Your next shifts" list inlined on
+        # the landing page. The employee's own read of the published schedule now exists and is what
+        # the tile opens; the two REQUEST pages stay declared behind it, because asking for time off
+        # and asking for a swap are the other half of this surface.
+        #
+        # The manager's builder (`/storeops/schedule` — the whole-roster grid, the shift writes, the
+        # hours-trend report) is still NOT here and must not be: this surface gained a READ of the
+        # employee's own rows, not a grant of anyone's schedule.
+        "pages": ("/my/schedule", "/storeops/timeoff", "/storeops/swaps"),
         # The shift WRITES are a manager surface and are not here; `/storeops/shifts` is read-only to
         # an individual contributor, and the rows it returns are already narrowed to the people they
         # may see by `schedule_emp_ids` (§14w). Time off and shift swaps are POSTs on purpose — they

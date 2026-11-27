@@ -7543,6 +7543,7 @@ every store's record is a report (§STOREOPS-12, §CORE-33.1).
 | endpoint | code | what it is the one home of |
 | --- | --- | --- |
 | `GET /core/notifications` · `POST /core/notifications/read` · `GET /core/notifications/routes` | the company notification inbox's read surface. **No new gate and no new org clamp**: both are `import_health._gate` (`can_view_attention` + the caller's own org), which is who already hears about broken feeds — a tenant that granted `/admin/import-health` has already decided that. `read_ok` is the silent-zero guard: a caller can tell "nothing to report" from "the read did not happen" | `core/notification_inbox_api.py` → `core/notification_inbox.list_items` | §CORE-49 |
+| `GET /storeops/shifts?mine=1` | the employee's OWN published shifts — the question `/my/schedule` and the `/my` preview ask, answered from the TOKEN (never a client-supplied id) and applied ON TOP of the §14w people gate, so it can only ever narrow. A caller the token cannot name gets NOTHING, the opposite posture to `schedule_emp_ids` on purpose. Matches BOTH id forms of the one person through `payroll_identity.own_id_forms` → `business_id_alias_map`, because a Schedule-page shift stores the numeric `employees.id` while a login carries the business id | `storeops/router.get_shifts` → `own_emp_ids` → `payroll_identity.own_id_forms` | §CORE-33.2 · §14w |
 | `GET /core/filter-options` | the org-scoped option source behind the shared `StandardFilterBar` — stores (+markets) from `storeops.stores` ∪ `commcalc.store_mapping`, reps from `storeops.employees` ∪ `storeops.app_users`. **ACTIVE-ONLY since 2026-11-14** through `core/roster_visibility`, with `include_inactive=1` and an `inactive_hidden` count so hiding is never silent | `core/router.filter_options` → `StandardFilterBar` `optionsUrl` | §CORE-45 · §3d |
 | `POST /storeops/timeclock/clock-in` · `POST /storeops/timeclock/clock-out` | `storeops/router.py` (`_punch_geo_columns` → `core/store_geofence.evaluate_presence`) | WHERE a punch was made, judged against that punch's OWN store (never the rep's home store — a floater ends their shift where they worked it) and stored beside it. The clock-out carried NO location at all before 2026-11-01. **Never refuses a punch** on its location. Gated on `_punch_geo_present` so an un-migrated database behaves exactly as today (§STOREOPS-04) |
 | `GET /storeops/timeclock/geo-config` · `PUT …` | `storeops/router.py` → `core/store_geofence.resolve_config` | the tenant's punch-geofence policy, read and written through the SAME resolver the judging path uses, so a junk payload cannot write a fence the judging code would then obey. Manager/admin only (§STOREOPS-04) |
@@ -47317,6 +47318,113 @@ P0), which is why the API gate above does not live inside that middleware. One c
 while proving this: a login presenting a token for a tenant it has no `app_users` row in resolved to
 `schedule_emp_ids() is None`, i.e. UNRESTRICTED. `person_write_allowed` now refuses that case
 (platform admins excepted); the general tenant-isolation question is the owner's.
+
+
+### CORE-33.2 The tile labelled "My schedule" opened the time-off form (owner 2026-11-27)
+
+Owner: *"also under employee login it does not show the employee thier own schdule"* and, clarifying:
+*"it shows your next shift at the bottom on the main page it shoudl also show in schedule whic his
+made for teh next 2 weeks or one week"*.
+
+**THE INSTANCE, in one line: a tile's link is `pages[0]` of its surface, and the schedule surface's
+first page was `/storeops/timeoff`.** So the tile headed "My schedule" opened the time-off REQUEST
+FORM. The only schedule an employee could see at all was the four-row "Your next shifts" list inlined
+on `/my` — which is why this read as "it does not show the employee their own schedule" rather than as
+a broken link. Nothing was wrong with the data, the gate or the feed.
+
+**What was built.** `/my/schedule` — `frontend/src/app/(platform)/my/schedule/page.tsx`: the person's
+own published shifts for the **next 7 or next 14 days** (the owner's "one week or two", as a rolling
+look-ahead rather than a work-week grid, so it answers "what am I working next" on any day without
+needing the tenant's `work_week_start_dow`), one row per DAY so a day off says *Not scheduled* rather
+than being absent, the window's total hours, and Export. It is declared FIRST on the schedule surface,
+so the tile opens it; `/storeops/timeoff` and `/storeops/swaps` stay declared behind it, because asking
+for time off and asking for a swap are the other half of that surface.
+
+**The manager's builder was NOT granted and must not be.** `/storeops/schedule` is the whole-roster
+grid, the shift writes and the hours-trend report. The employee surface gained a READ of their own
+rows; `GET /storeops/shifts` is granted GET-only, and `harness_my_schedule.py` 1e/1f fail the build if
+either of those stops being true. No Send bar: it would need `/api/v1/notify/send-file` granted to a
+confined employee — an outbound-mail capability riding in on a page, which is the collection rule of
+§CORE-33 all over again. Export renders in the browser and logs through `/core/export-event`, which
+this surface already has.
+
+#### The class: a question the server has already answered, re-derived in the browser
+
+`GET /storeops/shifts` has narrowed rows to the people the caller may read since §14w. `/my` then
+filtered those rows AGAIN, itself:
+
+```ts
+String(r.employee_id || '') === String(user.employee_id)      // DELETED 2026-11-27
+```
+
+One id form, string-equal. **A shift created on the Schedule page stores the NUMERIC `employees.id`
+("45"); a login, a clock punch and the roster carry the BUSINESS id ("E45")** —
+`schedule_emp_ids` widens both forms on purpose, and that line did not. For a tenant whose shift rows
+land on the other form the list was **EMPTY**, which reads as *nothing is scheduled*. Same shape as the
+device-line default (§COMMCALC-49.10): a plausible-looking zero, which is why the class hides.
+
+**One home now: `GET /storeops/shifts?mine=1`**, answered by `storeops.router.own_emp_ids` from the
+TOKEN — never from a client-supplied id, so nobody can ask for somebody else's schedule by passing
+their employee id. Both pages ask it and neither re-derives it.
+
+| | `schedule_emp_ids` (§14w) | `own_emp_ids` (new) |
+|---|---|---|
+| Question | whose shifts may I READ | which of them are ME |
+| A manager gets | their team | their own |
+| Caller the token cannot name | `None` — **unrestricted**, so an in-process/scheduled caller is not silently blanked | `set()` — **deny-all** |
+
+The postures are deliberately opposite. There is no legitimate in-process caller of `mine=1`, and the
+failure mode of the other posture is a rep reading their manager's team. `mine` is applied AFTER the
+existing gate, so it can only ever narrow.
+
+#### The sibling, and a real collision it was ignoring
+
+`storeops.router._widen_emp_id_forms` — the widening the schedule gate itself dereferences — paired the
+two id forms ITSELF (`if biz in out: out.add(num)`), while the one home for the pairing,
+`payroll_identity.business_id_alias_map`, has refused an **ambiguous** numeric id since 2026-07-27: a
+numeric id can BE a different employee's own all-digit business id (A is numeric 42 / `"E42"`, B's
+business id is the literal `"42"`), so pairing `"E42"` → `"42"` admitted **B's shifts into A's gate**.
+The guard was a thing one caller happened to have. Both now dereference that one home, so the gate and
+payroll cannot answer it differently. The asymmetry is the right way round: A seeing one form of A's
+own rows is a gap, A seeing B's rows is a leak.
+
+New pure helper `payroll_identity.own_id_forms(business_id, employees)` — every id form that is ONE
+person, built on `business_id_alias_map`, handed a roster rather than reading one (so it has no org and
+cannot reach across tenants), returning an empty set for a caller with no business id, which is
+deny-all at every call site and never "everyone".
+
+#### The cross-tenant read underneath, pinned rather than patched
+
+`test_the_plain_read_is_where_the_cross_tenant_hole_is` asserts TODAY'S behaviour: `GET /shifts`
+**without** `mine` hands a login the other tenant's shifts, because `schedule_emp_ids` answers `None`
+for a caller with no `app_users` row in the org named. This is the READ half of the finding §CORE-33
+already recorded on its write half ("the general tenant-isolation question is the owner's"), and the
+answer is the same: `TenantScopeMiddleware` rewrites a foreign `org_id` away and refuses a
+membership-less login, but its whole body sits behind `MULTI_TENANT_ENFORCE`, which is off by default
+and already filed **P0** in `docs/SECURITY_CONTROLS_SPEC.md`. What the test adds is proof that the
+handler underneath does **not** independently refuse — so that flag is load-bearing, not
+belt-and-braces. Changing `schedule_emp_ids`' posture here instead would blank every scheduled job
+that reads shifts.
+
+#### Every tenant
+
+`harness_my_schedule.py` (33 checks, DB-free) pins the tile's target, both windows, that neither page
+compares an employee id, the deny-all posture, the one-home dereference on both sides of the pairing,
+and two tenants on different id shapes. `tests/integration/test_my_schedule_endpoint.py` (16, the real
+app) runs tenant A with shift rows on the **business** id and tenant B on the **numeric** id, asserts a
+scheduled employee is never handed an empty schedule in either, that a teammate's shift is never
+"mine", that a manager asking for `mine` gets only their own while the plain read still shows the team,
+and that neither tenant's rows appear in the other's response. Both run in the **The employee's reach**
+job of `org-scope-guard.yml`.
+
+| Thing | Where |
+|---|---|
+| The page | `frontend/src/app/(platform)/my/schedule/page.tsx` |
+| The declaration | `backend/app/core/rep_surface.py` — `SURFACES` key `schedule`, `pages[0]` |
+| "Which are mine" | `storeops.router.own_emp_ids` → `payroll_identity.own_id_forms` |
+| The pairing (one home) | `payroll_identity.business_id_alias_map` |
+| Proof / tests | `backend/harness_my_schedule.py`, `backend/tests/integration/test_my_schedule_endpoint.py` |
+| NAV href | `frontend/src/lib/rbac.ts` `/my/schedule` (tileOnly), `lib/route-index.ts` |
 
 ---
 

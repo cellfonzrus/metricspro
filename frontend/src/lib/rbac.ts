@@ -893,6 +893,10 @@ export const NAV: NavGroup[] = [
     // reachability is NOT the module gate's to decide (canAccessPath admits it unconditionally, the
     // same as the password page), because it only ever shows a person their own things.
     { href: '/my', label: 'My Day', icon: '🙋‍♂️', module: 'targets', tileOnly: true },
+    // The employee's own schedule (owner 2026-11-27) — the page the "My schedule" tile opens. Same
+    // posture as the landing above: it shows a person only their OWN published shifts (the server
+    // narrows them), so reachability is not the module gate's to decide.
+    { href: '/my/schedule', label: 'My Schedule', icon: '📅', module: 'targets', tileOnly: true },
   ]},
   { group: 'Finance', icon: '💰', module: 'accounts', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
