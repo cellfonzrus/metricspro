@@ -63,7 +63,8 @@ export default function TimeOffPage() {
       // from", narrowed server-side by the caller's own role, and it carries names rather than
       // personnel records. One path for every viewer; no new endpoint and no widened grant.
       apiCached('/api/v1/storeops/employees/visible', LOOKUP)
-        .then((d: any) => (Array.isArray(d?.employees) ? d.employees : [])).catch(() => []),
+        .then((d: { employees?: unknown[] }) => (Array.isArray(d?.employees) ? d.employees : []))
+        .catch(() => []),
       apiCached('/api/v1/storeops/stores', LOOKUP).catch(() => []),
     ]).then(([reqs, emps, sts]) => {
       setRequests(reqs || [])
