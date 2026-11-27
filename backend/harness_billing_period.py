@@ -504,6 +504,39 @@ check("I5 the home exports the eight functions the two surfaces and this lock de
       >= {"is_measured", "resolve_cadence", "next_weekday_on_or_after", "week_window",
           "period_of", "period_of_row", "roll_up"})
 
+# ── THE FORWARD ROLL NOW ANSWERS FOR A SET OF WEEKDAYS TOO (§PAYABLES-02, owner 2026-11-27: a
+#    carrier that pays every Tuesday AND Friday). It lives HERE because this is already the home of
+#    "the first declared weekday on or after this date"; the inbound side reads it.
+_BP_SRC = read("backend/app/modules/payables/billing_period.py")
+check("I6 a SET of declared weekdays rolls to the NEARER member, on or after — and one declared day "
+      "is the one-element case, byte-identical to what it answered before",
+      str(bp.next_weekday_in_on_or_after("2026-11-28", (1, 4))) == "2026-12-01"
+      and str(bp.next_weekday_in_on_or_after("2026-12-02", (1, 4))) == "2026-12-04"
+      and str(bp.next_weekday_in_on_or_after("2026-12-01", (1, 4))) == "2026-12-01"
+      and bp.next_weekday_in_on_or_after("2026-11-09", (4,))
+      == bp.next_weekday_on_or_after("2026-11-09", 4))
+check("I7 an unusable date or an empty set is None — a period is never derived from a day nobody "
+      "recorded, and never from a rhythm nobody named",
+      bp.next_weekday_in_on_or_after(None, (1, 4)) is None
+      and bp.next_weekday_in_on_or_after("2026-11-28", ()) is None
+      and bp.next_weekday_in_on_or_after("2026-11-28", None) is None
+      and bp.next_weekday_on_or_after("2026-11-28", None) is None)
+check("I8 `weekdays_of` is the ONE parser for a declared weekday set: an array, a single value and a "
+      "comma-separated string all mean the same, and a bool is refused rather than meaning Tuesday",
+      bp.weekdays_of([1, 4]) == (1, 4) and bp.weekdays_of("4,1") == (1, 4)
+      and bp.weekdays_of(4) == (4,) and bp.weekdays_of(True) == ()
+      and bp.weekdays_of([True]) == () and bp.weekdays_of([7, -1, "x"]) == ())
+check("I9 THE LOCK: ONE forward-roll expression exists in this module and the single-day function "
+      "DELEGATES to the set one, so the two readings cannot drift apart",
+      _BP_SRC.count("timedelta(days=min(") == 1
+      and re.search(r"def next_weekday_on_or_after\([^)]*\):(?:.|\n)*?"
+                    r"return next_weekday_in_on_or_after", _BP_SRC) is not None
+      # the raw source, not `code_only`: this helper blanks string literals as well as docstrings,
+      # and the expression being counted is code either way.
+      and _BP_SRC.count("(w - day.weekday()) % 7") == 1)
+ctl("I9 a second copy of the roll would break that count",
+    (_BP_SRC + "\ntimedelta(days=min(").count("timedelta(days=min(") != 1)
+
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 print("\n== J. REGISTRATION ==")

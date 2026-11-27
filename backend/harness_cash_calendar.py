@@ -47,6 +47,8 @@ import re
 import sys
 
 from app.modules.commcalc import data_lineage_registry as lineage
+from app.modules.commcalc import commission_ledger as cl
+from app.modules.payables import billing_period as bp
 from app.modules.payables import cash_calendar as cc
 from app.modules.payables import expected_receipts as er
 from app.modules.payables import receipt_schedule as rs
@@ -174,8 +176,51 @@ ctl("C2 an 'after' rather than 'on or after' rule would postpone a real receipt 
 
 check("C3 WEEKLY dereferences the forward-roll that already has a home on the outbound side rather "
       "than carrying a second copy of the same arithmetic",
-      "next_weekday_on_or_after" in read("backend/app/modules/payables/receipt_schedule.py")
+      "next_weekday_in_on_or_after" in read("backend/app/modules/payables/receipt_schedule.py")
       and "billing_period" in read("backend/app/modules/payables/receipt_schedule.py"))
+
+# ── A WEEKLY RHYTHM MAY LAND ON MORE THAN ONE DAY (owner 2026-11-27: "Boost pays every Tuesday and
+#    Friday"). The single-day case must keep its exact answer, because every declaration made before
+#    the set existed is one.
+weekly_tue_fri = rs.resolve_schedule({"payout_cadence": rs.CADENCE_WEEKLY,
+                                      "payout_weekdays": [1, 4]})
+check("C3a a carrier paying TWICE a week pays on the NEARER declared day, not on the first one "
+      "declared — Saturday earns, Tuesday pays; Wednesday earns, Friday pays",
+      rs.receipt_date("2026-11-28", weekly_tue_fri)["date"] == "2026-12-01"
+      and rs.receipt_date("2026-12-02", weekly_tue_fri)["date"] == "2026-12-04"
+      and rs.receipt_date("2026-12-01", weekly_tue_fri)["date"] == "2026-12-01")
+ctl("C3a a one-day rhythm would have pushed Wednesday's money to the following Tuesday, three days "
+    "late, every week",
+    rs.receipt_date("2026-12-02", weekly_fri)["date"] != "2026-12-04"
+    or rs.receipt_date("2026-12-02", rs.resolve_schedule(
+        {"payout_cadence": rs.CADENCE_WEEKLY, "payout_weekday": 1}))["date"] == "2026-12-08")
+check("C3b the label names the day the money LANDED on, not the first day of the declared set — a "
+      "Friday payment under a Tue+Fri cycle must not print Tuesday",
+      rs.receipt_date("2026-12-02", weekly_tue_fri)["label"].startswith("Friday")
+      and rs.receipt_date("2026-11-28", weekly_tue_fri)["label"].startswith("Tuesday"))
+check("C3c ONE declared day is the one-element case: a row saved before the set column existed, "
+      "carrying only payout_weekday, answers EXACTLY as it did",
+      rs.resolve_schedule({"payout_cadence": rs.CADENCE_WEEKLY, "payout_weekday": 4})["weekdays"]
+      == (4,)
+      and rs.receipt_date("2026-11-09", weekly_fri)["date"] == "2026-11-13")
+check("C3d a cadence of WEEKLY with no day declared at all is NOT MEASURED — not Monday, and not "
+      "the earning date",
+      rs.can_date({"payout_cadence": rs.CADENCE_WEEKLY}) is False
+      and rs.receipt_date(EARNED, rs.resolve_schedule(
+          {"payout_cadence": rs.CADENCE_WEEKLY}))["basis"] == rs.BASIS_DAY_UNDECLARED
+      and rs.can_date(weekly_tue_fri) is True)
+check("C3e and the SET is normalised by the one home that rules on a weekday, so a bool, an "
+      "out-of-range number and a comma-separated string all mean what they say",
+      bp.weekdays_of("1,4") == (1, 4) and bp.weekdays_of([True, 1, 9, "4"]) == (1, 4)
+      and bp.weekdays_of(4) == (4,) and bp.weekdays_of(None) == ()
+      and bp.weekdays_of([]) == ())
+check("C3f THE LOCK: the receipt side holds no weekday arithmetic and no second weekday vocabulary "
+      "of its own — both are read from billing_period",
+      rs.WEEKDAYS is bp.WEEKDAYS
+      and not re.search(r"timedelta\(days=\(", code_only(
+          read("backend/app/modules/payables/receipt_schedule.py")))
+      and not re.search(r'"Monday"', code_only(
+          read("backend/app/modules/payables/receipt_schedule.py"))))
 
 monthly_15 = rs.resolve_schedule({"payout_cadence": rs.CADENCE_MONTHLY, "payout_day_of_month": 15})
 check("C4 MONTHLY pays on the declared day of month, this month when it is still ahead and next "
@@ -357,12 +402,16 @@ STORE = {"commcalc": {
     "receipt_source_map": [
         {"org_id": HOUSE, "label": "carrier statement", "source_table": lineage.PAYMENT_DETAIL,
          "amount_field": "amount", "payout_cadence": rs.CADENCE_SEMI_MONTHLY,
-         "payout_days": [6, 21], "payout_weekday": None, "payout_day_of_month": None,
-         "payout_net_days": None, "is_active": True},
+         "payout_days": [6, 21], "payout_weekday": None, "payout_weekdays": None,
+         "payout_day_of_month": None, "payout_net_days": None,
+         "amount_sign_convention": None, "is_active": True},
+        # The processor feed writes money owed TO the dealer as a NEGATIVE and DECLARES that, which
+        # is the shape production really has (measured 2026-11-27 on all twelve of its components).
         {"org_id": LUXE, "label": "processor statement", "source_table": lineage.MA_COMMISSION,
          "amount_field": "total_commission", "payout_cadence": rs.CADENCE_NET_DAYS,
-         "payout_days": None, "payout_weekday": None, "payout_day_of_month": None,
-         "payout_net_days": 30, "is_active": True},
+         "payout_days": None, "payout_weekday": None, "payout_weekdays": None,
+         "payout_day_of_month": None, "payout_net_days": 30,
+         "amount_sign_convention": "payout_negative", "is_active": True},
     ],
     lineage.PAYMENT_DETAIL: [
         {"org_id": HOUSE, "payment_date": "2026-11-02", "amount": 400.0, "business_address": "B-1"},
@@ -370,8 +419,8 @@ STORE = {"commcalc": {
         {"org_id": LUXE, "payment_date": "2026-11-03", "amount": 7777.0, "business_address": "L-1"},
     ],
     lineage.MA_COMMISSION: [
-        {"org_id": LUXE, "tx_date": "2026-11-01", "total_commission": 250.0, "business_address": "L-1"},
-        {"org_id": HOUSE, "tx_date": "2026-11-01", "total_commission": 3333.0, "business_address": "B-1"},
+        {"org_id": LUXE, "tx_date": "2026-11-01", "total_commission": -250.0, "business_address": "L-1"},
+        {"org_id": HOUSE, "tx_date": "2026-11-01", "total_commission": -3333.0, "business_address": "B-1"},
     ],
 }}
 
@@ -421,7 +470,8 @@ BAD["commcalc"]["receipt_source_map"] = [
     {"org_id": HOUSE, "label": "typo", "source_table": lineage.PAYMENT_DETAIL,
      "amount_field": "column_that_does_not_exist", "payout_cadence": rs.CADENCE_MONTHLY,
      "payout_day_of_month": 15, "payout_days": None, "payout_weekday": None,
-     "payout_net_days": None, "is_active": True}]
+     "payout_weekdays": None, "payout_net_days": None, "amount_sign_convention": None,
+     "is_active": True}]
 bad = er.dated_receipts(FakeClient(BAD), HOUSE, WIN)
 check("E7 a DECLARED source that cannot be READ is REPORTED, never read as 'nothing was declared' — "
       "the §COMMCALC-29 class, and the two outcomes must not look identical",
@@ -591,6 +641,78 @@ ctl("H7 a module that called today() would have matched that pattern",
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # §I  REGISTRATION — THE MIGRATION, ITS GRANT, THE INDEX, AND THE PAGE
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# §J  WHICH SIGN MEANS MONEY EARNED IS THE FEED'S CONVENTION, DECLARED — NOT A CONSTANT
+#
+# Measured against production 2026-11-27: commcalc.raw_ma_commission writes money owed TO the dealer
+# as a NEGATIVE across all twelve of its declared payout components, so summing the declared column
+# raw reported about MINUS $45,000 a week of incoming money — a tenant's income shown as a debt, on
+# the one report whose whole purpose is to say what is arriving.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+print("\n§J  the declared money sign\n" + "-" * 94)
+
+check("J1 the sign vocabulary is the commission ledger's, DEREFERENCED — the payables side names no "
+      "convention of its own",
+      er.DEFAULT_SIGN_CONVENTION in cl.SIGN_CONVENTIONS
+      and not re.search(r'"payout_negative"', code_only(
+          read("backend/app/modules/payables/expected_receipts.py"))))
+
+check("J2 an UNDECLARED sign reads the column at FACE VALUE — a positive number is money in — which "
+      "is the only default that asserts nothing about a carrier's export",
+      cl.signed_amount(400.0, er.amount_convention({})) == 400.0
+      and cl.signed_amount(-400.0, er.amount_convention({})) == -400.0)
+ctl("J2 inheriting the ledger's own statement-shaped default would have flipped every figure every "
+    "existing declaration already produces",
+    cl.signed_amount(400.0, cl.convention_named(cl.SIGN_CONVENTION_DEFAULT)) == -400.0)
+
+neg = er.amount_convention({"amount_sign_convention": "payout_negative"})
+check("J3 a feed that DECLARES earnings are negative has its money read the right way up, and a "
+      "positive on that feed reads as the clawback it is",
+      cl.signed_amount(-129.99, neg) == 129.99 and cl.signed_amount(129.99, neg) == -129.99)
+
+check("J4 a value nobody ruled on falls back to face value rather than being honoured — acting on a "
+      "typo is acting on a rhythm nobody declared",
+      cl.signed_amount(-5.0, er.amount_convention({"amount_sign_convention": "nonsense"})) == -5.0)
+
+check("J5 END TO END: the processor-fed tenant's NEGATIVE rows total as POSITIVE expected money, "
+      "because its declaration says so",
+      got_luxe["total"] == 250.0
+      and all(d["amount"] > 0 for d in got_luxe["days"]))
+ctl("J5 reading that column raw would have reported minus 250.00 expected to arrive",
+    sum(float(r["total_commission"]) for r in STORE["commcalc"][lineage.MA_COMMISSION]
+        if r["org_id"] == LUXE) == -250.0)
+
+check("J6 and the HOUSE tenant, which declares no sign, is byte-identical to before this existed",
+      got_house["total"] == 500.0)
+
+check("J7 `signed_amount` is the ONE place a feed's sign becomes the platform's, and `direction` "
+      "reads it rather than keeping the multiplication",
+      "signed_amount(raw_amount, conv)" in read(
+          "backend/app/modules/commcalc/commission_ledger.py")
+      and cl.direction(-1) == cl.DIR_PAYOUT and cl.direction(1) == cl.DIR_REVERSAL
+      and cl.direction(0) == cl.DIR_FLAT)
+
+# ── THE SCHEMA CAN LAG THE CODE, and a working report must survive that. The 1093/1094 lesson: a
+#    landed migration number says nothing about the one below it.
+LEGACY = {"commcalc": dict(
+    STORE["commcalc"],
+    receipt_source_map=[{k: v for k, v in STORE["commcalc"]["receipt_source_map"][0].items()
+                         if k not in ("payout_weekdays", "amount_sign_convention")}])}
+legacy = er.dated_receipts(FakeClient(LEGACY), HOUSE, WIN)
+check("J8 where migration 1133 has NOT been applied the declaration is still read, with the older "
+      "column set, and the existing figure is unchanged",
+      legacy["declared"] is True and legacy["measured"] is True and legacy["total"] == 500.0)
+check("J9 and the fallback is NEVER SILENT: the payload says the schema is behind and names what "
+      "cannot be declared until it catches up",
+      legacy["schema_behind"] is True
+      and isinstance(legacy.get("note"), str) and "1133" in legacy["note"])
+ctl("J9 the current schema does not raise that flag, so the notice cannot become permanent furniture",
+    got_house.get("schema_behind") is False)
+check("J10 a declaration table that is genuinely unreadable is still REPORTED rather than quietly "
+      "falling back — the fallback is for a missing COLUMN, not for a missing table",
+      gone["table_missing"] is True and gone.get("schema_behind") is False)
+
+
 print("\n§I  registration\n" + "-" * 94)
 
 MIG = read("database/migrations/1115_receipt_source_map.sql")
@@ -632,6 +754,33 @@ check("I10 and the page states WHOSE rhythm dated the money, by dereferencing th
 check("I11 the tenant's own declaration is reachable from the report, so an empty calendar has a "
       "next step on it instead of a support ticket",
       "receipt-sources" in PAGE or "receipt_source" in PAGE)
+
+MIG33 = read("database/migrations/1133_payout_weekdays_and_sign.sql")
+check("I12 the several-pay-days and money-sign columns ship as their own ADDITIVE, IDEMPOTENT "
+      "migration, with its REVERT note and the grant restated",
+      "add column if not exists payout_weekdays" in MIG33.lower()
+      and "add column if not exists amount_sign_convention" in MIG33.lower()
+      and "-- REVERT:" in MIG33
+      and re.search(r"(?i)grant\s+select,\s*insert,\s*update,\s*delete\s+on\s+"
+                    r"commcalc\.receipt_source_map\s+to\s+service_role", MIG33)
+      and not re.search(r"(?i)to\s+anon", MIG33))
+check("I13 both new columns are CONSTRAINED to the vocabularies their homes rule on, so a value no "
+      "reader honours cannot be stored — and an EMPTY weekday set is refused, because it reads as a "
+      "declaration while naming no day",
+      all(c in MIG33 for c in cl.SIGN_CONVENTIONS)
+      and "array_length(payout_weekdays, 1) >= 1" in MIG33
+      and "<@ ARRAY[0, 1, 2, 3, 4, 5, 6]" in MIG33)
+check("I14 and it SEEDS NOTHING: a pay rhythm or a money sign defaulted into a tenant's row would be "
+      "one tenant's commercial arrangement answering for another's",
+      "insert into commcalc.receipt_source_map" not in MIG33.lower()
+      and "update commcalc.receipt_source_map" not in MIG33.lower())
+check("I15 the panel offers the weekday names and the sign wording FROM THEIR HOMES, over the "
+      "payload, rather than retyping either vocabulary into the form",
+      "weekday_names" in PAGE and "sign_conventions" in PAGE
+      and not re.search(r"payout_negative", PAGE))
+check("I16 and the page says, rather than silently failing to save, when the schema has not caught "
+      "up with what can be declared",
+      "schema_behind" in PAGE and "1133_payout_weekdays_and_sign.sql" in PAGE)
 
 
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")

@@ -530,6 +530,9 @@ on:
       - "backend/app/modules/payables/router.py"
       - "backend/app/modules/payables/vendor_invoice.py"
       - "database/migrations/1095_payable_billing_cadence.sql"
+      # §PAYABLES-02.7 — several pay days a week, and the DECLARED money sign the inbound read
+      # now dereferences from the commission ledger.
+      - "database/migrations/1133_payout_weekdays_and_sign.sql"
       - "backend/harness_payables_device_rows.py"
       - "frontend/src/app/(platform)/commcalc/asset/owed-weekly/page.tsx"
       - "backend/harness_batch25_drilldown.py"

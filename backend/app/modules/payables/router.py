@@ -17,7 +17,9 @@ from app.modules.commcalc import demand_projection
 from app.modules.commcalc import device_vocabulary as _devvocab
 from app.modules.payables import engine
 from app.modules.payables import ledger_status as _ls
+from app.modules.commcalc import commission_ledger as _ledger
 from app.modules.commcalc import data_lineage_registry as _lineage
+from app.modules.payables import billing_period as _bp
 from app.modules.payables import cash_calendar as _cal
 from app.modules.payables import cash_calendar_drilldown as _caldrill
 from app.modules.payables import expected_receipts as _receipts
@@ -911,9 +913,11 @@ class PutReceiptSourceIn(LaxModel):
     amount_field: Any = None
     payout_cadence: Any = None
     payout_weekday: Any = None
+    payout_weekdays: Any = None
     payout_days: Any = None
     payout_day_of_month: Any = None
     payout_net_days: Any = None
+    amount_sign_convention: Any = None
     is_active: Any = None
 
 
@@ -1016,7 +1020,17 @@ def get_receipt_sources(org_id: str = ORG_ID):
             "cadence_words": dict(_rsched.BASIS_WORDS),
             # A feed with no column naming its own day cannot be placed on a calendar, so it is not
             # offered as a choice. The registry's None is a declaration and is honoured here.
-            "candidate_tables": sorted(t for t, c in _lineage.DATA_DATE_COLUMN_BY_TABLE.items() if c)}
+            "candidate_tables": sorted(t for t, c in _lineage.DATA_DATE_COLUMN_BY_TABLE.items() if c),
+            # The declaration has not caught up with the code where migration 1133 has not run: the
+            # panel is told so it can say which choices it cannot offer yet, rather than saving a
+            # value that will be rejected.
+            "schema_behind": dec.get("schema_behind", False),
+            # The weekday names and the sign vocabulary BOTH come from their homes, so the form
+            # cannot offer a day this platform numbers differently or a convention nothing applies.
+            "weekday_names": list(_bp.WEEKDAYS),
+            "sign_conventions": [{"value": v, "label": _ledger.SIGN_CONVENTION_LABELS[v]}
+                                 for v in _ledger.SIGN_CONVENTIONS],
+            "sign_convention_default": _receipts.DEFAULT_SIGN_CONVENTION}
 
 
 @router.put("/receipt-sources")
@@ -1040,12 +1054,23 @@ def put_receipt_source(body: PutReceiptSourceIn, org_id: str = ORG_ID):
     days = body.payout_days
     if isinstance(days, str):
         days = [int(x) for x in days.split(",") if x.strip().isdigit()] or None
+    # THE SET OF PAY WEEKDAYS, normalised by the home that rules on it rather than by a parser here:
+    # `weekdays_of` already accepts a list, a single number or a comma-separated string, so the panel,
+    # a SQL declaration and a JSON one all mean the same thing. Stored as a real list or NULL — never
+    # an empty array, which would read as "a set was declared" while naming no day.
+    weekdays = list(_bp.weekdays_of(body.payout_weekdays)) or None
+    sign = str(body.amount_sign_convention or "").strip().lower() or None
+    if sign is not None and sign not in _ledger.SIGN_CONVENTIONS:
+        raise HTTPException(400, "amount_sign_convention must be one of %s"
+                                 % ", ".join(_ledger.SIGN_CONVENTIONS))
     row = {"org_id": org_id, "label": (str(body.label or "").strip() or table),
            "source_table": table, "amount_field": amount_field,
            "payout_cadence": cadence,
-           "payout_weekday": body.payout_weekday, "payout_days": days,
+           "payout_weekday": body.payout_weekday, "payout_weekdays": weekdays,
+           "payout_days": days,
            "payout_day_of_month": body.payout_day_of_month,
            "payout_net_days": body.payout_net_days,
+           "amount_sign_convention": sign,
            "is_active": (True if body.is_active is None else bool(body.is_active))}
     r = (client_upsert_receipt_source(row))
     return {"saved": True, "row": r}

@@ -1366,6 +1366,12 @@ FACTS: dict[str, dict] = {
             # house default of its own: inbound there is only an EARNING date, so a default would
             # invent a payment date out of a sale date.
             'app/modules/payables/receipt_schedule.py': ('_bp',),
+            # §PAYABLES-02 (owner 2026-11-27, "Boost pays every Tuesday and Friday"). The declaration
+            # endpoint normalises a SET of pay weekdays through this home's own `weekdays_of`, and
+            # offers the form this home's `WEEKDAYS` names, rather than parsing or retyping either —
+            # a weekday numbered differently in a form than in the read would place money on the
+            # wrong day with nothing on screen admitting it.
+            'app/modules/payables/router.py': ('_bp',),
         },
     },
     'payable_expected_receipts': {
@@ -3043,6 +3049,14 @@ FACTS: dict[str, dict] = {
             # M1 and M2-M12 buckets exactly what the commission ledger calls them.
             'app/modules/commcalc/router.py': ('_cled', '_month_token', 'commission_ledger'),
             'app/modules/commcalc/sale_installment_engine.py': ('month_leg_of',),
+            # §PAYABLES-02. WHICH SIGN MEANS MONEY EARNED is this home's question, and the inbound
+            # receipt read now asks it instead of summing a declared column raw: the master-agent
+            # feed writes money owed TO the dealer as a NEGATIVE, so the raw sum reported a tenant's
+            # income as a debt (measured 2026-11-27). The tenant declares the convention in THIS
+            # home's vocabulary and `signed_amount` applies it; the panel offers this home's own
+            # wording for the choice.
+            'app/modules/payables/expected_receipts.py': ('_ledger',),
+            'app/modules/payables/router.py': ('_ledger',),
         },
     },
     'month_focus_declaration': {

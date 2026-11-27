@@ -35,6 +35,14 @@ DEREFERENCED, never declared twice:
     around. A table the registry has never heard of is refused for the same reason.
   · **the store identity and the market** — the CALLER injects its resolvers, exactly as `owed_read`
     takes them, so §64 and RULE FIVE keep their own homes instead of gaining copies here.
+  · **which sign means money EARNED** — `commission_ledger.SIGN_CONVENTIONS` and its
+    `signed_amount`, the vocabulary the commission ledger and the onboarding intake already share.
+    The tenant DECLARES which of those its money column follows (`amount_sign_convention`) and this
+    module only applies it. Measured 2026-11-27: the master-agent commission feed writes money owed
+    TO the dealer as a NEGATIVE, so summing that column raw reported about minus $45,000 a week of
+    expected receipts — a tenant's income shown as a debt. Flipping a sign inside this read would
+    have been the §19.18 copy of a convention that already has a home, and hard-coding the flip for
+    that one feed would have been the per-tenant code RULE TWO forbids.
 
 A DECLARED SOURCE THAT CANNOT BE READ IS REPORTED (§COMMCALC-29). The two outcomes "this tenant
 declared nothing" and "this tenant's declaration names a column that does not exist" are the same
@@ -48,12 +56,21 @@ nothing", which is a sentence about the carrier, while the truth is a sentence a
 
 NO CARRIER, TENANT OR PRODUCT NAME (RULE TWO), and no feed name of its own.
 """
+from app.modules.commcalc import commission_ledger as _ledger
 from app.modules.commcalc import data_lineage_registry as _lineage
 from app.modules.commcalc import date_window
 from app.modules.payables import receipt_schedule as _rs
 
 #: The tenant's declaration of its own inbound money sources.
 SOURCE_MAP = "receipt_source_map"
+
+#: The sign a money column is read with when the tenant has declared none: ITS FACE VALUE — a
+#: positive number is money coming in. Deliberately NOT `commission_ledger`'s own default, which is
+#: `payout_negative` because that is what the master-agent STATEMENTS it was written for do. On this
+#: side the declaration describes an arbitrary column of an arbitrary feed, and the only default that
+#: asserts nothing about a carrier's export convention is to take the column at its word. A feed that
+#: writes earnings negative therefore has to say so — which is what the first such tenant did.
+DEFAULT_SIGN_CONVENTION = _ledger.SIGN_PAYOUT_POSITIVE
 
 GRAIN_STATEMENT_LINE = "statement_line"
 
@@ -71,6 +88,11 @@ NO_TABLE_NOTE = ("The table that holds these declarations does not exist yet, so
                  "tenant's inbound money source and payout cycle.")
 NO_DATE_COLUMN_NOTE = ("The declared source has no column that names the day a row is about, so its "
                        "money cannot be placed on a calendar. Declare a day-grain source instead.")
+SCHEMA_BEHIND_NOTE = ("These declarations are being read without the several-pay-days and "
+                      "money-sign columns, because migration 1133_payout_weekdays_and_sign.sql has not been "
+                      "applied. Everything already declared still answers; a carrier that pays on "
+                      "more than one weekday, or whose feed writes earnings as a negative, cannot "
+                      "be declared until it runs.")
 UNREADABLE_NOTE = ("An inbound money source IS declared for this tenant but could not be read. This "
                    "is a setup fault, not an empty month — the figures below are incomplete.")
 INCOMPLETE_NOTE = ("More rows exist than this read will page through, so the total below is a floor "
@@ -92,11 +114,36 @@ def earning_date_field(source_table):
     return _lineage.DATA_DATE_COLUMN_BY_TABLE.get(tbl) or None
 
 
+#: Every column a declaration is read with, and the subset that existed before migration 1133. TWO
+#: LISTS ON PURPOSE: a landed migration number says nothing about the one below it (the 1093/1094
+#: lesson), so this read asks for the newer columns and, if the schema has not caught up, falls back
+#: to the older set and SAYS SO — rather than failing a working report over a column nobody has added
+#: yet. The fallback is never silent and never the first attempt.
+SELECT_COLS = ("label,source_table,amount_field,payout_cadence,payout_weekday,payout_weekdays,"
+               "payout_days,payout_day_of_month,payout_net_days,amount_sign_convention,is_active")
+SELECT_COLS_PRE_1133 = ("label,source_table,amount_field,payout_cadence,payout_weekday,"
+                        "payout_days,payout_day_of_month,payout_net_days,is_active")
+
+
+def amount_convention(src):
+    """The SIGN CONVENTION the tenant declared for one money column, as a convention dict.
+
+    DEREFERENCED from `commission_ledger`: the vocabulary ("is money you earned positive or negative
+    in this file") and the arithmetic both already have a home shared by the ledger and the
+    onboarding intake, and a second spelling of either here would be the §19.18 divergence. An
+    undeclared or unrecognised value reads as `DEFAULT_SIGN_CONVENTION` — the column at face value —
+    rather than as the ledger's own statement-shaped default; see that constant for why.
+    """
+    declared = str((src or {}).get("amount_sign_convention") or "").strip().lower()
+    return _ledger.convention_named(declared if declared in _ledger.SIGN_CONVENTIONS
+                                    else DEFAULT_SIGN_CONVENTION)
+
+
 def declared_sources(client, org_id):
     """The tenant's ACTIVE inbound money declarations, and whether the declaration table is reachable.
 
-    Returns {rows, error, table_missing}. Nothing raises: a platform where the migration has not been
-    applied must REPORT that, not 500 on a report.
+    Returns {rows, error, table_missing, schema_behind}. Nothing raises: a platform where the
+    migration has not been applied must REPORT that, not 500 on a report.
 
     THE TABLE BEING ABSENT IS NOT A BAD DECLARATION, and the two must not collapse into one answer.
     If the declaration table does not exist, nobody has been able to declare anything — so that is
@@ -104,18 +151,24 @@ def declared_sources(client, org_id):
     yet. A declaration that EXISTS and cannot be read is the §COMMCALC-29 case and stays
     `declared: True`.
     """
-    try:
-        rows = (client.schema("commcalc").table(SOURCE_MAP)
-                .select("label,source_table,amount_field,payout_cadence,payout_weekday,"
-                        "payout_days,payout_day_of_month,payout_net_days,is_active")
+    def _read(cols):
+        return (client.schema("commcalc").table(SOURCE_MAP).select(cols)
                 .eq("org_id", org_id).limit(200).execute().data or [])
+
+    behind = False
+    try:
+        rows = _read(SELECT_COLS)
     except Exception as exc:                      # noqa: BLE001 — a setup fault is reported, not raised
-        return {"rows": [], "table_missing": True,
-                "error": "%s.%s is not readable: %s" % ("commcalc", SOURCE_MAP, exc)}
+        try:
+            rows = _read(SELECT_COLS_PRE_1133)
+            behind = True
+        except Exception:                         # noqa: BLE001 — the real fault is the first one
+            return {"rows": [], "table_missing": True, "schema_behind": False,
+                    "error": "%s.%s is not readable: %s" % ("commcalc", SOURCE_MAP, exc)}
     # An INACTIVE declaration is not a declaration: a tenant can switch one off without deleting the
     # row that records what it was.
     return {"rows": [r for r in rows if r.get("is_active") is not False],
-            "error": None, "table_missing": False}
+            "error": None, "table_missing": False, "schema_behind": behind}
 
 
 def _source_rows(client, org_id, src, win, date_field):
@@ -145,7 +198,7 @@ def dated_receipts(client, org_id, win, *, want_store=None, want_markets=None, m
     """The money expected to come IN, grouped onto the DAYS the declared payout cycle says it lands.
 
     Returns {days, total, source, sources, grain, declared, measured, error, note, unplaced_rows,
-    unplaced_amount, bases}.
+    unplaced_amount, bases, schema_behind}.
 
     `want_store` / `market_of` are the CALLER'S resolvers — store identity (§64) and the market home
     (RULE FIVE) keep their own homes rather than gaining copies here, the same contract
@@ -158,7 +211,8 @@ def dated_receipts(client, org_id, win, *, want_store=None, want_markets=None, m
     dec = declared_sources(client, org_id)
     blank = {"days": [], "total": None, "source": None, "sources": [], "grain": None,
              "measured": False, "unplaced_rows": 0, "unplaced_amount": 0.0, "bases": {},
-             "table_missing": bool(dec.get("table_missing"))}
+             "table_missing": bool(dec.get("table_missing")),
+             "schema_behind": bool(dec.get("schema_behind"))}
     if dec.get("table_missing"):
         return dict(blank, declared=False, error=dec["error"], note=NO_TABLE_NOTE)
     if dec["error"]:
@@ -198,8 +252,10 @@ def dated_receipts(client, org_id, win, *, want_store=None, want_markets=None, m
             kept.append(r)
 
         schedule = _rs.resolve_schedule(src)
+        conv = amount_convention(src)
         roll = _rs.roll_up(kept, schedule, date_field=date_field,
-                           amount_of=lambda r, _f=amount_field: r.get(_f))
+                           amount_of=lambda r, _f=amount_field, _c=conv:
+                           _ledger.signed_amount(r.get(_f), _c))
         answered.append({"label": str(src.get("label") or table), "source_table": table,
                          "cadence": roll["cadence"], "cadence_declared": roll["cadence_declared"],
                          "total": roll["total"], "measured": roll["measured"],
@@ -225,6 +281,8 @@ def dated_receipts(client, org_id, win, *, want_store=None, want_markets=None, m
     days.sort(key=lambda x: x["date"])
     if truncated:
         notes.append(INCOMPLETE_NOTE)
+    if dec.get("schema_behind"):
+        notes.append(SCHEMA_BEHIND_NOTE)
     note = next((n for n in notes if n), None)
     if errors and not note:
         note = UNREADABLE_NOTE
@@ -243,6 +301,6 @@ def dated_receipts(client, org_id, win, *, want_store=None, want_markets=None, m
             # undeclared (or incompletely declared) carrier is an unknown. Those are different
             # answers and the surface prints them differently.
             "declared": True, "measured": any(s["measured"] for s in answered),
-            "table_missing": False,
+            "table_missing": False, "schema_behind": bool(dec.get("schema_behind")),
             "error": ("; ".join(errors) if errors else None), "note": note,
             "unplaced_rows": unplaced_n, "unplaced_amount": round(unplaced_amt, 2), "bases": bases}
