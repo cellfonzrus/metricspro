@@ -296,6 +296,9 @@ def test_the_two_reported_tiles_land_where_the_owner_expects(api_client, gate, w
               ((r.json().get("permissions") or {}).get("rep_surface") or {}).get("tiles") or []}
     assert by_key.get("commissions") == "/employee"
     assert by_key.get("clock") == "/portal"
+    # OWNER 2026-11-27: *"daily closing tile is missing from their landing page but on teh portal is
+    # seen"* — the form existed only as a panel inside the kiosk (§CORE-33.3).
+    assert by_key.get("closing") == "/closing/submit"
 
 
 def test_both_tenants_are_given_the_same_tiles(api_client, gate):
@@ -306,6 +309,24 @@ def test_both_tenants_are_given_the_same_tiles(api_client, gate):
         return [(t["key"], t.get("page")) for t in
                 ((r.json().get("permissions") or {}).get("rep_surface") or {}).get("tiles") or []]
     assert tiles("repA", ORG_A) == tiles("repB", ORG_B)
+
+
+@pytest.mark.parametrize("who", ["repA", "repB"])
+def test_the_closing_tile_opened_one_page_and_widened_no_api(api_client, gate, who):
+    """The Daily closing grant is that ONE page: `/closing` is a 30-screen subsystem and none of it
+    moved. Asked of the API, because the API is what enforces it (§CORE-33) — the kiosk's own calls
+    are allowed and the tender CONFIG write, which the first draft of this module admitted, is not."""
+    allowed = api_client.get(f"/api/v1/closing/days?org_id={ORG_A}", headers={"Authorization": HDR[who]})
+    assert allowed.status_code != 403, allowed.text
+    for path, method in (("/api/v1/closing/tender-config", "put"),
+                         ("/api/v1/closing/count-config", "post")):
+        r = getattr(api_client, method)(f"{path}?org_id={ORG_A}", json={},
+                                        headers={"Authorization": HDR[who]})
+        assert r.status_code == 403, f"{method.upper()} {path}: {r.status_code}"
+        assert r.json()["code"] == "not_your_access"
+    assert rep_surface.page_allowed("/closing/submit")
+    assert not any(rep_surface.page_allowed(p) for p in
+                   ("/closing", "/closing/recon", "/closing/verify", "/closing/management"))
 
 
 def test_a_store_manager_is_not_confined_by_the_api_gate(api_client, gate):

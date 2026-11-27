@@ -83,7 +83,7 @@ check("A12 a trailing slash never changes the answer",
 check("A13 every one of the owner's five has a tile, in his order — and nothing else has one "
       "without saying so here",
       [t["key"] for t in RS.tiles()] == ["clock", "commissions", "schedule", "action_plan",
-                                         "helpdesk", "dropoff"],
+                                         "helpdesk", "dropoff", "closing"],
       [t["key"] for t in RS.tiles()])
 check("A14 every tile's page is a page the gate admits",
       all(RS.page_allowed(t["page"]) for t in RS.tiles()), [t["page"] for t in RS.tiles()])
@@ -107,7 +107,7 @@ check("A16 the pattern → address conversion has ONE home that every tile deref
 check("A17 …and the addresses it publishes are the real ones",
       [t["page"] for t in RS.tiles()] == ["/portal", "/employee", "/storeops/timeoff",
                                           "/commcalc/targets/action-plan", "/helpdesk",
-                                          "/storeops/dropoff-barcode"],
+                                          "/storeops/dropoff-barcode", "/closing/submit"],
       [t["page"] for t in RS.tiles()])
 check("A18 …and each one is still a page the gate admits, asked of the ADDRESS",
       all(RS.page_allowed(t["page"]) and "*" not in t["page"] for t in RS.tiles()))
@@ -115,6 +115,22 @@ check("A18 …and each one is still a page the gate admits, asked of the ADDRESS
 # page was being guessed from the first grant, which for the clock is the landing the tile sits on.
 check("A19 THE OWNER'S SECOND REPORT: Clock in / out opens the punch kiosk, not the landing",
       next(t["page"] for t in RS.tiles() if t["key"] == "clock") == "/portal")
+# ── A19b THE DAILY CLOSING TILE (owner 2026-11-27) ───────────────────────────────────────────────
+# *"daily closing tile is missing from their landing page but on teh portal is seen."* The form was
+# reachable only as a panel inside the kiosk. It gets a tile and ONE page — and the exactness of that
+# page is the safety: `/closing` is a 30-screen subsystem and none of it moves.
+check("A19b the Daily closing tile opens the submit page",
+      next((t["page"] for t in RS.tiles() if t["key"] == "closing"), None) == "/closing/submit")
+check("A19c …and that grant admits that page and NOTHING else under /closing",
+      RS.page_allowed("/closing/submit")
+      and not any(RS.page_allowed(p) for p in (
+          "/closing", "/closing/recon", "/closing/verify", "/closing/management",
+          "/closing/tender-config", "/closing/store-cash-on-hand", "/closing/deposit-recon",
+          "/closing/submit/anything")))
+check("A19d …and it needed no new API grant: every call the page makes was already granted",
+      all(RS.api_allowed(r, "POST") for r in ("/api/v1/closing/row", "/api/v1/closing/metric-lines"))
+      and RS.api_allowed("/api/v1/closing/days", "GET")
+      and not RS.api_allowed("/api/v1/closing/tender-config", "PUT"))
 check("A20 a tile that declares no destination publishes none — there is no fallback to pages[0]",
       "pages\"][0]" not in open(RS.__file__).read().split("def tiles(")[1])
 

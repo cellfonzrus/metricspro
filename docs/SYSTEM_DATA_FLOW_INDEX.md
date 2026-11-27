@@ -47338,17 +47338,49 @@ renders the server's list in the server's order.
 into a link — no other backend declaration publishes a `page` containing `**`, and `(platform)/my/page.tsx`
 and `lib/fix-it.tsx` are the only two surfaces that build an href from server-declared page data.
 
+### CORE-33.3 A seventh tile: the daily closing (owner 2026-11-27)
+
+Owner, minutes after the tile 404s above: *"daily closing tile is missing from their landing page but
+on teh portal is seen."*
+
+**It was never tiled.** The `closing` surface was declared with `"tile": False` and **no page at all**:
+the grant existed only so the `<ClosingSubmitForm>` panel *embedded in the `/portal` kiosk* could
+submit. So a rep who had already clocked in had to go back to the clock screen to file the close, and
+a confined employee — who has no menu — had no other way to find it. The same shape as the geofence
+control that shipped correct and unreachable (§CORE-33.1's own lesson, and the `tileOnly` trap): **a
+feature is not shipped until it is reachable from the surface that owns the job.**
+
+**What was granted: one page, exactly.** `tile: True`, `tile_page` / `pages` = `"/closing/submit"` —
+the thin wrapper around the SAME shared `<ClosingSubmitForm>` the kiosk panel renders. The exactness
+is the whole safety of it: `/closing` is a ~30-screen subsystem (recon, deposits, variances, every
+store's cash position, the tender and count configs) and the grammar's exact form admits that page and
+**nothing else**, so nothing below or beside it moves. `page_allowed` is asserted False for `/closing`,
+`/closing/recon`, `/closing/verify`, `/closing/management` and `/closing/submit/anything`.
+
+**No API grant changed.** The page makes exactly the calls the kiosk panel has been making all along,
+which this surface already granted; the tender/count CONFIG writes stay refused (`api_read` is
+read-only and `/closing/row/**`, the manager's edit of a filed row, stays carved). Proved through the
+real app, both tenants: `GET /closing/days` allowed, `PUT /closing/tender-config` and
+`POST /closing/count-config` refused with `not_your_access`.
+
+**The one door out of that page is now the right one.** `(platform)/closing/submit/page.tsx` had a
+hard-coded `← Dashboard` link to `/closing`, which is refused — a dead end for the only viewer who
+arrives by tile. For a confined employee it reads `← My day` (`REP_LANDING`, the one home). `repConfined`
+off `/me` is used for that single purpose, exactly as on the barcode rescue. `WorkflowNext` needed
+nothing: it already asks `useCanOpen`, the same predicate the sidebar asks, so it cannot advertise a
+screen the viewer would be bounced out of.
+
 ### Proofs and the lock
 
-- `backend/harness_rep_surface.py` (125) — the grammar, default-deny on the API, the REAL middleware
+- `backend/harness_rep_surface.py` (128) — the grammar, default-deny on the API, the REAL middleware
   verdict over each role shape, the REAL four handlers over the in-memory double, two tenants, and
   ★ NO LOCKOUT ★.
 - `frontend/tools/rep-surface-nav-proof.mjs` (48) — the compiled `rbac.ts`; §A **reproduces the prefix
   hole for real** on the legacy path before §B shows it closed. Reads the declared pages out of the
   backend source, so it cannot pass against a list it made up.
-- `backend/tests/integration/test_rep_surface_gate.py` (73) — the real FastAPI app, the real scope code
+- `backend/tests/integration/test_rep_surface_gate.py` (75) — the real FastAPI app, the real scope code
   deciding whose people are whose, two tenants with the same role NAMES and different configuration.
-- `backend/harness_rep_surface_lock.py` (99, CI job **The employee's reach**) — fails the build
+- `backend/harness_rep_surface_lock.py` (101, CI job **The employee's reach**) — fails the build
   if a second page list appears, if the prefix widening escapes the legacy branch, if the API gate is
   un-installed or becomes conditional, if any of the four writes stops dereferencing the gate, if the
   landing route drifts between the two sides, or (§6c, 2026-11-27) if a tile publishes a pattern as its

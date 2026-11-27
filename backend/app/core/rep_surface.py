@@ -196,8 +196,20 @@ SURFACES = (
                 "token, so there is no employee id to pass (the by-id route is manager-gated)",
     },
     {
-        "key": "closing", "tile": False, "label": "Daily closing", "icon": "🧾",
-        "pages": (),
+        "key": "closing", "tile": True, "label": "Daily closing", "icon": "🧾",
+        # OWNER 2026-11-27: *"daily closing tile is missing from their landing page but on teh portal
+        # is seen"*. The closing form was reachable only as a panel inside the `/portal` kiosk, so a
+        # rep who had already clocked in had to go back to the clock screen to file the close — and a
+        # confined employee has no menu to find it by. It gets a tile, and the ONE page that hosts
+        # the same shared `<ClosingSubmitForm>`.
+        #
+        # EXACT, not a subtree, and that is the whole safety of it: `/closing` is a 30-screen
+        # subsystem (recon, deposits, variances, every store's cash position, the tender config). The
+        # grammar's exact form admits that page and NOTHING else, so nothing below or beside it moves.
+        # No API grant changes either — the page makes exactly the calls already granted below, which
+        # the kiosk panel has been making all along.
+        "tile_page": "/closing/submit",
+        "pages": ("/closing/submit",),
         # Named routes, not the `/api/v1/closing` prefix the first draft granted: that prefix also
         # admitted every tender/cash/deposit/sweep CONFIG write and the chargeback decisions. These
         # are exactly the calls `components/ClosingSubmitForm.tsx` makes, nothing more.

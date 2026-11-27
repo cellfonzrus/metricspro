@@ -282,6 +282,7 @@ entries += [m for grp in re.findall(r'"page_except":\s*\(([^)]*)\)', RS) for m i
 DECLARED_PAGES = {
     "/account/password/**",
     "/chat/**",
+    "/closing/submit",
     "/commcalc/targets/action-plan",
     "/employee/**",
     "/helpdesk/**",
