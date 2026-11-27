@@ -622,7 +622,7 @@ def run_preflight(month: str = None, start: str = None, end: str = None,
 @router.post("/payroll/clock-variance-ask")
 async def clock_variance_ask(month: str = None, start: str = None, end: str = None,
                              dry_run: bool = True, respect_weekday: bool = True,
-                             org_id: str = ORG_ID):
+                             org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Carry the weekly ask to whoever owns each store with something still blocking.
 
     NOTHING ABOUT DELIVERY IS DECIDED HERE. The recipients come from `clock_variance.ask_plan` over
@@ -642,6 +642,12 @@ async def clock_variance_ask(month: str = None, start: str = None, end: str = No
     and 0 of 20 Luxelink stores resolve a district manager, so an ask keyed on DMs alone would reach
     eight stores out of fifty-one and look like it had asked everybody.
     """
+    # ONE HOME, dereferenced (never a copy of the role test): index §STOREOPS-07.8. Imported
+    # locally because router.py imports this module.
+    from app.modules.storeops.router import require_not_individual_contributor
+    from app.modules.core.auth_header import auth_str
+    require_not_individual_contributor(auth_str(authorization), org_id,
+                                       "Sending the weekly clock-variance ask")
     from app.modules.storeops.router import _resolve_range, org_chain_inputs
     from app.modules.storeops import org_chain as _org_chain
     from app.modules.notify import digest_delivery as _delivery

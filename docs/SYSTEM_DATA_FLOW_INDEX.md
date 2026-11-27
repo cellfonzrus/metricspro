@@ -45975,6 +45975,85 @@ mistake a narrowed read for an authorisation it has not made.
 
 
 
+### STOREOPS-07.8 A ROUTE THAT CANNOT ASK WHO IS CALLING (security pass 2026-11-27)
+
+The daily adversarial access pass (§CORE-42) drew storeops on 2026-11-27. **To a stranger the module
+is clean** — every gated path answered `401 {"detail":"authentication required"}`, hand-verified one
+request at a time, and the probe reported zero findings. The defect came from the blast-radius
+question, as it has on four of the last five runs.
+
+**THE CLASS.** `grep` for the routes that take no `authorization` parameter at all: **30 storeops
+WRITE routes asked nobody who was calling.** A route that does not take the header cannot ask; its
+only boundary is `org_id`, so every signed-in person in the tenant is equal on it however the screen
+is drawn. The exposure was NOT to a confined employee — `rep_surface` is default-deny and declares
+none of these paths (§CORE-52) — but to everyone above that line: a store manager in one market
+could rewrite the company structure, create and edit stores, and read and overwrite any named
+person's W-4 withholding.
+
+This is **not a new ruling**. It is the owner's own 2026-08-05 threat model
+(`harness_privesc_rbac_gates`: *"a logged-in NON-ADMIN with devtools crafts an HTTP request carrying
+their own valid JWT ... these endpoints self-gated on nothing but the UI hiding the control"*) and
+§STOREOPS-07.65 (a person-keyed read that applied the pay gate and never asked whose employee id was
+passed), one module over. **Hiding a page is not gating a route.**
+
+**AND THE GATES ALREADY EXISTED.** `require_person_write`, `require_not_individual_contributor`
+(§14w, owner directives 2026-11-04 and 2026-11-20) and `gate_person_rows` are the house one homes.
+The defect was 21 callers never wired to them — the §19.18 pattern this index names explicitly:
+*writing the registry and leaving the callers on their own is not a fix.* This is the fourth time.
+
+**ONE FACT, ONE HOME.** `backend/app/modules/storeops/route_authority.py` is the only declaration of
+what counts as *asking* (`AUTHORITY_GATES`, `SECRET_GATES`) and of which reads are excused and why
+(`EXCUSED_READS`, a ratchet that may only shrink). `classify_routes()` answers "does this route ask"
+for all 212 storeops routes by reading the shipped source with `ast` — no import, no DB, no network.
+
+**WIRED IN THIS CHANGE (21 routes, 30 ungated writes -> 10):** the twelve `/org/*` structure writes
+(seed, build-standard, levels C/U/D, units C/U/D, unit managers add/remove, store placement, employee
+placement), `POST /stores`, `POST /stores/bulk`, `PATCH /stores/{store_id}`, both
+`/shift-templates/*`, `POST /shifts`, `POST /payroll/clock-variance-ask` ->
+`require_not_individual_contributor`; `PUT /payroll-settings/{employee_id}` ->
+`require_person_write(..., manager_only=True)` (setting withholding is a manager's act);
+`GET /payroll-settings/{employee_id}` -> `gate_person_rows` on the employee requested, the exact
+§STOREOPS-07.65 shape.
+
+**NOT WIRED, AND SAID PLAINLY** (the house rule is fix the mechanism for every caller *or say you
+have not*). Ten writes and nine reads remain ungated, each NAMED in the lock so a new one cannot
+hide inside a count: the four `/dropoff-label/*` reads-by-POST, `PATCH`/`DELETE /shifts/{id}`,
+`DELETE /employees/{emp_id}`, `POST /employees/merge`, the two `/employees/{emp_id}/*-config` PUTs,
+and nine timeclock/payroll CONFIG reads. They are live employee and scheduling screens where the
+right audience is the owner's ruling, not an agent's guess, and gating them wrongly is the ★ NO
+LOCKOUT ★ defect of equal weight (§22). Awaiting that ruling.
+
+**NOT MEASURED.** None of this was reproduced from outside: the `rep` and `cross_tenant` personas
+have no accounts (§CORE-42.7), so there is no signed-in request to send. The finding is a reading of
+the shipped source plus the asymmetry with its own siblings — `PUT /merchant-ids` calls
+`_require_manager` twenty lines from an `/org/*` write that called nothing. Stated as a reading, not
+a measurement.
+
+### STOREOPS-07.9 THE LOCK
+
+`backend/harness_storeops_route_authority.py` — 101 checks, DB-free, wired into CI:
+
+- **§A** no WRITE route is ungated beyond the pinned debt; the ceiling may only be LOWERED, a new
+  ungated write is named-and-caught, and §A3 fails if a paid debt is left un-re-pinned (a slack
+  ratchet is how a count quietly stops meaning anything);
+- **§B** the unexcused READ debt may only shrink, every excuse carries a reason, and a stale excuse
+  naming a route that no longer exists FAILS (an excuse for nothing is a lie);
+- **§C** each of the 21 routes is asserted STILL wired, BY NAME and by the gate it must dereference —
+  un-wiring one trips **7** checks, verified by disarming it rather than assumed (the lesson of
+  §CORE-53: a source-text lock can match a declaration and pass while the fix is un-wired);
+- **§D** armed controls, including that the gate is asked BEFORE the write;
+- **§E** the lock holds no second copy of the vocabulary and dereferences `route_authority`.
+
+Plus `backend/tests/integration/test_storeops_route_authority.py` — 19 tests through the REAL app:
+an individual contributor refused with **nothing written**, a manager still allowed, the eight
+structure siblings in one parametrised sweep, the W-4 read refused for another person and ★ still
+served for the caller's OWN ★, an unrestricted/in-process caller unaffected, and — the control that
+makes the rest evidence — the **pre-fix world**, with the gate monkeypatched to a pass-through, where
+the same request writes.
+
+No migration. No permission or schema change: the gates are code, and the roles they read are the
+tenant's existing ones.
+
 ---
 
 ## §STOREOPS-08. WHAT A PAY PERIOD COSTS THE COMPANY, BESIDE WHAT IT PAYS (owner ask 2026-11-12)
