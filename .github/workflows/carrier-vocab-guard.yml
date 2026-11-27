@@ -1368,6 +1368,13 @@ on:
       # must re-run it — the pay path, the feed, the two vocabularies and the one accent fold.
       - "backend/harness_payroll_hours_basis_lock.py"
       - "backend/harness_payroll_hours_basis.py"
+      # index §76.4 — an hours-split incentive pool is weighted by CLOSED PUNCHES from the day each
+      # store started clocking in, and a hand-corrected day carries NO weight (owner 2026-11-27).
+      # The harness NAMES ITSELF for the §13e reason above, and names its subjects because a change
+      # to any of them must re-run it: the floor boundary, the weight rule's home, and the one
+      # reader whose pre-floor branch must stay byte-for-byte what it is today.
+      - "backend/harness_incentive_clock_weight.py"
+      - "backend/app/modules/commcalc/incentive_clock_floor.py"
       - "backend/harness_clock_feed.py"
       - "backend/harness_clock_variance.py"
       - "backend/harness_clock_variance_api.py"
@@ -2236,6 +2243,9 @@ jobs:
       - name: Run the daily-incentive proof (the owner's six live rules replayed as CONFIG; gates fail closed; an unsplittable pool is reported, never guessed - index 72)
         working-directory: backend
         run: python3 harness_daily_incentive.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the incentive clock-weight proof + lock (an hours-split pool is weighted by CLOSED punches only, a hand-corrected day carries NO weight while payroll still PAYS it, the floor is read as stored so a backfilled punch cannot restate a paid period, and an absent floor keeps today's split exactly - index 76.4)
+        working-directory: backend
+        run: python3 harness_incentive_clock_weight.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the declared-metric catalog lock (ONE home for what a business declares daily; no second copy of the vocabulary, no caller reaching past it - index 72)
         working-directory: backend
         run: python3 harness_metric_catalog_lock.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

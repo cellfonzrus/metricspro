@@ -1871,6 +1871,40 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_daily_incentive',),
         },
     },
+    # ── §76.4b (owner ruling 2026-11-27) — the day a store started clocking in ──────────────────
+    'incentive_clock_floor': {
+        "question": 'From WHICH DAY is this store\'s hours-split incentive pool weighted by closed '
+                    'clock punches rather than by the schedule? Owner Sanjot, 2026-11-27: *"let '
+                    'the daily cincentive ... bee ffeceive going forward based on eh acual clock '
+                    'in"*. The pool was weighted `actual_hours or scheduled_hours` over a column '
+                    'carrying a figure on 7 of 7,740 live rows, so in practice THE SCHEDULE paid: a '
+                    'rep rostered 9h who punched 4h drew a 9/Sigma share of a pool whose total never '
+                    'moved. Changing the weighting changes WHO IS PAID WHAT, so it may apply only '
+                    'GOING FORWARD — and "going forward" has to be a stored fact, not a hope. The '
+                    'date is DERIVED from each tenant\'s own punch history (never a literal, never '
+                    'a house default, never another tenant\'s date — §COMMCALC-49.10), ACCEPTED by '
+                    'a human into `commcalc.incentive_clock_floor`, and then READ AS STORED and '
+                    'never recomputed: a derivation read at money time would walk the boundary '
+                    'BACKWARDS when a punch is backfilled into an earlier day and restate a period '
+                    'already paid. PER STORE, because stores began clocking at different times. '
+                    'AN ABSENT ROW MEANS TODAY\'S BEHAVIOUR, so the table is the switch and an '
+                    'empty one changes nothing — the opposite sense from '
+                    '`payroll_hours_basis.clocked_basis_effective_from`, where an empty floor means '
+                    '"the declared mode applies with no floor". Stated out loud because the two '
+                    'columns look alike and mean opposite things when empty.',
+        "homes": ('app/modules/commcalc/incentive_clock_floor.py',),
+        "index": ('76.4',),
+        "locks": ('harness_incentive_clock_weight.py',),
+        # SNAPSHOT — written BY HAND (§50: `--bless` does not work here; it returns 1 on the first
+        # fact it cannot locate and writes nothing).
+        "callers": {
+            # The only reader. `_incentive_hours_for_day` asks `status(floor_row, day)` per
+            # (store, day) and keeps today's schedule-weighted branch byte-for-byte when the answer
+            # is no. The WEIGHT itself is not here — that is
+            # `payroll_hours_basis.incentive_weight_hours`; this home owns only the boundary.
+            'app/modules/commcalc/router.py': ('_icf',),
+        },
+    },
     # ── §CORE-08 (owner report 2026-10-14) — which PERSON is this name ──────────────────────────
     'person_identity': {
         "question": 'Is this the same human? Asked wherever two systems\' people are joined: a '
@@ -2472,6 +2506,12 @@ FACTS: dict[str, dict] = {
         "callers": {
             'app/modules/account/coa.py': ('_hours_basis',),
             'app/modules/commcalc/labour_coverage.py': ('_hours_basis',),
+            # §76.4 — the daily-incentive pool asks this home what WEIGHT a person-day carries in an
+            # hours split (`incentive_weight_hours`). It is a DIFFERENT question from paid hours and
+            # has its own named answer here, deliberately beside the pay rule so the contrast is
+            # visible: a hand-corrected day is PAID (`corrections_apply`) and carries NO weight. The
+            # router dereferences that one home rather than re-spelling "is this punch closed".
+            'app/modules/commcalc/router.py': ('_phb',),
             'app/modules/hr/router.py': ('_hours_basis',),
             # §14y.2 — the workforce report prints an hours figure, so it must say which of
             # those hours a clock MEASURED. It asks this home (`basis_is_measurement`)

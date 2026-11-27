@@ -152,6 +152,7 @@ SCHEMA_OF = {
     "goal_rollforward_policy": "commcalc",
     "gp_category_map": "commcalc",
     "gp_snapshot": "commcalc",
+    "incentive_clock_floor": "commcalc",
     "incentive_rule": "commcalc",
     "incentive_rule_assignment": "commcalc",
     "ingest_store_guard": "commcalc",

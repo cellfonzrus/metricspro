@@ -534,6 +534,96 @@ def corrections_apply(day, cfg):
     return True, None
 
 
+# ── AN INCENTIVE ASKS A NARROWER QUESTION THAN PAY (owner ruling 2026-11-27) ─────────────────────
+#
+# Owner Sanjot, verbatim: *"let the daily cincentive as itonly affects ny logistics bee ffeceive
+# going forward based on eh acual clock in, if te hours are udpated manuay then we cannot oay for
+# thsose hours"*.
+#
+# ★ THE CONTRAST IS THE POINT, AND IT LIVES HERE SO NOBODY MERGES THE TWO ★
+#
+#   | question                                           | a manual correction | the schedule |
+#   | -------------------------------------------------- | ------------------- | ------------ |
+#   | what are this person's PAID hours? (`resolve_day`) | FOLDED, on and after the org's own
+#   |                                                    | `corrections_effective_from` (PR #679,
+#   |                                                    | §STOREOPS-07)       | paid when the
+#   |                                                    |                     | per-rep tick is on |
+#   | what WEIGHT does this day carry in an INCENTIVE    | **ZERO WEIGHT FOR  | **never any  |
+#   | pool split by hours?                               | THE WHOLE DAY**     | weight**     |
+#
+# Pay asks what the business OWES — and a day somebody wrote down is a day somebody wrote down, so
+# payroll folds it. An incentive is a REWARD FOR MEASURED WORK, and the owner's sentence is explicit
+# that a hand-edited day may not earn one. Both readings are right for their own question, which is
+# exactly why a single shared helper would be wrong for one of them.
+#
+# SO: `corrections_apply` IS NOT CONSULTED HERE, deliberately. An org that has declared
+# `count_manual_hours` and a `corrections_effective_from` for PAY must still carry no incentive
+# weight on a corrected day — otherwise a switch set for one question would silently override the
+# owner's ruling on another.
+INCENTIVE_WEIGHT_CLOCKED = "clocked"
+INCENTIVE_WEIGHT_NO_PUNCH = "no_closed_punch"
+INCENTIVE_WEIGHT_MANUAL_BLOCKED = "manual_correction_no_weight"
+
+#: Reader-facing sentences, so a surface never composes its own explanation of a zero weight.
+INCENTIVE_WEIGHT_REASONS = {
+    INCENTIVE_WEIGHT_CLOCKED:
+        "These hours were measured by a closed clock punch, so they weight this pool.",
+    INCENTIVE_WEIGHT_NO_PUNCH:
+        "No closed clock punch measured this day, so it carries no weight in the pool. A "
+        "scheduled shift is not a measurement and never weights an incentive.",
+    INCENTIVE_WEIGHT_MANUAL_BLOCKED:
+        "This day's hours were updated by hand, so the day carries no weight in the pool "
+        "(owner ruling 2026-11-27). The hours may still be PAID — that is a separate question, "
+        "answered by this org's own corrections date.",
+}
+
+
+def incentive_weight_hours(punches, cfg, *, has_manual_correction=False):
+    """PURE: `(hours, reason)` — the weight ONE person-day carries in an hours-split incentive pool.
+
+    THE ONE HOME for *"may these hours earn an incentive, and how many"*. Three outcomes only:
+
+      · a closed, usable punch        → its hours (summed over the day's punches)
+      · nothing closed                → **0.0**, `no_closed_punch` — the schedule is NEVER a weight
+      · the day was hand-corrected    → **0.0**, `manual_correction_no_weight`, which OUTRANKS a
+                                        perfectly good punch on the same day
+
+    `punches` are `storeops.timelog` rows for one (employee, day). Whether a punch is CLOSED is
+    `punch_usability`'s answer, dereferenced rather than re-spelled, so an org that counts
+    auto-clockouts weights them and one that does not does not — and this function never needs to
+    know what an auto-clockout is.
+
+    `has_manual_correction` is the caller's own question ("is there a `storeops.manual_hours` row
+    for this person-day"), passed in rather than read here, because this module does no I/O. It is a
+    BOOLEAN and not the corrected hours, on purpose: the corrected VALUE is irrelevant to an
+    incentive, and accepting it would invite somebody to weight by it later.
+
+    ★ A ZERO HERE IS NOT A REFUSAL OF THE POOL ★ — it is this person's weight. A pool none of whose
+    qualifying people carry weight is reported UNALLOCATED by `daily_incentive.split_pool`, which
+    already refuses to turn an unmeasurable basis into an equal split. That boundary is deliberate:
+    this function answers for a PERSON-DAY and must not be able to decide the fate of a pool.
+    """
+    cfg = cfg if isinstance(cfg, dict) else resolve_config(None)
+    if has_manual_correction:
+        return 0.0, INCENTIVE_WEIGHT_MANUAL_BLOCKED
+    total = 0.0
+    for p in (punches or ()):
+        usable, _why = punch_usability(p, cfg)
+        if usable:
+            total += _f((p or {}).get("hours"))
+    if total <= 0:
+        return 0.0, INCENTIVE_WEIGHT_NO_PUNCH
+    return round(total, 2), INCENTIVE_WEIGHT_CLOCKED
+
+
+def incentive_weight_reason(reason):
+    """PURE: the sentence a reader is shown for a weight outcome. An unruled reason says so rather
+    than rendering blank."""
+    return INCENTIVE_WEIGHT_REASONS.get(
+        reason, f"This incentive weight's reason ({reason!r}) has no ruling in "
+                f"payroll_hours_basis — it is treated as carrying no weight.")
+
+
 def day_is_before_floor(day, cfg):
     """PURE: is this business date STRICTLY BEFORE this org's clocked-basis floor?
 

@@ -51319,7 +51319,8 @@ def get_daily_incentive(close_date: str, store_code: str = "", metric_source: st
         lines = _metric_lines(client, org_id, store_code, close_date)
     declared = _mc.declared(cat, row, lines)
     per_emp = _mc.by_employee(cat, lines)
-    hours, roster = _incentive_hours_for_day(client, org_id, store_code, close_date)
+    hours, roster, hours_detail = _incentive_hours_for_day(client, org_id, store_code,
+                                                             close_date)
     # WHETHER that money counts is the org's own declaration, resolved in one home (§COMMCALC-84).
     # The endpoint passes the ADDEND, never the scope: the engine must not be able to re-decide the
     # policy next to the money, and `unclassified_addend` is the only place the switch is read.
@@ -51473,7 +51474,7 @@ def _incentive_shortfall_payload(client, org_id, period, *, store_code="", metri
     days = []
     for (store, day) in sorted(bags):
         bag = bags[(store, day)]
-        hrs, roster = hours_by_date.get(day, ({}, []))
+        hrs, roster, _hrs_detail = hours_by_date.get(day, ({}, [], {}))
         addend = _revenue_scope.unclassified_addend(scope, bag.get("unclassified"))
         per_emp_addend = ({k: _revenue_scope.unclassified_addend(scope, v)
                            for k, v in (bag.get("unclassified_by_employee") or {}).items()}
@@ -51654,18 +51655,54 @@ async def upload_pos_report(file: UploadFile = File(...), source_id: str = Form(
 
 
 def _incentive_hours_for_day(client, org_id, store_code, close_date, date_to=None):
-    """(hours_by_employee, roster) for a store-day, from the schedule the workforce module already
-    keeps. Actual clocked hours win where they exist; otherwise the scheduled hours, which is what the
-    tenants here actually record. Absent is ABSENT — this returns {} rather than a guess, and
-    `daily_incentive.split_pool` reports the pool unallocated.
+    """`(hours_by_employee, roster, detail)` for a store-day — THE weights an hours-split pool uses.
 
-    `date_to` answers a RANGE instead, as {date: (hours, roster)} — a parameter rather than a second
-    reader, the same choice `_metric_lines` and `_portal_metric_rows` beside it already made, and for
-    the same reason: a period caller that found only the single-day form would either loop thirty
-    round trips or query `storeops.shifts` itself. A by-hours pool whose hours were never read comes
-    back UNALLOCATED, which on a shortfall surface would read as "the gate cost nothing" — so a
-    period view that skipped this would under-report the money."""
+    OWNER RULING 2026-11-27 (Sanjot, verbatim): *"let the daily cincentive as itonly affects ny
+    logistics bee ffeceive going forward based on eh acual clock in, if te hours are udpated manuay
+    then we cannot oay for thsose hours"*.
+
+    WHAT WAS WRONG. This read `actual_hours` else `scheduled_hours` off `storeops.shifts` and never
+    looked at a punch. `shifts.actual_hours` carries a figure on 7 of 7,740 live rows (index §14y),
+    so an hours-split `threshold_pool` was in practice **split by the SCHEDULE**: a rep rostered 9h
+    who punched 4h drew a 9/Σ share. The pool TOTAL never moved; who got paid what did.
+
+    THE WEIGHT RULE IS NOT HERE. It is `payroll_hours_basis.incentive_weight_hours` — the one named
+    place, with the owner's sentence beside it and the deliberate contrast with PAY written out: a
+    `manual_hours` correction is FOLDED into paid hours (PR #679) and carries **zero incentive
+    weight for the whole day**. Two right answers to two different questions, which is why they may
+    never share a helper.
+
+    ★ THE ROSTER IS DELIBERATELY UNCHANGED ★ — every scheduled person stays on it, clocked or not.
+    `roster` is what the caller turns into `people`, i.e. who is ELIGIBLE for *any* pool, `equal` and
+    `individual_sales` included. Narrowing it to people who clocked would silently re-split every
+    pool on every tenant, which is far beyond the ruling. Only `split: hours` moves, and a rep who
+    did not clock stays eligible while carrying no weight.
+
+    ★ GOING FORWARD ONLY ★ — `commcalc/incentive_clock_floor` decides, per STORE, whether punch-only
+    weighting is in effect on a given day, from a floor that is derived, **stored**, then read. A day
+    before the store's accepted date, or a store with no accepted date at all, is weighted EXACTLY as
+    it is today. So deploying this moves no money until a floor is accepted per store.
+
+    `detail` is `{employee_name: {hours, reason, sentence, floor_reason}}` for everyone on the
+    roster, so a surface can always say why a weight is what it is. The evidence is assembled by
+    `payroll_evidence.read_pay_evidence` + `payroll_hours_basis.build_evidence` — THE one punch read
+    and THE one index, keyed on the raw `employee_id` exactly as every pay path keys them, so this
+    reader inherits their identity handling instead of inventing a second grain.
+
+    `date_to` answers a RANGE instead, as `{date: (hours, roster, detail)}` — a parameter rather than
+    a second reader, the same choice `_metric_lines` and `_portal_metric_rows` beside it already
+    made, and for the same reason: a period caller that found only the single-day form would either
+    loop thirty round trips or query `storeops.shifts` itself. A by-hours pool whose hours were never
+    read comes back UNALLOCATED, which on a shortfall surface would read as "the gate cost nothing" —
+    so a period view that skipped this would under-report the money."""
+    from app.modules.commcalc import incentive_clock_floor as _icf
+    from app.modules.storeops import payroll_evidence as _payevid
+    from app.modules.storeops import payroll_hours_basis as _phb
+
     hours, roster, by_date = {}, [], {}
+    detail, detail_by_date = {}, {}
+    lo = str(close_date)[:10]
+    hi = str(date_to or close_date)[:10]
     try:
         q = (client.schema("storeops").table("shifts").select("*").eq("org_id", org_id)
              .neq("is_deleted", True))
@@ -51675,36 +51712,65 @@ def _incentive_hours_for_day(client, org_id, store_code, close_date, date_to=Non
             q = q.gte("shift_date", str(close_date)).lte("shift_date", str(date_to)).limit(20000)
         if store_code:
             q = q.eq("store_code", str(store_code))
-        for sh in (q.execute().data or []):
+        shifts = q.execute().data or []
+        # ── THE EVIDENCE: one punch read, one index, the same grain every pay path uses ─────────
+        _so = client.schema("storeops")
+        cfg = _phb.load_config(_so, org_id)
+        ev_rows, _blockers = _payevid.read_pay_evidence(_so, org_id, lo,
+                                                        _payevid.day_after(hi))
+        evidence = _phb.build_evidence(shifts=shifts,
+                                       punches=(ev_rows or {}).get("punches") or (),
+                                       manual_rows=(ev_rows or {}).get("manual") or ())
+        floors, _floor_blocker = _icf.load(client, org_id)
+
+        for sh in shifts:
             who = str(sh.get("employee_name") or "").strip()
             if not who:
                 continue
-            h = sh.get("actual_hours")
-            if h in (None, "", 0):
-                h = sh.get("scheduled_hours")
-            try:
-                h = float(h or 0)
-            except (TypeError, ValueError):
-                h = 0.0
+            day = str(sh.get("shift_date") or "")[:10]
+            # WHICH RULE APPLIES TO THIS (store, day) — asked, never assumed.
+            in_force, floor_reason = _icf.status(
+                floors.get(str(sh.get("store_code") or "").strip()), day)
+            if in_force:
+                cell = evidence.get((sh.get("employee_id"), day)) or {}
+                h, reason = _phb.incentive_weight_hours(
+                    cell.get("_raw_punches") or (), cfg,
+                    has_manual_correction=int(cell.get("manual_rows") or 0) > 0)
+            else:
+                # TODAY'S BEHAVIOUR, BYTE-FOR-BYTE. Before a store's accepted floor — and for every
+                # store that has none — the weight is exactly what it has always been, so no closed
+                # period can restate and no tenant is switched on by somebody else's decision.
+                h = sh.get("actual_hours")
+                if h in (None, "", 0):
+                    h = sh.get("scheduled_hours")
+                try:
+                    h = float(h or 0)
+                except (TypeError, ValueError):
+                    h = 0.0
+                reason = None
+            row = {"hours": h, "reason": reason, "floor_reason": floor_reason,
+                   "sentence": _phb.incentive_weight_reason(reason) if reason
+                               else _icf.reason_sentence(floor_reason)}
             if date_to is None:
                 roster.append(who)
+                detail[who] = row
                 if h:
                     hours[who] = round(hours.get(who, 0.0) + h, 2)
             else:
-                day = str(sh.get("shift_date") or "")[:10]
                 if not day:
                     continue
-                slot = by_date.setdefault(day, [{}, []])
+                slot = by_date.setdefault(day, [{}, [], {}])
                 slot[1].append(who)
+                slot[2][who] = row
                 if h:
                     slot[0][who] = round(slot[0].get(who, 0.0) + h, 2)
     except Exception:
-        # The single-day form's callers unpack a pair; the range form's read a map. Returning the
+        # The single-day form's callers unpack a TRIPLE; the range form's read a map. Returning the
         # wrong SHAPE here would turn a degraded read into a TypeError at the call site.
-        return {} if date_to is not None else ({}, [])
+        return {} if date_to is not None else ({}, [], {})
     if date_to is not None:
-        return {d: (hrs, sorted(set(names))) for d, (hrs, names) in by_date.items()}
-    return hours, sorted(set(roster))
+        return {d: (hrs, sorted(set(names)), det) for d, (hrs, names, det) in by_date.items()}
+    return hours, sorted(set(roster)), detail
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
