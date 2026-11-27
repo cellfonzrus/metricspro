@@ -48157,6 +48157,84 @@ section first.
 
 ---
 
+### CORE-33.6 A grant here was a MANDATE, and a granted page may not call an API the gate refuses (owner 2026-11-27)
+
+Two reports, ten minutes apart, on the tiles added for him that morning (§CORE-33.2/.3/.4).
+
+**ONE — THE CARD THAT COULD NOT LOAD.** *"on employee dashboard it shows Inventory aging could not be
+loaded (This is not part of your access. GET /api/v1/commcalc/my-shelf belongs to a manager
+screen…)"*. The My targets PAGE was granted; the card ON it was not. Granting a page is half a grant
+— its cards ask the server too, and a refused card is what the employee actually sees. Same class as
+the device lookup the day before, pointing the other way: **the browser must not offer a surface the
+API refuses, and the API must not refuse a surface the browser was granted.**
+
+Asking that question of every granted page at once (rather than per report) found **four** screens
+already broken, not one:
+
+| Screen | The call it makes on mount | Was | Now |
+|---|---|---|---|
+| My targets | `GET /commcalc/my-shelf` | refused → red card | granted, GET only. Their OWN shelf: the handler resolves devices through `scope_keyset(authorization)` and was built (owner 2026-10-26) for *"every sales reps daSHBOARDS"* |
+| Help desk (list, new, one ticket) | `GET /helpdesk/config/bootstrap` | refused by the `/config/**` carve-out → a ticket form with no categories | granted read. The whole-module grant it was carved out of is GONE: `api` is now `/helpdesk/tickets` |
+| Time off | `GET /storeops/timeoff-conflict-mode` | refused → and inside a `Promise.all`, so it took the whole page down | granted read; the PUT beside it stays `_require_manager` |
+| Time off + Shift swaps | `GET /storeops/employees` | refused → an empty page and a nameless swap picker | the pages now ask `GET /storeops/employees/visible`, the picker the declaration ALREADY granted |
+
+The roster swap is the one worth carrying: `/storeops/employees` is a `select("*")` over the
+personnel record — date of birth, home address, emergency contacts — and two pages were using it for
+three fields (name, employee id, home store). **A picker asks the picker.** No grant was widened and
+no endpoint was created; the personnel roster stays refused to an employee, and the picker now
+carries the numeric `id` as well as the business one so either stored id form still resolves to a
+name (the two-id-forms trap, §CORE-33.2).
+
+**TWO — THE ADMIN COULD NOT TAKE AWAY WHAT THIS FILE GAVE.** *"also i disaables my targets from ny
+logistics sales reps but it still shows up"*. He had switched the page off for that role on the Roles
+screen; the tile stayed, the page opened, the API answered.
+
+**The class.** `rep_surface` was built to stop a confined employee reaching a manager screen, so it
+answers one question — *is this part of an individual contributor's surface?* — and both gates took
+that answer as the WHOLE truth: `canSeeItem` hands a confined viewer straight to `repPageAllowed`,
+and the API middleware asks `api_allowed` alone, deliberately BEFORE any role read, so the
+per-function switches an admin ticks were never consulted for the one kind of viewer whose menu is
+built from this file. **A ceiling read as a floor.**
+
+**The fix: a grant here is a MAXIMUM, not a mandate.** `roles.permissions["pages"]["<href>"] is
+False` — the per-function override the Roles screen already writes, the same key `canSeeItem` reads
+for every other viewer — now subtracts, in all three places from the one answer:
+
+| Place | Dereference |
+|---|---|
+| the tile | `rep_surface.tiles(role_perms)` → `/me` `permissions.rep_surface.tiles` |
+| the page | `rep_surface.pages(role_perms)` / `page_allowed(path, role_perms)` → the served page list the menu and the route guard already ask |
+| the API | `tenant_middleware._rep_surface_refusal` → `api_allowed(path, method, role_perms)` |
+
+- **Only subtracts.** Ticking a refused page ON grants nothing — widening by configuration is the
+  defect §CORE-33 exists to prevent, and the API would refuse what the menu offered.
+- **Only an explicit `False`.** Absent, `True` and a non-dict leave the declaration whole, so every
+  tenant that has configured nothing is byte-identical to before.
+- **One page at a time.** A surface's API grants go only when EVERY page it declares is off, so
+  closing the time-off form does not close the schedule beside it.
+- **★ NO LOCKOUT ★.** `UNIVERSAL_API` is never subtracted and the password surface carries
+  `never_off`: a role whose password page was switched off could not complete a forced reset.
+- **The hot path still pays nothing.** `api_switchable(path, method)` is False for a universal call,
+  so the shell traffic resolves no identity; only a surface call reads the role (cached 60s beside
+  the self-scope answer, unreadable → no switches, never a refusal).
+- **No migration, no new storage, no new vocabulary.**
+
+**Locks.** `harness_rep_surface_lock.py` **§6d** walks every page the declaration grants, reads the
+API paths its own code calls (comments stripped, `const BASE = "/api/v1/…"` templates expanded) and
+FAILS THE BUILD on a refused call unless it is excused by name with a reason — plus §6d3, which
+deletes an excuse that its own grant has made stale. **§6e** pins the switch in tile, page and API at
+once, that it only subtracts, and that the shell survives it. `harness_rep_surface.py` A22–A23i,
+`tests/integration/test_rep_surface_gate.py` (both tenants: a switch closes a tile for the tenant
+that made it and reaches no other, and every tiled page switched off still leaves a usable sign-in),
+`frontend/tools/rep-surface-nav-proof.mjs` §F (the browser subtracts nothing of its own).
+
+Cross-references: §CORE-33 (the declaration) · §CORE-33.2 (a tile's link is an address; the two id
+forms) · §CORE-33.3 (the kiosk offers no surface the gate refuses — the same class, other direction)
+· §CORE-33.4 (a granted page with no tile) · §CORE-52 (a default-deny declaration answering a
+wrong-shaped question).
+
+---
+
 ## §CORE-34. A PROOF THAT CANNOT START IS NOT A PASSING PROOF — one compiler and one source reader for the frontend proofs (2026-11-04)
 
 Four of the twelve `frontend/tools/*-proof.mjs` programs were red on the shrink-only register

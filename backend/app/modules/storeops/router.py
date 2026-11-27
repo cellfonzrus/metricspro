@@ -9117,7 +9117,11 @@ def employees_visible(authorization: str = Header(default=""), org_id: str = ORG
     my_eid = (au.get("employee_id") or "").strip()
     role = (au.get("role") or "").strip()
     scope = _role_scope(org_id, role) if au else "all"
-    rows = (c.table("employees").select("employee_id,name,home_store,role,is_active")
+    # `id` is the NUMERIC primary key: a shift or a time-off row created on the Schedule page
+    # stores it, while a login carries the BUSINESS id ("E45") — the two-id-forms trap (§CORE-33.2).
+    # A picker that carries only one form cannot name the person on half the rows, so it carries
+    # both. Nothing personal is added: this stays names, store and role.
+    rows = (c.table("employees").select("id,employee_id,name,home_store,role,is_active")
             .eq("org_id", org_id).execute().data or [])
     rows = [r for r in rows if r.get("employee_id") and r.get("is_active", True)]
     # The store/market resolution now runs through `core.scope.roster_keyset`, the same helper

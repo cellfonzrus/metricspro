@@ -136,6 +136,32 @@ ok('E2 …the Time Off page reaches the swaps screen too',
 ok('E3 …and the declaration still grants both, so no link is a dead end',
   SRC.includes('"/storeops/swaps"') && SRC.includes('"/storeops/timeoff"'))
 
+
+// ══ F. THE BROWSER SUBTRACTS NOTHING OF ITS OWN (owner 2026-11-27, §CORE-33.6) ══════════════════
+// *"i disaables my targets from ny logistics sales reps but it still shows up"*. The switch is now
+// honoured where the list is BUILT — the server — so the landing renders what it is handed and the
+// menu keeps asking the served page list. A second filter in the browser would be a second answer,
+// and the API would still disagree with whichever one was wrong.
+console.log('\nF. the switch is the server\'s subtraction, not the browser\'s')
+const MYDAY = readFileSync(path.join(FRONTEND, 'src/app/(platform)/my/page.tsx'), 'utf8')
+const RBAC_SRC = readFileSync(path.join(FRONTEND, 'src/lib/rbac.ts'), 'utf8')
+ok('F1 the landing renders the tiles it is given and gates on none of them itself',
+  /permissions\?\.rep_surface\?\.tiles/.test(MYDAY) && !/canSeeItem|canOpen|perms\.pages/.test(MYDAY))
+ok('F2 a confined viewer\'s menu still asks the SERVED page list',
+  /repConfined\(perms\)\) return repPageAllowed\(perms, item\.href\)/.test(RBAC_SRC))
+ok('F3 …and the browser keeps no copy of the switch key',
+  !/ROLE_PAGE_SWITCH|switched_off/.test(RBAC_SRC))
+// A card on a granted page must not ask for something the gate refuses (§6d). The two rep pages
+// that used the PERSONNEL roster as a name picker now ask the picker the declaration grants.
+const SWAPS = readFileSync(path.join(FRONTEND, 'src/app/(platform)/storeops/swaps/page.tsx'), 'utf8')
+ok('F4 neither rep page asks for the personnel roster any more',
+  !/'\/api\/v1\/storeops\/employees'/.test(TIMEOFF) && !/'\/api\/v1\/storeops\/employees'/.test(SWAPS))
+ok('F5 …both ask the picker, which is narrowed server-side to who they may see',
+  /employees\/visible/.test(TIMEOFF) && /employees\/visible/.test(SWAPS)
+  && SRC.includes('"/api/v1/storeops/employees/visible"'))
+ok('F6 …and the picker refusal can no longer take the whole Time off page down with it',
+  /employees\/visible', LOOKUP\)[\s\S]{0,160}catch\(\(\) => \[\]\)/.test(TIMEOFF))
+
 console.log('\n' + '='.repeat(100))
 console.log(`${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

@@ -181,6 +181,95 @@ check("A21d THE CONTRAST: the barcode rescue IS granted, and tiled",
       and any(t["key"] == "dropoff" for t in RS.tiles())
       and RS.api_allowed("/api/v1/storeops/dropoff-label/read", "POST"))
 
+# ── A22 THE CARD THAT COULD NOT LOAD ─────────────────────────────────────────────────────────────
+# OWNER 2026-11-27, opening the tile added for him the same morning: *"on employee dashboard it shows
+# Inventory aging could not be loaded (This is not part of your access. GET
+# /api/v1/commcalc/my-shelf belongs to a manager screen…)"*. Granting the PAGE is half a grant — the
+# cards on it ask the server too, and a refused card is what the employee actually sees.
+check("A22 THE REPORTED DEFECT: the rep's own shelf is granted to the screen that shows it",
+      RS.api_allowed("/api/v1/commcalc/my-shelf", "GET"))
+check("A22b …read only — nothing about a shelf is an employee's to write",
+      not RS.api_allowed("/api/v1/commcalc/my-shelf", "POST")
+      and not RS.api_allowed("/api/v1/commcalc/my-shelf", "DELETE"))
+check("A22c …and it did not widen the module: the other commcalc reads stay refused",
+      not any(RS.api_allowed(p, "GET") for p in (
+          "/api/v1/commcalc/inventory-aging", "/api/v1/commcalc/device-history",
+          "/api/v1/commcalc/commission-ledger")))
+# A grant is a PREFIX, so it would carry a member route if one were ever added below it (§4g). There
+# is none, and this fails the build if one appears without the grant being narrowed to the leaf.
+_CC = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "app/modules/commcalc/router.py"), encoding="utf-8").read()
+check("A22c2 …and nothing is declared BELOW /my-shelf, which a prefix grant would carry",
+      '"/my-shelf/' not in _CC)
+# The same class on three more screens, found by asking the question of every granted page at once
+# rather than waiting for the next report (locked by harness_rep_surface_lock §6d).
+check("A22d the ticket form's own vocabulary is granted — raising a ticket is the feature",
+      RS.api_allowed("/api/v1/helpdesk/config/bootstrap", "GET"))
+check("A22e …and the settings writes it used to sit behind are still refused",
+      not RS.api_allowed("/api/v1/helpdesk/config/bootstrap", "PUT")
+      and not RS.api_allowed("/api/v1/helpdesk/config/settings", "PUT")
+      and not RS.api_allowed("/api/v1/helpdesk/config/categories", "POST")
+      and not RS.api_allowed("/api/v1/helpdesk/support/queue", "GET")
+      and not RS.api_allowed("/api/v1/helpdesk/stats/dashboard", "GET"))
+check("A22f the ticket itself is still granted, members included",
+      RS.api_allowed("/api/v1/helpdesk/tickets", "GET")
+      and RS.api_allowed("/api/v1/helpdesk/tickets/42/comments", "POST")
+      and RS.api_allowed("/api/v1/helpdesk/tickets/42/attachments", "POST"))
+check("A22g the org's time-off policy is a READ for everyone, and the write stays a manager's",
+      RS.api_allowed("/api/v1/storeops/timeoff-conflict-mode", "GET")
+      and not RS.api_allowed("/api/v1/storeops/timeoff-conflict-mode", "PUT"))
+# The personnel roster stays refused — the two pages that used it as a name picker now ask the
+# PICKER, which the declaration already granted and which carries no personnel record.
+_TO = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "../frontend/src/app/(platform)/storeops/timeoff/page.tsx"),
+           encoding="utf-8").read()
+_SW = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "../frontend/src/app/(platform)/storeops/swaps/page.tsx"),
+           encoding="utf-8").read()
+check("A22h the personnel roster is still refused to an employee (it carries date of birth, home "
+      "address and emergency contacts)",
+      not RS.api_allowed("/api/v1/storeops/employees", "GET"))
+check("A22i …and neither rep page asks for it any more — both ask the picker",
+      "'/api/v1/storeops/employees'" not in _TO and "'/api/v1/storeops/employees'" not in _SW
+      and "/api/v1/storeops/employees/visible" in _TO
+      and "/api/v1/storeops/employees/visible" in _SW
+      and RS.api_allowed("/api/v1/storeops/employees/visible", "GET"))
+
+# ── A23 A GRANT HERE IS A MAXIMUM, NOT A MANDATE ─────────────────────────────────────────────────
+# OWNER 2026-11-27: *"also i disaables my targets from ny logistics sales reps but it still shows
+# up."* The per-function switch an admin ticks on the Roles screen was never consulted for a
+# confined viewer — this declaration answered as the whole truth, so the tenant's own administrator
+# could not take away what it gave.
+_OFF = {"pages": {"/commcalc/targets/my": False}}
+check("A23 THE REPORTED DEFECT: the role's switch closes the tile",
+      "targets" in [t["key"] for t in RS.tiles()]
+      and "targets" not in [t["key"] for t in RS.tiles(_OFF)])
+check("A23b …the page", not RS.page_allowed("/commcalc/targets/my", _OFF))
+check("A23c …and the API that page calls",
+      not RS.api_allowed("/api/v1/commcalc/my-shelf", "GET", role_perms=_OFF))
+check("A23d the refusal sentence then stops offering the screen it just closed",
+      "My targets" in RS.refusal("/api/v1/commcalc/my-shelf", "GET")
+      and "My targets" not in RS.refusal("/api/v1/commcalc/my-shelf", "GET", role_perms=_OFF))
+check("A23e a switch only SUBTRACTS — ticking a refused page ON grants nothing",
+      not RS.page_allowed("/commcalc/targets/settings",
+                          {"pages": {"/commcalc/targets/settings": True}}))
+check("A23f every other tile is untouched by one switch",
+      len(RS.tiles(_OFF)) == len(RS.tiles()) - 1
+      and RS.page_allowed("/employee", _OFF) and RS.api_allowed("/api/v1/storeops/shifts", "GET",
+                                                                role_perms=_OFF))
+check("A23g ★ NO LOCKOUT ★ the password page cannot be switched off",
+      RS.page_allowed("/account/password", {"pages": {"/account/password": False}})
+      and RS.api_allowed("/api/v1/core/me", "POST",
+                         role_perms={"pages": {"/account/password": False}}))
+check("A23h the shell is never subtracted, whatever is switched off",
+      all(RS.api_allowed(u, "GET", role_perms={"pages": {RS.tile_page(p): False
+                                                         for p in RS.pages()}})
+          for u in RS.UNIVERSAL_API))
+check("A23i only a surface call makes the gate read the role at all",
+      not RS.api_switchable("/api/v1/core/me", "GET")
+      and not RS.api_switchable("/api/v1/storeops/payroll", "GET")
+      and RS.api_switchable("/api/v1/commcalc/my-shelf", "GET"))
+
 check("A20 a tile that declares no destination publishes none — there is no fallback to pages[0]",
       "pages\"][0]" not in open(RS.__file__).read().split("def tiles(")[1])
 
