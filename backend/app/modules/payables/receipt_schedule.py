@@ -32,10 +32,17 @@ THE FIVE WAYS A RECEIPT DATE CAN BE KNOWN, kept apart because they are different
     carrier's own answer and is NEVER recomputed, the same rule the outbound `period_field` obeys. A
     row under this cadence carrying no stamp is UNMEASURED, not estimated by some other rule: the
     tenant declared that the feed answers, so an unstamped row means the feed has not answered yet.
-  * **`weekly`** — the carrier pays on one declared weekday. A due dollar rolls forward to the first
-    such weekday ON OR AFTER the earning date, through
-    `billing_period.next_weekday_on_or_after` — DEREFERENCED, because the forward roll already has a
-    home and a second copy of that arithmetic is a future divergence (§19.18).
+  * **`weekly`** — the carrier pays on ONE OR MORE declared weekdays. A due dollar rolls forward to
+    the first such weekday ON OR AFTER the earning date, through
+    `billing_period.next_weekday_in_on_or_after` — DEREFERENCED, because the forward roll already has
+    a home and a second copy of that arithmetic is a future divergence (§19.18).
+
+    ONE DECLARED DAY IS THE ONE-ELEMENT CASE, not a different cadence. The first carrier declared
+    here pays every Tuesday AND Friday (owner, 2026-11-27), and a rhythm that could hold only one day
+    could not say so at all — nor could it be faked with a second declaration row, because one feed
+    column may be declared once. So the DECLARATION holds a set and this module asks for the nearest
+    member; a tenant that named a single day is unaffected, and `payout_weekday` keeps answering for
+    any row saved before the set existed.
   * **`semi_monthly`** — the carrier pays on two or more declared days of the month.
   * **`monthly`** — one declared day of the month. Answered by the SAME function as `semi_monthly`,
     because "the next declared day of month on or after this one" is one question, not two.
@@ -58,7 +65,7 @@ from app.modules.payables import billing_period as _bp
 
 #: The feed stamps the payment day itself — never recomputed here.
 CADENCE_STATEMENT_DATE = "statement_date"
-#: One declared weekday.
+#: One or more declared weekdays.
 CADENCE_WEEKLY = "weekly"
 #: Two or more declared days of the month.
 CADENCE_SEMI_MONTHLY = "semi_monthly"
@@ -84,7 +91,10 @@ BASIS_NO_DATE = "no_date"                      # the row carries no earning date
 MEASURED_BASES = (BASIS_STATEMENT_FIELD, BASIS_WEEKLY, BASIS_SEMI_MONTHLY,
                   BASIS_MONTHLY, BASIS_NET_DAYS)
 
-WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+#: DEREFERENCED, not restated: the weekday names and their 0-is-Monday numbering are one fact, and
+#: this module held a byte-identical second copy of the tuple until 2026-11-27. Two copies of a
+#: vocabulary are free to disagree the moment either is edited (§19.18).
+WEEKDAYS = _bp.WEEKDAYS
 
 #: The one place each state is put into words, so every surface says it identically.
 UNDECLARED_NOTE = ("Nobody has declared when this carrier pays us, so no expected payment can be "
@@ -96,7 +106,7 @@ STATEMENT_UNSTAMPED_NOTE = ("This carrier's payout cycle says its own statement 
 
 BASIS_WORDS = {
     BASIS_STATEMENT_FIELD: "the carrier's own statement date",
-    BASIS_WEEKLY: "the carrier's declared pay weekday",
+    BASIS_WEEKLY: "the carrier's declared pay weekdays",
     BASIS_SEMI_MONTHLY: "the carrier's declared pay days of the month",
     BASIS_MONTHLY: "the carrier's declared pay day of the month",
     BASIS_NET_DAYS: "the carrier's declared days-after-earning terms",
@@ -124,7 +134,7 @@ def can_date(schedule=None) -> bool:
     if cfg["cadence"] is None:
         return False
     if cfg["cadence"] == CADENCE_WEEKLY:
-        return cfg["weekday"] is not None
+        return bool(cfg["weekdays"])
     if cfg["cadence"] in (CADENCE_SEMI_MONTHLY, CADENCE_MONTHLY):
         return bool(cfg["days"])
     if cfg["cadence"] == CADENCE_NET_DAYS:
@@ -191,7 +201,7 @@ def _days_of_month(v):
 
 #: The keys `resolve_schedule` always returns. A CONFIG ROW IS ALSO A DICT (the §COMMCALC-34 trap),
 #: so "is this already resolved?" cannot be `isinstance(x, dict)`.
-_RESOLVED_KEYS = ("cadence", "weekday", "days", "net_days", "declared")
+_RESOLVED_KEYS = ("cadence", "weekdays", "days", "net_days", "declared")
 
 
 def _cfg(schedule):
@@ -218,8 +228,14 @@ def resolve_schedule(map_row=None):
     if not days:
         one = _int_in(row.get("payout_day_of_month"), 1, 31)
         days = (one,) if one is not None else ()
+    # THE SET, from the set column, falling back to the single column a row saved before the set
+    # existed carries. `weekdays_of` is the one home for both readings, so neither this module nor
+    # the outbound one parses a weekday of its own.
+    weekdays = _bp.weekdays_of(row.get("payout_weekdays"))
+    if not weekdays:
+        weekdays = _bp.weekdays_of(row.get("payout_weekday"))
     return {"cadence": cadence,
-            "weekday": _int_in(row.get("payout_weekday"), 0, 6),
+            "weekdays": weekdays,
             "days": days,
             "net_days": _int_in(row.get("payout_net_days"), 0, 365),
             "declared": cadence is not None}
@@ -272,15 +288,17 @@ def receipt_date(earned_on, schedule=None):
                 "label": basis_word(BASIS_NO_DATE)}
 
     if cfg["cadence"] == CADENCE_WEEKLY:
-        # DEREFERENCED, never re-derived: the outbound side already owns "the first such weekday on
-        # or after this date", and two copies of it would be free to disagree the moment either
-        # learned something the other did not (§19.18).
-        got = _bp.next_weekday_on_or_after(day, cfg["weekday"])
+        # DEREFERENCED, never re-derived: the outbound side already owns "the first declared weekday
+        # on or after this date", for one declared day or several, and two copies of it would be free
+        # to disagree the moment either learned something the other did not (§19.18).
+        got = _bp.next_weekday_in_on_or_after(day, cfg["weekdays"])
         if got is None:
             return {"date": None, "basis": BASIS_DAY_UNDECLARED, "measured": False,
                     "label": basis_word(BASIS_DAY_UNDECLARED)}
+        # The label names the day the money LANDED ON, read off that date — not the first day of the
+        # declared set, which would print "Tuesday" over a Friday payment under a Tue+Fri cycle.
         return {"date": got.isoformat(), "basis": BASIS_WEEKLY, "measured": True,
-                "label": "%s %s" % (WEEKDAYS[cfg["weekday"]], got.isoformat())}
+                "label": "%s %s" % (WEEKDAYS[got.weekday()], got.isoformat())}
 
     if cfg["cadence"] in (CADENCE_SEMI_MONTHLY, CADENCE_MONTHLY):
         got = next_day_of_month_on_or_after(day, cfg["days"])

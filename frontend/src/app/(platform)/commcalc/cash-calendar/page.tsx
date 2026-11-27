@@ -95,11 +95,16 @@ type ReceiptSourceRow = {
   amount_field: string
   payout_cadence: string | null
   payout_weekday: number | null
+  payout_weekdays: number[] | null
   payout_days: number[] | null
   payout_day_of_month: number | null
   payout_net_days: number | null
+  amount_sign_convention: string | null
   is_active: boolean
 }
+
+/** One sign convention a money column may follow, named and worded by `commission_ledger`. */
+type SignOpt = { value: string; label: string }
 
 export default function CashCalendarPage() {
   const [sel, setSel] = useState<StandardFilterValue>(emptyStandardFilter())
@@ -334,6 +339,10 @@ function ReceiptSourcePanel({ onSaved }: { onSaved: () => void }) {
   const [state, setState] = useState<{
     rows: ReceiptSourceRow[]; cadences: string[]; cadence_words: Record<string, string>
     candidate_tables: string[]; table_missing: boolean; error: string | null
+    // Both vocabularies ride the payload from their own homes, so this form cannot offer a weekday
+    // this platform numbers differently or a sign convention nothing applies.
+    weekday_names?: string[]; sign_conventions?: SignOpt[]; sign_convention_default?: string
+    schema_behind?: boolean
   } | null>(null)
   const [form, setForm] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
@@ -355,9 +364,13 @@ function ReceiptSourcePanel({ onSaved }: { onSaved: () => void }) {
           amount_field: form.amount_field,
           payout_cadence: form.payout_cadence || null,
           payout_weekday: form.payout_weekday === '' || form.payout_weekday == null ? null : Number(form.payout_weekday),
+          // A SET, sent as the comma-separated string the backend's own `weekdays_of` normalises —
+          // so the panel does not parse weekdays and cannot disagree with the home that does.
+          payout_weekdays: form.payout_weekdays || null,
           payout_days: form.payout_days || null,
           payout_day_of_month: form.payout_day_of_month ? Number(form.payout_day_of_month) : null,
           payout_net_days: form.payout_net_days === '' || form.payout_net_days == null ? null : Number(form.payout_net_days),
+          amount_sign_convention: form.amount_sign_convention || null,
         }),
       })
       setMsg('Saved.'); refresh(); onSaved()
@@ -374,15 +387,31 @@ function ReceiptSourcePanel({ onSaved }: { onSaved: () => void }) {
           <SetupNotice lead="Payout cycles cannot be declared yet." detail="1115_receipt_source_map.sql" />
         </div>
       )}
+      {/* The code can declare more than the schema can store until 1133 runs. Saying so beats
+          saving a value the column would refuse. */}
+      {state?.schema_behind && (
+        <div style={{ fontSize: 12 }}>
+          <SetupNotice lead="Several pay days a week, and a feed whose earnings are negative, cannot be declared yet."
+            detail="1133_payout_weekdays_and_sign.sql" />
+        </div>
+      )}
       {!!state?.rows?.length && (
         <div style={{ fontSize: 12, display: 'grid', gap: 2 }}>
           {state.rows.map((r, i) => (
             <div key={i}>
               {r.label} — {sourceLabel(r.source_table)} — {r.payout_cadence?.replace(/_/g, ' ') || 'no payout cycle declared'}
-              {r.payout_weekday != null ? ` (weekday ${r.payout_weekday})` : ''}
+              {r.payout_weekdays?.length
+                ? ` (pays ${r.payout_weekdays.map(w => (state?.weekday_names || [])[w] || String(w)).join(' and ')})`
+                : (r.payout_weekday != null
+                  ? ` (pays ${(state?.weekday_names || [])[r.payout_weekday] || String(r.payout_weekday)})`
+                  : '')}
               {r.payout_days ? ` (days ${String(r.payout_days)})` : ''}
               {r.payout_day_of_month != null ? ` (day ${r.payout_day_of_month})` : ''}
               {r.payout_net_days != null ? ` (+${r.payout_net_days} days)` : ''}
+              {r.amount_sign_convention
+                ? ` — ${(state?.sign_conventions || []).find(o => o.value === r.amount_sign_convention)?.label
+                  || r.amount_sign_convention}`
+                : ''}
               {r.is_active === false ? ' — off' : ''}
               {/* The relation and the money column are internals, so they ride PlatformDetail (the
                   platform super admin only) as BOUND values rather than composed into copy. */}
@@ -404,10 +433,25 @@ function ReceiptSourcePanel({ onSaved }: { onSaved: () => void }) {
           {(state?.cadences || []).map(c => <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>)}
         </select>
         {form.payout_cadence === 'weekly' && (
-          <select style={fld} value={form.payout_weekday ?? ''} onChange={e => setForm({ ...form, payout_weekday: e.target.value })}>
-            <option value="">pay weekday…</option>
-            {WEEKDAY_LABELS.map((w, i) => <option key={w} value={String(i)}>{w}</option>)}
-          </select>
+          /* EVERY day it pays on, not one: the first carrier declared here pays Tuesday AND Friday.
+             The names and their numbering come from the payload (`billing_period.WEEKDAYS`), so a
+             tick box cannot mean a different day here than in the read. */
+          <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
+            <span style={{ color: 'var(--text2)' }}>pays on</span>
+            {(state?.weekday_names || []).map((w, i) => {
+              const picked = (form.payout_weekdays || '').split(',').filter(Boolean)
+              const on = picked.includes(String(i))
+              return (
+                <label key={w} style={{ display: 'inline-flex', gap: 3, alignItems: 'center', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={on} onChange={() => {
+                    const next = on ? picked.filter(x => x !== String(i)) : [...picked, String(i)]
+                    setForm({ ...form, payout_weekdays: next.join(',') })
+                  }} />
+                  {w.slice(0, 3)}
+                </label>
+              )
+            })}
+          </span>
         )}
         {form.payout_cadence === 'semi_monthly' && (
           <input placeholder="days of month, e.g. 6,21" style={fld} value={form.payout_days || ''} onChange={e => setForm({ ...form, payout_days: e.target.value })} />
@@ -417,6 +461,16 @@ function ReceiptSourcePanel({ onSaved }: { onSaved: () => void }) {
         )}
         {form.payout_cadence === 'net_days_after_period_end' && (
           <input placeholder="days after earning" inputMode="numeric" style={fld} value={form.payout_net_days || ''} onChange={e => setForm({ ...form, payout_net_days: e.target.value })} />
+        )}
+        {!!form.source_table && !!state?.sign_conventions?.length && (
+          /* WHICH SIGN MEANS MONEY EARNED is the feed's own convention, and getting it wrong shows a
+             tenant's income as a debt — the master-agent feed writes earnings NEGATIVE. The options
+             and their wording are `commission_ledger`'s, never retyped here. */
+          <select style={fld} value={form.amount_sign_convention || ''}
+            onChange={e => setForm({ ...form, amount_sign_convention: e.target.value })}>
+            <option value="">in this feed, money we earned is… (a positive number)</option>
+            {state.sign_conventions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
         )}
         <button type="button" disabled={busy || !form.source_table || !form.amount_field} onClick={save}
           style={{ padding: '5px 11px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, cursor: 'pointer' }}>

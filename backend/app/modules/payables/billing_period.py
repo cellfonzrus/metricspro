@@ -114,6 +114,27 @@ def _weekday(v):
     return n if 0 <= n <= 6 else None
 
 
+def weekdays_of(v):
+    """PURE: a DECLARED SET of weekdays as a sorted tuple of 0..6, or () when nothing usable was.
+
+    THE ONE HOME FOR "WHICH DAYS OF THE WEEK DID SOMEBODY DECLARE". A rhythm landing on more than
+    one weekday is not a different question from one landing on a single weekday — "every Tuesday"
+    is the one-element case of "every Tuesday and Friday" — so both sides of the money read this and
+    neither keeps its own parser. A single value is accepted as the set containing it, because a
+    declaration made before the set existed means exactly what it said.
+
+    Accepts a list, a tuple, a set, a single number or a comma-separated string: a config row may
+    have been saved from a form, from SQL or from JSON and the declaration means the same in all
+    three. `_weekday` rules on each element, so a bool, a stray word and an out-of-range number are
+    each dropped rather than becoming Tuesday.
+    """
+    if v is None or isinstance(v, bool):
+        return ()
+    items = v if isinstance(v, (list, tuple, set)) else str(v).split(",")
+    out = {d for d in (_weekday(x) for x in items) if d is not None}
+    return tuple(sorted(out))
+
+
 #: The keys `resolve_cadence` always returns. A CONFIG ROW IS ALSO A DICT, so "is this already
 #: resolved?" cannot be `isinstance(x, dict)` — handing a `payable_source_map` row straight to
 #: `period_of` would then have it read as a resolved cadence with no `cadence` key at all. Caught by
@@ -146,18 +167,34 @@ def resolve_cadence(map_row=None):
             "declared": bool(want in CADENCES or field)}
 
 
+def next_weekday_in_on_or_after(d, weekdays):
+    """PURE: the first of the DECLARED weekdays on or after `d`, or None.
+
+    THE ONE PIECE OF FORWARD-ROLL ARITHMETIC in this platform, for one declared weekday or several.
+    A carrier paying Tuesday AND Friday is not a second kind of rhythm needing a second function;
+    it is this one asked about a larger set, and the nearest declared day is the answer in both
+    cases. Keeping it as one function is what stops the two sides of the money drifting apart the
+    moment either learns something the other does not (§19.18).
+
+    "On or after", not "after": money due ON the billing day bills that day, and rolling it to the
+    next occurrence would postpone a real liability by up to a week. Returns None where the date or
+    the set is unusable, because a period cannot be derived from a day nobody recorded.
+    """
+    day = _date(d)
+    want = weekdays_of(weekdays)
+    if day is None or not want:
+        return None
+    return day + datetime.timedelta(days=min((w - day.weekday()) % 7 for w in want))
+
+
 def next_weekday_on_or_after(d, weekday):
     """PURE: the first `weekday` on or ON OR AFTER `d` — the day this money actually bills.
 
-    "On or after", not "after": money due ON the billing day bills that day, and rolling it to the
-    next week would postpone a real liability by seven days. Returns None where either input is
-    unusable, because a period cannot be derived from a date nobody recorded.
+    The single-weekday case, DELEGATED to `next_weekday_in_on_or_after` rather than carrying its own
+    copy of the arithmetic: one declared day is the one-element set, and a second implementation of
+    the roll would be free to disagree with the first.
     """
-    day = _date(d)
-    w = _weekday(weekday)
-    if day is None or w is None:
-        return None
-    return day + datetime.timedelta(days=(w - day.weekday()) % 7)
+    return next_weekday_in_on_or_after(d, (weekday,))
 
 
 def week_window(billing_day):

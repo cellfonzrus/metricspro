@@ -634,11 +634,27 @@ def convention_from_mapping(mapping_rules, amount_field=AMOUNT_FIELD):
     }
 
 
+def signed_amount(raw_amount, conv=None):
+    """PURE: one raw amount as CANONICAL SIGNED money — positive is earned, negative is clawed back.
+
+    THE ONE PLACE A FEED'S OWN SIGN IS TURNED INTO THE PLATFORM'S. `raw × payout_sign`, which is the
+    expression `direction` and the deduction rule in `_booking_for` have each always applied; it is
+    named here so a surface outside this module can read a feed's money the right way up without
+    copying the multiplication. A reader that sums a payout-negative column RAW reports a tenant's
+    income as a debt — measured 2026-11-27 on the master-agent commission feed, where a week of real
+    earnings would have read as about minus $45,000 expected to arrive.
+
+    `conv` is a convention dict from `convention_named` / `normalise_convention`; None is the house
+    default, which is what every caller had before this existed.
+    """
+    conv = conv or DEFAULT_CONVENTION
+    return _sf(raw_amount) * (conv.get("payout_sign") or PAYOUT_SIGN_NEGATIVE)
+
+
 def direction(raw_amount, conv=None):
     """Which way one line points under a convention: DIR_PAYOUT (money earned), DIR_REVERSAL (money
     clawed back) or DIR_FLAT (zero). PURE. Under the default convention this is exactly `amt < 0`."""
-    conv = conv or DEFAULT_CONVENTION
-    v = _sf(raw_amount) * (conv.get("payout_sign") or PAYOUT_SIGN_NEGATIVE)
+    v = signed_amount(raw_amount, conv)
     if v > 0:
         return DIR_PAYOUT
     return DIR_REVERSAL if v < 0 else DIR_FLAT
