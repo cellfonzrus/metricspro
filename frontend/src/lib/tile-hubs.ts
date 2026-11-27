@@ -37,6 +37,59 @@ export function slugGroup(name: string): string {
   return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
 }
 
+// ── A tileOnly ROW IS SKIPPED ONLY WHILE ITS HUB IS THERE (§CORE-06.5, owner report 2026-11-27) ───
+// `tileOnly` is a PRECONDITION, not a property. rbac.ts states it as: *"the page is covered by a
+// master tile on its hub dashboard, so the sidebar's default rendering SKIPS it"*. When the group's
+// own hub entry is NOT among the items this viewer can see — the tenant vertical's hide-list names it
+// (`core/verticals.nav_hidden`), a tenant `/admin/menu` layout hides it, its module or scopes close
+// it — nothing covers the page and the skip STRANDS it: `(platform)/layout.tsx` then drops the group
+// whole (`loose.length === 0 && shownSubs.length === 0`) while the route guard would still open every
+// page in it. Measured 2026-11-27 on the `ups_store` vertical: 20 pages that hide-list deliberately
+// left VISIBLE had no door, "Daily Incentive Rules" (mig 1072, built FOR that vertical) and
+// "Target Settings" among them.
+//
+// This reveals NOTHING a gate hid — it only stops SKIPPING rows the gate already let through, and the
+// caller is only ever asked about rows that survived the gate. The hub is READ off the group — its one
+// '/hub/…' item — rather than rebuilt from its title: the two agree today (every converted group's hub
+// IS '/hub/' + slugGroup(group), pinned by the tests) and reading it cannot drift if a group is renamed.
+// A group that declares no hub (Store Operations → /franchise, Workforce → /storeops, Payroll & HR →
+// /payroll, Marketing, Supply Ordering, Flags & Compliance, Configuration, Approvals, Chat, Reports)
+// keeps a hand-woven front door or none, and is untouched: its rows skip exactly as before.
+//
+// Locked by `backend/harness_nav_reachability.py`, which sweeps every house vertical.
+
+const pathOf = (href: string): string => (String(href || '').split('?')[0].replace(/\/+$/, '') || '/')
+
+/** The group's hub DASHBOARD entry, if it declares one. A converted group declares exactly ONE '/hub/…'
+ *  item and that item IS its dashboard (and equals '/hub/' + slugGroup(group), which is how
+ *  (platform)/hub/[group] resolves itself — the tests pin that the two agree for every converted group).
+ *  Read off the group rather than rebuilt from its title, so renaming a group cannot silently answer
+ *  "no hub". A group with no '/hub/…' item keeps a hand-woven front door or none, and is left as it was. */
+export function groupHubItem<T extends { href: string }>(items: T[] | undefined): T | undefined {
+  return (items || []).find(it => pathOf(it.href).startsWith('/hub/'))
+}
+
+/** Does this group declare a hub dashboard at all? (false → behaviour unchanged.) */
+export function groupDeclaresHub(declaredItems: { href: string }[] | undefined): boolean {
+  return !!groupHubItem(declaredItems)
+}
+
+/** May the sidebar skip this row? TRUE only while the group's hub dashboard still covers it. */
+export function tileOnlySkipped(
+  item: { href: string; tileOnly?: boolean },
+  group: string,
+  declaredItems: { href: string }[] | undefined,
+  visibleItems: { href: string }[] | undefined,
+  isReportCategory: boolean,
+): boolean {
+  if (!item?.tileOnly) return false
+  // The Reports directory categories reuse the SAME item objects and deliberately show them.
+  if (isReportCategory) return false
+  const hub = groupHubItem(declaredItems)
+  if (!hub) return true
+  return (visibleItems || []).some(it => pathOf(it.href) === pathOf(hub.href))
+}
+
 // ── defaultHubGroups ─────────────────────────────────────────────────────────────────────────────
 const toHubItem = (it: NavItem): HubItem => ({
   href: it.href, icon: it.icon || ITEM_ICON, label: it.label || it.href, desc: '',

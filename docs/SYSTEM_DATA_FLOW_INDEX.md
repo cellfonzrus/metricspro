@@ -242,6 +242,7 @@ Primary code homes:
 | STOREOPS-17 | **A work week belongs to a market, and which days a store opens is declarable** | "Work week for all companies starts on a Monday and the nds kn a Sunday , luxelink Chicago stores start on Thursday and end on Wednesday , luxelink ny stores are Monday to Sunday" and "All store open 7 days a week". Which seven days is THIS STORE's week when its tenant has one answer and its markets need two, which days is it expected to be covered, and how does a board holding more than one week avoid implying one? |
 | CORE-51 | **"How far through is this flow, and where do I pick it up" has one home** | Three flows were asked for in one sentence (employee setup, scheduling, running payroll). Answering the rail, the lamps, the resume and the progress count once per flow is three homes for one question, and the third copy drifts. Who owns a step's status, what makes a missing answer a refusal rather than a silent "not started", and what fails the build when a fourth copy appears? |
 | CORE-52 | **A derivation that answers five for a 1,558-path app has not found the routes** | The in-process control built so that a declared-public link can never be locked out again was sweeping FIVE paths — the docs pages and `/health` — of the 21 declared-public GETs the app really serves, and its own non-vacuity guard was satisfied by `/health`. Two failures at once, neither with a symptom. Who owns "what paths does this app serve", why does the prefix-stripped answer read as a confident "not declared", and what fails the build when a control's derivation goes vacuous? |
+| CORE-53 | **"Did the door open" and "whose rows came out" are two questions, and the second one can be unaskable** | The probe's cross-tenant read refused to judge a body when no marker named another tenant's content; the rep's OWN surface fell through to `ok` on the same input, though the function's docstring promises an empty marker set is never read as clean. One branch honoured the rule and the other did not — with no symptom, because it only bites when exactly ONE tenant is declared, which is the state the platform enters the moment the first tenant's test accounts exist. What makes an answer judgeable at all, and why is that asked per-branch rather than up front? |
 | CORE-33 | **What an employee may reach is one declaration, and the API is what enforces it** | "on ny logistics Manan was able to go past [the clock-in screen] and also see the adjustment hours, this should not be allowed for any sales reps — this is universal across the board". The browser was the only gate: a menu row the viewer could see opened its whole subtree by URL, and the payroll writes behind those pages asked for no authority at all. Who decides what a surface's audience is, and what makes the API refuse a caller the menu would not offer it to? |
 | CORE-42 | **A gate proved in-process is a claim, not a measurement** | "create a testng agent who deciatedly is checking the data leakage, unwanted access to modules even if theya re gated like the case of manan and we discovered by accident, c annot have an accident of this sort, put it on schdule and one module at a time from the front end as though somebnbody was trying to hack in to the system". Every access control here is proved by a harness that imports the handler — which catches a wrong rule and not a right rule that was never reached. Who asks the DEPLOYED platform what it actually answers an unprivileged outsider, one module at a time, and what stops that probe from writing to production or from reporting a pass on a question it never asked? |
 | CORE-32 | **A guard that reads source code must be told f-strings exist** | Found by running the suite on a newer interpreter than CI's: the guard that stops our own setup internals reaching a customer was RED on Python 3.13 and GREEN on 3.11. PEP 701 stopped making an f-string one string token, so it had stopped seeing f-strings — and the same file held a SECOND reader of the same fact that had been taught the new shape. What proves a capability that depends on the interpreter, when CI pins one? |
@@ -26809,6 +26810,7 @@ status word rather than a blank that reads as nil.
 | STOREOPS-13 | storeops, core |
 | CORE-51 | core |
 | CORE-52 | core |
+| CORE-53 | core |
 | STOREOPS-14 | storeops, hr, core |
 | STOREOPS-15 | storeops, core, notify |
 | STOREOPS-16 | storeops, core |
@@ -30565,6 +30567,76 @@ dereference it, with controls proving an un-wired hub goes red.
   checker and no test of the gate itself can see a caller that never calls it. §A the one home carries
   the whole stack, §B every `HubTiles` consumer dereferences it, §C nobody retypes it, §D the curated
   KPI rows are gated too, §E eight negative controls proving each check bites.
+
+
+### CORE-06.5 THE OTHER SIDE OF THE SAME QUESTION — a door that ASKS PERMISSION vs a door that EXISTS (owner report 2026-11-27)
+
+Owner, in the NY LOGISTICS tenant: *"i cannot see the targtet setting dashboard and the incentives
+dashboard in ny logistcis - why is that and fix it"*.
+
+Nothing was switched off for that tenant, and no licence flag, entitlement or feature gate was involved.
+`NavItem.tileOnly` means, in `rbac.ts`'s own words, *"the page is covered by a master tile on its hub
+dashboard, so the sidebar's default rendering SKIPS it"*. **That is a PRECONDITION, not a property** — and
+nothing checked it. A business type's hide-list (`core.tenant_vertical.nav_hidden`, mig 1020) names group
+HUBS; when the hub goes, nothing covers the group's pages, `(platform)/layout.tsx` drops the group whole
+(`loose.length === 0 && shownSubs.length === 0` — whose own comment said that state was *"possible only via
+a tenant layout that regrouped hidden items"*), and every page the hide-list **deliberately left visible**
+loses its only door while `verticalPathOK` would still open it by URL.
+
+Measured on the `ups_store` business type before the fix, over the real NAV: **33 pages had no door.**
+
+| group | hub hidden | pages stranded |
+|---|---|---|
+| Management Overview | `/hub/management-overview` | 12 |
+| Targets & Coaching | `/hub/targets-coaching` | 7 — Target Settings among them |
+| Incentives | `/hub/incentives` | 6 |
+| Assets | `/hub/assets` | 5 |
+| Incentive Payout Plans | `/hub/incentive-payout-plans` | 3 — **Daily Incentive Rules**, the mig-1072 daily-incentive mechanism built FOR this business type, and What a Day Pays |
+
+**A SECOND over-reach, in the row.** `href_hidden` reads a bare entry as *"this page and everything under
+it"*. `/commcalc/targets` was written without the exact `$` marker eight of its siblings use, so one intended
+hide (Daily Targets) also hid six pages nobody named: `targets/settings` (the report), `targets/my`,
+`targets/report-cards`, `targets/action-plan`, `targets/accessories`, `targets/rep-map`. A page shipped under
+a bare prefix is hidden on arrival with nothing said.
+
+**§CORE-06 asked whether a door ASKS PERMISSION. This asks whether a door EXISTS.** Same subject — a tile is
+the only way to a `tileOnly` page — and the complementary failure: there, a tile offered a page its viewer
+could not open; here, a page a viewer may open had no tile and no row.
+
+### CORE-06.6 THE FIX — one home, and the row says exactly what it means
+
+- **`frontend/src/lib/tile-hubs.ts::tileOnlySkipped`** is the ONE home for *"may the sidebar skip this row?"*,
+  dereferenced by `(platform)/layout.tsx`, which keeps no copy of the rule. The skip now holds only while the
+  group's hub is among the items the viewer can see. The hub is **read off the group** (`groupHubItem` — its
+  one `/hub/…` item), not rebuilt from the group's title; the tests pin that reading it and deriving it
+  (`'/hub/' + slugGroup(group)`) agree for every converted group, so the sidebar and the `/hub/[group]` route
+  can never disagree about which page is a group's dashboard. A group with a hand-woven front door
+  (Store Operations → `/franchise`, Workforce → `/storeops`, Payroll & HR → `/payroll`) declares no hub and is
+  deliberately untouched.
+- **It reveals nothing a gate hid.** The caller is only ever asked about rows that already survived the gate;
+  this stops a row being SKIPPED, it does not admit one. Every pre-existing gate still answers first.
+- **Migration 1134** re-declares the `ups_store` hide-list: `/commcalc/targets` → `/commcalc/targets$` (one
+  page, no children), and three group hub dashboards removed — `/hub/incentives`,
+  `/hub/incentive-payout-plans`, `/hub/targets-coaching` — each of whose groups keeps pages this business type
+  uses. `/hub/management-overview`, `/hub/assets` and `/hub/distributors` stay hidden: not reported, and their
+  surviving pages now reach the sidebar directly. A CONFIG row, not code: no business type, tenant or page is
+  branched on anywhere (RULE TWO). No schema change, no relation created, money-neutral.
+
+### CORE-06.7 PROOF AND THE LOCK
+
+- **`backend/harness_nav_reachability.py` (27)** — the build lock, wired into `carrier-vocab-guard.yml`.
+  §B **THE INVARIANT**: for every house business type, every page it leaves visible is reachable. §D the
+  **swept-children ratchet** — each bare hide-list entry's NAV children are pinned, so adding a page under one
+  fails the build until somebody decides (it caught the six `/commcalc/targets` children on the planted
+  revert). §E the sidebar dereferences the one home and no copy of the old skip survives. §F negative
+  controls, including the pre-fix skip reproducing all 33.
+- **`frontend/src/lib/__tests__/nav-hub-reachability.test.ts` (11)** — the predicate's four gates, written
+  FIRST and shown red, plus the real-NAV assertions above.
+- **`backend/tests/integration/test_vertical_nav_reachability.py` (9)** — the hide-list is a ROW, and a mirror
+  agreeing with itself proves nothing about the read: this asks the production functions
+  (`load_vocab` → `resolve_vertical` → `payload`) over the in-memory double, for **four tenants in one table**
+  — the franchise type, the default, one declaring nothing and one declaring nonsense — so a cross-tenant leak
+  surfaces as the wrong type's pages going missing. Verified red against the bare `/commcalc/targets` entry.
 
 
 ## §CORE-07. A LOGIN IS NOBODY UNTIL IT IS LINKED TO ITS PERSON (owner report 2026-10-14)
@@ -54136,3 +54208,95 @@ in place and cross-referenced rather than merged, for the three reasons stated i
 control was built for) · §CORE-50 (a sweep is public for the method it declares) · §CORE-33 (what an
 employee may reach) · §CORE-21 (path redaction's object-graph route table) · §CORE-01.5 (the section
 register).
+
+
+## §CORE-53. "DID THE DOOR OPEN" AND "WHOSE ROWS CAME OUT" ARE TWO QUESTIONS, AND THE SECOND CAN BE UNASKABLE (found 2026-11-27)
+
+**Module:** core. **Found by:** preparing the first real `rep` accounts for the outside access pass
+(§CORE-42) — before they were wired, not by a run. Sanjot created two logins in NY LOGISTICS on
+2026-11-27; reading what the first measured run would actually report surfaced this.
+
+### §CORE-53.1 The measurement
+
+`security_probe.verdict` has two expectations that decide by looking for another tenant's content in
+a response body, and they disagreed about the case where **no marker was declared**:
+
+```
+verdict(EXPECT_REACH,           200, <body with another tenant's store code>, ())  ->  ok
+verdict(EXPECT_NO_FOREIGN_ROWS, 200, <the same body>,                        ())  ->  unknown
+```
+
+The function's own docstring states the rule: *"An empty marker set is never read as 'clean' — it is
+reported as `unknown`, because nothing declared means nothing identified (owner 2026-10-30)."* One
+branch obeyed it. The other returned `ok`.
+
+### §CORE-53.2 Why it had no symptom, and why today is when it would have bitten
+
+`foreign_markers(accounts, label)` derives an account's foreign set from the OTHER tenants'
+declarations (§CORE-42.7), so **with exactly one tenant declared every rep's foreign set is empty**.
+That is precisely the configuration the platform enters when the first tenant's probe accounts exist
+and the second tenth's do not. The first run with `coverage.measured = true` would have reported
+`ok` on every surface a rep is supposed to reach, with the whose-rows question never asked — a green
+control measuring nothing, which is the accident §CORE-42 exists to prevent. Before today no tenant
+had accounts at all, so the branch had never been reached with a body.
+
+**The class:** *this is the EMPTY-SET direction of the defect `_foreign_in` was created to close on
+2026-11-23* (§CORE-42.7: "the old shape was literally one branch checking and another not"). Making
+the two branches share the marker LOOP did not make them share the rule about having no markers.
+Stated generally: **factoring out the comparison does not factor out the precondition for making
+it.**
+
+### §CORE-53.3 The fix
+
+`judgeable_verdict(expect, foreign_markers)` is the ONE home for "can this answer be judged at all",
+placed beside `blinded_verdict`, which answers the other way an answer can be unjudgeable (a
+different door stopped us). `MARKER_DEPENDENT` declares which expectations turn on markers. Both
+branches dereference it; neither keeps a rule of its own, and the `if not foreign_markers` copy in
+`EXPECT_NO_FOREIGN_ROWS` is gone.
+
+It returns **`NOT_MEASURED`**, not `UNKNOWN`: a thing this run could not ASK is a GAP, counted by
+`coverage` and listed by `gaps()`, never one of the `findings()` where it could bury a real leak.
+That is a strengthening of the cross-tenant branch as well as a fix to the rep branch.
+
+**★ IT IS ASKED PER-BRANCH, NOT UP FRONT, AND THAT PLACEMENT IS THE POINT.** A LOCKOUT is a fact
+about the DOOR and a refusal is a fact about the GATE; both are judgeable with no markers whatever.
+Asking the new guard first would have refused to judge them and simply traded one blind spot for
+another — and NO LOCKOUT is a defect of equal weight to a leak (§CORE-48). So each branch answers
+its own door question FIRST and asks this only before it would read a body. Pinned by three
+regressions: a 403 on the rep's own surface is still `locked_out` with no markers, a 401 on the
+cross-tenant read is still `ok`, and the stranger's `leak` never depended on markers.
+
+### §CORE-53.4 The lock
+
+`harness_security_probe.py` §L2 (188 checks total, was 174): the gap itself on both branches, that
+`NOT_MEASURED` lands in `gaps()` and never in `findings()`, the three door-question regressions, one
+home for the rule, no second copy of `if not foreign_markers`, and that **each branch dereferences
+it — anchored on `if expect == <EXPECTATION>:`, not on any mention of the name.** The loose anchor
+was tried first and passed while the branch was un-wired, because `MARKER_DEPENDENT` names both
+constants a few lines above the function; it was caught by disarming the guard and seeing only one
+check trip instead of two. Verified armed: un-wiring the `EXPECT_REACH` guard turns 188/0 into
+186/2.
+
+Four pre-existing §F checks were **re-aimed, not relaxed**: they passed no markers, so they were
+asserting the fall-through rather than the door property named in their labels. Each now declares a
+marker set, which is the honest way to ask a door question. The cross-tenant check's expectation
+moved `unknown` → `not_measured`; its stated rule ("never clean") is unchanged.
+
+### §CORE-53.5 What this does NOT change, and what is still unmeasured
+
+No live report moves today: the `anon` persona's expectations (`EXPECT_REFUSE`, `EXPECT_PUBLIC`) do
+not turn on markers, and a re-probe of `remediation` after the change returns the same 6 probes, 0
+findings, 2 unprobed. `rep` and `cross_tenant` remain `skipped` / `measured: False` until the NY
+LOGISTICS accounts are corrected (they were created with the `management` role, which that tenant
+defines as scope `all`, and with no login, no store and `must_reset_password` set) and until a second
+tenant exists — without one, every rep's foreign set is empty and this section's gap is exactly what
+the report will state.
+
+**The duplicate check (build gate).** `blinded_verdict` already answers "was this measured at all"
+for the other door; the new home sits beside it under the same rule rather than duplicating it, and
+`_foreign_in` stays the single marker comparison. No second reader of either was added.
+
+**Cross-references:** §CORE-42 (the outside pass and its three personas) · §CORE-42.7 (the
+many-tenant accounts and `_foreign_in` as one home) · §CORE-48 (NO LOCKOUT, the door question this
+fix must not eat) · §CORE-52 (a control that cannot fail — the same vacuity class, found the day
+before) · §CORE-01.5 (the section register).

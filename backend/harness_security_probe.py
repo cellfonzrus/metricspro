@@ -262,11 +262,18 @@ ok(sp.verdict(oracle_probe, 405) == sp.GATE_NOT_REACHED,
 ok(sp.verdict(oracle_probe, 200) == sp.GATE_NOT_REACHED, "the oracle never reads a 200 as a pass")
 
 reach = {"expect": sp.EXPECT_REACH, "probe": sp.DIRECT_PROBE, "path": REP_GRANTED}
-ok(sp.verdict(reach, 200) == sp.OK, "the employee reaches their own surface")
+# RE-AIMED 2026-11-27 (§CORE-53), and deliberately NOT by relaxing what is expected. These three
+# passed NO markers, so they were asserting the EMPTY-SET fall-through rather than the property
+# named in their labels: a body whose verdict turns on markers is now a stated gap, not a clean
+# answer (§L2). The intent — "the employee reaches their own surface", "a 404 is not a lockout",
+# "a 500 is reported" — is a fact about the DOOR, so each now declares a marker set, which is the
+# honest way to ask a door question and leaves the row question answerable.
+ok(sp.verdict(reach, 200, "{}", ("FOREIGN-1",)) == sp.OK, "the employee reaches their own surface")
 ok(sp.verdict(reach, 403) == sp.LOCKED_OUT,
    "★ a gate that refuses an employee their OWN screen is a defect of equal weight")
-ok(sp.verdict(reach, 404) == sp.OK, "a 404 is not a lockout")
-ok(sp.verdict(reach, 500) == sp.UNKNOWN, "a 500 at their own screen is reported")
+ok(sp.verdict(reach, 404, "{}", ("FOREIGN-1",)) == sp.OK, "a 404 is not a lockout")
+ok(sp.verdict(reach, 500, "{}", ("FOREIGN-1",)) == sp.UNKNOWN,
+   "a 500 at their own screen is reported")
 
 cross = {"expect": sp.EXPECT_NO_FOREIGN_ROWS, "probe": sp.DIRECT_PROBE, "path": MANAGER_ONLY}
 ok(sp.verdict(cross, 403) == sp.OK, "a refusal across tenants is a pass")
@@ -274,8 +281,12 @@ ok(sp.verdict(cross, 200, '{"store":"B-1115"}', ("B-1115",)) == sp.FOREIGN_ROWS,
    "the other tenant's marker in the body IS the leak")
 ok(sp.verdict(cross, 200, '{"store":"OWN-1"}', ("B-1115",)) == sp.OK,
    "its own rows are not a leak")
-ok(sp.verdict(cross, 200, '{"store":"B-1115"}', ()) == sp.UNKNOWN,
-   "NOTHING DECLARED MEANS NOTHING IDENTIFIED: with no markers it is unknown, never clean")
+# STRENGTHENED 2026-11-27 (§CORE-53): the verdict was `unknown`, a low-severity FINDING. A thing
+# this run could not ASK is a GAP — counted in coverage, never listed among the findings where it
+# could bury a leak. The label's own rule ("never clean") is unchanged and now holds on BOTH
+# branches that read a body, from one home.
+ok(sp.verdict(cross, 200, '{"store":"B-1115"}', ()) == sp.NOT_MEASURED,
+   "NOTHING DECLARED MEANS NOTHING IDENTIFIED: with no markers it is a gap, never clean")
 ok(sp.verdict(cross, 200, {"store": "B-1115"}, ("B-1115",)) == sp.FOREIGN_ROWS,
    "a dict body is searched too (no silent pass on a non-string)")
 ok(sp.verdict({"expect": sp.EXPECT_PUBLIC, "path": "/health"}, 200) == sp.OK,
@@ -364,8 +375,57 @@ ok(sp.verdict({"expect": sp.EXPECT_REACH}, 200, '{"rows":[{"store":"MINE-1"}]}',
    "negative control: its own rows are still a clean answer (no false leak)")
 ok(sp.verdict({"expect": sp.EXPECT_REACH}, 403, "{}", foreign_markers=("FOREIGN-1",)) == sp.LOCKED_OUT,
    "★ NO LOCKOUT ★ is still measured first — the marker rule did not eat it")
-ok(sp.verdict({"expect": sp.EXPECT_REACH}, 200, "{}") == sp.OK,
+# RE-AIMED 2026-11-27 (§CORE-53). This used to assert `== sp.OK`, which pinned the very
+# fall-through described below. Its INTENT — "nothing declared must never be reported as a leak" —
+# is kept and made explicit; what changed is that "not a leak" is no longer the same as "clean".
+ok(sp.verdict({"expect": sp.EXPECT_REACH}, 200, "{}") != sp.FOREIGN_ROWS,
    "with nothing declared the employee's own surface is not reported as a leak")
+
+# ── §L2  an answer whose verdict TURNS ON markers cannot be judged without them ──────────────────
+section("§L2  nothing declared means nothing identified — on EVERY branch that reads a body")
+# THE GAP (found 2026-11-27 while wiring the first real rep accounts). `EXPECT_NO_FOREIGN_ROWS`
+# refused to judge a body with no markers; `EXPECT_REACH` fell through to OK. One branch honoured
+# `verdict`'s own docstring — "an empty marker set is never read as clean" — and the other did not,
+# which is the same one-branch-checks-and-another-does-not shape §L was created to close. It had no
+# symptom because it only bites when exactly ONE tenant is declared, and until today none was.
+FOREIGN_BODY = '{"rows":[{"store":"B-1598","company":"ANOTHER TENANT"}]}'
+ok(sp.verdict({"expect": sp.EXPECT_REACH}, 200, FOREIGN_BODY, ()) == sp.NOT_MEASURED,
+   "★ a rep's OWN surface, 200, no markers declared -> a GAP, never OK")
+ok(sp.verdict({"expect": sp.EXPECT_NO_FOREIGN_ROWS}, 200, FOREIGN_BODY, ()) == sp.NOT_MEASURED,
+   "★ the cross-tenant read with no markers -> the same answer, from the same home")
+ok(sp.SEVERITY[sp.NOT_MEASURED] == "gap",
+   "and a gap is counted as coverage, never listed as a finding that could bury a leak")
+ok(sp.gaps([{"verdict": sp.NOT_MEASURED, "path": "/p", "persona": "rep", "method": "GET"}]),
+   "a NOT_MEASURED row really does land in the reported gaps")
+ok(not sp.findings([{"verdict": sp.NOT_MEASURED, "path": "/p"}]),
+   "and never in the findings")
+
+# ★ THE REGRESSION THAT WOULD MAKE THIS A NEW VACUITY ★ — a lockout is about the DOOR, not the
+# rows, so it is judgeable with no markers at all. Refusing to judge it would simply trade one
+# blind spot for another, and NO LOCKOUT is a defect of equal weight to a leak.
+ok(sp.verdict({"expect": sp.EXPECT_REACH}, 403, "{}", ()) == sp.LOCKED_OUT,
+   "★ NO LOCKOUT ★ is still measured with NO markers — the new guard did not eat it")
+ok(sp.verdict({"expect": sp.EXPECT_NO_FOREIGN_ROWS}, 401, "{}", ()) == sp.OK,
+   "a refusal is still a pass with no markers — it needed none to be judged")
+ok(sp.verdict({"expect": sp.EXPECT_REFUSE}, 200, FOREIGN_BODY, ()) == sp.LEAK,
+   "and the stranger's leak never depended on markers either")
+
+# ONE HOME, dereferenced by both, with no copy of the rule in either branch.
+ok(SRC_FOR_LOCK.count("def judgeable_verdict") == 1,
+   "ONE home for 'can this answer be judged at all'")
+ok(len(re.findall(r"if not foreign_markers", SRC_FOR_LOCK)) == 0,
+   "no branch keeps its own copy of the empty-marker rule")
+# Anchored on the BRANCH, not on any mention of the name: `MARKER_DEPENDENT` lists both constants
+# a few lines above `judgeable_verdict`, so a loose search matched the DECLARATION and passed while
+# the branch had been un-wired. Caught by disarming the guard and seeing only one check trip.
+for br in ("EXPECT_REACH", "EXPECT_NO_FOREIGN_ROWS"):
+    ok(re.search(r"if expect == " + br + r":.{0,900}?judgeable_verdict", SRC_FOR_LOCK, re.S),
+       f"the {br} branch DEREFERENCES that home")
+ok(sp.judgeable_verdict(sp.EXPECT_REFUSE, ()) is None
+   and sp.judgeable_verdict(sp.EXPECT_PUBLIC, ()) is None,
+   "an expectation that does not turn on markers is never blinded by their absence")
+ok(sp.judgeable_verdict(sp.EXPECT_REACH, ("X",)) is None,
+   "and a declared marker set is judgeable")
 ok(SRC_FOR_LOCK.count("def _foreign_in") == 1,
    "ONE home for 'is another tenant's content in this body'")
 ok(len(re.findall(r'for marker in foreign_markers', SRC_FOR_LOCK)) == 0,
