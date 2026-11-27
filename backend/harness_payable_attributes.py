@@ -288,6 +288,73 @@ gseg2 = rsrc[rsrc.find("def get_period_goal_progress"):][:4000] or rsrc
 ok("item_keys" not in gseg2.split("def _declared_metric_authority")[0],
    "G12 the goal path is deliberately unchanged — a different question, explicitly excused")
 
+print("\n§I  AN ITEM MUST BE STRICTLY FINER THAN THE METRIC IT ROLLS INTO (security pass 2026-11-27)")
+# THE DEFECT THE REVIEW FOUND. `declared_items` asserts that every key of a `line_map` is an ITEM.
+# It is not: `line_label`'s synonym list begins "product category", "category" — AHEAD of "product"
+# and "item" — so a tenant's export may carry a CATEGORY in the column the mapping is keyed on, and
+# `pos_report_sweep._line_map` merges a source-level map into EVERY report. Where the label IS the
+# category, `item:<label>` carried the category's WHOLE figure while the picker said "pay on that
+# item alone". `gross_revenue` was unmoved (the §B claim held and still holds) because an item is not
+# in `revenue_keys` — but `revenue_keys` is not the paying path. `daily_incentive.measure` with
+# explicit `metric_keys` is, and it sums `amount_of` per named key with no notion that one key is
+# another's parent. Naming both DOUBLED the money.
+SAME_DEFS = [{"field_key": "printing", "label": "Printing", "value_kind": "amount",
+              "declared_by": "employee"}]
+same = mc.build(SAME_DEFS, item_defs=[{"item_label": "Printing", "metric_key": "printing"}])
+ok(not [m for m in same if m.get("source") == "feed_item"],
+   "I1 an 'item' whose label IS its category's label is not a payable attribute")
+ok("printing" in mc.keys(same),
+   "I2 ...and the category itself is untouched — the right thing to pay on is still offered")
+# The same when the label matches the KEY rather than the display label.
+bykey = mc.build(SAME_DEFS, item_defs=[{"item_label": "printing", "metric_key": "printing"}])
+ok(not [m for m in bykey if m.get("source") == "feed_item"],
+   "I3 ...matched on the metric key too, not only the display label")
+# Folded, so case and spacing cannot smuggle the duplicate back in.
+folded = mc.build(SAME_DEFS, item_defs=[{"item_label": "  PRINTING  ", "metric_key": "printing"}])
+ok(not [m for m in folded if m.get("source") == "feed_item"],
+   "I4 ...through the same folding, so 'PRINTING' is not a different thing from 'Printing'")
+# A genuinely finer item is STILL offered — the fix must not cost the feature.
+finer = mc.build(SAME_DEFS, item_defs=[{"item_label": "11x17 Color Copies", "metric_key": "printing"}])
+ok([m for m in finer if m.get("source") == "feed_item"],
+   "I5 a genuinely finer item is still payable — the fix does not cost the feature")
+ok(mc.item_key("Printing") == mc.item_key("  printing "),
+   "I6 the folding the refusal uses is the catalog's own")
+
+print("\n§J  A RULE MAY NOT NAME AN ITEM AND ITS OWN PARENT (the doubling, refused at save)")
+# Granularity is not always knowable from the label, so the save door refuses the OVERLAP itself:
+# whatever the label's grain, a rule that measures a parent and its own descendant counts one row's
+# money twice. Two SIBLING items stay legal — disjoint lines, and the owner's actual use case.
+sseg = read(os.path.join(APP, "modules", "commcalc", "router.py"))
+jseg = sseg[sseg.find("def save_incentive_rule"):]
+jseg = jseg[:jseg.find("\n@router.")] if jseg.find("\n@router.") > 0 else jseg
+ok("parent_key" in jseg,
+   "J1 the save guard reads each named key's parent")
+ok("_mc.by_key(" in jseg or "by_key(" in jseg,
+   "J2 ...through the catalog it was already given, not a second lookup")
+ok("also names" in jseg or "parent" in jseg.lower(),
+   "J3 ...and the refusal explains the overlap in words")
+
+print("\n§K  ONE FOLDING, ONE HOME, AND A DETERMINISTIC READ (review finding 2)")
+# `_declared_item_defs` deduped with its OWN `.strip().lower()`, which does NOT collapse internal
+# whitespace the way `metric_catalog.item_key` does. So two spellings survived the read, collided in
+# `build`, and the FIRST one seen won — while the read had no ORDER BY, so which one that was came
+# down to row order. `figure_unit` could flip between count and dollars for the same request, which
+# is the exact divergence `metric_catalog`'s own header says it exists to prevent.
+kseg = sseg[sseg.find("def _declared_item_defs"):]
+kseg = kseg[:kseg.find("\n@router.")] if kseg.find("\n@router.") > 0 else kseg[:2000]
+ok("_mc.item_key(" in kseg or "item_key(" in kseg,
+   "K1 the org-scoped read dedupes through the catalog's folding, not its own")
+# Comment lines stripped: doctrine may NAME the folding it replaced ("it used to carry its own
+# .strip().lower()"); the executable text may not spell it. A scanner that reads prose fails the
+# build on its own explanation, which is how a lock teaches the next author to delete the comment.
+kcode = "\n".join(ln for ln in kseg.splitlines() if not ln.strip().startswith("#"))
+ok(not re.search(r"\.strip\(\)\.lower\(\)", kcode),
+   "K2 ...and spells no second folding in its executable text")
+ok(".strip().lower()" in kseg,
+   "K2b CONTROL: the comment that names the old folding is still there to be scanned past")
+ok(".order(" in kseg,
+   "K3 the read is ORDERED, so which spelling wins is a fact and not a row-order race")
+
 print("\n§H  negative controls — the scanners can see a violation")
 ok(re.search(r"""['"]item:[A-Za-z0-9][A-Za-z0-9 ._/x-]*['"]""", 'k = "item:NDA Saver"') is not None,
    "H1 the item-literal scanner fires on a planted key")
