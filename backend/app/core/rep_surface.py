@@ -72,6 +72,9 @@ construction, because no org_id reaches this module at all.
 SURFACES = (
     {
         "key": "clock", "tile": True, "label": "Clock in / out", "icon": "⏱",
+        # THE TILE'S DESTINATION, declared (see TILE DESTINATIONS below). The punch lives at the
+        # kiosk, NOT at this surface's first grant — `/my` is the landing the tile sits ON.
+        "tile_page": "/portal",
         "pages": ("/my/**", "/portal/**"),
         "api": ("/api/v1/storeops/timeclock",),
         "api_read": (),
@@ -90,6 +93,7 @@ SURFACES = (
     },
     {
         "key": "commissions", "tile": True, "label": "My commissions", "icon": "💵",
+        "tile_page": "/employee",
         "pages": ("/employee/**",),
         "api": (),
         "api_read": ("/api/v1/core/employee-dashboard", "/api/v1/core/portal-reports",
@@ -103,16 +107,18 @@ SURFACES = (
         # … *"it shows your next shift at the bottom on the main page it shoudl also show in schedule
         # whic his made for teh next 2 weeks or one week"*.
         #
-        # `/my/schedule` IS FIRST, AND THAT IS THE FIX. A tile's link is `pages[0]` (see `tiles()`),
-        # so the tile labelled "My schedule" opened `/storeops/timeoff` — the time-off REQUEST FORM.
-        # The only schedule an employee could see was the four-row "Your next shifts" list inlined on
-        # the landing page. The employee's own read of the published schedule now exists and is what
-        # the tile opens; the two REQUEST pages stay declared behind it, because asking for time off
-        # and asking for a swap are the other half of this surface.
+        # THE TILE OPENS `/my/schedule`, the employee's own read of the published schedule. It used
+        # to open `/storeops/timeoff` — the time-off REQUEST FORM — because the tile's link was taken
+        # from `pages[0]`, and guessing a destination from the first grant is exactly the defect
+        # §CORE-33.3 fixed in this same PR: the destination is DECLARED here now, so the order of
+        # `pages` carries no meaning at all. The two REQUEST pages stay declared behind it, because
+        # asking for time off and asking for a swap are the other half of this surface, and
+        # `/my/schedule` links to both (pinned by rep-surface-nav-proof.mjs §E).
         #
         # The manager's builder (`/storeops/schedule` — the whole-roster grid, the shift writes, the
         # hours-trend report) is still NOT here and must not be: this surface gained a READ of the
         # employee's own rows, not a grant of anyone's schedule.
+        "tile_page": "/my/schedule",
         "pages": ("/my/schedule", "/storeops/timeoff", "/storeops/swaps"),
         # The shift WRITES are a manager surface and are not here; `/storeops/shifts` is read-only to
         # an individual contributor, and the rows it returns are already narrowed to the people they
@@ -140,6 +146,7 @@ SURFACES = (
     },
     {
         "key": "action_plan", "tile": True, "label": "My action plan", "icon": "🎯",
+        "tile_page": "/commcalc/targets/action-plan",
         "pages": ("/commcalc/targets/action-plan",),
         "api": (),
         "api_read": ("/api/v1/commcalc/targets",),
@@ -147,7 +154,28 @@ SURFACES = (
                 "scope_keyset (§59.7)",
     },
     {
+        # OWNER 2026-11-27: *"my targets are shown on the portal and not on the employee dashboad, a
+        # tile for that shoudl be there too"*. Target-vs-achieved was visible only as part of the
+        # kiosk's My Dashboard tab (`<EmployeeWidgets repTargets=…>`), so the standalone screen that
+        # owns the question was unreachable without a menu. §CORE-33.4.
+        #
+        # NO API GRANT IS ADDED. The page reads `/commcalc/targets/{period}/summary|calendar|
+        # action-plan`, every one of which the action-plan surface above already grants read on —
+        # a rep can call them today. Only the PAGE was missing, and it is granted EXACTLY: the rest
+        # of `/commcalc/targets` (settings, report cards, the rep map, the accessory plan) stays
+        # refused. The screen is already in `rbac.SELF_OWN_STORE_SURFACES`, i.e. it resolves a
+        # scope-'self' viewer to their OWN store and filters per-rep rows to their own employee id,
+        # so this grants a view that was designed for exactly this viewer.
+        "key": "targets", "tile": True, "label": "My targets", "icon": "📈",
+        "tile_page": "/commcalc/targets/my",
+        "pages": ("/commcalc/targets/my",),
+        "api": (),
+        "api_read": (),
+        "what": "their own target against what they have achieved this month, for their own store",
+    },
+    {
         "key": "helpdesk", "tile": True, "label": "Help desk", "icon": "🎫",
+        "tile_page": "/helpdesk",
         "pages": ("/helpdesk/**",),
         # The ticket list, a ticket and raising one are an employee's; the two manager screens
         # inside the same subtree are NOT, and the carve-out is stated where the grant is made.
@@ -163,6 +191,7 @@ SURFACES = (
     },
     {
         "key": "dropoff", "tile": True, "label": "Barcode rescue", "icon": "🏷",
+        "tile_page": "/storeops/dropoff-barcode",
         # OWNER 2026-11-20: *"Grant the sales rep this and also give step by step instructions on
         # the page when the sales rep is ready to take a picture of the items."* The person who
         # takes a return over the counter and finds the carrier barcode unscannable IS the rep; a
@@ -207,8 +236,20 @@ SURFACES = (
                 "token, so there is no employee id to pass (the by-id route is manager-gated)",
     },
     {
-        "key": "closing", "tile": False, "label": "Daily closing", "icon": "🧾",
-        "pages": (),
+        "key": "closing", "tile": True, "label": "Daily closing", "icon": "🧾",
+        # OWNER 2026-11-27: *"daily closing tile is missing from their landing page but on teh portal
+        # is seen"*. The closing form was reachable only as a panel inside the `/portal` kiosk, so a
+        # rep who had already clocked in had to go back to the clock screen to file the close — and a
+        # confined employee has no menu to find it by. It gets a tile, and the ONE page that hosts
+        # the same shared `<ClosingSubmitForm>`.
+        #
+        # EXACT, not a subtree, and that is the whole safety of it: `/closing` is a 30-screen
+        # subsystem (recon, deposits, variances, every store's cash position, the tender config). The
+        # grammar's exact form admits that page and NOTHING else, so nothing below or beside it moves.
+        # No API grant changes either — the page makes exactly the calls already granted below, which
+        # the kiosk panel has been making all along.
+        "tile_page": "/closing/submit",
+        "pages": ("/closing/submit",),
         # Named routes, not the `/api/v1/closing` prefix the first draft granted: that prefix also
         # admitted every tender/cash/deposit/sweep CONFIG write and the chargeback decisions. These
         # are exactly the calls `components/ClosingSubmitForm.tsx` makes, nothing more.
@@ -225,7 +266,12 @@ SURFACES = (
                 "(ClosingSubmitForm is on the clock-in screen) — removing it would stop closings",
     },
     {
-        "key": "chat", "tile": False, "label": "Chat", "icon": "💬",
+        # Tiled 2026-11-27 with the targets report above, for the same reason: it was GRANTED and
+        # unreachable. A confined employee has no menu row, so a granted page with no tile can be
+        # opened only by typing its address. No permission changes — the page and its API were
+        # already granted; the tile is how a person finds them.
+        "key": "chat", "tile": True, "label": "Chat", "icon": "💬",
+        "tile_page": "/chat",
         "pages": ("/chat/**",),
         "api": ("/api/v1/chat",),
         "api_except": ("/api/v1/chat/admin/**",),
@@ -233,14 +279,16 @@ SURFACES = (
         "what": "in-app messaging, which is how an employee reaches their manager",
     },
     {
-        "key": "training", "tile": False, "label": "Training", "icon": "🎓",
+        "key": "training", "tile": True, "label": "Training", "icon": "🎓",
+        "tile_page": "/training",
         "pages": ("/training/**",),
         "api": ("/api/v1/core/training",),
         "api_read": (),
         "what": "the training assignments the platform gives them",
     },
     {
-        "key": "password", "tile": False, "label": "My password", "icon": "🔑",
+        "key": "password", "tile": True, "label": "My password", "icon": "🔑",
+        "tile_page": "/account/password",
         "pages": ("/account/password/**",),
         "api": ("/api/v1/core/me",),
         "api_read": (),
@@ -320,10 +368,37 @@ def _matches(path, prefixes):
     return False
 
 
+# ── TILE DESTINATIONS ─────────────────────────────────────────────────────────────────────────────
+# A `pages` entry is a PERMISSION PATTERN, not an address: `"/employee/**"` says "that page and
+# everything below it". A browser cannot navigate to a pattern.
+#
+# THE DEFECT THIS EXISTS TO KILL (reported 2026-11-27 by the owner, on NY Logistics and then on every
+# tenant): `tiles()` published `pages[0]` verbatim as the tile's link, so "My commissions" linked to
+# the literal `/employee/**` and "Clock in / out" to `/my/**`. Both are the app's 404. The gate could
+# not catch it — `page_allowed("/employee/**")` is TRUE, because the literal `/**` reads as a child
+# of `/employee` and the subtree grant admits its children. A default-deny gate answers a
+# wrong-SHAPED question with a confident yes.
+#
+# TWO facts were being guessed from one, and both are now declared:
+#   1. the ADDRESS of a pattern — `tile_page()` below is its one home, dereferenced by `tiles()` AND
+#      by the locks, so no caller carries its own `[:-3]`;
+#   2. WHICH page a tile opens — never "the first grant". The clock's first grant is `/my`, the
+#      landing the tile sits on; the punch is at `/portal`. Every tiled surface states its own
+#      `tile_page`, and there is NO fallback to `pages[0]`: a tile that has not said where it goes
+#      must not be able to answer.
+def tile_page(entry):
+    """The navigable address of a page-grammar entry. `"/helpdesk/**"` → `"/helpdesk"` (a page
+    subtree includes its base, see `page_allowed`), an exact entry is already its own address."""
+    e = str(entry or "")
+    return _norm(e[: -len(SUBTREE)]) if e.endswith(SUBTREE) else _norm(e)
+
+
 def tiles():
-    """The landing page's tiles, in declaration order. Label, icon, page and plain-words `what`."""
+    """The landing page's tiles, in declaration order. Label, icon, page and plain-words `what`.
+    `page` is an ADDRESS a browser can open, never a permission pattern."""
     return tuple({"key": s["key"], "label": s["label"], "icon": s["icon"],
-                  "page": (s["pages"][0] if s["pages"] else None), "what": s["what"]}
+                  "page": tile_page(s["tile_page"]) if s.get("tile_page") else None,
+                  "what": s["what"]}
                  for s in SURFACES if s.get("tile"))
 
 

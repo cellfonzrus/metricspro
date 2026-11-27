@@ -4,8 +4,9 @@
 // a sell-NEW vs offer-UPGRADE prompt (ALWAYS shown — the salesperson-facing core), and an admin-only
 // per-period money table (COMMISSION + REBATE shown as SEPARATE categories). DISPLAY only, org-scoped.
 //
-// Self-fetching so it drops in anywhere: the commcalc page below renders it, and the employee portal
-// can render the same component as a widget (see the handoff coordination note for mod-people). The
+// Self-fetching, and rendered by the commcalc page beside it — its ONLY caller. It is deliberately
+// NOT mounted on the employee dashboard any more (owner 2026-11-27): the route it reads is not granted
+// to a confined employee, so there it was a search box that answers 403. Index §CORE-33.4. The
 // money section is gated by the 'device_commission' DATA_GRANT — the backend is the source of truth
 // (returns `commission_visible` + either `money` or `money_locked`); `hasDataGrant` is the frontend
 // mirror used to keep the pre-response UI honest.

@@ -83,10 +83,106 @@ check("A12 a trailing slash never changes the answer",
 check("A13 every one of the owner's five has a tile, in his order — and nothing else has one "
       "without saying so here",
       [t["key"] for t in RS.tiles()] == ["clock", "commissions", "schedule", "action_plan",
-                                         "helpdesk", "dropoff"],
+                                         "targets", "helpdesk", "dropoff", "closing",
+                                         "chat", "training", "password"],
       [t["key"] for t in RS.tiles()])
 check("A14 every tile's page is a page the gate admits",
       all(RS.page_allowed(t["page"]) for t in RS.tiles()), [t["page"] for t in RS.tiles()])
+# ── A15–A18 THE TILE'S PAGE IS AN ADDRESS, NOT A PATTERN ─────────────────────────────────────────
+# THE DEFECT (reported 2026-11-27): a confined employee tapped "My commissions" on the landing and
+# got the app's 404. The tile carried `pages[0]` VERBATIM, and `pages[0]` is written in the page
+# GRAMMAR — `"/employee/**"` means "that page and everything below it". A browser cannot navigate to
+# a pattern, so three of the six tiles (clock, commissions, helpdesk) linked to an address that
+# cannot exist, for EVERY tenant.
+#
+# A14 above could not see it, and that is the lesson: `page_allowed("/employee/**")` is True, because
+# the literal `/**` reads as a child of `/employee` and the subtree grant admits its children. A
+# default-deny gate answers a wrong-SHAPED question with a confident yes. So the shape is pinned
+# here, separately from the permission.
+check("A15 THE 404: no tile publishes a grammar pattern as its link",
+      not any("*" in str(t["page"] or "") for t in RS.tiles()),
+      [t["page"] for t in RS.tiles()])
+check("A16 the pattern → address conversion has ONE home that every tile dereferences",
+      hasattr(RS, "tile_page") and RS.tile_page("/employee" + RS.SUBTREE) == "/employee"
+      and RS.tile_page("/storeops/timeoff") == "/storeops/timeoff")
+check("A17 …and the addresses it publishes are the real ones",
+      [t["page"] for t in RS.tiles()] == ["/portal", "/employee", "/my/schedule",
+                                          "/commcalc/targets/action-plan", "/commcalc/targets/my",
+                                          "/helpdesk", "/storeops/dropoff-barcode",
+                                          "/closing/submit", "/chat", "/training",
+                                          "/account/password"],
+      [t["page"] for t in RS.tiles()])
+check("A18 …and each one is still a page the gate admits, asked of the ADDRESS",
+      all(RS.page_allowed(t["page"]) and "*" not in t["page"] for t in RS.tiles()))
+# The clock's destination is the SECOND grant, and that is the second half of the defect: the tile's
+# page was being guessed from the first grant, which for the clock is the landing the tile sits on.
+check("A19 THE OWNER'S SECOND REPORT: Clock in / out opens the punch kiosk, not the landing",
+      next(t["page"] for t in RS.tiles() if t["key"] == "clock") == "/portal")
+# ── A19b THE DAILY CLOSING TILE (owner 2026-11-27) ───────────────────────────────────────────────
+# *"daily closing tile is missing from their landing page but on teh portal is seen."* The form was
+# reachable only as a panel inside the kiosk. It gets a tile and ONE page — and the exactness of that
+# page is the safety: `/closing` is a 30-screen subsystem and none of it moves.
+check("A19b the Daily closing tile opens the submit page",
+      next((t["page"] for t in RS.tiles() if t["key"] == "closing"), None) == "/closing/submit")
+check("A19c …and that grant admits that page and NOTHING else under /closing",
+      RS.page_allowed("/closing/submit")
+      and not any(RS.page_allowed(p) for p in (
+          "/closing", "/closing/recon", "/closing/verify", "/closing/management",
+          "/closing/tender-config", "/closing/store-cash-on-hand", "/closing/deposit-recon",
+          "/closing/submit/anything")))
+check("A19d …and it needed no new API grant: every call the page makes was already granted",
+      all(RS.api_allowed(r, "POST") for r in ("/api/v1/closing/row", "/api/v1/closing/metric-lines"))
+      and RS.api_allowed("/api/v1/closing/days", "GET")
+      and not RS.api_allowed("/api/v1/closing/tender-config", "PUT"))
+# ── A19e THE MY TARGETS TILE, AND THE THREE THAT WERE GRANTED AND UNREACHABLE ────────────────────
+# OWNER 2026-11-27: *"my targets are shown on the portal and not on the employee dashboad, a tile for
+# that shoudl be there too."* Target-vs-achieved lived only inside the kiosk's My Dashboard tab.
+check("A19e the My targets tile opens the rep's own targets screen",
+      next((t["page"] for t in RS.tiles() if t["key"] == "targets"), None) == "/commcalc/targets/my")
+check("A19f …granted EXACTLY: the rest of the targets subsystem stays refused",
+      RS.page_allowed("/commcalc/targets/my")
+      and not any(RS.page_allowed(p) for p in (
+          "/commcalc/targets", "/commcalc/targets/settings", "/commcalc/targets/report-cards",
+          "/commcalc/targets/rep-map", "/commcalc/targets/accessories", "/commcalc/targets/my/x")))
+check("A19g …and it needed no new API grant: the targets reads were already granted",
+      all(RS.api_allowed(p, "GET") for p in (
+          "/api/v1/commcalc/targets/November%202026/summary",
+          "/api/v1/commcalc/targets/November%202026/calendar",
+          "/api/v1/commcalc/targets/November%202026/action-plan"))
+      and not RS.api_allowed("/api/v1/commcalc/targets", "POST"))
+# The same class, found by asking the question once rather than per report: a surface GRANTED a page
+# and given no tile is reachable only by typing its address, because a confined employee has no menu.
+check("A19h every surface that HAS a page has a tile — nothing is granted and unreachable",
+      [s["key"] for s in RS.SURFACES if s["pages"] and not s.get("tile")] == [],
+      [s["key"] for s in RS.SURFACES if s["pages"] and not s.get("tile")])
+check("A19i …and the one surface with no page of its own is the paperwork inside the kiosk",
+      [s["key"] for s in RS.SURFACES if not s["pages"]] == ["own_paperwork"],
+      [s["key"] for s in RS.SURFACES if not s["pages"]])
+# ── A21 THE KIOSK OFFERS NO SURFACE THE GATE REFUSES ─────────────────────────────────────────────
+# OWNER 2026-11-27: *"device history look up is not rwequired ont eh portal but the bar code resue
+# is."* The employee dashboard mounted the device-history lookup for EVERY employee, on the reasoning
+# that doing so was "safe" because the money rows are gated server-side. Safety is not the test:
+# `GET /commcalc/device-history` is not granted to a confined employee, so the kiosk showed a search
+# box that answers 403 — the browser offering what the API refuses, which is the §CORE-33 defect
+# pointing the other way. The barcode rescue is the contrast: asked for, granted, and tiled.
+_CR = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "app/modules/core/router.py"), encoding="utf-8").read()
+_WIDGETS = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "../frontend/src/components/EmployeeWidgets.impl.tsx"),
+                encoding="utf-8").read()
+check("A21 the device-history lookup is not granted to a confined employee",
+      not RS.api_allowed("/api/v1/commcalc/device-history", "GET"))
+check("A21b …so the employee dashboard does not render it",
+      "DeviceHistoryLookup" not in _WIDGETS and "device_history" not in _WIDGETS)
+check("A21c …and the widget list no longer offers a toggle for a widget that cannot render",
+      '"device_history"' not in _CR.split("EMP_WIDGETS = [")[1].split("]")[0])
+check("A21d THE CONTRAST: the barcode rescue IS granted, and tiled",
+      RS.page_allowed("/storeops/dropoff-barcode")
+      and any(t["key"] == "dropoff" for t in RS.tiles())
+      and RS.api_allowed("/api/v1/storeops/dropoff-label/read", "POST"))
+
+check("A20 a tile that declares no destination publishes none — there is no fallback to pages[0]",
+      "pages\"][0]" not in open(RS.__file__).read().split("def tiles(")[1])
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 print("\nB. THE API — default deny")

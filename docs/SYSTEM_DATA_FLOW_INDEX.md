@@ -47368,20 +47368,136 @@ never silently dropped from the sheet. `/api/v1/core/export-event` is granted to
 rep's save is audited like anyone else's — `governExport` fails open, so without the grant the PDF
 would still save and simply go unlogged, which is the worst of both.
 
+### CORE-33.3 A tile's link is an ADDRESS, not a permission pattern (owner 2026-11-27)
+
+Owner, on NY Logistics: *"when the employee clicks on my commisison in Ny logistics it leads to this
+404"*, and minutes later: *"when you clock on clock in clock out from the app.metricspro.tech it shows
+the same 404 … if it broken platform wide fix that aswell"*.
+
+**It was broken platform wide, and for every tenant.** A confined employee has no menu — the landing's
+tiles are their only way to reach anything (§CORE-33.1). `tiles()` published `SURFACES[…]["pages"][0]`
+verbatim as the tile's link, and a `pages` entry is written in the **page grammar**, not as an address:
+`"/employee/**"` means *that page and everything below it*. So "My commissions" linked to the literal
+`/employee/**` and "Clock in / out" to `/my/**` — three of the six tiles (clock, commissions, helpdesk)
+pointed at an address that cannot exist. Nothing tenant-specific was involved; NY Logistics is simply
+where an employee tapped it.
+
+**Why every gate said yes.** `page_allowed("/employee/**")` is **True** — the literal `/**` reads as a
+*child* of `/employee`, and a subtree grant admits its children. `harness_rep_surface.py` A14 asked
+exactly that question and passed. A default-deny declaration answers a wrong-**shaped** question with
+the same confident yes it uses for a real one, which is the sibling of the §CORE-52 trap (a wrongly
+shaped path answered with the same `False` default-deny uses for "no"). **The permission and the SHAPE
+are two questions, and only one of them was being asked.**
+
+**Two facts were being guessed from one, and both are now declared.**
+
+1. **The address of a pattern has one home.** `rep_surface.tile_page()` is the only conversion from a
+   grammar entry to a navigable address, dereferenced by `tiles()` **and by the lock**. The lock
+   already knew a pattern is not an address — it carried its own slice to check each declared page
+   exists on disk — and `tiles()` did not. That is why the 404 shipped green: every page existed, and
+   the tiles linked to patterns of them. One fact, one home, dereferenced — never copied.
+2. **Where a tile goes is declared, never guessed from the first grant.** Every tiled surface states
+   its own `tile_page`, and there is **no fallback to `pages[0]`**: a tile that has not said where it
+   goes publishes nothing rather than guessing. This is the half that fixes the clock, whose first
+   grant is `/my` — the landing the tile sits **on** — while the punch is at `/portal` (§14z). The
+   owner's second report was that same guess, one surface over.
+
+**The addresses the landing is now given**: clock → `/portal`, commissions → `/employee`, schedule →
+`/storeops/timeoff`, action plan → `/commcalc/targets/action-plan`, helpdesk → `/helpdesk`, dropoff →
+`/storeops/dropoff-barcode`. The browser is unchanged and still decides nothing: `(platform)/my/page.tsx`
+renders the server's list in the server's order.
+
+**Swept, not assumed.** `tiles()` is the only producer in the platform that turned a permission pattern
+into a link — no other backend declaration publishes a `page` containing `**`, and `(platform)/my/page.tsx`
+and `lib/fix-it.tsx` are the only two surfaces that build an href from server-declared page data.
+
+### CORE-33.4 A seventh tile: the daily closing (owner 2026-11-27)
+
+Owner, minutes after the tile 404s above: *"daily closing tile is missing from their landing page but
+on teh portal is seen."*
+
+**It was never tiled.** The `closing` surface was declared with `"tile": False` and **no page at all**:
+the grant existed only so the `<ClosingSubmitForm>` panel *embedded in the `/portal` kiosk* could
+submit. So a rep who had already clocked in had to go back to the clock screen to file the close, and
+a confined employee — who has no menu — had no other way to find it. The same shape as the geofence
+control that shipped correct and unreachable (§CORE-33.1's own lesson, and the `tileOnly` trap): **a
+feature is not shipped until it is reachable from the surface that owns the job.**
+
+**What was granted: one page, exactly.** `tile: True`, `tile_page` / `pages` = `"/closing/submit"` —
+the thin wrapper around the SAME shared `<ClosingSubmitForm>` the kiosk panel renders. The exactness
+is the whole safety of it: `/closing` is a ~30-screen subsystem (recon, deposits, variances, every
+store's cash position, the tender and count configs) and the grammar's exact form admits that page and
+**nothing else**, so nothing below or beside it moves. `page_allowed` is asserted False for `/closing`,
+`/closing/recon`, `/closing/verify`, `/closing/management` and `/closing/submit/anything`.
+
+**No API grant changed.** The page makes exactly the calls the kiosk panel has been making all along,
+which this surface already granted; the tender/count CONFIG writes stay refused (`api_read` is
+read-only and `/closing/row/**`, the manager's edit of a filed row, stays carved). Proved through the
+real app, both tenants: `GET /closing/days` allowed, `PUT /closing/tender-config` and
+`POST /closing/count-config` refused with `not_your_access`.
+
+**The one door out of that page is now the right one.** `(platform)/closing/submit/page.tsx` had a
+hard-coded `← Dashboard` link to `/closing`, which is refused — a dead end for the only viewer who
+arrives by tile. For a confined employee it reads `← My day` (`REP_LANDING`, the one home). `repConfined`
+off `/me` is used for that single purpose, exactly as on the barcode rescue. `WorkflowNext` needed
+nothing: it already asks `useCanOpen`, the same predicate the sidebar asks, so it cannot advertise a
+screen the viewer would be bounced out of.
+
+**Then the same report again, one surface over** (owner, ten minutes later): *"my targets are shown on
+the portal and not on the employee dashboad, a tile for that shoudl be there too."* Target-vs-achieved
+was visible only inside the kiosk's My Dashboard tab (`<EmployeeWidgets repTargets=…>`), so the screen
+that OWNS the question — `/commcalc/targets/my`, already in `rbac.SELF_OWN_STORE_SURFACES`, i.e.
+already designed to resolve a scope-`self` viewer to their own store and filter per-rep rows to their
+own employee id — had no way in. Granted EXACTLY, like the closing page: the rest of
+`/commcalc/targets` (settings, report cards, the rep map, the accessory plan) stays refused, and **no
+API grant moved** — the action-plan surface already grants read on `/commcalc/targets`, so a rep could
+call `summary`, `calendar` and `action-plan` before this change and still cannot POST a target.
+
+**The third report is what turned this into a class.** Rather than wait for a fourth, the question was
+asked of the whole declaration: *which surfaces are GRANTED a page and have no tile?* Three more were —
+**Chat**, **Training** and **My password** — reachable only by typing their address. All three are now
+tiled, which changes **no permission at all**: the pages and their APIs were already granted; a tile is
+how a person without a menu finds them. The rule is now a build check
+(`harness_rep_surface_lock.py` §6c7, `harness_rep_surface.py` A19h): **a surface that declares a page
+has a tile, or CI fails.**
+
+**One page is deliberately reached by a link, not a tile**: `/storeops/swaps`, the second page of the
+My schedule surface. The Time Off page the tile lands on now carries a **🔁 Shift swaps** button, so
+the swaps screen is reachable without a twelfth tile — pinned in
+`frontend/tools/rep-surface-nav-proof.mjs` §E (the link) and named as the single declared exception in
+the integration gate, which otherwise asserts every granted page is a tile's destination or below one.
+`own_paperwork` remains the one surface with no page of its own: it is a tab inside the kiosk, and the
+test names it rather than letting it slide under a count.
+
+**And the same question answered the other way** (owner, same hour): *"device history look up is not
+rwequired ont eh portal but the bar code resue is."* The employee dashboard mounted
+`<DeviceHistoryLookup>` for EVERY employee — its comment reasoned that this was *"safe"* because the
+MONEY rows are gated server-side. **Safety is not the test.** `GET /commcalc/device-history` is not
+granted to a confined employee, so on the kiosk it was a search box that answers 403: the browser
+offering what the API refuses, which is §CORE-33's defect pointing the other way. The widget is gone
+from the dashboard and the `device_history` key is gone from `EMP_WIDGETS` with it — a toggle for a
+widget that cannot render is worse than no toggle — and the screen keeps its one home at
+`/commcalc/device-history` for the roles whose nav allows it. The barcode rescue is the contrast the
+owner drew in the same sentence: asked for, granted, tiled (§CORE-33.1). Pinned by
+`harness_rep_surface.py` §A21, which asserts the refusal, the absence from the dashboard, the absent
+toggle, and the rescue's presence.
+
 ### Proofs and the lock
 
-- `backend/harness_rep_surface.py` (92) — the grammar, default-deny on the API, the REAL middleware
+- `backend/harness_rep_surface.py` (137) — the grammar, default-deny on the API, the REAL middleware
   verdict over each role shape, the REAL four handlers over the in-memory double, two tenants, and
   ★ NO LOCKOUT ★.
-- `frontend/tools/rep-surface-nav-proof.mjs` (48) — the compiled `rbac.ts`; §A **reproduces the prefix
+- `frontend/tools/rep-surface-nav-proof.mjs` (50) — the compiled `rbac.ts`; §A **reproduces the prefix
   hole for real** on the legacy path before §B shows it closed. Reads the declared pages out of the
   backend source, so it cannot pass against a list it made up.
-- `backend/tests/integration/test_rep_surface_gate.py` (40) — the real FastAPI app, the real scope code
+- `backend/tests/integration/test_rep_surface_gate.py` (79) — the real FastAPI app, the real scope code
   deciding whose people are whose, two tenants with the same role NAMES and different configuration.
-- `backend/harness_rep_surface_lock.py` (66, stdlib, CI job **The employee's reach**) — fails the build
+- `backend/harness_rep_surface_lock.py` (107, CI job **The employee's reach**) — fails the build
   if a second page list appears, if the prefix widening escapes the legacy branch, if the API gate is
-  un-installed or becomes conditional, if any of the four writes stops dereferencing the gate, or if the
-  landing route drifts between the two sides. Verified it goes red by un-wiring `create_time_off`.
+  un-installed or becomes conditional, if any of the four writes stops dereferencing the gate, if the
+  landing route drifts between the two sides, or (§6c, 2026-11-27) if a tile publishes a pattern as its
+  link, stops declaring its own destination, links to a page with no `page.tsx` on disk, if a
+  surface declares a page and no tile (§6c7), or if the pattern → address conversion gains a second copy — in the declaration or in the lock itself. Verified it goes red by un-wiring `create_time_off`.
 
 ### Reported, not fixed
 
@@ -47398,9 +47514,11 @@ Owner: *"also under employee login it does not show the employee thier own schdu
 *"it shows your next shift at the bottom on the main page it shoudl also show in schedule whic his
 made for teh next 2 weeks or one week"*.
 
-**THE INSTANCE, in one line: a tile's link is `pages[0]` of its surface, and the schedule surface's
+**THE INSTANCE, in one line: a tile's link WAS `pages[0]` of its surface, and the schedule surface's
 first page was `/storeops/timeoff`.** So the tile headed "My schedule" opened the time-off REQUEST
-FORM. The only schedule an employee could see at all was the four-row "Your next shifts" list inlined
+FORM. (That guess is itself the defect §CORE-33.3 removed in the same hour: a tile's destination is
+now DECLARED as `tile_page`, so the order of `pages` carries no meaning and this tile names
+`/my/schedule` outright.) The only schedule an employee could see at all was the four-row "Your next shifts" list inlined
 on `/my` — which is why this read as "it does not show the employee their own schedule" rather than as
 a broken link. Nothing was wrong with the data, the gate or the feed.
 
@@ -47550,7 +47668,7 @@ job of `org-scope-guard.yml`.
 | Thing | Where |
 |---|---|
 | The page | `frontend/src/app/(platform)/my/schedule/page.tsx` |
-| The declaration | `backend/app/core/rep_surface.py` — `SURFACES` key `schedule`, `pages[0]` |
+| The declaration | `backend/app/core/rep_surface.py` — `SURFACES` key `schedule`, `tile_page` (§CORE-33.3) |
 | "Which are mine" | `storeops.router.own_emp_ids` → `payroll_identity.own_id_forms` |
 | The pairing (one home) | `payroll_identity.business_id_alias_map` |
 | Proof / tests | `backend/harness_my_schedule.py`, `backend/tests/integration/test_my_schedule_endpoint.py` |

@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
+import Link from 'next/link'
 import DateField from '@/components/DateField'
 import { api, parseLocalDate } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
@@ -196,6 +197,11 @@ export default function TimeOffPage() {
             </select>
           </label>
           <ReportExportBar title="Time Off Requests" columns={cols} rows={visible} />
+          {/* SHIFT SWAPS IS THE OTHER HALF OF THIS SURFACE and a confined employee has no menu row:
+              this page is where the "My schedule" tile lands, so it is the only way they can reach
+              the swaps screen (owner 2026-11-27, §CORE-33.4). Pinned by
+              frontend/tools/rep-surface-nav-proof.mjs and by the integration gate. */}
+          <Link href="/storeops/swaps" className="btn btn-secondary" style={{ fontSize: 13 }}>🔁 Shift swaps</Link>
           <button className="btn btn-primary" onClick={() => { setErr(''); setShowForm(true) }}>+ New Request</button>
         </div>
       </div>
