@@ -228,6 +228,42 @@ def _catalog_labels(catalog):
     return out
 
 
+def declared_items(portal_calibration):
+    """THE reader for "which ITEMS has this tenant declared, across every report" (owner 2026-11-27).
+
+    Returns [{item_label, metric_key}] — the tenant's own product spellings and the category each
+    rolls into — for `closing/metric_catalog.build(item_defs=...)` to turn into payable attributes.
+
+    This is a DIFFERENT question from `pos_report_sweep._line_map`, which resolves the map for ONE
+    report with the narrower declaration winning. Here every declared spelling counts, whichever
+    report carried it, because an item a tenant has ever mapped is an item they may pay on — so this
+    UNIONS and deliberately does not re-implement that precedence. Two readers answering the same
+    question would be the duplicate defect; these answer two.
+
+    Folded through `metric_catalog.item_key`, so `NDA` and `nda` are one attribute. PURE.
+    """
+    from app.modules.closing import metric_catalog as _mc
+    cal = portal_calibration if isinstance(portal_calibration, dict) else {}
+    out, seen = [], set()
+
+    def add(m):
+        for raw, key in (m or {}).items() if isinstance(m, dict) else []:
+            label, k = str(raw or "").strip(), str(key or "").strip()
+            if not label or not k:
+                continue
+            ck = _mc.item_key(label)
+            if ck in seen:
+                continue
+            seen.add(ck)
+            out.append({"item_label": label, "metric_key": k})
+
+    add(cal.get("line_map"))
+    for v in cal.values():
+        if isinstance(v, dict):
+            add(v.get("line_map"))
+    return out
+
+
 def _norm_line_map(line_map, catalog_keys):
     """{normalized portal label: metric key} from the tenant's config, dropping any entry that points
     at a category the catalog does not have. A mapping to a deleted category is not honoured silently:

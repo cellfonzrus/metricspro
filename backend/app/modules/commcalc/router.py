@@ -50919,6 +50919,30 @@ def _can_edit_incentive_rules(authorization, org_id):
         return True
 
 
+def _declared_item_defs(client, org_id):
+    """The tenant's uploaded ITEM vocabulary, org-scoped (owner 2026-11-27).
+
+    Every item spelling this org has declared on any of its data sources' reports, so a daily-incentive
+    rule can be paid on `NDA Early AM` rather than only on the category it folds into. The parsing is
+    `pos_report_feed.declared_items`' — the one reader — and this function is only the org-scoped READ
+    that hands it the rows. Returns [] on any failure, which means "nothing identified": an item list
+    is a tenant's own words and there is deliberately no house list behind it."""
+    from app.modules.commcalc import pos_report_feed as _prf
+    out, seen = [], set()
+    try:
+        rows = (client.schema("commcalc").table("data_source")
+                .select("portal_calibration").eq("org_id", org_id).execute()).data or []
+    except Exception:
+        return []
+    for r in rows:
+        for it in _prf.declared_items((r or {}).get("portal_calibration")):
+            k = str(it.get("item_label") or "").strip().lower()
+            if k and k not in seen:
+                seen.add(k)
+                out.append(it)
+    return out
+
+
 @router.get("/incentive-rules")
 def list_incentive_rules(include_inactive: bool = True, org_id: str = ORG_ID,
                          authorization: str = Header(default="")):
@@ -50928,7 +50952,7 @@ def list_incentive_rules(include_inactive: bool = True, org_id: str = ORG_ID,
     client = sb()
     from app.modules.closing.router import _metric_catalog
     from app.modules.closing import metric_catalog as _mc
-    cat = _metric_catalog(client, org_id)
+    cat = _metric_catalog(client, org_id, item_defs=_declared_item_defs(client, org_id))
     return {
         "rules": _incentive_rules(client, org_id, active_only=not include_inactive),
         "metrics": cat,
@@ -50973,11 +50997,23 @@ def save_incentive_rule(body: SaveIncentiveRuleIn, org_id: str = ORG_ID,
         raise HTTPException(400, "label required")
     qualifier = body.qualifier if isinstance(body.qualifier, dict) else {"scope": "none"}
     payout = body.payout if isinstance(body.payout, dict) else {}
-    known = set(_mc.keys(_metric_catalog(client, org_id)))
+    # The SAME set the editor's picker was served (owner 2026-11-27): the tenant's categories AND the
+    # items they uploaded. Before this, the guard read categories only, so a rule naming an item the
+    # tenant had already declared in their feed mapping was refused and the owner was told to retype
+    # it by hand on Count Fields. One set, dereferenced by both sides, so what is offered is what is
+    # accepted — a picker and a guard reading two lists is the duplicate defect.
+    known = set(_mc.keys(_metric_catalog(client, org_id,
+                                         item_defs=_declared_item_defs(client, org_id))))
     named = [str(k).strip() for k in (list(qualifier.get("metric_keys") or [])
                                       + list(payout.get("metric_keys") or [])) if str(k).strip()]
     unknown = sorted({k for k in named if k not in known})
     if unknown:
+        items = [k for k in unknown if k.startswith(_mc.ITEM_PREFIX)]
+        if items:
+            raise HTTPException(400, "This rule names items this business has not declared: "
+                                     + ", ".join(k[len(_mc.ITEM_PREFIX):] for k in items)
+                                     + ". Map them to a category on the data source's report "
+                                       "mapping first, then they become payable here.")
         raise HTTPException(400, "This rule names categories this business does not declare: "
                                  + ", ".join(unknown)
                                  + ". Add them on Daily Closing -> Count Fields first.")
@@ -51207,7 +51243,11 @@ def get_daily_incentive(close_date: str, store_code: str = "", metric_source: st
     client = sb()
     from app.modules.closing.router import _metric_catalog, _metric_lines
     from app.modules.closing import metric_catalog as _mc
-    cat = _metric_catalog(client, org_id)
+    # The catalog carries the tenant's uploaded ITEMS too (owner 2026-11-27), so a rule written on
+    # `NDA Early AM` has something to measure. Items are not revenue, so every existing figure this
+    # endpoint returns is unmoved.
+    _items = _declared_item_defs(client, org_id)
+    cat = _metric_catalog(client, org_id, item_defs=_items)
     row = None
     try:
         q = (client.schema("commcalc").table("daily_closing").select("*")
@@ -51227,7 +51267,8 @@ def get_daily_incentive(close_date: str, store_code: str = "", metric_source: st
     unclassified = {"amount": 0.0, "rows": 0, "by_employee": {}}
     if source == _metric_authority.SOURCE_FEED:
         feed_rows = _portal_metric_rows(client, org_id, store_code, close_date)
-        lines = _metric_authority.lines_from_feed(feed_rows, business_date=str(close_date))
+        lines = _metric_authority.lines_from_feed(
+            feed_rows, business_date=str(close_date), item_keys=_mc.item_keys(cat))
         excluded = _metric_authority.excluded_from_feed(feed_rows)
         # The money this day's report carried on lines no declared category claimed. Read in ONE
         # home, and only from the feed: a rep's declaration cannot carry an unclassified line,
@@ -51344,7 +51385,11 @@ def _incentive_shortfall_payload(client, org_id, period, *, store_code="", metri
     from app.modules.closing import metric_catalog as _mc
     start, end, _today = _period_bounds(period, today)
     d_from, d_to = str(start), str(end - _timedelta(days=1))
-    cat = _metric_catalog(client, org_id)
+    # The catalog carries the tenant's uploaded ITEMS too (owner 2026-11-27), so a rule written on
+    # `NDA Early AM` has something to measure. Items are not revenue, so every existing figure this
+    # endpoint returns is unmoved.
+    _items = _declared_item_defs(client, org_id)
+    cat = _metric_catalog(client, org_id, item_defs=_items)
     rules = _incentive_rules(client, org_id, active_only=True)
     src_declared, src_pending = _declared_metric_authority(client, org_id)
     source = _metric_authority.resolve(metric_source or src_declared)
@@ -51366,7 +51411,8 @@ def _incentive_shortfall_payload(client, org_id, period, *, store_code="", metri
             # BOTH halves through `metric_authority`, exactly as the day endpoint reads them: which
             # rows may pay, and which money no declared category claimed. Reaching past it to the
             # feed module would be a second reader of the same question.
-            lines = _metric_authority.lines_from_feed(rows, business_date=key[1])
+            lines = _metric_authority.lines_from_feed(
+                rows, business_date=key[1], item_keys=_mc.item_keys(cat))
             u = _metric_authority.unclassified_from_feed(rows, business_date=key[1]) or {}
             bags[key] = {"declared_map": _mc.declared(cat, None, lines),
                          "per_employee": _mc.by_employee(cat, lines),

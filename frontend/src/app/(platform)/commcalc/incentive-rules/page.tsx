@@ -20,6 +20,10 @@ const th: React.CSSProperties = { textAlign: 'left', padding: '8px', fontSize: 1
 type Metric = {
   key: string; label: string; value_kind: string; declared_by: string
   unit_price: number; in_revenue: boolean; source: string
+  // Owner 2026-11-27: an ITEM the tenant uploaded with their sales report is payable in its own
+  // right, so a rule can pay a different amount for `NDA Early AM` than for `NDA Saver`. The
+  // category it rolls into travels with it — never re-derived here.
+  parent_key?: string | null; parent_label?: string | null
 }
 type Qualifier = { scope?: string; basis?: string; metric_keys?: string[]; op?: string; threshold?: number }
 type Payout = { basis?: string; metric_keys?: string[]; rate?: number; split?: string; cap?: number | null }
@@ -120,8 +124,37 @@ function plainWords(r: Rule, metrics: Metric[]): string {
   return `${when}this rule pays on ${on}.`
 }
 
+function Chip({ m, on, toggle }: { m: Metric; on: boolean; toggle: () => void }) {
+  return (
+    <label title={m.parent_label ? `Counts towards ${m.parent_label}` : undefined} style={{
+      fontSize: 12, padding: '2px 7px', borderRadius: 11, cursor: 'pointer',
+      border: '1px solid var(--border)',
+      background: on ? 'var(--surface2)' : 'transparent', opacity: on ? 1 : 0.7,
+    }}>
+      <input type="checkbox" checked={on} onChange={toggle} style={{ marginRight: 5 }} />
+      {m.label}
+      {m.parent_label ? (
+        <span style={{ color: 'var(--text3)', marginLeft: 4 }}>· {m.parent_label}</span>
+      ) : null}
+    </label>
+  )
+}
+
+// WHAT A RULE MAY BE PAID ON (owner 2026-11-27: "they shoudl be able to pick what items needs to be
+// compensated fromt eh drop down menu and what amount").
+//
+// Two groups, and the SERVER's own `source` word decides which is which — this screen declares no
+// category and no item, exactly as the file header has always required. The categories are the ones
+// typed on Count Fields; the items are the tenant's own product spellings, uploaded with their sales
+// report. Picking an item pays on that item alone, which is what the categories could never express.
+//
+// Items are searchable because a real upload carries dozens of them; the search is display only and
+// never narrows what gets SAVED.
 function MetricPicker({ metrics, value, onChange, hint }:
   { metrics: Metric[]; value: string[]; onChange: (v: string[]) => void; hint: string }) {
+  const [q, setQ] = useState('')
+  const cats = metrics.filter(m => m.source !== 'feed_item')
+  const items = metrics.filter(m => m.source === 'feed_item')
   if (!metrics.length) {
     return (
       <div style={{ fontSize: 12, color: 'var(--text3)' }}>
@@ -131,22 +164,43 @@ function MetricPicker({ metrics, value, onChange, hint }:
     )
   }
   const toggle = (k: string) => onChange(value.includes(k) ? value.filter(x => x !== k) : [...value, k])
+  const needle = q.trim().toLowerCase()
+  // A chosen item stays visible however the search is narrowed, so nothing can be selected and then
+  // hidden — which would read as having been dropped.
+  const shown = items.filter(m => !needle || value.includes(m.key)
+    || m.label.toLowerCase().includes(needle)
+    || (m.parent_label || '').toLowerCase().includes(needle))
   return (
     <div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {metrics.map(m => (
-          <label key={m.key} style={{
-            fontSize: 12, padding: '2px 7px', borderRadius: 11, cursor: 'pointer',
-            border: '1px solid var(--border)',
-            background: value.includes(m.key) ? 'var(--surface2)' : 'transparent',
-            opacity: value.includes(m.key) ? 1 : 0.7,
-          }}>
-            <input type="checkbox" checked={value.includes(m.key)} onChange={() => toggle(m.key)}
-              style={{ marginRight: 5 }} />
-            {m.label}
-          </label>
+        {cats.map(m => (
+          <Chip key={m.key} m={m} on={value.includes(m.key)} toggle={() => toggle(m.key)} />
         ))}
       </div>
+      {items.length ? (
+        <div style={{ marginTop: 8, paddingTop: 7, borderTop: '1px dashed var(--border)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>
+              Items from your uploaded sales report ({items.length})
+            </span>
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search items…"
+              style={{ ...sel, padding: '3px 6px', fontSize: 11, flex: '0 1 170px' }} />
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {shown.map(m => (
+              <Chip key={m.key} m={m} on={value.includes(m.key)} toggle={() => toggle(m.key)} />
+            ))}
+          </div>
+          {!shown.length ? (
+            <div style={{ fontSize: 11, color: 'var(--text3)' }}>No item matches “{q}”.</div>
+          ) : null}
+          <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 4 }}>
+            Pick an item to pay on that item alone. The grey word after it is the category it counts
+            towards. An item only produces a figure on days read from the sales report — a rep&apos;s
+            closing declaration is made per category, not per item.
+          </div>
+        </div>
+      ) : null}
       <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 3 }}>{hint}</div>
     </div>
   )
@@ -165,9 +219,17 @@ export default function IncentiveRulesPage() {
   }, [])
   useEffect(() => { load() }, [load])
 
-  const metrics = (d?.metrics || []).filter(m => m.source === 'count_field')
-  const countMetrics = metrics.filter(m => m.value_kind !== 'amount')
-  const moneyMetrics = metrics.filter(m => m.value_kind !== 'count' || m.unit_price > 0)
+  // THE DEFECT THIS LINE WAS (owner 2026-11-27). It read `.filter(m => m.source === 'count_field')`,
+  // so the only things a rule could be paid on were the categories someone had typed by hand on
+  // Count Fields — and the item vocabulary the tenant had already UPLOADED was dropped on the floor
+  // here even when the server served it. Both sources are offered now, grouped, and the server's
+  // own `source` word decides the grouping so a source added there needs no change here.
+  const all = d?.metrics || []
+  const metrics = all.filter(m => m.source === 'count_field')
+  const items = all.filter(m => m.source === 'feed_item')
+  // An item is measured the way its category is, so it belongs in the same two buckets.
+  const countMetrics = [...metrics, ...items].filter(m => m.value_kind !== 'amount')
+  const moneyMetrics = [...metrics, ...items].filter(m => m.value_kind !== 'count' || m.unit_price > 0)
   const kinds = d?.rule_kinds || []
   const canEdit = d?.can_edit !== false
 

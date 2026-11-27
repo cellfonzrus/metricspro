@@ -44,6 +44,25 @@ RECON_CLASSES = ("activation", "upgrade", "other")
 # Mirrors count_config.STANDARD_DEFS; the lock harness asserts the two never drift.
 STANDARD_KEYS = ("upgrade_count", "new_line_count", "postpaid_count")
 
+# How an ITEM-level attribute is keyed (owner 2026-11-27). A tenant uploads an item vocabulary with
+# their sales report — `NDA Early AM`, `11x17 Color Copies` — and every one of those items used to be
+# folded into its category before anything could point at it, so "pay $2 for every NDA Early AM" was
+# inexpressible and a rule naming an item was REFUSED. An item joins the catalog on exactly the terms
+# a tender does: keyed under a prefix, read-only here, and NEVER revenue, because an item is a finer
+# view of money its category already counts. One constant, so no caller may respell it.
+ITEM_PREFIX = "item:"
+
+
+def item_key(item_label) -> str:
+    """The catalog key for one uploaded item. Case- and space-folded, so the two spellings a POS
+    export carries for one product (`NDA` and `nda`) are ONE payable attribute rather than two that
+    would each pay. The one home for that folding — `harness_payable_attributes.py` §F4 pins it."""
+    return ITEM_PREFIX + " ".join(str(item_label or "").strip().lower().split())
+
+
+def item_keys(catalog):
+    return [m["key"] for m in (catalog or []) if m.get("source") == "feed_item"]
+
 
 def _num(v, default=0.0):
     try:
@@ -69,7 +88,7 @@ def _key(v):
 
 # ── The catalog ───────────────────────────────────────────────────────────────────────────────────
 
-def build(count_defs, *, tender_defs=None):
+def build(count_defs, *, tender_defs=None, item_defs=None):
     """The tenant's declared-metric catalog, in display order.
 
     `count_defs` are `closing_count_field_def` rows (the editor's own list — pass the ACTIVE ones for
@@ -158,6 +177,46 @@ def build(count_defs, *, tender_defs=None):
             "sort_order": 1000 + _int(t.get("sort_order"), j),
             # A tender is HOW money arrived; the feed's own tender split is the same figure, so
             # reconciling it here would duplicate `/closing/tender-recon`.
+            "feed_counterpart": None,
+            "feed_units_tolerance": None,
+            "feed_amount_tolerance": None,
+        })
+    # ── The tenant's uploaded ITEM vocabulary (owner 2026-11-27) ──────────────────────────────────
+    # `item_defs` are {item_label, metric_key} pairs read from the tenant's own feed declaration
+    # (`data_source.portal_calibration[*].line_map`, via `pos_report_feed.declared_items` — the one
+    # reader). They are a TENANT'S OWN WORDS, so this is a REQUIRED declaration with NO house list
+    # behind it: pass nothing and nothing is identified, which is the 2026-10-30 directive's one
+    # banned place for a default. An item whose category this tenant does not declare is dropped —
+    # a rule may not point at something the engine could never measure.
+    cat_now = {m["key"]: m for m in out}
+    for n, it in enumerate(item_defs or []):
+        label = _key((it or {}).get("item_label"))
+        parent = cat_now.get(_key((it or {}).get("metric_key")))
+        if not label or not parent:
+            continue
+        ck = item_key(label)
+        if ck in seen or ck == ITEM_PREFIX:
+            continue
+        seen.add(ck)
+        out.append({
+            "key": ck,
+            "label": label,          # the tenant's own spelling, never re-worded
+            # An item is measured the way its category is, so a target or a payout on it reads the
+            # same kind of number — `figure_unit` must not disagree between the two.
+            "value_kind": parent["value_kind"],
+            "declared_by": parent["declared_by"],
+            "unit_price": 0.0,
+            # NEVER revenue. An item is a finer view of money `parent` already counts; counting it
+            # again would overstate every day's gross revenue and with it every revenue target and
+            # every percent-of-amount payout. Same reason a tender is not revenue.
+            "in_revenue": False,
+            "recon_class": parent["recon_class"],
+            "source": "feed_item",
+            "editable": False,       # edited where it was uploaded, not on Count Fields
+            "is_standard": False,
+            "sort_order": 2000 + _int((it or {}).get("sort_order"), n),
+            "parent_key": parent["key"],
+            "parent_label": parent["label"],
             "feed_counterpart": None,
             "feed_units_tolerance": None,
             "feed_amount_tolerance": None,

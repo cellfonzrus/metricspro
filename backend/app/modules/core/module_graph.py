@@ -1015,6 +1015,12 @@ FACTS: dict[str, dict] = {
             # editor and its endpoint offer exactly what the parser serves, because a screen with
             # its own list offers a value the parser refuses.
             'app/modules/commcalc/report_declaration.py': ('_feed',),
+            # §76.4a (owner 2026-11-27) — `_declared_item_defs` is the ORG-SCOPED READ that hands the
+            # tenant's `portal_calibration` rows to `declared_items`, the one reader of the uploaded
+            # item list. The router does the scoping and none of the parsing: the daily-incentive
+            # rules endpoint and its save guard are served from that one answer, so what the picker
+            # offers is what the guard accepts.
+            'app/modules/commcalc/router.py': ('_prf',),
         },
     },
     # ── §4a.4 (owner decision 2026-10-19) — which POS departments are DEVICE departments ────────
@@ -1821,6 +1827,15 @@ FACTS: dict[str, dict] = {
             # `amount_of` — so a payout rule and a target cannot disagree about what a day's sales
             # were. It holds no category list and no second definition of revenue.
             'app/modules/commcalc/daily_incentive.py': ('mc',),
+            # §76.4a (owner 2026-11-27) — a rule may be paid on an ITEM the tenant uploaded, so the
+            # feed projection asks the catalog for the ITEM KEY FOLDING (`item_key`, `ITEM_PREFIX`)
+            # rather than spelling `item:` itself. A second folding would let the picker and the paid
+            # line disagree about which of a POS export's spellings are one item.
+            'app/modules/commcalc/metric_authority.py': ('_mc',),
+            # §76.4a — the reader of the tenant's UPLOADED item list folds each label through the
+            # same `item_key`, so what `declared_items` offers is keyed exactly as what the catalog
+            # builds and the engine measures. It holds no item name of any tenant's.
+            'app/modules/commcalc/pos_report_feed.py': ('_mc',),
             # §COMMCALC-81 — the shortfall reader asks the catalog for a category's own WORDS
             # (`by_key`) and the day's figures (`units_of` / `amount_of`), so a rep is coached in the
             # words their own business declared. It holds no label and no figure of its own; this

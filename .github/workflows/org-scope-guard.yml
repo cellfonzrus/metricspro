@@ -20,6 +20,8 @@ on:
       # the undefined-name lock (index §6k) judges EVERY module under backend/app
       - "backend/app/**/*.py"
       - "backend/harness_undefined_names_lock.py"
+      # the integration tests this job runs, so editing one re-runs it (owner 2026-11-27)
+      - "backend/tests/integration/test_incentive_rule_items_endpoint.py"
       # §CORE-19 — the bounded in-process TTL cache: the one home, the two modules that hold one,
       # and the lock whose §D scan judges every file under backend/app/core.
       - "backend/app/core/ttl_cache.py"
@@ -421,6 +423,15 @@ jobs:
       - name: Run the own-schedule integration tests (both id shapes, both tenants)
         working-directory: backend
         run: python3 -m pytest tests/integration/test_my_schedule_endpoint.py -q | tee -a "$GITHUB_STEP_SUMMARY"
+      # PAYABLE ITEMS (owner 2026-11-27, index §COMMCALC-76.5). A daily-incentive rule may now be
+      # paid on an ITEM the tenant uploaded with their sales report, not only on a hand-typed
+      # category. An item vocabulary is a TENANT'S OWN WORDS, so this belongs in the org-scope job:
+      # the tests give two tenants the SAME item spelling on the SAME store code and day, so only
+      # the org scope separates them and a dropped `.eq("org_id", ...)` fails here rather than
+      # hiding behind an unrelated filter.
+      - name: Run the payable-item integration tests (three tenants; one tenant's item list may not reach another)
+        working-directory: backend
+        run: python3 -m pytest tests/integration/test_incentive_rule_items_endpoint.py -q | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
       - name: Install frontend deps for the nav proof
