@@ -499,7 +499,12 @@ def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None,
         # middleware refuses on. `lib/rbac.ts` holds no copy of this list; it reads this payload.
         from app.core import rep_surface as _rs
         from app.modules.storeops.router import _role_scope as _rscope
-        _rsv = _rs.viewer_payload(_is_self, _rscope(org_id, (u.get("role") or "").strip()))
+        # `perms` IS this role's permissions row (read at the top of this function), so the admin's
+        # own per-function switches reach the payload with no second read: a tile, a page and the
+        # API gate all subtract the same screens (§CORE-33.6). A grant here is a maximum — a switch
+        # can only close a surface, never open one the declaration refuses.
+        _rsv = _rs.viewer_payload(_is_self, _rscope(org_id, (u.get("role") or "").strip()),
+                                  role_perms=perms)
         if _rsv is not None:
             perms = {**perms, "rep_surface": _rsv}
     except Exception:

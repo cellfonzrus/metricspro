@@ -141,7 +141,12 @@ SURFACES = (
         # call none of it. REMOVED rather than carved out, because this module's own rule is that
         # carving something never granted is "a comment pretending to be a gate" — default deny is
         # the real refusal. Found by the security pass on 2026-11-27 (§CORE-33.2).
-        "api_read": ("/api/v1/storeops/shifts",),
+        # `timeoff-conflict-mode` (GET) is the org's own policy — may a shift be scheduled over
+        # approved time off, warn or block. Its handler says "any signed-in caller may read"; the
+        # Time off page asks it on mount to decide whether to confirm() before posting, and a rep
+        # was refused it. READ only: the PUT beside it is `_require_manager`, and api_read cannot
+        # carry a write (§CORE-33.6).
+        "api_read": ("/api/v1/storeops/shifts", "/api/v1/storeops/timeoff-conflict-mode"),
         "what": "their own shifts, and asking for time off, a swap or an extension",
     },
     {
@@ -166,11 +171,18 @@ SURFACES = (
         # refused. The screen is already in `rbac.SELF_OWN_STORE_SURFACES`, i.e. it resolves a
         # scope-'self' viewer to their OWN store and filters per-rep rows to their own employee id,
         # so this grants a view that was designed for exactly this viewer.
+        # THE CARD THAT COULD NOT LOAD (owner 2026-11-27, §CORE-33.6). The page carries an Inventory
+        # aging card, and `GET /commcalc/my-shelf` was not granted — so the one screen this tile
+        # exists to open told the rep "This is not part of your access" in a red box. The read is
+        # THEIR OWN shelf by construction: the handler resolves the devices through
+        # `storeops.scope_keyset(authorization)`, the evidence-based span of the stores this login
+        # actually works at, and it was built (owner 2026-10-26) for exactly this viewer — *"it
+        # should be on every sales reps daSHBOARDS WHEN TEHY LOG IN"*. GET only.
         "key": "targets", "tile": True, "label": "My targets", "icon": "📈",
         "tile_page": "/commcalc/targets/my",
         "pages": ("/commcalc/targets/my",),
         "api": (),
-        "api_read": (),
+        "api_read": ("/api/v1/commcalc/my-shelf",),
         "what": "their own target against what they have achieved this month, for their own store",
     },
     {
@@ -180,13 +192,21 @@ SURFACES = (
         # The ticket list, a ticket and raising one are an employee's; the two manager screens
         # inside the same subtree are NOT, and the carve-out is stated where the grant is made.
         "page_except": ("/helpdesk/settings", "/helpdesk/dashboard"),
-        "api": ("/api/v1/helpdesk",),
-        # The carve-out the page side already had, now on the API too — carving the SCREEN and
-        # granting its whole API is the browser-only gate this module exists to kill. `/config/**`
-        # is the settings screen (categories, priorities, teams, SLA) and `/support/**` is the
-        # agent console (assign, reply, canned responses, bulk review).
-        "api_except": ("/api/v1/helpdesk/config/**", "/api/v1/helpdesk/support/**"),
-        "api_read": (),
+        # GRANTED BY WHAT THE SCREENS CALL, not by the module with holes punched in it (§CORE-33.6).
+        # This was `"/api/v1/helpdesk"` — the WHOLE module, every method — with `/config/**` and
+        # `/support/**` carved back out. Two problems with that shape, and the second one was a live
+        # defect: (a) every helpdesk route shipped from now on is granted to every employee until
+        # somebody remembers to carve it, and (b) the carve-out is absolute and asked FIRST, so
+        # `/config/bootstrap` — the ticket form's own vocabulary (categories, priorities, statuses)
+        # which all three employee screens fetch on mount — was refused. Raising a ticket is the
+        # feature; its drop-downs are part of it.
+        #
+        # So: the ticket itself (list, one ticket, its comments, attachments, escalate — the prefix
+        # match covers the members) for every method, and the form vocabulary READ-ONLY. The
+        # settings writes, the agent console and the manager dashboard stats are simply never
+        # granted, which is a real refusal rather than a carve-out that reads like one.
+        "api": ("/api/v1/helpdesk/tickets",),
+        "api_read": ("/api/v1/helpdesk/config/bootstrap",),
         "what": "raising and following their own tickets",
     },
     {
@@ -287,7 +307,10 @@ SURFACES = (
         "what": "the training assignments the platform gives them",
     },
     {
-        "key": "password", "tile": True, "label": "My password", "icon": "🔑",
+        # ★ NO LOCKOUT ★ — `never_off` keeps this one surface out of the admin's switch (see
+        # `surface_switched_off`). A role whose password page is switched off cannot complete a
+        # forced reset, so it cannot sign in to have the switch put back.
+        "key": "password", "tile": True, "label": "My password", "icon": "🔑", "never_off": True,
         "tile_page": "/account/password",
         "pages": ("/account/password/**",),
         "api": ("/api/v1/core/me",),
@@ -393,13 +416,65 @@ def tile_page(entry):
     return _norm(e[: -len(SUBTREE)]) if e.endswith(SUBTREE) else _norm(e)
 
 
-def tiles():
+def tiles(role_perms=None):
     """The landing page's tiles, in declaration order. Label, icon, page and plain-words `what`.
-    `page` is an ADDRESS a browser can open, never a permission pattern."""
+    `page` is an ADDRESS a browser can open, never a permission pattern.
+
+    `role_perms` is the role's own permissions row. A tile whose destination that role has switched
+    off is not published — the same subtraction the page list and the API gate make, from the same
+    one answer, so the landing page cannot offer a door the server has closed."""
     return tuple({"key": s["key"], "label": s["label"], "icon": s["icon"],
                   "page": tile_page(s["tile_page"]) if s.get("tile_page") else None,
                   "what": s["what"]}
-                 for s in SURFACES if s.get("tile"))
+                 for s in SURFACES
+                 if s.get("tile") and (s.get("never_off")
+                                       or not switched_off(role_perms, tile_page(s.get("tile_page") or ""))))
+
+
+# ── THE ADMIN'S OWN SWITCH — A GRANT HERE IS A MAXIMUM, NEVER A MANDATE ──────────────────────────
+# OWNER 2026-11-27: *"i disaables my targets from ny logistics sales reps but it still shows up"*.
+# He had turned My Targets off for that role on the Roles screen, and the tile stayed, the page
+# opened and the API answered.
+#
+# THE CLASS, stated so nobody re-derives it. This module was built to stop a confined employee
+# reaching a manager screen, so it answers ONE question — "is this page/route part of an individual
+# contributor's surface?" — and it answered it as the WHOLE truth: `canSeeItem` hands a confined
+# viewer straight to `repPageAllowed` and the API gate asks `api_allowed` alone, so the per-function
+# switches an admin ticks for that role were never consulted for the one kind of viewer whose menu
+# is built from this file. A tenant's own administrator could not take away what this declaration
+# gave. A ceiling read as a floor.
+#
+# DELIBERATELY ONE-DIRECTIONAL. A switch here can only SUBTRACT. An admin ticking a page ON for a
+# confined role does not widen their reach past this declaration — widening by configuration is
+# exactly what §CORE-33 exists to prevent, and the API gate would refuse what the menu offered. So
+# `False` closes a surface and nothing else opens one.
+#
+# WHAT A SWITCH IS. `roles.permissions["pages"]["/commcalc/targets/my"] is False` — the per-function
+# override the Roles screen already writes, keyed by the page's NAV href, which is the same key
+# `canSeeItem` reads for every other viewer. No new storage, no new vocabulary, no migration.
+ROLE_PAGE_SWITCH_KEY = "pages"
+
+
+def switched_off(role_perms, address):
+    """Has this role's own per-function switch turned this page address OFF? Only an explicit
+    `False` counts: an absent key and a `True` both leave the declaration exactly as it is."""
+    sw = (role_perms or {}).get(ROLE_PAGE_SWITCH_KEY)
+    if not isinstance(sw, dict):
+        return False
+    return sw.get(_norm(address)) is False
+
+
+def surface_switched_off(surface, role_perms):
+    """Is this whole surface off for this role? Only when EVERY page it declares is switched off —
+    denying the time-off REQUEST FORM must not also take away the schedule it sits beside. A
+    surface marked `never_off` is never off (★ NO LOCKOUT ★: a forced password change must not be
+    switchable, or the role it is switched off for cannot sign in and fix anything)."""
+    if not role_perms or surface.get("never_off"):
+        return False
+    addrs = [tile_page(p) for p in (surface.get("pages") or ())]
+    if not addrs:
+        return False
+    return all(switched_off(role_perms, a) for a in addrs)
 
 
 # ── PAGE GRAMMAR ──────────────────────────────────────────────────────────────────────────────────
@@ -412,15 +487,19 @@ def tiles():
 SUBTREE = "/**"
 
 
-def pages():
+def pages(role_perms=None):
     """Every page entry a confined employee may open, deduped, in declaration order — in the grammar
-    above. This is the list `/me` hands the browser; `lib/rbac.ts` holds no copy of it."""
+    above. This is the list `/me` hands the browser; `lib/rbac.ts` holds no copy of it.
+
+    With `role_perms`, a page this role has switched off is dropped — one page at a time, so an
+    admin can close the time-off form without closing the schedule beside it."""
     out, seen = [], set()
     for s in SURFACES:
         for p in s["pages"]:
-            if p not in seen:
-                seen.add(p)
-                out.append(p)
+            if s.get("never_off") or not switched_off(role_perms, tile_page(p)):
+                if p not in seen:
+                    seen.add(p)
+                    out.append(p)
     return tuple(out)
 
 
@@ -440,13 +519,14 @@ def _page_entry_matches(path, entry):
     return p == _norm(e)
 
 
-def page_allowed(path):
+def page_allowed(path, role_perms=None):
     """May a confined employee open this PAGE? One of the declared entries must match in the grammar
     above, and no carve-out may. `/my/**` admits `/my/anything`; `/helpdesk/**` does NOT admit
-    `/helpdesk/settings`; `/storeops/timeoff` does NOT admit `/storeops/timeclock`."""
+    `/helpdesk/settings`; `/storeops/timeoff` does NOT admit `/storeops/timeclock`. With
+    `role_perms`, a page that role has switched off is not among the entries."""
     if any(_page_entry_matches(path, e) for e in page_exceptions()):
         return False
-    return any(_page_entry_matches(path, e) for e in pages())
+    return any(_page_entry_matches(path, e) for e in pages(role_perms))
 
 
 def _api_except_matches(path, entry):
@@ -469,13 +549,18 @@ def api_exceptions():
     return tuple(out)
 
 
-def api_allowed(path, method="GET"):
+def api_allowed(path, method="GET", role_perms=None):
     """May a confined employee's browser call this API path with this method? DEFAULT DENY.
 
     A carve-out is asked FIRST and refuses outright, exactly as `page_allowed` does — a grant made
     for the POST that ASKS must never carry the PATCH that ANSWERS. The carve-out is absolute
     rather than per-surface: a route one surface calls a manager's is not an employee's because a
-    second grant happens to overlap it."""
+    second grant happens to overlap it.
+
+    With `role_perms`, a surface whose every page this role has switched off grants nothing: the
+    screen is gone, so the calls it makes are not this role's either. The UNIVERSAL calls are never
+    subtracted — they are the shell, and refusing one would lock the person out rather than confine
+    them (★ NO LOCKOUT ★)."""
     m = (method or "GET").upper()
     if any(_api_except_matches(path, e) for e in api_exceptions()):
         return False
@@ -484,6 +569,8 @@ def api_allowed(path, method="GET"):
     if m in _READ_METHODS and _matches(path, UNIVERSAL_API_READ):
         return True
     for s in SURFACES:
+        if surface_switched_off(s, role_perms):
+            continue
         if _matches(path, s["api"]):
             return True
         if m in _READ_METHODS and _matches(path, s["api_read"]):
@@ -491,7 +578,7 @@ def api_allowed(path, method="GET"):
     return False
 
 
-def surface_for_api(path, method="GET"):
+def surface_for_api(path, method="GET", role_perms=None):
     """Which declared surface admits this API path (for a trace / an explanation). None when none
     does, which is exactly when the gate refuses."""
     m = (method or "GET").upper()
@@ -500,31 +587,52 @@ def surface_for_api(path, method="GET"):
     if _matches(path, UNIVERSAL_API) or (m in _READ_METHODS and _matches(path, UNIVERSAL_API_READ)):
         return "universal"
     for s in SURFACES:
+        if surface_switched_off(s, role_perms):
+            continue
         if _matches(path, s["api"]) or (m in _READ_METHODS and _matches(path, s["api_read"])):
             return s["key"]
     return None
 
 
-def refusal(path, method="GET"):
+def api_switchable(path, method="GET"):
+    """Could a ROLE's own switch close this API path? True only when the path is granted by a
+    surface that has pages and is not `never_off` — i.e. when the answer depends on the role's
+    permissions row and the gate therefore has to read it.
+
+    This exists for the API middleware's hot path, which asks `api_allowed` BEFORE it resolves any
+    identity: a universal shell call stays I/O-free, and only a surface call pays for the role read.
+    Without it, honouring the switch would have meant an identity resolution on every request."""
+    if not api_allowed(path, method):
+        return False                      # already refused; nothing left for a switch to close
+    key = surface_for_api(path, method)
+    if key in (None, "universal"):
+        return False
+    for s in SURFACES:
+        if s["key"] == key:
+            return bool(s.get("pages")) and not s.get("never_off")
+    return False
+
+
+def refusal(path, method="GET", role_perms=None):
     """The sentence a refused caller is told. It names what they CAN do rather than what they cannot,
     because the person reading it is an employee who has done nothing wrong."""
-    labels = ", ".join(t["label"] for t in tiles())
+    labels = ", ".join(t["label"] for t in tiles(role_perms))
     return (f"This is not part of your access. {method} {_norm(path)} belongs to a manager screen. "
             f"What you can use: {labels}.")
 
 
-def viewer_payload(is_individual_contributor, scope=None):
+def viewer_payload(is_individual_contributor, scope=None, role_perms=None):
     """What `/me` carries, or None for a viewer neither confined nor landed — so an older browser and
     a market/company role are byte-identical to today. The browser never re-derives either fact:
     `confined` says whether its reach is this list, `landing` says where it drops them."""
     confined = bool(is_individual_contributor)
     if not landing_applies(confined, scope):
         return None
-    out = {"confined": confined, "landing": LANDING_PAGE, "tiles": [dict(t) for t in tiles()]}
+    out = {"confined": confined, "landing": LANDING_PAGE, "tiles": [dict(t) for t in tiles(role_perms)]}
     if confined:
         out["page_except"] = list(page_exceptions())
     # A store manager lands here but is NOT confined, so handing them a page allowlist would be a
     # second, wrong answer about their reach. Only a confined viewer gets one.
     if confined:
-        out["pages"] = list(pages())
+        out["pages"] = list(pages(role_perms))
     return out

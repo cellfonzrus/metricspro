@@ -54,7 +54,17 @@ export default function TimeOffPage() {
   useEffect(() => {
     Promise.all([
       api('/api/v1/storeops/time-off'),
-      apiCached('/api/v1/storeops/employees', LOOKUP),
+      // THE PICKER ASKS THE PICKER (§CORE-33.6). This read was `GET /storeops/employees` — the
+      // PERSONNEL roster, a `select("*")` carrying date of birth, home address and emergency
+      // contacts, which this page uses for exactly three fields: the name, the employee id and the
+      // home store. It is also a manager's route, so for a confined employee it was refused — and
+      // in the Promise.all below that refusal took the WHOLE page down with it, requests and all.
+      // `GET /storeops/employees/visible` is the platform's own answer to "whom may this login pick
+      // from", narrowed server-side by the caller's own role, and it carries names rather than
+      // personnel records. One path for every viewer; no new endpoint and no widened grant.
+      apiCached('/api/v1/storeops/employees/visible', LOOKUP)
+        .then((d: { employees?: unknown[] }) => (Array.isArray(d?.employees) ? d.employees : []))
+        .catch(() => []),
       apiCached('/api/v1/storeops/stores', LOOKUP).catch(() => []),
     ]).then(([reqs, emps, sts]) => {
       setRequests(reqs || [])

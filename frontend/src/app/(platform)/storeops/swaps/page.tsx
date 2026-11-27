@@ -36,7 +36,18 @@ export default function ShiftSwapsPage() {
     setLoading(true)
     Promise.all([
       api('/api/v1/storeops/shift-swaps').catch(() => []),
-      apiCached('/api/v1/storeops/employees', LOOKUP).catch(() => []),
+      // THE PICKER ASKS THE PICKER (§CORE-33.6). This read was `GET /storeops/employees` — the
+      // PERSONNEL roster, a `select("*")` carrying date of birth, home address and emergency
+      // contacts, which this page uses for exactly three fields: the name, the employee id and the
+      // home store. It is also a manager's route, so for a confined employee it was refused, and a
+      // rep raising a swap got a counterpart picker with no names in it (on the Time off page the
+      // same refusal took the whole page down, requests and all).
+      // `GET /storeops/employees/visible` is the platform's own answer to "whom may this login pick
+      // from", narrowed server-side by the caller's own role, and it carries names rather than
+      // personnel records. One path for every viewer; no new endpoint and no widened grant.
+      apiCached('/api/v1/storeops/employees/visible', LOOKUP)
+        .then((d: { employees?: unknown[] }) => (Array.isArray(d?.employees) ? d.employees : []))
+        .catch(() => []),
       api(`/api/v1/storeops/shifts?week_start=${win.start}&week_end=${win.end}`).catch(() => []),
     ]).then(([sw, e, sh]) => { setSwaps(sw || []); setEmps(e || []); setShifts(sh || []) })
       .catch(console.error).finally(() => setLoading(false))

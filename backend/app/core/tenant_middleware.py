@@ -543,16 +543,45 @@ def _is_individual_contributor(org: str, role) -> bool:
     return out
 
 
+# THE ROLE'S OWN PERMISSIONS ROW, cached beside the self-scope answer and for the same reason: this
+# runs on requests a tenant's staff make every day. Unreadable reads as "no switches", never as a
+# refusal (★ NO LOCKOUT ★ — the 2026-10-03 lesson, again).
+_rep_perms_cache = _ttl_cache.TTLCache(ttl=_REP_TTL,
+                                       cap=_ttl_cache.cap_from_env("REP_SCOPE_CACHE_MAX", 1024))
+
+
+def _role_switches(org: str, role) -> dict:
+    key = (str(org or ""), str(role or ""))
+    hit = _rep_perms_cache.get(key)
+    if hit is not None:
+        return hit[0]
+    try:
+        from app.modules.storeops.router import _role_permissions
+        out = dict(_role_permissions(org, (role or "").strip()) or {})
+    except Exception:
+        out = {}
+    _rep_perms_cache.put(key, (out,))
+    return out
+
+
 def _rep_surface_refusal(org: str, role, path: str, method: str):
-    """The refusal sentence for a confined caller reaching an undeclared API path, else None."""
+    """The refusal sentence for a confined caller reaching a path their surface does not carry, else
+    None. TWO ways it can be refused, and the second one is the admin's:
+      • the declaration never granted it — default deny, `api_allowed`;
+      • the declaration grants it but THIS ROLE has the screen switched off on the Roles screen, so
+        the surface is not theirs and neither are its calls (§CORE-33.6). A switch can only
+        subtract: it never opens a path the declaration refuses."""
     if not _rep_confine():
         return None
     from app.core import rep_surface as _rs
-    if _rs.api_allowed(path, method):
-        return None                       # declared — asked before the role read, so the hot path is free
+    if _rs.api_allowed(path, method) and not _rs.api_switchable(path, method):
+        return None                       # declared and un-switchable — the hot path, still no role read
     if not _is_individual_contributor(org, role):
         return None
-    return _rs.refusal(path, method)
+    switches = _role_switches(org, role)
+    if _rs.api_allowed(path, method, role_perms=switches):
+        return None
+    return _rs.refusal(path, method, role_perms=switches)
 
 
 def _tenant_needs_2fa(org: str, role, twofa_enabled) -> bool:
@@ -1455,8 +1484,8 @@ class RepSurfaceMiddleware:
         if not _rep_confine():
             return await self.app(scope, receive, send)
         from app.core import rep_surface as _rs
-        if _rs.api_allowed(path, method):
-            return await self.app(scope, receive, send)       # declared — no I/O at all
+        if _rs.api_allowed(path, method) and not _rs.api_switchable(path, method):
+            return await self.app(scope, receive, send)       # declared, un-switchable — no I/O at all
         if _raw_header(scope, _IMPERSONATE_HEADER):
             return await self.app(scope, receive, send)       # the impersonation path's own gate
         headers = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}

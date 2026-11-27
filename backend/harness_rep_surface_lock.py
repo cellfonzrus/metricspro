@@ -247,7 +247,11 @@ API_EXCEPT = {
     "/api/v1/storeops/timeclock/force-clockout/**",
     "/api/v1/storeops/time-off/**", "/api/v1/storeops/shift-swaps/**",
     "/api/v1/storeops/shift-extensions/**",
-    "/api/v1/helpdesk/config/**", "/api/v1/helpdesk/support/**",
+    # The two helpdesk carve-outs are GONE as of 2026-11-27 (§CORE-33.6) and must not come back:
+    # the grant they carved — the whole `/api/v1/helpdesk` module, every method — was replaced by the
+    # ticket routes plus a read of the form's vocabulary. Carving what was never granted is "a
+    # comment pretending to be a gate", and that carve-out was also REFUSING `/config/bootstrap`,
+    # which all three employee screens fetch on mount. See 4g7.
     "/api/v1/closing/row/**", "/api/v1/chat/admin/**",
     # 2026-11-20: a tenant's drop-off label DECLARATIONS. The rescue was opened to a confined
     # employee; retiring one of the organisation's declarations was not.
@@ -263,9 +267,21 @@ check("4g6 the closing grant is NAMED routes, not the whole /closing prefix (whi
       "tender, cash, deposit and sweep config write)",
       '"api": ("/api/v1/closing/row", "/api/v1/closing/envelope-photo",' in RS
       and '"api": ("/api/v1/closing",)' not in RS)
-check("4g7 the helpdesk settings screen is carved on BOTH sides — carving the page and granting "
-      "its whole API is the browser-only gate this module exists to kill",
-      "/helpdesk/settings" in RS and "/api/v1/helpdesk/config/**" in RS)
+# 4g7 — THE HELPDESK IS GRANTED BY WHAT ITS SCREENS CALL (§CORE-33.6). The settings screen is still
+# carved out on the PAGE side; on the API side the module prefix is no longer granted at all, so the
+# settings writes, the agent console and the manager stats are refused by default deny rather than by
+# a carve-out. The form's own vocabulary is a READ, which is what the employee screens were missing.
+check("4g7 the helpdesk settings screen is refused on BOTH sides",
+      "/helpdesk/settings" in RS
+      and '"api": ("/api/v1/helpdesk",)' not in RS
+      and '"api": ("/api/v1/helpdesk/tickets",)' in RS
+      and not _rs.api_allowed("/api/v1/helpdesk/config/settings", "PUT")
+      and not _rs.api_allowed("/api/v1/helpdesk/config/categories", "GET")
+      and not _rs.api_allowed("/api/v1/helpdesk/support/queue", "GET")
+      and not _rs.api_allowed("/api/v1/helpdesk/stats/dashboard", "GET"))
+check("4g7b …and the ticket form's vocabulary is granted read-only",
+      _rs.api_allowed("/api/v1/helpdesk/config/bootstrap", "GET")
+      and not _rs.api_allowed("/api/v1/helpdesk/config/bootstrap", "POST"))
 
 
 # ── 5. /me SERVES THE SAME DECLARATION ───────────────────────────────────────────────────────────
@@ -367,6 +383,143 @@ ctl("6c6 can go red", _SLICE_COPY in "route = e" + _SLICE_COPY)
 nav_hrefs = set(re.findall(r"href: '([^']+)'", RBAC))
 check("6b the landing is registered in NAV, so it carries a page title like every other page",
       LANDING in nav_hrefs)
+
+# ── 6d. A GRANTED PAGE MAY NOT CALL AN API THE GATE REFUSES ──────────────────────────────────────
+# The owner, 2026-11-27, opening the tile that had just been added for him: *"on employee dashboard
+# it shows Inventory aging could not be loaded (This is not part of your access. GET
+# /api/v1/commcalc/my-shelf belongs to a manager screen…)"*. Same shape as the device lookup the day
+# before (§CORE-33.3): THE BROWSER OFFERED WHAT THE API REFUSES. Granting the page is half a grant;
+# the cards on it ask the server too, and a refused card is what the employee actually sees.
+#
+# So this walks every page a confined employee may open, reads the API paths its own code calls —
+# comments stripped, `const BASE = "/api/v1/…"` templates expanded — and asks the gate itself. A
+# refused call is a FAILED BUILD unless it is excused here BY NAME, with the reason the screen never
+# makes it for this viewer. Four screens were already broken when this check was written (the shelf
+# card, the ticket form's vocabulary, the time-off policy read, and the personnel roster two pages
+# used as a name picker); each is a grant or a rewrite in this same change, not an excuse.
+print("\n6d every API a granted page calls is granted")
+PLAT = os.path.join(ROOT, "frontend", "src", "app", "(platform)")
+# EXCUSED — a call the screen makes only for a viewer this is not. The reason is the point: an excuse
+# without one is how a real refusal gets filed as noise.
+API_EXCUSED = {
+    "/api/v1/core/users": "the helpdesk Assignee roster, fetched only when `isAgent` (the ticket "
+                          "page returns early for a requester)",
+    "/api/v1/chat/admin/retention": "the chat retention purge, inside the admin-only control block",
+    "/api/v1/storeops/dropoff-label/scans": "the audit list of everyone's rescues — manager only, "
+                                            "and the page renders no list for a confined viewer",
+    "/api/v1/storeops/dropoff-label": "the collection itself is never called; every call is a "
+                                      "member of it (`${BASE}/read`, `${BASE}/barcodes`)",
+}
+_CALL = re.compile(r"/api/v1/[A-Za-z0-9/_.-]+")
+
+
+def _page_files(route, subtree):
+    """The files that render `route`: its own page/layout/components, plus — for a SUBTREE grant —
+    the child routes the gate still admits. A carved-out child (`/helpdesk/settings`) is not this
+    viewer's page, so its calls are not this viewer's calls."""
+    base = os.path.join(PLAT, route.lstrip("/"))
+    out = []
+    if not os.path.isdir(base):
+        return out
+    for root, dirs, files in os.walk(base):
+        rel = os.path.relpath(root, base)
+        if rel != ".":
+            parts = [p for p in rel.split(os.sep)]
+            # `_components` and friends are not routes; a route segment is anything else.
+            if any(not p.startswith("_") for p in parts):
+                child = route.rstrip("/") + "/" + "/".join(parts)
+                if not subtree or not _rs.page_allowed(child):
+                    dirs[:] = []
+                    continue
+        out.extend(os.path.join(root, f) for f in files if f.endswith((".tsx", ".ts")))
+    return out
+
+
+def _calls(src):
+    """Every API path the code (not the prose) asks for, with `const BASE = "/api/v1/…"` templates
+    resolved — a lock that cannot see through one literal indirection is a lock that passes while
+    the screen is broken."""
+    code = code_only(src, "ts")
+    found = set()
+    for name, lit in re.findall(r"const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*[\'\"`](/api/v1/[^\'\"`]+)", code):
+        for tail in re.findall(r"\$\{" + name + r"\}([A-Za-z0-9/_.-]*)", code):
+            found.add((lit.rstrip("/") + tail).rstrip("/"))
+    for m in _CALL.findall(code):
+        found.add(m.split("${")[0].rstrip("/"))
+    return {p for p in found if p.count("/") > 3 or p.startswith("/api/v1/")}
+
+
+REFUSED_CALLS = []
+for e in _rs.pages():
+    route, subtree = _rs.tile_page(e), e.endswith("/**")
+    for f in _page_files(route, subtree):
+        for path in sorted(_calls(open(f, encoding="utf-8", errors="replace").read())):
+            if _rs.api_allowed(path, "GET") or path in API_EXCUSED:
+                continue
+            REFUSED_CALLS.append((route, path, os.path.relpath(f, ROOT)))
+check("6d1 no granted page calls an API the gate refuses",
+      not REFUSED_CALLS,
+      "; ".join(f"{r}: {p} ({f})" for r, p, f in REFUSED_CALLS[:6]))
+ctl("6d1 can go red", not _rs.api_allowed("/api/v1/commcalc/report-cards", "GET"))
+check("6d2 every excuse names its reason", all(len(v) > 25 for v in API_EXCUSED.values()))
+# An excuse for a path the gate now GRANTS is stale: it reads as "the screen must not call this"
+# while the screen may. Delete it rather than leave a contradiction in the file.
+STALE = [p for p in API_EXCUSED if _rs.api_allowed(p, "GET")]
+check("6d3 no excuse survives its own grant", not STALE, STALE)
+# THE REPORTED DEFECT, as its own regression.
+check("6d4 the rep's own shelf is granted to the screen that shows it",
+      _rs.api_allowed("/api/v1/commcalc/my-shelf", "GET")
+      and not _rs.api_allowed("/api/v1/commcalc/my-shelf", "POST"))
+
+# ── 6e. THE ADMIN'S SWITCH CAN CLOSE WHAT THIS FILE OPENS ────────────────────────────────────────
+# The owner, 2026-11-27: *"i disaables my targets from ny logistics sales reps but it still shows
+# up"*. He had switched the page off for that role and the tile stayed, the page opened and the API
+# answered — because for a confined viewer this declaration was consulted as the WHOLE truth, so a
+# tenant's own administrator could not take away what it gave. These pin the subtraction in all
+# three places at once, because a switch honoured in two of them is the browser-only gate again.
+print("\n6e the role's own switch")
+OFF = {"pages": {"/commcalc/targets/my": False}}
+check("6e1 the switch closes the TILE",
+      "targets" in [t["key"] for t in _rs.tiles()]
+      and "targets" not in [t["key"] for t in _rs.tiles(OFF)])
+check("6e2 …the PAGE", _rs.page_allowed("/commcalc/targets/my")
+      and not _rs.page_allowed("/commcalc/targets/my", OFF))
+check("6e3 …and the API the page calls",
+      _rs.api_allowed("/api/v1/commcalc/my-shelf", "GET")
+      and not _rs.api_allowed("/api/v1/commcalc/my-shelf", "GET", role_perms=OFF))
+check("6e4 a switch can only SUBTRACT — turning a refused page ON does not grant it",
+      not _rs.page_allowed("/commcalc/report-cards", {"pages": {"/commcalc/report-cards": True}})
+      and not _rs.api_allowed("/api/v1/commcalc/report-cards", "GET",
+                              role_perms={"pages": {"/commcalc/report-cards": True}}))
+check("6e5 only an explicit False counts — absent, True and a non-dict leave the declaration whole",
+      all(len(_rs.tiles(p)) == len(_rs.tiles())
+          for p in ({}, {"pages": {}}, {"pages": {"/commcalc/targets/my": True}},
+                    {"pages": "nonsense"}, None)))
+check("6e6 ★ NO LOCKOUT ★ the password surface is never switchable",
+      len(_rs.tiles({"pages": {"/account/password": False}})) == len(_rs.tiles())
+      and _rs.page_allowed("/account/password", {"pages": {"/account/password": False}}))
+check("6e7 closing one page of a surface leaves its siblings open — the time-off form is not the "
+      "schedule beside it",
+      _rs.page_allowed("/my/schedule", {"pages": {"/storeops/timeoff": False}})
+      and not _rs.page_allowed("/storeops/timeoff", {"pages": {"/storeops/timeoff": False}})
+      and _rs.api_allowed("/api/v1/storeops/shifts", "GET",
+                          role_perms={"pages": {"/storeops/timeoff": False}}))
+check("6e8 the UNIVERSAL shell is never subtracted",
+      all(_rs.api_allowed(u, "GET", role_perms={"pages": {p: False for p in
+                                                          [_rs.tile_page(x) for x in _rs.pages()]}})
+          for u in _rs.UNIVERSAL_API))
+check("6e9 /me hands the browser the role's own switches, with no second read",
+      "role_perms=perms" in CORE)
+check("6e10 the API middleware asks the switch too — and only when a surface call makes it matter",
+      "api_switchable(" in TM and "_role_switches(" in TM
+      and "def api_switchable" in RS
+      and not _rs.api_switchable("/api/v1/core/me", "GET")
+      and _rs.api_switchable("/api/v1/commcalc/my-shelf", "GET"))
+check("6e11 the switch has ONE home — nothing else reads the permissions key",
+      RS.count("ROLE_PAGE_SWITCH_KEY") == 2
+      and "def switched_off" in RS and RBAC.count("rep_surface") >= 1
+      and '"pages"]' not in TM)
+ctl("6e can go red", _rs.page_allowed("/commcalc/targets/my"))
 
 # ── 7. RULE TWO + EVERY TENANT ───────────────────────────────────────────────────────────────────
 print("\n7. house policy, not a tenant's words")

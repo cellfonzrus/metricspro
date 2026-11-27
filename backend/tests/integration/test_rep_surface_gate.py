@@ -236,7 +236,25 @@ def gate(monkeypatch, wired):
     monkeypatch.setattr("app.core.tenant_middleware._rep_cache",
                         type(__import__("app.core.tenant_middleware", fromlist=["x"])._rep_cache)(
                             ttl=0.001, cap=16))
+    # The ROLE's own switches are cached beside the self-scope answer, for the same reason; a test
+    # that changes a roles row must see the change, so this copy expires immediately too.
+    monkeypatch.setattr("app.core.tenant_middleware._rep_perms_cache",
+                        type(__import__("app.core.tenant_middleware", fromlist=["x"])._rep_perms_cache)(
+                            ttl=0.001, cap=16))
+    monkeypatch.setattr("app.modules.storeops.router.sb", lambda: wired.schema("storeops"),
+                        raising=False)
     return wired
+
+
+def _switch_off(wired, org, role, page):
+    """Turn one page off for one role, exactly as the Roles screen does — a `pages` entry of False
+    on that role's permissions row. Nothing else in the tenant changes."""
+    rows = wired.schema("storeops").table("roles").select("*").eq("org_id", org).execute().data or []
+    row = next(r for r in rows if r.get("name") == role)
+    perms = dict(row.get("permissions") or {})
+    perms["pages"] = {**(perms.get("pages") or {}), page: False}
+    (wired.schema("storeops").table("roles").update({"permissions": perms})
+     .eq("org_id", org).eq("name", role).execute())
 
 
 MANAGER_API = ["/api/v1/storeops/payroll", "/api/v1/storeops/manual-hours",
@@ -496,3 +514,99 @@ def test_the_ask_is_never_refused_by_the_gate(api_client, gate, path, method):
     """★ NO LOCKOUT ★ — carving the answer must not refuse the ask, nor the kiosk's own calls."""
     r = api_client.request(method, path, headers={"Authorization": HDR["repA"]}, json={})
     assert not (r.status_code == 403 and r.json().get("code") == "not_your_access"), r.text
+
+
+# ── THE CARD THAT COULD NOT LOAD (owner 2026-11-27, §CORE-33.6) ──────────────────────────────────
+@pytest.mark.parametrize("who", ["repA", "repB"])
+@pytest.mark.parametrize("api", ["/api/v1/commcalc/my-shelf",
+                                 "/api/v1/helpdesk/config/bootstrap",
+                                 "/api/v1/storeops/timeoff-conflict-mode",
+                                 "/api/v1/storeops/employees/visible"])
+def test_the_reads_a_reps_own_screens_make_are_not_refused(api_client, gate, who, api):
+    """Every one of these is a card or a drop-down ON a page the rep is granted. The gate refused
+    four of them, which is what the owner saw in a red box on his own dashboard."""
+    r = api_client.get(api, headers={"Authorization": HDR[who]})
+    assert not (r.status_code == 403 and r.json().get("code") == "not_your_access"), r.text
+
+
+@pytest.mark.parametrize("who", ["repA", "repB"])
+@pytest.mark.parametrize("path,method", [("/api/v1/commcalc/my-shelf", "POST"),
+                                         ("/api/v1/helpdesk/config/settings", "PUT"),
+                                         ("/api/v1/helpdesk/config/categories", "POST"),
+                                         ("/api/v1/helpdesk/stats/dashboard", "GET"),
+                                         ("/api/v1/storeops/timeoff-conflict-mode", "PUT"),
+                                         ("/api/v1/storeops/employees", "GET")])
+def test_the_reads_did_not_widen_into_writes_or_rosters(api_client, gate, who, path, method):
+    """A read granted for a card must not carry the write beside it, nor the personnel roster."""
+    r = api_client.request(method, path, headers={"Authorization": HDR[who]}, json={})
+    assert r.status_code == 403, r.text
+    assert r.json().get("code") == "not_your_access", r.text
+
+
+# ── A GRANT IS A MAXIMUM, NOT A MANDATE (owner 2026-11-27, §CORE-33.6) ───────────────────────────
+@pytest.mark.parametrize("who,org", [("repA", ORG_A), ("repB", ORG_B)])
+def test_the_roles_screen_switch_closes_a_tile_for_that_tenant(api_client, gate, who, org):
+    """*"i disaables my targets from ny logistics sales reps but it still shows up"*. Switched off on
+    the Roles screen, the tile must not be published, the page must not be admitted, and the card's
+    API must refuse — for the tenant that switched it and NOT for the other one."""
+    me = api_client.get("/api/v1/core/me", headers={"Authorization": HDR[who]},
+                        params={"org_id": org})
+    assert me.status_code == 200, me.text
+    before = me.json()["permissions"]["rep_surface"]
+    assert "targets" in [t["key"] for t in before["tiles"]]
+    assert "/commcalc/targets/my" in before["pages"]
+
+    _switch_off(gate, org, "sales_rep", "/commcalc/targets/my")
+
+    me = api_client.get("/api/v1/core/me", headers={"Authorization": HDR[who]},
+                        params={"org_id": org})
+    after = me.json()["permissions"]["rep_surface"]
+    assert "targets" not in [t["key"] for t in after["tiles"]], after["tiles"]
+    assert "/commcalc/targets/my" not in after["pages"]
+    assert len(after["tiles"]) == len(before["tiles"]) - 1
+    r = api_client.get("/api/v1/commcalc/my-shelf", headers={"Authorization": HDR[who]})
+    assert r.status_code == 403 and r.json().get("code") == "not_your_access", r.text
+
+
+def test_one_tenants_switch_never_reaches_the_other(api_client, gate):
+    """Tenant A switches My targets off; tenant B's reps still have it, tile, page and card."""
+    _switch_off(gate, ORG_A, "sales_rep", "/commcalc/targets/my")
+    me = api_client.get("/api/v1/core/me", headers={"Authorization": HDR["repB"]},
+                        params={"org_id": ORG_B})
+    rs = me.json()["permissions"]["rep_surface"]
+    assert "targets" in [t["key"] for t in rs["tiles"]]
+    assert "/commcalc/targets/my" in rs["pages"]
+    r = api_client.get("/api/v1/commcalc/my-shelf", headers={"Authorization": HDR["repB"]})
+    assert not (r.status_code == 403 and r.json().get("code") == "not_your_access"), r.text
+
+
+def test_a_switch_only_subtracts_and_never_opens_a_manager_screen(api_client, gate):
+    """Ticking a page ON for a confined role grants nothing — widening by configuration is the
+    defect §CORE-33 exists to prevent, and the API would refuse what the menu offered."""
+    rows = (gate.schema("storeops").table("roles").select("*").eq("org_id", ORG_A)
+            .execute().data or [])
+    row = next(r for r in rows if r.get("name") == "sales_rep")
+    perms = {**(row.get("permissions") or {}),
+             "pages": {"/storeops/payroll": True, "/commcalc/targets/settings": True}}
+    (gate.schema("storeops").table("roles").update({"permissions": perms})
+     .eq("org_id", ORG_A).eq("name", "sales_rep").execute())
+    me = api_client.get("/api/v1/core/me", headers={"Authorization": HDR["repA"]},
+                        params={"org_id": ORG_A})
+    rs = me.json()["permissions"]["rep_surface"]
+    assert "/storeops/payroll" not in rs["pages"]
+    assert "/commcalc/targets/settings" not in rs["pages"]
+    r = api_client.get("/api/v1/storeops/payroll", headers={"Authorization": HDR["repA"]})
+    assert r.status_code == 403 and r.json().get("code") == "not_your_access", r.text
+
+
+def test_the_shell_survives_every_switch(api_client, gate):
+    """★ NO LOCKOUT ★ — with every tiled page switched off, the person can still sign in, read who
+    they are and change their own password."""
+    for page in [rep_surface.tile_page(p) for p in rep_surface.pages()]:
+        _switch_off(gate, ORG_A, "sales_rep", page)
+    me = api_client.get("/api/v1/core/me", headers={"Authorization": HDR["repA"]},
+                        params={"org_id": ORG_A})
+    assert me.status_code == 200, me.text
+    rs = me.json()["permissions"]["rep_surface"]
+    assert "/account/password/**" in rs["pages"], rs["pages"]
+    assert "password" in [t["key"] for t in rs["tiles"]]
