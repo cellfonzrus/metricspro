@@ -197,6 +197,22 @@ def build(count_defs, *, tender_defs=None, item_defs=None):
         ck = item_key(label)
         if ck in seen or ck == ITEM_PREFIX:
             continue
+        # AN ITEM MUST BE STRICTLY FINER THAN THE METRIC IT ROLLS INTO (security pass 2026-11-27).
+        #
+        # `declared_items` can only assume the keys of a `line_map` are items; they are really report
+        # LINE LABELS, and `pos_report_feed`'s `line_label` synonyms begin "product category",
+        # "category" — ahead of "product" and "item". So a tenant's export may carry a CATEGORY in
+        # the very column the mapping is keyed on, and a source-level map is merged into every
+        # report. Where the label IS the category, `item:<label>` would carry the category's WHOLE
+        # figure while the editor says "pay on that item alone" — and because
+        # `daily_incentive.measure` sums `amount_of` per NAMED key with no notion of parentage, a
+        # rule naming both would count one row's money twice.
+        #
+        # Refused here, at the one place an item entry is created, so no caller can be handed the
+        # trap. The category itself is untouched and remains the right thing to pay on. Folded
+        # through `item_key`, so case and spacing cannot smuggle the duplicate back in.
+        if ck in (item_key(parent.get("label")), item_key(parent["key"])):
+            continue
         seen.add(ck)
         out.append({
             "key": ck,

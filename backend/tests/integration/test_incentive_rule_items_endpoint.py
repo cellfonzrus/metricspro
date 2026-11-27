@@ -231,3 +231,65 @@ def test_a_tenant_on_its_reps_declarations_is_unmoved(wired, api_client):
     assert body["declared"]["overnight"]["units"] == 5, "the rep's own category figure stands"
     assert body["total"] == 0.00, \
         "the item rule pays nothing on a declaration — it may NOT inherit the category's units"
+
+
+# ═════ SECURITY PASS 2026-11-27 — an item must be strictly finer than its category ═══════════════
+
+def test_an_item_spelled_like_its_category_is_not_offered(wired, api_client):
+    """`line_map` keys are report LINE LABELS, and `pos_report_feed`'s synonyms for that column
+    begin "product category" / "category" — ahead of "product" and "item". So a tenant's export can
+    carry a CATEGORY where the mapping is keyed, and `item:<label>` would then carry the category's
+    WHOLE figure while the editor says "pay on that item alone"."""
+    #: `seed` REPLACES a table, so the tenant's real item rows are re-seeded alongside the
+    #: category-grained one. Without them `served` would be empty and the two assertions below
+    #: would pass for the wrong reason — the trivially-true pass this whole review was about.
+    wired.seed("commcalc.data_source", [
+        {"org_id": org, "id": "src-" + org[-2:], "processor": "pos_report", "label": "Portal",
+         "portal_reports": [{"key": "item_sales", "label": "Item Sales"}],
+         "portal_calibration": ({"item_sales": {"line_map": ITEMS[org]}} if ITEMS[org] else {})}
+        for org in ORGS] + [
+        {"org_id": HOUSE, "id": "src-dup", "processor": "pos_report", "label": "Portal 2",
+         "portal_reports": [{"key": "by_category", "label": "By Category"}],
+         "portal_calibration": {"by_category": {"line_map": {"Next Day Air": "overnight"}}}}])
+    body = api_client.get(RULES, params={"org_id": HOUSE}).json()
+    served = {m["key"] for m in body["metrics"] if m.get("source") == "feed_item"}
+    assert "item:next day air" not in served, \
+        "an 'item' spelled like its own category is the category wearing a hat"
+    assert "overnight" in {m["key"] for m in body["metrics"]}, \
+        "...and the category itself is still offered — it is the right thing to pay on"
+    assert "item:nda early am" in served, "a genuinely finer item is unaffected"
+
+
+def test_a_rule_naming_an_item_and_its_category_is_refused(wired, api_client):
+    """Whatever the label's grain, `daily_incentive.measure` sums per NAMED key with no notion of
+    parentage, so measuring a parent and its own descendant counts one row's money twice."""
+    r = api_client.put(RULES, params={"org_id": HOUSE},
+                       json={"rule_key": "double", "label": "Doubled", "rule_kind": "per_unit",
+                             "qualifier": {"scope": "none"},
+                             "payout": {"basis": "units", "rate": 2.0,
+                                        "metric_keys": [ITEM_KEY, "overnight"]}})
+    assert r.status_code == 400, "a parent and its own item in one rule is a double count"
+    assert "twice" in r.text.lower()
+
+
+def test_two_sibling_items_in_one_rule_stay_legal(wired, api_client):
+    """Disjoint lines, and paying different rates for two items of one category is the whole ask."""
+    r = api_client.put(RULES, params={"org_id": HOUSE},
+                       json={"rule_key": "both_items", "label": "Both", "rule_kind": "per_unit",
+                             "qualifier": {"scope": "none"},
+                             "payout": {"basis": "units", "rate": 1.0,
+                                        "metric_keys": [ITEM_KEY, "item:nda saver"]}})
+    assert r.status_code == 200, r.text
+    body = api_client.get(INCENTIVE, params={"org_id": HOUSE, "store_code": STORE[HOUSE]}).json()
+    assert body["total"] == 5.00, f"3 Early AM + 2 Saver at $1.00 = $5.00, got {body['total']}"
+
+
+def test_the_qualifier_cannot_smuggle_the_overlap_in(wired, api_client):
+    """The guard reads the qualifier's keys as well as the payout's — `_gate` measures the same way."""
+    r = api_client.put(RULES, params={"org_id": HOUSE},
+                       json={"rule_key": "sneaky", "label": "Sneaky", "rule_kind": "per_unit",
+                             "qualifier": {"scope": "store", "basis": "units", "op": "gte",
+                                           "threshold": 1, "metric_keys": ["overnight"]},
+                             "payout": {"basis": "units", "rate": 2.0,
+                                        "metric_keys": [ITEM_KEY]}})
+    assert r.status_code == 400, "a gate on the parent plus a payout on its item is the same overlap"

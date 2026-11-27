@@ -25336,13 +25336,61 @@ if that filter returns.
 ACHIEVED against a goal", a different question from "what does this day pay"; an item is not revenue,
 so it could only ever add a zero there. Pinned by §G12 so the exemption is visible if revisited.
 
-**Proof + lock:** `backend/harness_payable_attributes.py` (50 checks, DB-free, in
+**SECURITY PASS 2026-11-27 — TWO REAL DEFECTS, both fixed (§76.4b).** The pass the 2026-10-30 rule
+requires was run against the MERGED code by a reviewer given the files and not this section's
+conclusions. It cleared the credential question (`_declared_item_defs` selects only
+`portal_calibration`, `declared_items` emits only `{item_label, metric_key}`, so no
+username/password/totp_secret/session_state can reach a response — verified against the one
+production row that has a calibration), cleared cross-tenant reach (every read org-filtered, no
+memoisation anywhere on the path), cleared injection (no catalog key reaches a PostgREST filter) and
+cleared XSS. It found two things this section had asserted wrongly:
+
+1. **AN ITEM WAS NOT NECESSARILY FINER THAN ITS CATEGORY — and naming both DOUBLED the money.**
+   `declared_items` can only assume a `line_map` key is an item; it is really a report LINE LABEL,
+   and `pos_report_feed`'s synonyms for that column begin **"product category", "category"** — ahead
+   of "product" and "item". A source-level map is merged into every report, so where the label IS the
+   category, `item:<label>` carried the category's WHOLE figure while the editor said *"pay on that
+   item alone"*. **The §B revenue claim held and still holds** (`gross_revenue` unmoved, verified) —
+   but `revenue_keys` is not the paying path. `daily_incentive.measure` with explicit `metric_keys`
+   is, and it sums `amount_of`/`units_of` per NAMED key with no notion of parentage: $1,000 of
+   printing measured as **$2,000**. Reproduced arithmetically on the shipped modules. Nothing was
+   paid wrongly in production — `portal_metric_day` is empty for every org, so this was
+   live-but-unfired.
+   **THE CLASS, and where it now lives:** *a payable attribute must be strictly finer than the metric
+   it rolls into.* `metric_catalog.build` refuses to create an item entry whose folded label equals
+   its parent's label or key — at the one place an item is created, so no caller can be handed the
+   trap, and the category itself is untouched as the right thing to pay on. Because a label's grain
+   is NOT always knowable, `save_incentive_rule` additionally refuses the OVERLAP itself: any rule
+   whose qualifier or payout names an item **and** that item's parent. Two SIBLING items stay legal —
+   disjoint lines, and two rates for two items of one category is the owner's actual ask.
+2. **THE ITEM'S PARENT DEPENDED ON ROW ORDER.** `_declared_item_defs` deduped with its own
+   `.strip().lower()`, which does **not** collapse internal whitespace the way `metric_catalog.item_key`
+   does — a second folding of one fact — and its read had **no `order`**. So an item mapped to
+   different categories on two sources resolved to whichever row arrived first, flipping its
+   `figure_unit` between a count and dollars for the same request: the exact divergence
+   `metric_catalog` exists to prevent. Now dereferences `item_key` (one folding) and orders the read.
+
+**REPORTED, NOT FIXED HERE — `_require_commission_admin` is pre-existing and platform-wide
+(§CORE):** it accepts an `org_id` and never compares it to the resolved caller's org, and
+`if caller is None: return` allows the write. The tenant binding of every one of its callers rests
+solely on `tenant_middleware`'s `?org_id=` rewrite, which does not fire for a verified identity with
+no `storeops.app_users` row — and that same identity makes `_resolve_caller` return `None`, opening
+both gates at once. Measured: anonymous `GET` on both endpoints is **401** and self-signup is closed,
+which is what keeps it medium. It belongs in its own PR with its own sibling sweep across every
+caller of that gate, not smuggled into this feature's.
+
+**ALSO NOTED, pre-existing:** these endpoints build the catalog with `include_inactive=False`, so
+deactivating a parent category silently drops its items, after which `measure` returns them in
+`missing` — which `_gate` fails closed on but the payout branch treats as a silent zero
+(`daily_incentive.py`). An item rule would stop paying with no stated reason.
+
+**Proof + lock:** `backend/harness_payable_attributes.py` (63 checks, DB-free, in
 `carrier-vocab-guard.yml`): §A items join the catalog without displacing the categories; §B the
 revenue arithmetic is unmoved; §C picker and guard read one set; §D the feed produces an item figure
 and an undeclared item produces none; §E the cross-tenant assertions; §F the one reader; §G the wiring
 is pinned by COUNT (both paying reads, four org-scoped callers, one reader) plus the screen
 regression; §H five negative controls. **Integration:**
-`backend/tests/integration/test_incentive_rule_items_endpoint.py` (16 tests, in `org-scope-guard.yml`)
+`backend/tests/integration/test_incentive_rule_items_endpoint.py` (20 tests, in `org-scope-guard.yml`)
 — three tenants, two of them sharing an item spelling on the SAME store code and day, so only the org
 scope separates them. **No migration:** the item list is already a config row the tenant uploaded.
 
