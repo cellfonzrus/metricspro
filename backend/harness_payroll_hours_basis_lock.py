@@ -472,8 +472,16 @@ for p in ALL:
             continue
         _new.append(f"{os.path.relpath(p, _HERE)}: {' '.join(frag.split())[:80]}")
 ok("E4 no module carries an alnum-only fold that skips the one accent fold", not _new, _new)
-ok("E4b …and the inventory below is not empty: there ARE folds, they are all classified",
-   len(FOLD_SIBLINGS) >= 5)
+# A SIZE IS NOT AN INVENTORY. A bare lower bound here lets a sibling leave without naming itself:
+# drop one from the dict and `>= 5` would have gone on reading green at 5 of 6. The declared set
+# below is the human-written answer to "which modules fold a store name", so a sibling that leaves
+# is reported BY NAME, and a new one must be classified before the build is green.
+FOLD_SIBLING_NAMES = {
+    "scope.py", "balance_sheet.py", "store_identity_audit.py", "device_payable.py", "coa.py",
+}
+ok("E4b …and the inventory is exactly the declared set: a sibling that leaves names itself",
+   {os.path.basename(p) for p in FOLD_SIBLINGS} == FOLD_SIBLING_NAMES,
+   sorted({os.path.basename(p) for p in FOLD_SIBLINGS} ^ FOLD_SIBLING_NAMES))
 ok("E5 …and the search is not vacuous: it sees a planted private fold",
    bool(_PRIVATE_FOLD.search('k = "".join(ch for ch in s.upper() if ch.isalnum())')))
 ok("E5b …and it does NOT fire on a filename slugifier, which substitutes rather than drops",
