@@ -376,7 +376,7 @@
 7	@typescript-eslint/no-explicit-any	src/components/ClosingSubmitForm.tsx
 111	@typescript-eslint/no-explicit-any	src/components/DailyClosingVerify.tsx
 13	@typescript-eslint/no-explicit-any	src/components/DataGrid.tsx
-18	@typescript-eslint/no-explicit-any	src/components/EmployeeWidgets.impl.tsx
+17	@typescript-eslint/no-explicit-any	src/components/EmployeeWidgets.impl.tsx
 3	@typescript-eslint/no-explicit-any	src/components/EmployeeWidgets.tsx
 2	@typescript-eslint/no-explicit-any	src/components/EntityPicker.tsx
 2	@typescript-eslint/no-explicit-any	src/components/EnvelopeViewLink.tsx

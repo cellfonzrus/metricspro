@@ -239,7 +239,7 @@ export default function StoreOpsReportsPage() {
     // did NOT, so the identical figure read as measured here and explained there (owner 2026-11-27,
     // index §14y). Both screens now call the same `hoursBasisLabel` over the same server-sent basis,
     // so neither can state a reason the other contradicts. Blank on an older backend.
-    { header: 'Hours basis (why)', get: (r: any) => hoursBasisLabel(r.hours_basis, r.hours_basis_mixed) },
+    { header: 'Hours basis (why)', get: r => hoursBasisLabel(r.hours_basis, r.hours_basis_mixed) },
     // Lunch-break auto-deduction (owner directive 2026-07-27, Deliverable 3) — HONESTY: an explicit
     // line, never folded silently into Actual Hrs (which is already the NET/post-deduction figure —
     // see GET /payroll). 0 for the common case (feature off, or no day qualified this period).

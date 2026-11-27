@@ -382,7 +382,7 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
                   { name: 'Actual', clocked: data.hours.actual_hours ?? 0, gap: data.hours.unmeasured_hours ?? 0 },
                 ]} margin={{ top: 0, right: 10, left: 6, bottom: 0 }}>
                 <XAxis type="number" hide /><YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} stroke="var(--text3)" width={66} />
-                <Tooltip formatter={(v: any, n: any) => [`${v}h`, n === 'gap' ? 'not clocked' : 'clocked']} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                <Tooltip formatter={(v: unknown, n: unknown) => [`${v}h`, n === 'gap' ? 'not clocked' : 'clocked']} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
                 <Bar dataKey="clocked" stackId="h" radius={[0, 0, 0, 0]} barSize={16}>
                   <Cell fill="var(--c-fg-94a3b8)" /><Cell fill="var(--c-fg-2e75b6)" />
                 </Bar>
