@@ -67,6 +67,7 @@ from app.modules.storeops import payroll_evidence as _payevid
 from app.modules.storeops import clock_variance as _clockvar
 from app.modules.storeops.payroll_identity import (
     business_id_alias_map as _business_id_alias_map,
+    own_id_forms as _own_id_forms,
     reconcile_employee_identity as _reconcile_employee_identity,
 )
 from app.modules.storeops import payroll_salary
@@ -394,7 +395,12 @@ def staffing_heatmap(store_code: str, period: str, capacity: float = 12.0,
 
 
 @router.get("/shifts")
-def get_shifts(store_code: str = None, week_start: str = None, week_end: str = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def get_shifts(store_code: str = None, week_start: str = None, week_end: str = None,
+               mine: bool = False,
+               authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The published schedule, as this caller may read it. `mine=1` narrows further to the caller
+    THEMSELVES — the question "My schedule" (`/my/schedule`, §CORE-33.2) asks, answered here from the
+    token rather than re-derived in the browser from one id form (owner 2026-11-27)."""
     q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
     if store_code: q = q.eq("store_code", store_code)
     if week_start: q = q.gte("shift_date", week_start)
@@ -403,9 +409,15 @@ def get_shifts(store_code: str = None, week_start: str = None, week_end: str = N
     # WHOSE shifts (owner directive 2026-10-05, §14w). The old gate answered "which stores" and a
     # rep's market pin made that the whole company; this answers "which people". A rep sees their own
     # week wherever they worked it, a manager theirs plus the people who work under them.
-    return gate_person_rows(rows, authorization, org_id, people_fields=("employee_id",),
+    rows = gate_person_rows(rows, authorization, org_id, people_fields=("employee_id",),
                             store_fields=("store_code",),
                             since=week_start or None, until=week_end or None)
+    # NARROWING ONLY, and applied AFTER the gate on purpose: `mine` can never widen what the gate
+    # already decided this caller may read. A manager asking for `mine` gets their own shifts out of
+    # their team's grid; a caller the token cannot name gets none (`own_emp_ids` is deny-all).
+    if mine:
+        rows = keep_visible_people(rows, own_emp_ids(authorization, org_id), "employee_id")
+    return rows
 
 
 @router.get("/schedule/hours-trend")
@@ -9358,7 +9370,15 @@ def _widen_emp_id_forms(org_id: str, ids):
     `employees.id` (numeric "45") while the roster, templates and punches store the BUSINESS id
     ("E45") — the identical mismatch `payroll_identity.business_id_alias_map` exists for. Without
     this, a rep whose own shifts carry the numeric form would be filtered out of their OWN schedule.
-    Widens FORMS of an already-allowed person only; it can never admit a different person."""
+    Widens FORMS of an already-allowed person only; it can never admit a different person.
+
+    2026-11-27 — that last sentence WAS NOT TRUE, and it is now. This function paired the two forms
+    by itself (`if biz in out: out.add(num)`), while the one home for the pairing,
+    `payroll_identity.business_id_alias_map`, has refused an AMBIGUOUS numeric id since 2026-07-27: a
+    numeric id can BE a different employee's own all-digit business id (A is numeric 42 / "E42", B's
+    business id is the literal "42"), so pairing "E42"→"42" quietly admitted B's shifts into A's
+    gate. The guard was a thing one caller happened to have; the pairing is one fact, dereferenced
+    here now, so the gate and payroll cannot answer it differently."""
     if ids is None:
         return None
     out = {str(i) for i in ids}
@@ -9369,15 +9389,41 @@ def _widen_emp_id_forms(org_id: str, ids):
     except Exception as e:                                  # pragma: no cover - I/O guard
         print(f"WARN schedule_emp_ids id-form widening failed: {e}")
         return out
-    for e in emps:
-        num, biz = str(e.get("id") or "").strip(), str(e.get("employee_id") or "").strip()
-        if not num or not biz:
-            continue
-        if biz in out:
-            out.add(num)
-        if num in out:
-            out.add(biz)
+    for numeric_s, canonical in _business_id_alias_map(emps).items():
+        if canonical in out:
+            out.add(numeric_s)
+        if numeric_s in out:
+            out.add(canonical)
     return out
+
+
+def own_emp_ids(authorization: str, org_id: str = ORG_ID):
+    """The employee_ids that are THE CALLER THEMSELVES, in both id forms — never anybody else's.
+
+    This is the answer to `GET /shifts?mine=1`: "of the rows I am allowed to read, which are MINE".
+    `schedule_emp_ids` answers a different question — whose shifts may I read — and for a manager
+    that is their whole team, which is exactly right for the schedule grid and exactly wrong for a
+    page headed "My schedule".
+
+    POSTURE IS THE OPPOSITE OF `schedule_emp_ids`, DELIBERATELY. That one returns None
+    (unrestricted) for a tokenless or unprovisioned caller, because an in-process/scheduled caller is
+    not a browser and must not be silently blanked. Here, a caller who ASKED for their own rows and
+    cannot be tied to an employee gets `set()` — deny-all. There is no legitimate in-process caller
+    of `mine=1`, and the failure mode of the other posture is a rep reading their manager's team.
+
+    The identity comes from the TOKEN (`_caller_app_user`), never from a client-supplied id, so a
+    caller cannot ask for somebody else's schedule by passing their employee id."""
+    au = _caller_app_user(authorization, org_id)
+    eid = (au.get("employee_id") or "").strip() if au else ""
+    if not eid:
+        return set()
+    try:
+        emps = (sb().table("employees").select("id,employee_id")
+                .eq("org_id", org_id).limit(20000).execute().data) or []
+    except Exception as e:                                  # pragma: no cover - I/O guard
+        print(f"WARN own_emp_ids roster read failed: {e}")
+        emps = []
+    return set(_own_id_forms(eid, emps))
 
 
 def keep_visible_people(rows, eids, *fields):

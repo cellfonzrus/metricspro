@@ -410,3 +410,43 @@ def link_proposals(rows, matcher):
                        "bound": len(bound),
                        "unmatched_hours": round(sum(c["hours"] for c in unmatched.values()), 2),
                        "proposed_hours": round(sum(c["hours"] for c in proposals.values()), 2)}}
+
+
+def own_id_forms(business_id, employees):
+    """Every id FORM under which THIS ONE PERSON's rows can be stored — PURE, and nothing else.
+
+    WHY THIS EXISTS (owner 2026-11-27, *"under employee login it does not show the employee thier own
+    schdule"*). A surface that shows a person only their OWN rows has to know which strings are them.
+    A shift created on the Schedule page stores the NUMERIC `employees.id` ("45"); a login, a clock
+    punch and the roster all carry the BUSINESS id ("E45"). Asking the question with one form answers
+    ZERO for half the rows, which looks exactly like "nothing is scheduled".
+
+    So the question is asked HERE, once, on top of `business_id_alias_map` — including its collision
+    guard, which is the whole reason this is a dereference and not a two-line pairing at the call
+    site: a numeric id can BE a different employee's own all-digit business id, and claiming it would
+    put THEIR rows inside this person's gate. An ambiguous numeric form is left unclaimed, so the
+    person sees one form of their own rows rather than two people's.
+
+    `employees` is ONE org's roster, as the caller already read it; this function reads nothing, so it
+    cannot reach across tenants and has no org to be given. Returns a frozenset — empty for a caller
+    with no business id, which is DENY-ALL at every call site and never "everyone"."""
+    given = str(business_id or "").strip()
+    if not given:
+        return frozenset()
+    alias = business_id_alias_map(employees)
+    # SYMMETRIC, and it has to be. This resolved only one way at first — business id in, both forms
+    # out; NUMERIC id in, only itself out — so a login whose `app_users.employee_id` carries the
+    # numeric form read "Not scheduled" on every day while business-keyed shifts existed. That is the
+    # exact silent zero this helper was written to kill (§COMMCALC-49.10), re-created inside it, and
+    # it is not hypothetical: `_canonical_shift_employee_id` exists because numeric ids really do get
+    # typed into pickers and written into person-keyed rows. Found by the security pass 2026-11-27.
+    #
+    # Canonicalising the INPUT through the same one home is safe in the way this whole module argues:
+    # `business_id_alias_map` has already refused an AMBIGUOUS numeric id, so this can only ever
+    # resolve an UNAMBIGUOUS numeric form to the one person it belongs to.
+    biz = alias.get(given, given)
+    forms = {given, biz}
+    for numeric_s, canonical in alias.items():
+        if canonical == biz:
+            forms.add(numeric_s)
+    return frozenset(forms)

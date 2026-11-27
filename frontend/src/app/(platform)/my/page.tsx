@@ -44,19 +44,21 @@ export default function MyDayPage() {
       .catch((e: unknown) => setStatusErr(e instanceof Error ? e.message : String(e)))
   }, [])
 
-  // Their own next shifts. The rows are narrowed SERVER-side by `schedule_emp_ids` (§14w), so this
-  // asks for the window and filters to this person's own id rather than inventing a second rule
-  // about whose schedule it may show.
+  // Their own next shifts. `mine=1` is the SERVER's answer to "which of these are mine"
+  // (`own_emp_ids`, §CORE-33.2), asked once and never re-derived here.
+  //
+  // 2026-11-27 — this used to filter the rows itself:
+  //     String(r.employee_id || '') === String(user.employee_id)
+  // one id form, string-equal. A shift created on the Schedule page stores the NUMERIC
+  // `employees.id` ("45") while a login carries the BUSINESS id ("E45"); the server widens both
+  // forms on purpose and this did not, so for a tenant whose rows land on the other form this list
+  // was EMPTY — which reads as "nothing is scheduled" rather than as a bug.
   useEffect(() => {
     const today = new Date(); const end = new Date(); end.setDate(end.getDate() + 13)
-    api(`/api/v1/storeops/shifts?week_start=${iso(today)}&week_end=${iso(end)}`)
-      .then((rows: unknown) => {
-        const mine = (Array.isArray(rows) ? rows : []).filter((r: Shift) =>
-          !user?.employee_id || String(r.employee_id || '') === String(user.employee_id))
-        setShifts(mine.slice(0, 4))
-      })
+    api(`/api/v1/storeops/shifts?week_start=${iso(today)}&week_end=${iso(end)}&mine=1`)
+      .then((rows: unknown) => setShifts((Array.isArray(rows) ? rows as Shift[] : []).slice(0, 4)))
       .catch(() => setShifts([]))
-  }, [user?.employee_id])
+  }, [])
 
   const clockedIn = !!status?.clockedIn
   const since = status?.entry?.clock_in
@@ -115,8 +117,12 @@ export default function MyDayPage() {
       </div>
 
       {/* Their own next shifts, inline — a rep has no business on the manager's schedule editor, and
-          this is the part of it that is theirs. */}
-      <h2 style={{ fontSize: 16, margin: '22px 0 8px' }}>Your next shifts</h2>
+          this is the part of it that is theirs. The WHOLE window lives on `/my/schedule`; this stays
+          a four-row preview of it, so the landing page keeps its shape. */}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', margin: '22px 0 8px' }}>
+        <h2 style={{ fontSize: 16, margin: 0 }}>Your next shifts</h2>
+        <Link href="/my/schedule" style={{ fontSize: 13 }}>See my whole schedule →</Link>
+      </div>
       <div style={{ ...card, minHeight: 0, padding: 14 }}>
         {shifts === null && <div style={{ color: 'var(--text3)', fontSize: 13 }}>Loading…</div>}
         {shifts?.length === 0 && (

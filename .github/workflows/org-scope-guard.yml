@@ -410,6 +410,17 @@ jobs:
       - name: Run the employee-reach integration tests (the real app, every tenant)
         working-directory: backend
         run: python3 -m pytest tests/integration/test_rep_surface_gate.py -q | tee -a "$GITHUB_STEP_SUMMARY"
+      # THE EMPLOYEE'S OWN SCHEDULE (owner 2026-11-27, §CORE-33.2). The tile labelled "My schedule"
+      # opened the time-off REQUEST FORM, because a tile's link is its surface's FIRST page. The
+      # proof pins the tile's target, the one-or-two-week window, and that neither page re-derives
+      # "whose shift is this" in the browser; the tests pin that a real request answers for a tenant
+      # whose shift rows carry the NUMERIC employee id, which is the form that read as zero.
+      - name: Run the own-schedule proof (the tile's target, and 'mine' is the server's answer)
+        working-directory: backend
+        run: python3 harness_my_schedule.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the own-schedule integration tests (both id shapes, both tenants)
+        working-directory: backend
+        run: python3 -m pytest tests/integration/test_my_schedule_endpoint.py -q | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
       - name: Install frontend deps for the nav proof
