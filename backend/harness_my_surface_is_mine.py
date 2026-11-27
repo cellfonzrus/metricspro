@@ -54,6 +54,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.modules.commcalc import payout_audience as pa        # noqa: E402
+from app.modules.commcalc import targets_engine as te         # noqa: E402
+from app.modules.core import person_identity as _pi           # noqa: E402
 from harnesslib import py_code_only                           # noqa: E402
 
 PASS = FAIL = 0
@@ -153,6 +155,34 @@ ok(pa.requested_rep_is_mine("", MINE) is True, "a blank request asks for no narr
 ok(pa.requested_rep_is_mine(OTHER, set()) is False,
    "an unplaceable self caller gets nobody, not everybody")
 
+print("\n§A2  the fold is NOT an identity on its own — the security pass on this change")
+# Found by the security review of this very PR, both confirmed by running them before being closed.
+# `folded_token_key` throws WORD ORDER away, which is an accepted cost for a JOIN (a wrong figure)
+# and a cross-employee breach as an AUTHORIZATION equality.
+TWIN_A, TWIN_B = "Mark Kellie", "Kellie Mark"
+ok(pa.name_fold(TWIN_A) == pa.name_fold(TWIN_B),
+   "two DIFFERENT people whose names are the same words in a different order DO share the fold — "
+   "the pair `person_identity.token_key` cites as live data")
+ok(pa.name_fold("Maria Diaz Diaz") == pa.name_fold("Diaz Diaz Maria"),
+   "…and a duplicated surname folds the same way, because the tokens are a SET")
+ok(pa.requested_rep_is_mine(TWIN_B, {TWIN_A.upper(), pa.name_fold(TWIN_A)}) is True,
+   "ARMED: so the fold ALONE admits the other person — which is why a caller may only add it to "
+   "its own key set after proving the roster holds one such person (`_fold_names_one_person`), "
+   "and why that guard is pinned on the real handler in the integration gate")
+
+# THE OTHER HALF: the guard's key and the DATA LAYER's key are not the same function.
+_ACCENT = "\u00e1\u00f1\u00e1 Lopez"
+ok(_pi.folded_token_key(_ACCENT) == _pi.folded_token_key("Ana Lopez"),
+   "a crafted spelling folds to the caller, so it PASSES the guard…")
+ok(te.name_key(_ACCENT) == te.name_key("Lopez") != te.name_key("Ana Lopez"),
+   "…while `targets_engine.name_key` DELETES the non-ASCII letters and selects a DIFFERENT rep. "
+   "Two keys that are not comparable — which is why a restricted caller's rows are selected under "
+   "the roster's own spelling and never under the text of the request")
+for _bad in (None, "", "   ", "— · —"):
+    ok(pa.name_fold(_bad) == "",
+       "name_fold(%r) yields NO key rather than raising or matching everything — its caller's "
+       "enclosing except treats failure as UNRESTRICTED, so this must fail closed" % (_bad,))
+
 print("\n§F  the LOCK — both handlers dereference the one home")
 _ROUTER = os.path.join(os.path.dirname(os.path.abspath(pa.__file__)), "router.py")
 _src = open(_ROUTER, encoding="utf-8").read()
@@ -176,7 +206,11 @@ for fn in ("get_target_calendar", "get_targets_summary", "get_action_plan"):
     if not node:
         continue
     seg = py_code_only(ast.get_source_segment(_src, node) or "")
-    ok("_caller_rep_keys" in seg, "%s asks WHOSE rows through the one home" % fn)
+    # Either name of the SAME home: `_caller_rep_keys` is the thin wrapper over
+    # `_caller_rep_identity`, which a handler that must also SELECT under the caller's own name asks
+    # for directly. What is forbidden is answering the question without asking either.
+    ok("_caller_rep_keys" in seg or "_caller_rep_identity" in seg,
+       "%s asks WHOSE rows through the one home" % fn)
     ok("_caller_self_keyset" in seg, "%s asks WHICH stores through the one home" % fn)
     ok(any(n in seg for n in _NARROWERS),
        "%s narrows through payout_audience rather than by hand" % fn)
@@ -187,6 +221,19 @@ for fn in ("get_target_calendar", "get_targets_summary", "get_action_plan"):
     # self-scoped rep resolves to — skip the store guard entirely.
     ok(not re.search(r"\bif ks and not in_keyset", seg),
        "%s does not let an empty keyset skip the store guard" % fn)
+
+# THE TWO SHAPES THE SECURITY PASS ADDED.
+_cal_seg = py_code_only(ast.get_source_segment(_src, _fns["get_target_calendar"]) or "")
+ok("_caller_rep_identity" in _cal_seg and "rep = _own_name" in _cal_seg,
+   "the calendar selects a restricted caller's rows under the ROSTER's spelling, never under the "
+   "text of the request — so nothing a caller can type changes whose rows come back")
+_ident = py_code_only(ast.get_source_segment(_src, _fns["_caller_rep_identity"]) or "")
+ok("_fold_names_one_person" in _ident,
+   "the caller's own key set admits the order-free fold only when the roster holds exactly one such "
+   "person — otherwise \"Mark Kellie\" and \"Kellie Mark\" are one identity")
+_amb = py_code_only(ast.get_source_segment(_src, _fns["_fold_names_one_person"]) or "")
+ok("return False" in _amb and "employee_id" in _amb,
+   "…and that guard fails CLOSED on an unreadable roster, counting DISTINCT PEOPLE rather than rows")
 
 ok("Those are not your figures to read." in _code,
    "the calendar REFUSES a foreign rep rather than silently serving the caller's own figures under "

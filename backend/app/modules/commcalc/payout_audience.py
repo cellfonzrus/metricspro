@@ -481,9 +481,26 @@ def name_fold(v) -> str:
     that matched stops matching and no caller can newly be refused. It admits exactly the spellings
     that differ by word order, punctuation or accents — the ones `folded_token_key` already treats as
     one person — and NOT a dropped middle initial ("Caba, David, A" vs "Caba, David"), which that
-    key refuses on purpose because merging those is a judgement a human makes."""
-    from app.modules.core import person_identity as _pi
-    k = _pi.folded_token_key(v)
+    key refuses on purpose because merging those is a judgement a human makes.
+
+    ⚠️ IT IS NOT AN IDENTITY ON ITS OWN. The fold discards WORD ORDER, so "Mark Kellie" and
+    "Kellie Mark" — a pair `person_identity.token_key` cites as live data — share a key. For a JOIN
+    that merge costs a wrong figure and is accepted; as an AUTHORIZATION equality it is one employee
+    reading another's pay. So a caller may add this key to its OWN key set only after proving the
+    fold names exactly one person on the roster (`router._fold_names_one_person`), and a handler that
+    SELECTS per-rep rows must select under the roster's own spelling rather than the text it was
+    given (`router._caller_rep_identity`). Both are §CORE-33.5; both were found by the security pass
+    on the change that introduced this function, before it shipped.
+
+    NEVER RAISES. It defers an import, and its only caller's enclosing `except` treats failure as
+    UNRESTRICTED — so an exception here would fail OPEN. An unfoldable value yields no key, which
+    fails closed."""
+    try:
+        from app.modules.core import person_identity as _pi
+        k = _pi.folded_token_key(v)
+    except Exception as e:                                     # pragma: no cover - fail-closed guard
+        print(f"WARN payout_audience.name_fold failed: {e}")
+        return ""
     return ("fold:" + k) if k else ""
 
 

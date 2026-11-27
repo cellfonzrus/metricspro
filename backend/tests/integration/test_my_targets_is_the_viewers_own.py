@@ -296,3 +296,102 @@ def test_the_summary_is_unchanged_for_a_manager(api_client, wired, who, org):
     names = [row.get("rep") for s in (_summary(api_client, who, org).json().get("stores") or [])
              for row in (s.get("reps") or [])]
     assert OTHER in names, f"the manager lost their team's breakdown: {names}"
+
+
+# ── THE TWO HOLES THE SECURITY PASS FOUND IN THIS VERY FIX ───────────────────────────────────────
+# Both were confirmed by running them before being closed, and both come from ONE mistake: reusing a
+# name key built for a JOIN as an AUTHORIZATION equality. For a join, a false merge costs a wrong
+# figure and the platform accepts it on purpose (`person_identity.token_key` says so in its own
+# docstring). For a permission check it is one employee reading another's pay.
+TWIN_A = "Mark Kellie"          # two DISTINCT people whose name tokens are the same words…
+TWIN_B = "Kellie Mark"          # …in a different order. Cited as live data in person_identity.
+ANA = "Ana Lopez"
+ANA_ACCENTED = "áñá Lopez"      # folds to ana|lopez, but `name_key` DELETES the non-ASCII letters
+BARE_SURNAME = "Lopez"          # …leaving "LOPEZ", which is a DIFFERENT rep
+
+
+@pytest.fixture
+def twins(monkeypatch, fake_supabase, wired):
+    """Tenant A gains Kellie Mark and Mark Kellie as two separate employees, plus an Ana Lopez and a
+    colleague recorded under the bare surname Lopez. The feed carries all four."""
+    from app.modules.commcalc import router as cr
+    fake_supabase.seed("storeops.app_users", [
+        {"id": "au-twin", "org_id": ORG_A, "auth_id": "uid-twin", "role": "sales_rep",
+         "employee_id": "E400A", "store_code": "S1", "is_active": True},
+        {"id": "au-ana", "org_id": ORG_A, "auth_id": "uid-ana", "role": "sales_rep",
+         "employee_id": "E500A", "store_code": "S1", "is_active": True}])
+    fake_supabase.seed("storeops.employees", [
+        {"id": "5A", "org_id": ORG_A, "employee_id": "E400A", "name": TWIN_A,
+         "home_store": "S1", "is_active": True},
+        {"id": "6A", "org_id": ORG_A, "employee_id": "E401A", "name": TWIN_B,
+         "home_store": "S1", "is_active": True},
+        {"id": "7A", "org_id": ORG_A, "employee_id": "E500A", "name": ANA,
+         "home_store": "S1", "is_active": True},
+        {"id": "8A", "org_id": ORG_A, "employee_id": "E501A", "name": BARE_SURNAME,
+         "home_store": "S1", "is_active": True}])
+    UID["twin"], UID["ana"] = "uid-twin", "uid-ana"
+    HDR["twin"], HDR["ana"] = "Bearer twin", "Bearer ana"
+    _BY_TOKEN["Bearer twin"], _BY_TOKEN["Bearer ana"] = "uid-twin", "uid-ana"
+    rows = [{"store_code": "S1", "rep_name": n, "sale_date": "2026-11-03",
+             "activations": 3, "upgrades": 1, "accessories_amount": 90.0}
+            for n in (TWIN_A, TWIN_B, ANA, BARE_SURNAME)]
+    monkeypatch.setattr(cr, "_fetch_actuals", lambda client, org_id, *a, **k:
+                        list(rows) if org_id == ORG_A else [], raising=False)
+    monkeypatch.setattr(cr, "_fetch_shifts", lambda client, s, e, org_id, *a, **k:
+                        [{"store_code": "S1", "employee_name": n, "shift_date": "2026-11-03",
+                          "hours": 8.0} for n in (TWIN_A, TWIN_B, ANA, BARE_SURNAME)]
+                        if org_id == ORG_A else [], raising=False)
+    return fake_supabase
+
+
+def test_two_people_whose_names_are_the_same_words_are_not_one_person(api_client, twins):
+    """HOLE 1. The order-free fold made "Mark Kellie" and "Kellie Mark" one identity, so either
+    could read the other's figures on every surface sharing this code — commission included."""
+    r = _cal(api_client, "twin", ORG_A, "S1", scope="rep", rep=TWIN_B.replace(" ", "%20"))
+    assert r.status_code == 403, \
+        f"a different employee's figures came back: {r.status_code} {r.text[:200]}"
+
+
+def test_the_twin_is_not_offered_in_the_picker_either(api_client, twins):
+    reps = _cal(api_client, "twin", ORG_A, "S1", scope="store").json()["reps"]
+    assert TWIN_B not in reps, f"the other employee is offered as though they were the viewer: {reps}"
+
+
+def test_the_twin_can_still_read_their_own(api_client, twins):
+    """★ NO LOCKOUT ★ — refusing the fold for an ambiguous name must not cost the caller their own
+    exact spelling. They lose only the feed's OTHER spelling of themselves, which is reported."""
+    r = _cal(api_client, "twin", ORG_A, "S1", scope="rep", rep=TWIN_A.replace(" ", "%20"))
+    assert r.status_code == 200, r.text
+    assert r.json().get("rep") == TWIN_A
+
+
+def test_a_crafted_spelling_cannot_pass_the_guard_and_then_fetch_someone_else(api_client, twins):
+    """HOLE 2. The guard folds accents; `targets_engine.name_key` DELETES non-ASCII letters instead.
+    So "áñá Lopez" satisfied the guard as "Ana Lopez" and then SELECTED the rep recorded as "Lopez".
+    Two keys that are not comparable, on an endpoint with no row-level filter underneath.
+
+    The response must be the caller's OWN figures — the request's text is an authorization question,
+    never a selector."""
+    r = _cal(api_client, "ana", ORG_A, "S1", scope="rep",
+             rep=ANA_ACCENTED.replace(" ", "%20"))
+    assert r.status_code == 200, r.text
+    assert r.json().get("rep") == ANA, \
+        f"the request's text chose whose rows came back: {r.json().get('rep')!r}"
+
+
+def test_a_restricted_caller_always_reads_under_their_roster_name(api_client, twins):
+    """The general form of hole 2: whatever spelling is sent, a restricted caller's rows are selected
+    under the roster's own spelling of them. Nothing typed can change WHOSE rows come back."""
+    for sent in ("ANA  LOPEZ", "Lopez, Ana", ANA_ACCENTED):
+        r = _cal(api_client, "ana", ORG_A, "S1", scope="rep",
+                 rep=sent.replace(" ", "%20").replace(",", "%2C"))
+        assert r.status_code == 200, (sent, r.text[:200])
+        assert r.json().get("rep") == ANA, (sent, r.json().get("rep"))
+
+
+def test_the_filter_options_do_not_enumerate_colleagues(api_client, twins):
+    """Flagged by the same pass: `filters.reps` was every rep in the org's sales for the period, with
+    no store bound and no person bound — a roster of colleagues to read a name from and feed back
+    into `rep=`."""
+    opts = _summary(api_client, "ana", ORG_A).json().get("filters", {}).get("reps") or []
+    assert BARE_SURNAME not in opts and TWIN_A not in opts, f"colleagues enumerated: {opts}"

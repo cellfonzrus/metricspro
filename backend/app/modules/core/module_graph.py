@@ -3159,7 +3159,7 @@ FACTS: dict[str, dict] = {
         "callers": {
             'app/modules/commcalc/commission_drilldown.py': ('_pa',),
             'app/modules/commcalc/commission_statement.py': ('_pa',),
-            'app/modules/commcalc/router.py': ('_pa',),
+            'app/modules/commcalc/router.py': ('_pa', '_pa_fold'),
             'app/modules/core/router.py': ('_pa',),
         },
     },

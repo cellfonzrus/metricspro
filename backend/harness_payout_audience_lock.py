@@ -378,8 +378,19 @@ def scan(be, fe, rbac=None, fe_all=None):
     if ("_is_self = _self_scoped(org_id" not in _me or "_pa.viewer_payload(_is_self, _carrier)" not in _me
             or "_carrier = _pa.carrier_view_allowed(" not in _me):
         v.append(("f", CORE, "/me no longer stamps payout_audience.viewer_payload (the self scope + THE carrier permission)"))
-    for fn in ("_caller_rep_keys", "_caller_self_keyset"):
-        if "role_is_self_scoped(" not in py_code(fn_body(router, fn)):
+    # REACHABILITY, not expectation (§CORE-33.5). `_caller_rep_keys` became a thin wrapper over
+    # `_caller_rep_identity`, which holds the identity read and the `role_is_self_scoped` call — so
+    # reading only the wrapper's body made this lock fire on a change that moved the code without
+    # weakening it. A wrapper SATISFIES the rule by delegating to a function that satisfies it; what
+    # is forbidden is deciding the self scope any other way. Same trap as the browser-service guard
+    # that read only a handler's own body.
+    for fn in ("_caller_rep_keys", "_caller_rep_identity", "_caller_self_keyset"):
+        body = py_code(fn_body(router, fn))
+        if not body:
+            v.append(("f", ROUTER, "%s is gone — the self-scope home moved without this lock" % fn))
+            continue
+        delegates = re.search(r"return _caller_rep_identity\(", body)
+        if "role_is_self_scoped(" not in body and not delegates:
             v.append(("f", ROUTER, "%s re-derives the self scope instead of role_is_self_scoped" % fn))
     if not re.search(r"^def role_is_self_scoped\(", py_code(be.get(STOREOPS, "")), re.M):
         v.append(("f", STOREOPS, "role_is_self_scoped is gone"))

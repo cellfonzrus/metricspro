@@ -17612,13 +17612,31 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
 
 # ── Report endpoints ──────────────────────────────────────────
 def _caller_rep_keys(authorization: str, org_id: str):
-    """For a SELF-scoped (rep) caller, the UPPER name keys identifying THEIR OWN rep rows in rep_commissions
+    """The caller's own name KEYS alone — `_caller_rep_identity`'s second half.
+
+    Kept as the name ~8 call sites already ask for, dereferencing the one home rather than repeating
+    the identity read. Returns None (unrestricted) / {keys} / set() exactly as before."""
+    return _caller_rep_identity(authorization, org_id)[1]
+
+
+def _caller_rep_identity(authorization: str, org_id: str):
+    """WHO IS THIS SELF-SCOPED CALLER — -> (own_roster_name, own_name_keys).
+
+    `own_name_keys` is the UPPER name keys identifying THEIR OWN rep rows in rep_commissions
     — the caller's storeops employee name (app_user.employee_id → employees.name) PLUS any epay/alias that
     canonicalizes to it (name_map / rep_aliases). Returns:
       • None       — not self-scoped (admin / unrestricted / a real manager span → scope_keyset governs).
       • {keys}     — a self rep → keep ONLY the rows matching these keys.
       • set()       — a self rep we could NOT map to a rep → the caller sees NOTHING (never another rep's
                       row; the KPI page shows an empty state + hint, not other people's pay).
+
+    `own_roster_name` is the roster's OWN spelling of this caller, "" when there is none. **A handler
+    that selects per-rep data MUST look it up under THIS name rather than under the `rep` string the
+    request supplied** (§CORE-33.5). Passing the guard is not the same as being safe to pass on: the
+    identity check folds accents and word order while the data layer's `targets_engine.name_key`
+    DELETES non-ASCII letters instead, so `"áñá Lopez"` satisfies the guard as "Ana Lopez" and then
+    selects a rep recorded as "Lopez". Substituting this name removes that whole class — the request's
+    text is then only ever an authorization question, never a selector.
     Same identity path My Targets uses (app_user → employee → rep name). Reads app_users/employees
     READ-ONLY, org-scoped. Never raises. Both relations are read through
     `core.relation_home` (index §CORE-30) — this docstring used to claim "(public schema)",
@@ -17628,13 +17646,13 @@ def _caller_rep_keys(authorization: str, org_id: str):
         from app.modules.core.router import _uid_from_token
         from app.modules.commcalc import payout_audience as _pa
     except Exception:
-        return None
+        return ("", None)
     try:
         if not _rbac_enabled(org_id):
-            return None
+            return ("", None)
         uid = _uid_from_token(authorization)
         if not uid:
-            return None
+            return ("", None)
         # WHICH SCHEMA HOLDS THIS RELATION, dereferenced (index §CORE-30). `sb()` in THIS module is
         # the plain client — the `public` schema — and both relations below live in `storeops`
         # (mig 003). `public.app_users` has never existed, so this read raised PGRST205, the outer
@@ -17643,10 +17661,10 @@ def _caller_rep_keys(authorization: str, org_id: str):
         urows = (_relation_home.reader(sb(), "app_users", "role,employee_id")
                  .eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data) or []
         if not urows:
-            return None
+            return ("", None)
         u = urows[0]
         if not role_is_self_scoped(org_id, u.get("role"), rbac_on=True):
-            return None
+            return ("", None)
         name = ""
         eid = (u.get("employee_id") or "").strip()
         if eid:
@@ -17667,19 +17685,63 @@ def _caller_rep_keys(authorization: str, org_id: str):
             # spelling of them matches without an alias row (§CORE-33.5). BOTH sides of the
             # comparison gain this key — `payout_audience.rep_row_keys` adds it for the row — and
             # folding only one side would be worse than folding neither.
-            keys.add(_pa.name_fold(name))
+            #
+            # 🔴 BUT ONLY WHEN IT NAMES ONE PERSON. The fold discards WORD ORDER, so "Mark Kellie"
+            # and "Kellie Mark" share it — a pair `person_identity.token_key` cites as live data.
+            # That merge is an accepted cost for a JOIN (a wrong figure); as an AUTHORIZATION
+            # equality it is one employee reading another's pay. Found by the security pass on this
+            # very change, before it shipped. So the fold is admitted only if exactly ONE roster
+            # identity in the org carries it; otherwise the caller matches on their exact name and
+            # declared aliases alone, and `unmatched_self` reports the ambiguity as a merge task.
+            if _fold_names_one_person(org_id, name):
+                keys.add(_pa.name_fold(name))
             try:
                 cmap = _rep_canon_map(sb(), org_id)
                 for alias, canon in cmap.items():
                     if str(canon).strip().upper() == name.upper():
                         keys.add(str(alias).strip().upper())
+                        # An ALIAS is a human's explicit "these are the same person" declaration, so
+                        # its fold carries that authority and needs no ambiguity check of its own.
                         keys.add(_pa.name_fold(alias))
             except Exception:
                 pass
         keys.discard("")
-        return keys   # empty set = self rep with no resolvable rep → sees nothing
+        return name, keys   # empty set = self rep with no resolvable rep → sees nothing
     except Exception:
-        return None
+        return ("", None)
+
+
+def _fold_names_one_person(org_id: str, name: str) -> bool:
+    """Does this name's ORDER-FREE fold identify exactly one person on the org's roster?
+
+    The guard that makes the fold safe to use as an authorization key (§CORE-33.5). `False` when two
+    or more DISTINCT roster identities share the fold — then the fold must not be trusted for this
+    name, because admitting it would merge two real employees.
+
+    Fails CLOSED in every uncertain case: an unreadable roster, or a roster that does not contain the
+    caller at all, returns False, so the caller matches on their exact spelling and declared aliases
+    only. That can cost them the feed's other spelling of their name — which the `unmatched_self`
+    channel REPORTS and a rep-merge row fixes — and never costs somebody else their privacy."""
+    # `_pa` is imported INSIDE `_caller_rep_identity`, not at module scope, so referencing it here
+    # raised NameError — and that function's enclosing `except` treats failure as UNRESTRICTED, so
+    # the bug failed OPEN and handed every caller everybody's rows. Caught by the integration tests
+    # on the first run. Same class as `name_fold`'s own never-raises note.
+    from app.modules.commcalc import payout_audience as _pa_fold
+    want = _pa_fold.name_fold(name)
+    if not want:
+        return False
+    try:
+        rows = (_relation_home.reader(sb(), "employees", "employee_id,name")
+                .eq("org_id", org_id).limit(20000).execute().data) or []
+    except Exception as e:                                      # pragma: no cover - I/O guard
+        print(f"WARN _fold_names_one_person roster read failed: {e}")
+        return False
+    # Count DISTINCT PEOPLE, not rows: one person legitimately appears twice (two employee_id rows
+    # for the same human is what the rep-merge screen exists to tidy), and counting rows would
+    # refuse the fold for a duplicate of the caller themselves.
+    who = {str(r.get("employee_id") or "").strip().upper()
+           for r in rows if _pa_fold.name_fold(r.get("name")) == want}
+    return len(who) == 1
 
 
 # ── Ops-accountability chargebacks (retail-ops' commcalc.ops_chargeback) ───────────────────────────
@@ -33573,11 +33635,23 @@ def get_target_calendar(
     # endpoint's `scope=rep` answer IS one person; silently serving the caller's own figures under
     # somebody else's name would be a wrong answer rather than a narrower one, and the screen would
     # label another person's numbers with the name in the URL.
-    rep_keys = _caller_rep_keys(authorization, org_id)
+    _own_name, rep_keys = _caller_rep_identity(authorization, org_id)
     _cmap = _rep_canon_map(client, org_id) if rep_keys is not None else None
     _canon_fn = (lambda v: _canon(v, _cmap)) if rep_keys is not None else None
     if scope == 'rep' and rep and not _pa.requested_rep_is_mine(rep, rep_keys, canon=_canon_fn):
         raise HTTPException(403, "Those are not your figures to read.")
+    # PASSING THE GUARD IS NOT THE SAME AS BEING SAFE TO PASS ON. The guard folds accents and word
+    # order; `targets_engine.name_key` (which actually SELECTS the rows below) DELETES non-ASCII
+    # letters instead of folding them. So `rep="áñá Lopez"` satisfies the guard as the caller
+    # "Ana Lopez" and then selects whoever is recorded as "Lopez" — the two keys are not comparable,
+    # and this endpoint has no row-level filter underneath to catch it. Found by the security pass on
+    # this change, before it shipped.
+    #
+    # The fix is not a third key: a RESTRICTED caller's rows are selected under the roster's OWN
+    # spelling of them, so the request's text is only ever an authorization question and never a
+    # selector. Nothing a caller can type changes WHOSE rows come back.
+    if rep_keys is not None and scope == 'rep' and rep and _own_name:
+        rep = _own_name
     start, end, today = _period_bounds(cperiod, today)
     byod_def = _byod_pct_default(client, cperiod, org_id)
 
@@ -33960,7 +34034,21 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
                                {str(s.get('market') or '').strip() for s in roster if str(s.get('market') or '').strip()})
     except Exception:
         market_opts = sorted({str(s.get('market') or '').strip() for s in roster if str(s.get('market') or '').strip()})
+    # WHOSE ROWS — resolved ONCE, here, because the filter options below are the FIRST place this
+    # response names people (§CORE-33.5). The store dimension is answered by the keyset; this answers
+    # which PEOPLE within those stores, and a store-level surface carrying per-employee rows needs
+    # BOTH or it is the payroll leak `rbac.SELF_OWN_STORE_SURFACES` names in its own comment.
+    from app.modules.commcalc import payout_audience as _pa
+    _sum_rep_keys = _caller_rep_keys(authorization, org_id)
+    _sum_cmap = _rep_canon_map(client, org_id) if _sum_rep_keys is not None else None
+    _sum_canon_fn = (lambda v: _canon(v, _sum_cmap)) if _sum_rep_keys is not None else None
     rep_opts = sorted({str(a.get('rep_name') or '').strip() for a in actuals if str(a.get('rep_name') or '').strip()})
+    # The rep FILTER OPTIONS are every name in the org's sales for the period — no store bound, no
+    # person bound. Names carry no figures, so this is not the leak the per-rep rows were; but it is
+    # a roster of colleagues handed to whoever asks, it defeats the owner's own ask ("only the person
+    # who is logged in"), and it is exactly where somebody would read a name to feed back into the
+    # `rep=` parameter. Narrowed through the same one home. Flagged by the security pass.
+    rep_opts, _ = _pa.mine_names(rep_opts, _sum_rep_keys, canon=_sum_canon_fn)
     filters = {'stores': store_opts, 'markets': market_opts, 'reps': rep_opts}
 
     # Same selections as before for every real input (list / single value / None); routed through
@@ -33982,14 +34070,6 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
         client, org_id, start, end - _timedelta(days=1), catalog) if catalog else {})
 
     out = []
-    # WHOSE ROWS — resolved ONCE for the whole store loop (§CORE-33.5). The store dimension is
-    # answered below by the keyset; this answers which PEOPLE within those stores, and a store-level
-    # surface carrying per-employee rows needs BOTH or it is the payroll leak that
-    # `rbac.SELF_OWN_STORE_SURFACES` names in its own comment.
-    from app.modules.commcalc import payout_audience as _pa
-    _sum_rep_keys = _caller_rep_keys(authorization, org_id)
-    _sum_cmap = _rep_canon_map(client, org_id) if _sum_rep_keys is not None else None
-    _sum_canon_fn = (lambda v: _canon(v, _sum_cmap)) if _sum_rep_keys is not None else None
     for s in roster:
         code = str(s.get('store_code', '') or '').strip()
         if not code:
