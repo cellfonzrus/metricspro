@@ -1940,6 +1940,11 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/targets_engine.py': ('_person_identity',),
             # The drill-down's word-set, for its "did you mean" ranking.
             'app/modules/commcalc/commission_drilldown.py': ('_person_identity',),
+            # `folded_token_key`, through `payout_audience.name_fold` — the fold BOTH sides of
+            # "are these rows mine" use (§CORE-33.5). Added because `.upper()` alone refused a rep
+            # their own rows whenever the feed spelled them "Last, First" or kept an accent, which
+            # on a payout read is a lockout rather than a leak.
+            'app/modules/commcalc/payout_audience.py': ('_pi',),
             # The closing module: `_name_match` (the screening rule) AND the who-worked signal,
             # which is the surface the owner reported.
             'app/modules/closing/router.py': ('_person_identity',),
@@ -3209,7 +3214,7 @@ FACTS: dict[str, dict] = {
         "callers": {
             'app/modules/commcalc/commission_drilldown.py': ('_pa',),
             'app/modules/commcalc/commission_statement.py': ('_pa',),
-            'app/modules/commcalc/router.py': ('_pa',),
+            'app/modules/commcalc/router.py': ('_pa', '_pa_fold'),
             'app/modules/core/router.py': ('_pa',),
         },
     },

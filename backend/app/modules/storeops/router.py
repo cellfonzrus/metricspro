@@ -16,6 +16,7 @@ from app.modules.core import control_box as _cbx
 from app.core.config import settings
 from app.core.run_secret import verify_notify_secret
 from app.core.schemas import LaxModel
+from app.modules.core.auth_header import auth_str
 from app.core import scope as _cscope
 from . import org_chain
 from app.core import identity as _identity
@@ -578,10 +579,14 @@ def _canonical_shift_employee_id(org_id, raw_id, employees=None):
 
 
 @router.post("/shifts")
-def create_shift(shift: dict, org_id: str = ORG_ID):
+def create_shift(shift: dict, org_id: str = ORG_ID,
+                 authorization: str = Header(default="")):
     # 2026-07-27 money fix (owner-approved): canonicalize the incoming employee_id to the BUSINESS id
     # before anything below reads it (the time-off check, the hours-budget guard, and the insert
     # itself) — closes this endpoint as a source of NEW numeric-id shifts, whichever caller hits it.
+    require_person_write(auth_str(authorization), org_id,
+                         (shift or {}).get("employee_id"),
+                         "Creating a shift", manager_only=True)
     eid_raw = shift.get("employee_id")
     if eid_raw not in (None, ""):
         shift = {**shift, "employee_id":
@@ -3245,9 +3250,11 @@ class BulkCreateStoresIn(LaxModel):
 
 
 @router.post("/stores/bulk")
-def bulk_create_stores(body: BulkCreateStoresIn, org_id: str = ORG_ID):
+def bulk_create_stores(body: BulkCreateStoresIn, org_id: str = ORG_ID,
+                       authorization: str = Header(default="")):
     """Bulk-create stores from a filled template (new-tenant setup). Body: {stores:[{...}]}.
     Skips blank store_code rows and store_codes that already exist (idempotent re-upload)."""
+    require_not_individual_contributor(auth_str(authorization), org_id, "Bulk-creating stores")
     rows_in = body.stores or body.rows or []
     if not isinstance(rows_in, list):
         raise HTTPException(400, "stores must be a list")
@@ -3281,8 +3288,10 @@ def bulk_create_stores(body: BulkCreateStoresIn, org_id: str = ORG_ID):
 
 
 @router.post("/stores")
-def create_store(store: dict, org_id: str = ORG_ID):
+def create_store(store: dict, org_id: str = ORG_ID,
+                 authorization: str = Header(default="")):
     """Create a store (StoreOps Admin)."""
+    require_not_individual_contributor(auth_str(authorization), org_id, "Creating a store")
     row = {k: store[k] for k in STORE_FIELDS if k in store}
     if not (row.get("store_code") or "").strip():
         raise HTTPException(400, "store_code required")
@@ -3411,9 +3420,11 @@ def _register_store_entity(org_id, store_code, address, entity_id=None):
 
 
 @router.patch("/stores/{store_id}")
-def update_store(store_id: int, updates: dict, org_id: str = ORG_ID):
+def update_store(store_id: int, updates: dict, org_id: str = ORG_ID,
+                 authorization: str = Header(default="")):
     """Update a store (StoreOps Admin). org_id-scoped so a foreign (guessable BIGSERIAL) store_id
     is a no-op instead of a cross-tenant write — this previously took NO org filter at all."""
+    require_not_individual_contributor(auth_str(authorization), org_id, "Editing a store")
     row = {k: updates[k] for k in STORE_FIELDS if k in updates}
     if not row:
         raise HTTPException(400, "no valid fields to update")
@@ -4567,8 +4578,10 @@ class WeekStartIn(LaxModel):
 
 
 @router.post("/shift-templates/save-week")
-def save_week_as_template(body: WeekStartIn, org_id: str = ORG_ID):
+def save_week_as_template(body: WeekStartIn, org_id: str = ORG_ID,
+                          authorization: str = Header(default="")):
     """Save a week's shifts as the recurring template (replaces existing templates for those employees)."""
+    require_not_individual_contributor(auth_str(authorization), org_id, "Saving a week as the shift template")
     week_start = (body.week_start or "").strip()
     if not week_start:
         raise HTTPException(400, "week_start required")
@@ -4618,8 +4631,10 @@ def save_week_as_template(body: WeekStartIn, org_id: str = ORG_ID):
 
 
 @router.post("/shift-templates/apply")
-def apply_templates(body: WeekStartIn, org_id: str = ORG_ID):
+def apply_templates(body: WeekStartIn, org_id: str = ORG_ID,
+                    authorization: str = Header(default="")):
     """Create shifts for a week from the saved templates (dedup-safe; skips time-off-blocked days)."""
+    require_not_individual_contributor(auth_str(authorization), org_id, "Applying the shift templates")
     week_start = (body.week_start or "").strip()
     if not week_start:
         raise HTTPException(400, "week_start required")
@@ -8337,7 +8352,12 @@ def decide_budget_override(ov_id: str, body: DecisionNoteIn, authorization: str 
 
 # ── payroll settings (W-4 / state) + manual hours ──────────────────────────────────────────────
 @router.get("/payroll-settings/{employee_id}")
-def get_payroll_settings(employee_id: str, org_id: str = ORG_ID):
+def get_payroll_settings(employee_id: str, org_id: str = ORG_ID,
+                         authorization: str = Header(default="")):
+    if not gate_person_rows([{"employee_id": employee_id}], auth_str(authorization),
+                            org_id, people_fields=("employee_id",)):
+        raise HTTPException(403, "Those payroll settings are not available for this "
+                                 "employee — they are not in your team.")
     rows = (sb().table("payroll_settings").select("*").eq("org_id", org_id)
             .eq("employee_id", employee_id).limit(1).execute().data) or []
     if rows:
@@ -8355,7 +8375,10 @@ class PayrollSettingsIn(LaxModel):
 
 
 @router.put("/payroll-settings/{employee_id}")
-def put_payroll_settings(employee_id: str, body: PayrollSettingsIn, org_id: str = ORG_ID):
+def put_payroll_settings(employee_id: str, body: PayrollSettingsIn, org_id: str = ORG_ID,
+                         authorization: str = Header(default="")):
+    require_person_write(auth_str(authorization), org_id, employee_id,
+                         "Changing payroll tax settings", manager_only=True)
     row = {"org_id": org_id, "employee_id": employee_id,
            "filing_status": body.filing_status or "Single",
            "allowances": int(body.allowances or 0),
@@ -8765,8 +8788,10 @@ def org_tree(org_id: str = ORG_ID):
 
 
 @router.post("/org/seed")
-def org_seed(org_id: str = ORG_ID):
+def org_seed(org_id: str = ORG_ID,
+             authorization: str = Header(default="")):
     """(Re)build Company -> Market -> stores from storeops.stores. Idempotent; manual placements survive."""
+    require_not_individual_contributor(auth_str(authorization), org_id, "Rebuilding the company structure")
     res = sb().rpc("seed_org_from_stores", {"p_org_id": org_id}).execute()
     return {"ok": True, "result": getattr(res, "data", None)}
 
@@ -8777,13 +8802,15 @@ _STD_DEPTS = ["Finance", "Human Resources", "Marketing", "IT", "Inventory", "Ope
 
 
 @router.post("/org/build-standard")
-def org_build_standard(org_id: str = ORG_ID):
+def org_build_standard(org_id: str = ORG_ID,
+                       authorization: str = Header(default="")):
     """⚠️ REPLACES the org structure with a standard corporate org: Company (Executive) → departments
     (Director) → from existing markets/stores under Sales: Region (Regional Manager) → District
     (District Manager) → Store (Store Manager); sales consultants are the employees under each store
     (via home_store). The user then just assigns the people (CEO/COO/CFO on Company, Directors on
     departments, etc.). Wipes the current units/levels/manager-assignments first (store + employee
     placements are detached, not deleted)."""
+    require_not_individual_contributor(auth_str(authorization), org_id, "Replacing the company structure")
     c = sb()
     # 1. detach stores + employees from any unit (avoid FK violations on the wipe)
     unit_ids = [u["id"] for u in (c.table("org_units").select("id").eq("org_id", org_id).execute().data or [])]
@@ -8875,7 +8902,9 @@ def org_levels_list(org_id: str = ORG_ID):
 
 
 @router.post("/org/levels")
-def org_level_create(body: OrgLevelCreateIn, org_id: str = ORG_ID):
+def org_level_create(body: OrgLevelCreateIn, org_id: str = ORG_ID,
+                     authorization: str = Header(default="")):
+    require_not_individual_contributor(auth_str(authorization), org_id, "Creating an org level")
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "Level name required.")
@@ -8889,8 +8918,10 @@ def org_level_create(body: OrgLevelCreateIn, org_id: str = ORG_ID):
 
 
 @router.put("/org/levels/{level_id}")
-def org_level_update(level_id: int, body: OrgLevelUpdateIn, org_id: str = ORG_ID):
+def org_level_update(level_id: int, body: OrgLevelUpdateIn, org_id: str = ORG_ID,
+                     authorization: str = Header(default="")):
     """org_id-scoped so a foreign level_id is a no-op instead of a cross-tenant write."""
+    require_not_individual_contributor(auth_str(authorization), org_id, "Editing an org level")
     upd = {}
     sent = body.model_fields_set
     if "name" in sent:
@@ -8903,8 +8934,10 @@ def org_level_update(level_id: int, body: OrgLevelUpdateIn, org_id: str = ORG_ID
 
 
 @router.delete("/org/levels/{level_id}")
-def org_level_delete(level_id: int, org_id: str = ORG_ID):
+def org_level_delete(level_id: int, org_id: str = ORG_ID,
+                     authorization: str = Header(default="")):
     """org_id-scoped so a foreign level_id is a no-op instead of a cross-tenant delete."""
+    require_not_individual_contributor(auth_str(authorization), org_id, "Deleting an org level")
     used = sb().table("org_units").select("id").eq("org_id", org_id).eq("level_id", level_id).limit(1).execute().data or []
     if used:
         raise HTTPException(409, "This level is in use by one or more units — reassign them first.")
@@ -8914,7 +8947,9 @@ def org_level_delete(level_id: int, org_id: str = ORG_ID):
 
 # ── units ────────────────────────────────────────────────────────────────────────────────────────
 @router.post("/org/units")
-def org_unit_create(body: OrgUnitCreateIn, org_id: str = ORG_ID):
+def org_unit_create(body: OrgUnitCreateIn, org_id: str = ORG_ID,
+                    authorization: str = Header(default="")):
+    require_not_individual_contributor(auth_str(authorization), org_id, "Creating an org unit")
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "Unit name required.")
@@ -8925,9 +8960,11 @@ def org_unit_create(body: OrgUnitCreateIn, org_id: str = ORG_ID):
 
 
 @router.put("/org/units/{unit_id}")
-def org_unit_update(unit_id: str, body: OrgUnitUpdateIn, org_id: str = ORG_ID):
+def org_unit_update(unit_id: str, body: OrgUnitUpdateIn, org_id: str = ORG_ID,
+                    authorization: str = Header(default="")):
     """Rename / re-level / reorder / MOVE (set parent_id). Guards against cycles (can't move a unit
     under itself or a descendant)."""
+    require_not_individual_contributor(auth_str(authorization), org_id, "Editing an org unit")
     upd = {}
     sent = body.model_fields_set
     for k in ("name", "parent_id", "level_id", "sort_order", "is_active"):
@@ -8948,12 +8985,14 @@ def org_unit_update(unit_id: str, body: OrgUnitUpdateIn, org_id: str = ORG_ID):
 
 
 @router.delete("/org/units/{unit_id}")
-def org_unit_delete(unit_id: str, org_id: str = ORG_ID):
+def org_unit_delete(unit_id: str, org_id: str = ORG_ID,
+                    authorization: str = Header(default="")):
     """Delete a unit + its descendants (cascade). Stores/employees in the subtree are detached
     (org_unit_id -> NULL) FIRST so they become 'unassigned' rather than violating the FK.
     org_id-scoped throughout so a foreign unit_id is a no-op instead of a cross-tenant delete —
     the RPC already filters by org, but the final delete previously ran unconditionally even when
     the subtree resolved empty (i.e. the id wasn't the caller's)."""
+    require_not_individual_contributor(auth_str(authorization), org_id, "Deleting an org unit")
     sub = sb().rpc("org_subtree", {"p_org_id": org_id, "p_unit_id": unit_id}).execute().data or []
     ids = [n["id"] for n in sub if n.get("id")]
     if ids:
@@ -8965,7 +9004,9 @@ def org_unit_delete(unit_id: str, org_id: str = ORG_ID):
 
 # ── managers ───────────────────────────────────────────────────────────────────────────────────
 @router.post("/org/units/{unit_id}/managers")
-def org_unit_add_manager(unit_id: str, body: OrgManagerAddIn, org_id: str = ORG_ID):
+def org_unit_add_manager(unit_id: str, body: OrgManagerAddIn, org_id: str = ORG_ID,
+                         authorization: str = Header(default="")):
+    require_not_individual_contributor(auth_str(authorization), org_id, "Assigning a manager to an org unit")
     eid = (body.employee_id or "").strip()
     if not eid:
         raise HTTPException(400, "employee_id required.")
@@ -8979,17 +9020,21 @@ def org_unit_add_manager(unit_id: str, body: OrgManagerAddIn, org_id: str = ORG_
 
 
 @router.delete("/org/units/{unit_id}/managers/{employee_id}")
-def org_unit_remove_manager(unit_id: str, employee_id: str, org_id: str = ORG_ID):
+def org_unit_remove_manager(unit_id: str, employee_id: str, org_id: str = ORG_ID,
+                            authorization: str = Header(default="")):
     """org_id-scoped so a foreign unit_id/employee_id pair is a no-op instead of a cross-tenant delete."""
+    require_not_individual_contributor(auth_str(authorization), org_id, "Removing a manager from an org unit")
     sb().table("org_managers").delete().eq("unit_id", unit_id).eq("employee_id", employee_id).eq("org_id", org_id).execute()
     return {"ok": True}
 
 
 # ── attach a store to a unit (or unassign with unit_id=null) ─────────────────────────────────────
 @router.put("/org/stores/{store_code}/unit")
-def org_assign_store(store_code: str, body: OrgUnitRefIn, org_id: str = ORG_ID):
+def org_assign_store(store_code: str, body: OrgUnitRefIn, org_id: str = ORG_ID,
+                     authorization: str = Header(default="")):
     """org_id-scoped so a foreign store_code is a no-op instead of a cross-tenant write — this
     previously took NO org filter at all."""
+    require_not_individual_contributor(auth_str(authorization), org_id, "Moving a store in the company structure")
     sb().table("stores").update({"org_unit_id": body.unit_id}).eq("store_code", store_code).eq("org_id", org_id).execute()
     return {"ok": True}
 
@@ -9031,13 +9076,15 @@ def org_employees(include_inactive: bool = False, org_id: str = ORG_ID):
 
 
 @router.put("/org/employees/{row_id}/unit")
-def org_assign_employee(row_id: str, body: OrgUnitRefIn, org_id: str = ORG_ID):
+def org_assign_employee(row_id: str, body: OrgUnitRefIn, org_id: str = ORG_ID,
+                        authorization: str = Header(default="")):
     """Place an employee directly on a unit (overrides the home-store rollup — for managers / roving /
     overhead staff). unit_id=null clears the override so they fall back to their home store's unit.
 
     Keys on the employees PRIMARY KEY (id), NOT the optional business employee_id — that field is NULL
     for some staff, so keying on it made unplaced/no-Emp-ID employees impossible to assign (the update
     matched no row and silently no-op'd)."""
+    require_not_individual_contributor(auth_str(authorization), org_id, "Placing an employee in the company structure")
     sb().table("employees").update({"org_unit_id": body.unit_id}) \
         .eq("id", row_id).eq("org_id", org_id).execute()
     return {"ok": True}

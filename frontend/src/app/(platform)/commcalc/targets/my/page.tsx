@@ -48,6 +48,16 @@ export default function MyTargetsPage() {
   const [storeCode, setStoreCode] = useState('')
   const [reps, setReps] = useState<string[]>([])
   const [rep, setRep] = useState('')
+  // WHOSE NAME THIS SCREEN IS FOR — the server's answer, not a guess from `reps.length`.
+  // Owner 2026-11-27: *"under my targets it should only shpow the name of the person whoc is logged
+  // in not all reps"*. `locked_rep` is non-null only when the viewer is RESTRICTED and exactly one
+  // name is theirs, so an admin (unrestricted) keeps the picker and a rep never sees one. Deciding
+  // it here from the length of the list would turn into a picker again the moment a second spelling
+  // of the same person reached the feed — which is exactly how this screen drifted the first time.
+  const [lockedRep, setLockedRep] = useState<string | null>(null)
+  // The lockout case, reported by the server rather than rendered as an empty page: we know who the
+  // viewer is, somebody sold at this store, and none of those spellings folds to them.
+  const [repUnmatched, setRepUnmatched] = useState(false)
   const [detail, setDetail] = useState<any>(null)
   const [actionItems, setActionItems] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
@@ -97,7 +107,16 @@ export default function MyTargetsPage() {
     if (!storeCode) return
     setRep(''); setDetail(null)
     api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/calendar?scope=store&store_code=${encodeURIComponent(storeCode)}&org_id=${ORG_ID}`)
-      .then(d => setReps(d.reps || [])).catch(console.error)
+      .then(d => {
+        setReps(d.reps || [])
+        setRepUnmatched(!!d.rep_unmatched)
+        const locked = d.locked_rep || null
+        setLockedRep(locked)
+        // Locked: select it straight away. The viewer never had a choice to make, so asking them to
+        // pick their own name out of a list of one is a step that exists only because this screen
+        // predates sign-in.
+        if (locked) setRep(locked)
+      }).catch(console.error)
   }, [storeCode, period])
 
   useEffect(() => { if (storeCode && rep) loadRep() }, [rep])
@@ -227,24 +246,49 @@ export default function MyTargetsPage() {
         </div>
       )}
 
-      <div style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', borderRadius: 10, padding: '8px 14px', marginBottom: 18, fontSize: 12, color: 'var(--c-fg-92400e)' }}>
-        ⓘ Until logins are enabled, pick your store and name below. This view will be locked to you automatically once sign-in is live.
-      </div>
+      {/* THE NOTICE THAT OUTLIVED ITS OWN PROMISE. It read: "Until logins are enabled, pick your
+          store and name below. This view will be locked to you automatically once sign-in is live."
+          Sign-in went live and nobody came back to close it, so the screen kept asking every viewer
+          to choose a name out of the whole store's roster — which is what the owner reported on
+          2026-11-27. It is replaced by the lock it promised, so it is gone rather than reworded. */}
+      {repUnmatched && (
+        <div style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', borderRadius: 10, padding: '9px 13px', marginBottom: 16, fontSize: 12.5, color: 'var(--c-fg-92400e)' }}>
+          ⓘ We could not match your name to this store&apos;s sales or schedule rows, so your own
+          figures cannot be shown yet. Ask an admin to merge your name spellings.
+        </div>
+      )}
 
-      <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap', alignItems: 'center' }}>
         <select className="input" value={storeCode} onChange={e => setStoreCode(e.target.value)} style={{ minWidth: 220 }}>
           {stores.map(s => <option key={s.store_code} value={s.store_code}>{s.address || s.store_code}</option>)}
         </select>
-        <select className="input" value={rep} onChange={e => setRep(e.target.value)} style={{ minWidth: 200 }}>
-          <option value="">Select your name…</option>
-          {reps.map(r => <option key={r} value={r}>{r}</option>)}
-        </select>
-        <a href="/commcalc/targets/rep-map" className="btn btn-secondary" style={{ textDecoration: 'none', fontSize: 12 }}>🔗 Merge duplicate reps</a>
+        {/* LOCKED: the name, not a dropdown of one. UNRESTRICTED (an admin, who has no targets of
+            their own): the picker stays, because for them this screen is the only way to look at a
+            person's day and the all-reps view lives on the Targets overview. */}
+        {lockedRep ? (
+          <div style={{ fontSize: 14, fontWeight: 700, padding: '7px 2px' }}>{lockedRep}</div>
+        ) : (
+          <select className="input" value={rep} onChange={e => setRep(e.target.value)} style={{ minWidth: 200 }}>
+            <option value="">Select a name…</option>
+            {reps.map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+        )}
+        {/* The merge screen is an ADMIN page and is NOT granted to a confined employee, so offering
+            it to a locked viewer is a link straight into `not_your_access` — the same dead end
+            §CORE-33.4 found on the closing page's "← Dashboard". Shown only to whoever still has a
+            picker, i.e. somebody unrestricted. */}
+        {!lockedRep && (
+          <a href="/commcalc/targets/rep-map" className="btn btn-secondary" style={{ textDecoration: 'none', fontSize: 12 }}>🔗 Merge duplicate reps</a>
+        )}
       </div>
 
       {!rep ? (
         <div className="card" style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>
-          Select your name to see your targets.
+          {/* "your name" was right when everyone picked their own out of the list. A locked viewer
+              never reaches this branch (their name is selected for them), so the only person who
+              sees it is somebody unrestricted looking at a store — for whom it is somebody ELSE's
+              targets. */}
+          Select a name to see their targets.
         </div>
       ) : loading ? (
         <div style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>Loading…</div>

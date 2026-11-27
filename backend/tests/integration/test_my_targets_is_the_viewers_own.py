@@ -1,0 +1,460 @@
+"""A REP'S TARGETS ARE THEIR OWN, AND THE SCREEN NAMED "MY" OFFERS NOBODY ELSE.
+
+OWNER, 2026-11-27: *"under my targets it should only shpow the name of the person whoc is logged in
+not all reps , that needs to chnage across teh paltform"*.
+
+WHAT HE WAS LOOKING AT. `/commcalc/targets/my` has carried its own confession since before logins
+existed: *"Until logins are enabled, pick your store and name below. This view will be locked to you
+automatically once sign-in is live."* Sign-in went live; nobody came back to close it. So the screen
+still asked every viewer to choose a name out of the whole store's roster.
+
+THE DEFECT UNDER THE COSMETIC ONE, and it is why this is an access test rather than a UI tweak.
+`GET /targets/{period}/calendar` took `rep` as a plain query parameter and applied NO person filter
+of any kind — the only guard in the handler is `scope_keyset`, which bounds the STORE. It also
+published `reps`: every name that worked or sold at that store. A confined employee is granted read
+on `/commcalc/targets` (`rep_surface`, the action-plan surface), so one rep could name a colleague
+and read their target, their pace, their achieved figures and their shortfall.
+
+THE RULE THAT ALREADY SAID SO. `rbac.SELF_OWN_STORE_SURFACES` lists this page FIRST and states the
+paired rule in its own comment: *"a surface listed here shows STORE-LEVEL data. If it also carries a
+per-employee pay / commission / compensation / PII column, that column is filtered to the caller's
+own employee_id … Adding a surface to this list without that filter is a payroll leak between
+colleagues."* The declaration was right; the wiring was never done. That is §19.18 — a registry
+written and its callers left unwired — for the fourth time in this repo, which is why the lock below
+is an AST lock and not a comment.
+
+THE CLASS: **"may this door open" and "whose rows come out of it" are two questions, and a surface a
+rep is SUPPOSED to reach can only be judged by the second.** Named already in
+`probe-own-surface-foreign-rows`; this is the same shape, one subsystem over.
+
+TWO TENANTS throughout, with the same role NAMES and different declarations, because a feature is
+for every tenant (CLAUDE.md 2026-10-30) and a one-tenant answer would otherwise pass.
+
+★ NO LOCKOUT ★ is asserted as hard as the refusal: a filter that hides a rep from their OWN figures
+is a worse outage than the leak it closes, and the accent/middle-initial spellings are exactly where
+that happens. See `test_a_rep_whose_name_is_spelled_differently_*`.
+"""
+import pytest
+
+from app.modules.commcalc import targets_engine
+
+ORG_A = "11111111-1111-1111-1111-111111111111"
+ORG_B = "22222222-2222-2222-2222-222222222222"
+PERIOD = "November 2026"
+
+UID = {"repA": "uid-rep-a", "mgrA": "uid-mgr-a", "admA": "uid-adm-a", "repC": "uid-rep-c",
+       "repB": "uid-rep-b", "mgrB": "uid-mgr-b"}
+HDR = {k: f"Bearer {v}" for k, v in UID.items()}
+_BY_TOKEN = {v: UID[k] for k, v in HDR.items()}
+
+# The rep's roster spelling, and the three spellings the POS/schedule feeds actually write for them.
+# Each is the SAME person and must resolve to them; `OTHER` is a colleague and must never resolve.
+ME = "Diana Antunez"
+ME_POS = "Antunez, Diana"              # the comma form — the 2026-09-02 finding
+ME_ACCENT = "Díana Antúnez"            # accents: `token_key` alone would lock her out of her own page
+OTHER = "Marco Reyes"
+
+
+def _people(org, suffix, store):
+    return {
+        "app_users": [
+            {"id": f"au-rep-{suffix}", "org_id": org, "auth_id": UID[f"rep{suffix}"],
+             "role": "sales_rep", "employee_id": f"E100{suffix}", "is_active": True},
+            {"id": f"au-mgr-{suffix}", "org_id": org, "auth_id": UID[f"mgr{suffix}"],
+             "role": "store_manager", "employee_id": f"E200{suffix}", "store_code": store,
+             "is_active": True},
+        ],
+        "employees": [
+            {"id": f"1{suffix}", "org_id": org, "employee_id": f"E100{suffix}", "name": ME,
+             "home_store": store, "is_active": True},
+            {"id": f"2{suffix}", "org_id": org, "employee_id": f"E101{suffix}", "name": OTHER,
+             "home_store": store, "is_active": True},
+            {"id": f"3{suffix}", "org_id": org, "employee_id": f"E200{suffix}", "name": "The Manager",
+             "home_store": store, "is_active": True},
+        ],
+        "roles": [
+            # Tenant A declares the individual contributor through `scope`, tenant B through
+            # `people_visibility` over a store scope. Both shapes exist live, so both are tested.
+            {"id": f"r1{suffix}", "org_id": org, "name": "sales_rep",
+             "permissions": ({"scope": "self"} if suffix == "A"
+                             else {"scope": "store", "people_visibility": "self"})},
+            {"id": f"r2{suffix}", "org_id": org, "name": "store_manager",
+             "permissions": {"scope": "store", "people_visibility": "span"}},
+            {"id": f"r3{suffix}", "org_id": org, "name": "admin",
+             "permissions": {"scope": "all", "people_visibility": "all"}},
+        ],
+    }
+
+
+@pytest.fixture
+def wired(monkeypatch, fake_supabase):
+    """RBAC on, two tenants, the REAL targets handler reading the double.
+
+    `_fetch_shifts` / `_fetch_actuals` are stubbed because what they return is not under test — the
+    question is which of their rows reach the caller. Everything that DECIDES that (the role row,
+    the app_user, `scope_keyset`, the people keyset) is the real code reading real seeded rows."""
+    from app.modules.commcalc import router as cr
+
+    # `storeops.router.sb()` is the storeops-SCHEMA client (`sb().table("app_config")`), while
+    # `commcalc.router.sb()` is the default-schema one that names its schema at each call. Patching
+    # both to the same thing makes RBAC read as OFF and every filter unrestricted — which is how the
+    # first run of this file passed the fix and failed the tests.
+    monkeypatch.setattr("app.modules.storeops.router.sb",
+                        lambda: fake_supabase.schema("storeops"), raising=False)
+    monkeypatch.setattr("app.modules.commcalc.router.sb", lambda: fake_supabase, raising=False)
+    for mod in ("app.modules.storeops.router", "app.modules.commcalc.router"):
+        monkeypatch.setattr(f"{mod}.get_supabase", lambda: fake_supabase, raising=False)
+    monkeypatch.setattr("app.modules.core.router._uid_from_token",
+                        lambda a: _BY_TOKEN.get((a or "").strip()))
+    monkeypatch.setattr(
+        "app.core.tenant_middleware.caller_app_user_http",
+        lambda uid, cols="*": next(
+            (u for u in (fake_supabase.schema("storeops").table("app_users").select("*")
+                         .execute().data or []) if u.get("auth_id") == uid), None))
+
+    # Both colleagues worked, and both sold, at the same store — the shape the owner is looking at.
+    # KEYED BY ORG, because the real `_fetch_shifts`/`_fetch_actuals` are org-scoped reads and a stub
+    # that ignored `org_id` would hand one tenant's rows to the other and make a cross-tenant
+    # assertion here meaningless (it did, on the first run of this file).
+    shifts, actuals = {ORG_A: [], ORG_B: []}, {ORG_A: [], ORG_B: []}
+    for org, store in ((ORG_A, "S1"), (ORG_B, "T1")):
+        for name in (ME, OTHER):
+            shifts[org].append({"store_code": store, "employee_name": name,
+                                "shift_date": "2026-11-03", "hours": 8.0})
+        # The POS writes her the other way round, and once with accents.
+        for name in (ME_POS, ME_ACCENT, OTHER):
+            actuals[org].append({"store_code": store, "rep_name": name, "sale_date": "2026-11-03",
+                                 "activations": 1, "upgrades": 0, "accessories_amount": 10.0})
+    monkeypatch.setattr(cr, "_fetch_shifts",
+                        lambda client, start, end, org_id, *a, **k: list(shifts.get(org_id, [])),
+                        raising=False)
+    monkeypatch.setattr(cr, "_fetch_actuals",
+                        lambda client, org_id, *a, **k: list(actuals.get(org_id, [])),
+                        raising=False)
+
+    # Nobody here manages an org unit — the tree resolves a manager for 6 of 29 house stores and 0
+    # of 20 Luxelink stores, so "no subtree" is the live majority shape and the right default here.
+    fake_supabase.seed_rpc("storeops.org_span_for_manager", lambda params: [])
+    fake_supabase.seed("storeops.app_config", [{"id": 1, "rbac_enabled": True}])
+    a, b = _people(ORG_A, "A", "S1"), _people(ORG_B, "B", "T1")
+    # The admin exists in tenant A only: an unlinked super-admin is the live shape (3 of 140 logins).
+    a["app_users"].append({"id": "au-adm-a", "org_id": ORG_A, "auth_id": UID["admA"],
+                           "role": "admin", "employee_id": None, "is_active": True})
+    # repC is a real, linked, NAMED rep whom nobody has placed in a store: no login pin and no
+    # roster `home_store`. That is the shape the empty-keyset hole lived on.
+    a["app_users"].append({"id": "au-rep-c", "org_id": ORG_A, "auth_id": UID["repC"],
+                           "role": "sales_rep", "employee_id": "E300A", "is_active": True})
+    a["employees"].append({"id": "4A", "org_id": ORG_A, "employee_id": "E300A",
+                           "name": "Unplaced Rep", "home_store": None, "is_active": True})
+    for table in ("app_users", "employees", "roles"):
+        fake_supabase.seed(f"storeops.{table}", a[table] + b[table])
+    fake_supabase.seed("storeops.stores", [
+        {"id": "s1", "org_id": ORG_A, "store_code": "S1", "address": "1 A St", "is_active": True},
+        {"id": "t1", "org_id": ORG_B, "store_code": "T1", "address": "1 B St", "is_active": True}])
+    fake_supabase.seed("storeops.shifts", [])
+    fake_supabase.seed("storeops.timelog", [])
+    fake_supabase.seed("commcalc.targets", [
+        # The column names are DEREFERENCED from the engine, not spelled here: a target seeded under
+        # the wrong spelling sums to zero, the store is dropped from the response, and every
+        # assertion below would pass against an empty payload (it did, on the first run).
+        {"id": "tgA", "org_id": ORG_A, "period": PERIOD, "store_code": "S1",
+         **{targets_engine.BUILTIN_TARGET_COLUMN[c]: v for c, v in
+            (("activations", 100), ("upgrades", 50), ("accessories", 5000))}},
+        {"id": "tgB", "org_id": ORG_B, "period": PERIOD, "store_code": "T1",
+         **{targets_engine.BUILTIN_TARGET_COLUMN[c]: v for c, v in
+            (("activations", 100), ("upgrades", 50), ("accessories", 5000))}}])
+    return fake_supabase
+
+
+def _cal(client, who, org, store, **qs):
+    q = "".join(f"&{k}={v}" for k, v in qs.items())
+    return client.get(f"/api/v1/commcalc/targets/{PERIOD}/calendar"
+                      f"?store_code={store}&org_id={org}{q}",
+                      headers={"Authorization": HDR[who]})
+
+
+# ── THE PICKER: WHOSE NAMES COME BACK ────────────────────────────────────────────────────────────
+@pytest.mark.parametrize("who,org,store", [("repA", ORG_A, "S1"), ("repB", ORG_B, "T1")])
+def test_a_rep_is_offered_only_their_own_name(api_client, wired, who, org, store):
+    """THE OWNER'S REPORT. The dropdown was built from this list."""
+    r = _cal(api_client, who, org, store, scope="store")
+    assert r.status_code == 200, r.text
+    reps = r.json()["reps"]
+    assert OTHER not in reps, f"a colleague is still offered: {reps}"
+    assert len(reps) == 1, f"exactly one name — the viewer's own: {reps}"
+
+
+@pytest.mark.parametrize("who,org,store", [("mgrA", ORG_A, "S1"), ("mgrB", ORG_B, "T1")])
+def test_the_manager_of_that_store_is_still_offered_their_team(api_client, wired, who, org, store):
+    """The narrowing must not reach a viewer whose job is the whole store."""
+    reps = _cal(api_client, who, org, store, scope="store").json()["reps"]
+    assert OTHER in reps, f"the manager lost their own team: {reps}"
+
+
+def test_an_unrestricted_admin_still_sees_everyone(api_client, wired):
+    reps = _cal(api_client, "admA", ORG_A, "S1", scope="store").json()["reps"]
+    assert OTHER in reps and len(reps) > 1, reps
+
+
+# ── THE LEAK: NAMING A COLLEAGUE DIRECTLY ────────────────────────────────────────────────────────
+@pytest.mark.parametrize("who,org,store", [("repA", ORG_A, "S1"), ("repB", ORG_B, "T1")])
+def test_a_rep_cannot_read_a_colleagues_figures_by_naming_them(api_client, wired, who, org, store):
+    """THE REGRESSION. Not hiding the name from a dropdown — REFUSING the request. A hidden option
+    in a browser is not a gate; the owner's screen is one `curl` away from this parameter."""
+    r = _cal(api_client, who, org, store, scope="rep", rep=OTHER.replace(" ", "%20"))
+    assert r.status_code == 403, f"a colleague's targets came back: {r.status_code} {r.text[:400]}"
+
+
+@pytest.mark.parametrize("who,org,store", [("repA", ORG_A, "S1"), ("repB", ORG_B, "T1")])
+def test_a_rep_can_read_their_own(api_client, wired, who, org, store):
+    r = _cal(api_client, who, org, store, scope="rep", rep=ME.replace(" ", "%20"))
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.parametrize("who,org,store", [("mgrA", ORG_A, "S1"), ("mgrB", ORG_B, "T1")])
+def test_the_manager_can_read_their_own_rep(api_client, wired, who, org, store):
+    r = _cal(api_client, who, org, store, scope="rep", rep=OTHER.replace(" ", "%20"))
+    assert r.status_code == 200, r.text
+
+
+def test_a_rep_we_can_place_in_no_store_reads_no_store(api_client, wired):
+    """THE NARROW HOLE THE `is not None` CHANGE ACTUALLY CLOSES, and it is pinned separately because
+    the broad test below passes either way once the rep's own store resolves.
+
+    `_caller_self_keyset` answers `(True, set())` for a rep nobody has placed — no login pin, no
+    roster home_store. The old guard read `if ks and ...`, and an empty set is FALSY, so that viewer
+    skipped the store check entirely and could read EVERY store in the tenant. Six live logins sat on
+    the same shape in 2026-08-08 on the sibling endpoint. "Sees nothing, and is told why" is the safe
+    failure; the summary endpoint's `setup_hint` is what tells them."""
+    r = _cal(api_client, "repC", ORG_A, "S1", scope="store")
+    assert r.status_code == 403, f"an unplaced rep read a store: {r.status_code}"
+
+
+def test_a_rep_cannot_read_another_stores_targets_either(api_client, wired):
+    """THE SECOND DEFECT, found by this file. The handler's only guard reads
+
+        ks = scope_keyset(authorization, org_id)
+        if ks and not in_keyset(ks, store_code): raise 403
+
+    and a self-scoped rep resolves to an EMPTY keyset, which is falsy — so the check never ran for
+    exactly the viewer it needed to bound, and any `store_code` in the tenant was readable. The
+    comment above it was right that an empty keyset must not DENY-ALL; the answer is to resolve the
+    rep to their OWN store(s) (ruling #7, `self_own_store=True`), not to drop the guard."""
+    r = _cal(api_client, "repA", ORG_A, "S9-NOT-HERS", scope="store")
+    assert r.status_code == 403, f"another store's targets came back: {r.status_code}"
+
+
+# ── ★ NO LOCKOUT ★ ───────────────────────────────────────────────────────────────────────────────
+@pytest.mark.parametrize("spelling", [ME_POS, ME_ACCENT])
+def test_a_rep_whose_name_is_spelled_differently_by_the_feed_still_reads_their_own(
+        api_client, wired, spelling):
+    """Her roster name is "Diana Antunez"; the POS writes "Antunez, Diana" and once with accents.
+    A filter that compares raw strings — or folds without the accent fold — hides her from her own
+    targets. That is a worse outage than the leak this closes, so it is pinned as hard."""
+    r = _cal(api_client, "repA", ORG_A, "S1", scope="rep",
+             rep=spelling.replace(" ", "%20").replace(",", "%2C"))
+    assert r.status_code == 200, f"{spelling!r} is her own name: {r.status_code} {r.text[:300]}"
+
+
+def test_her_own_spellings_are_offered_as_one_name_not_three(api_client, wired):
+    """The three feed spellings are one person, so the picker must not show her three times."""
+    reps = _cal(api_client, "repA", ORG_A, "S1", scope="store").json()["reps"]
+    assert len(reps) == 1, reps
+
+
+# ── THE SAME PAGE'S OTHER PAYLOAD ────────────────────────────────────────────────────────────────
+# `/summary` is the call that fills the store picker and the area roll-up on the SAME screen, and it
+# breaks each store down "into the people driving it": one row per rep carrying their achieved
+# activations, upgrades, accessories and conversion rate. The store list was already narrowed to the
+# caller's own store; the rows inside it were not. Finding this is why the sweep is part of the fix
+# and not a follow-up — a picker that offers one name, over a payload that carries ten people's
+# numbers, closes nothing at all.
+def _summary(client, who, org):
+    return client.get(f"/api/v1/commcalc/targets/{PERIOD}/summary"
+                      f"?org_id={org}&include_untargeted=1",
+                      headers={"Authorization": HDR[who]})
+
+
+@pytest.mark.parametrize("who,org", [("repA", ORG_A), ("repB", ORG_B)])
+def test_the_summary_does_not_carry_a_colleagues_achieved_figures(api_client, wired, who, org):
+    r = _summary(api_client, who, org)
+    assert r.status_code == 200, r.text
+    names = [row.get("rep") for s in (r.json().get("stores") or []) for row in (s.get("reps") or [])]
+    assert OTHER not in names, f"a colleague's achieved figures came back: {names}"
+
+
+@pytest.mark.parametrize("who,org", [("repA", ORG_A), ("repB", ORG_B)])
+def test_the_summary_still_carries_the_reps_own_figures(api_client, wired, who, org):
+    """★ NO LOCKOUT ★ on this payload too: narrowing to nobody would blank the whole screen."""
+    names = [row.get("rep") for s in (_summary(api_client, who, org).json().get("stores") or [])
+             for row in (s.get("reps") or [])]
+    assert names, "the rep lost their own achieved figures"
+
+
+@pytest.mark.parametrize("who,org", [("mgrA", ORG_A), ("mgrB", ORG_B)])
+def test_the_summary_is_unchanged_for_a_manager(api_client, wired, who, org):
+    names = [row.get("rep") for s in (_summary(api_client, who, org).json().get("stores") or [])
+             for row in (s.get("reps") or [])]
+    assert OTHER in names, f"the manager lost their team's breakdown: {names}"
+
+
+# ── THE TWO HOLES THE SECURITY PASS FOUND IN THIS VERY FIX ───────────────────────────────────────
+# Both were confirmed by running them before being closed, and both come from ONE mistake: reusing a
+# name key built for a JOIN as an AUTHORIZATION equality. For a join, a false merge costs a wrong
+# figure and the platform accepts it on purpose (`person_identity.token_key` says so in its own
+# docstring). For a permission check it is one employee reading another's pay.
+TWIN_A = "Mark Kellie"          # two DISTINCT people whose name tokens are the same words…
+TWIN_B = "Kellie Mark"          # …in a different order. Cited as live data in person_identity.
+ANA = "Ana Lopez"
+ANA_ACCENTED = "áñá Lopez"      # folds to ana|lopez, but `name_key` DELETES the non-ASCII letters
+BARE_SURNAME = "Lopez"          # …leaving "LOPEZ", which is a DIFFERENT rep
+
+
+@pytest.fixture
+def twins(monkeypatch, fake_supabase, wired):
+    """Tenant A gains Kellie Mark and Mark Kellie as two separate employees, plus an Ana Lopez and a
+    colleague recorded under the bare surname Lopez. The feed carries all four."""
+    from app.modules.commcalc import router as cr
+    fake_supabase.seed("storeops.app_users", [
+        {"id": "au-twin", "org_id": ORG_A, "auth_id": "uid-twin", "role": "sales_rep",
+         "employee_id": "E400A", "store_code": "S1", "is_active": True},
+        {"id": "au-ana", "org_id": ORG_A, "auth_id": "uid-ana", "role": "sales_rep",
+         "employee_id": "E500A", "store_code": "S1", "is_active": True}])
+    fake_supabase.seed("storeops.employees", [
+        {"id": "5A", "org_id": ORG_A, "employee_id": "E400A", "name": TWIN_A,
+         "home_store": "S1", "is_active": True},
+        {"id": "6A", "org_id": ORG_A, "employee_id": "E401A", "name": TWIN_B,
+         "home_store": "S1", "is_active": True},
+        {"id": "7A", "org_id": ORG_A, "employee_id": "E500A", "name": ANA,
+         "home_store": "S1", "is_active": True},
+        {"id": "8A", "org_id": ORG_A, "employee_id": "E501A", "name": BARE_SURNAME,
+         "home_store": "S1", "is_active": True}])
+    # THE ORDINARY CONFIGURATION, not an exotic one: every epay-fed rep has a `name_map` row
+    # tying the POS's "SURNAME, FORENAME" spelling to the roster's. Hole 3 is that this row's FOLD
+    # is byte-identical to the roster name's fold, so an un-gated alias fold hands back the exact
+    # key the ambiguity gate just withheld.
+    fake_supabase.seed("commcalc.name_map", [
+        {"id": "nm-1", "org_id": ORG_A, "epay_salesperson": "KELLIE, MARK",
+         "storeops_name": TWIN_A},
+        {"id": "nm-2", "org_id": ORG_A, "epay_salesperson": "LOPEZ, ANA", "storeops_name": ANA}])
+    UID["twin"], UID["ana"] = "uid-twin", "uid-ana"
+    HDR["twin"], HDR["ana"] = "Bearer twin", "Bearer ana"
+    _BY_TOKEN["Bearer twin"], _BY_TOKEN["Bearer ana"] = "uid-twin", "uid-ana"
+    rows = [{"store_code": "S1", "rep_name": n, "sale_date": "2026-11-03",
+             "activations": 3, "upgrades": 1, "accessories_amount": 90.0}
+            for n in (TWIN_A, TWIN_B, ANA, BARE_SURNAME)]
+    monkeypatch.setattr(cr, "_fetch_actuals", lambda client, org_id, *a, **k:
+                        list(rows) if org_id == ORG_A else [], raising=False)
+    monkeypatch.setattr(cr, "_fetch_shifts", lambda client, s, e, org_id, *a, **k:
+                        [{"store_code": "S1", "employee_name": n, "shift_date": "2026-11-03",
+                          "hours": 8.0} for n in (TWIN_A, TWIN_B, ANA, BARE_SURNAME)]
+                        if org_id == ORG_A else [], raising=False)
+    return fake_supabase
+
+
+def test_two_people_whose_names_are_the_same_words_are_not_one_person(api_client, twins):
+    """HOLE 1. The order-free fold made "Mark Kellie" and "Kellie Mark" one identity, so either
+    could read the other's figures on every surface sharing this code — commission included."""
+    r = _cal(api_client, "twin", ORG_A, "S1", scope="rep", rep=TWIN_B.replace(" ", "%20"))
+    assert r.status_code == 403, \
+        f"a different employee's figures came back: {r.status_code} {r.text[:200]}"
+
+
+def test_the_twin_is_not_offered_in_the_picker_either(api_client, twins):
+    reps = _cal(api_client, "twin", ORG_A, "S1", scope="store").json()["reps"]
+    assert TWIN_B not in reps, f"the other employee is offered as though they were the viewer: {reps}"
+
+
+def test_the_twin_can_still_read_their_own(api_client, twins):
+    """★ NO LOCKOUT ★ — refusing the fold for an ambiguous name must not cost the caller their own
+    exact spelling. They lose only the feed's OTHER spelling of themselves, which is reported."""
+    r = _cal(api_client, "twin", ORG_A, "S1", scope="rep", rep=TWIN_A.replace(" ", "%20"))
+    assert r.status_code == 200, r.text
+    assert r.json().get("rep") == TWIN_A
+
+
+def test_a_crafted_spelling_cannot_pass_the_guard_and_then_fetch_someone_else(api_client, twins):
+    """HOLE 2. The guard folds accents; `targets_engine.name_key` DELETES non-ASCII letters instead.
+    So "áñá Lopez" satisfied the guard as "Ana Lopez" and then SELECTED the rep recorded as "Lopez".
+    Two keys that are not comparable, on an endpoint with no row-level filter underneath.
+
+    The response must be the caller's OWN figures — the request's text is an authorization question,
+    never a selector."""
+    r = _cal(api_client, "ana", ORG_A, "S1", scope="rep",
+             rep=ANA_ACCENTED.replace(" ", "%20"))
+    assert r.status_code == 200, r.text
+    assert r.json().get("rep") == ANA, \
+        f"the request's text chose whose rows came back: {r.json().get('rep')!r}"
+
+
+def test_a_restricted_caller_always_reads_under_their_roster_name(api_client, twins):
+    """The general form of hole 2: whatever spelling is sent, a restricted caller's rows are selected
+    under the roster's own spelling of them. Nothing typed can change WHOSE rows come back."""
+    for sent in ("ANA  LOPEZ", "Lopez, Ana", ANA_ACCENTED):
+        r = _cal(api_client, "ana", ORG_A, "S1", scope="rep",
+                 rep=sent.replace(" ", "%20").replace(",", "%2C"))
+        assert r.status_code == 200, (sent, r.text[:200])
+        assert r.json().get("rep") == ANA, (sent, r.json().get("rep"))
+
+
+# ── HOLE 3: THE GATE HAD AN UN-GATED TWIN BESIDE IT ───────────────────────────────────────────────
+# Found by the SECOND security pass over the fix for holes 1 and 2. The first gate asked its question
+# of the roster NAME and excused the alias folds, reasoning that a declared alias carries the human's
+# "same person" authority. It does — for itself. It carries no authority over a SECOND employee who
+# happens to fold the same way, and because folded_token_key('KELLIE, MARK') == 'kellie|mark' ==
+# folded_token_key('Mark Kellie'), the alias's fold IS the withheld key. The gate is now keyed on the
+# fold value, so two spellings of one fold cannot be judged differently.
+
+def test_a_declared_alias_cannot_re_admit_a_fold_the_gate_withheld(api_client, twins):
+    """HOLE 3. With the ordinary `name_map` row present, the twin must still be refused."""
+    r = _cal(api_client, "twin", ORG_A, "S1", scope="rep", rep=TWIN_B.replace(" ", "%20"))
+    assert r.status_code == 403, \
+        f"an alias row re-opened the colleague's figures: {r.status_code} {r.text[:200]}"
+
+
+def test_the_alias_row_does_not_put_the_twin_in_the_picker_either(api_client, twins):
+    reps = _cal(api_client, "twin", ORG_A, "S1", scope="store").json()["reps"]
+    assert TWIN_B not in reps, f"an alias row offered the colleague as the viewer: {reps}"
+
+
+def test_the_alias_itself_is_still_an_exact_key_for_its_own_person(api_client, twins):
+    """★ NO LOCKOUT ★ — gating the alias's FOLD must not cost the caller the alias itself. The
+    declaration still admits 'KELLIE, MARK' as an exact key; only its order-free fold is judged."""
+    from app.modules.commcalc import router as cr
+    name, keys = cr._caller_rep_identity(HDR["twin"], ORG_A)
+    assert name == TWIN_A and keys is not None
+    assert "KELLIE, MARK" in keys, f"the declared alias was dropped: {sorted(keys)}"
+    assert "fold:kellie|mark" not in keys, f"the ambiguous fold survived: {sorted(keys)}"
+
+
+def test_an_unambiguous_rep_still_gets_their_fold_and_their_alias(api_client, twins):
+    """★ NO LOCKOUT ★ — the whole point of the fold. Ana's fold names one identity (her own roster
+    name plus her own declared alias), so she keeps it and matches the feed's other spelling of her
+    without anybody having to merge a row."""
+    from app.modules.commcalc import router as cr
+    name, keys = cr._caller_rep_identity(HDR["ana"], ORG_A)
+    assert name == ANA and keys is not None
+    assert "fold:ana|lopez" in keys, f"an unambiguous rep lost their own fold: {sorted(keys)}"
+    assert "LOPEZ, ANA" in keys and ANA.upper() in keys, sorted(keys)
+
+
+def test_the_gate_judges_the_fold_not_the_spelling_that_produced_it(api_client, twins):
+    """The shape of the fix, pinned directly: one fold value, one verdict, whichever of its spellings
+    is asked about. This is what makes a second un-gated add impossible to write by accident."""
+    from app.modules.commcalc import router as cr
+    verdicts = {cr._fold_is_one_identity(ORG_A, "fold:kellie|mark",
+                                        cmap={"KELLIE, MARK": TWIN_A})
+                for _ in range(1)}
+    assert verdicts == {False}, "the ambiguous fold was admitted"
+    assert cr._fold_is_one_identity(ORG_A, "fold:ana|lopez",
+                                    cmap={"LOPEZ, ANA": ANA}) is True
+    # …and an unreadable universe is a REFUSAL, never a pass.
+    assert cr._fold_is_one_identity(ORG_A, "") is False
+
+
+def test_the_filter_options_do_not_enumerate_colleagues(api_client, twins):
+    """Flagged by the same pass: `filters.reps` was every rep in the org's sales for the period, with
+    no store bound and no person bound — a roster of colleagues to read a name from and feed back
+    into `rep=`."""
+    opts = _summary(api_client, "ana", ORG_A).json().get("filters", {}).get("reps") or []
+    assert BARE_SURNAME not in opts and TWIN_A not in opts, f"colleagues enumerated: {opts}"
