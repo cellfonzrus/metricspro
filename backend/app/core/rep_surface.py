@@ -103,8 +103,23 @@ SURFACES = (
     },
     {
         "key": "schedule", "tile": True, "label": "My schedule", "icon": "📅",
-        "tile_page": "/storeops/timeoff",
-        "pages": ("/storeops/timeoff", "/storeops/swaps"),
+        # OWNER 2026-11-27: *"under employee login it does not show the employee thier own schdule"*
+        # … *"it shows your next shift at the bottom on the main page it shoudl also show in schedule
+        # whic his made for teh next 2 weeks or one week"*.
+        #
+        # THE TILE OPENS `/my/schedule`, the employee's own read of the published schedule. It used
+        # to open `/storeops/timeoff` — the time-off REQUEST FORM — because the tile's link was taken
+        # from `pages[0]`, and guessing a destination from the first grant is exactly the defect
+        # §CORE-33.2 fixed in this same PR: the destination is DECLARED here now, so the order of
+        # `pages` carries no meaning at all. The two REQUEST pages stay declared behind it, because
+        # asking for time off and asking for a swap are the other half of this surface, and
+        # `/my/schedule` links to both (pinned by rep-surface-nav-proof.mjs §E).
+        #
+        # The manager's builder (`/storeops/schedule` — the whole-roster grid, the shift writes, the
+        # hours-trend report) is still NOT here and must not be: this surface gained a READ of the
+        # employee's own rows, not a grant of anyone's schedule.
+        "tile_page": "/my/schedule",
+        "pages": ("/my/schedule", "/storeops/timeoff", "/storeops/swaps"),
         # The shift WRITES are a manager surface and are not here; `/storeops/shifts` is read-only to
         # an individual contributor, and the rows it returns are already narrowed to the people they
         # may see by `schedule_emp_ids` (§14w). Time off and shift swaps are POSTs on purpose — they
@@ -117,7 +132,16 @@ SURFACES = (
         # found on this change: a rep could PATCH their own request to `approved`.
         "api_except": ("/api/v1/storeops/time-off/**", "/api/v1/storeops/shift-swaps/**",
                        "/api/v1/storeops/shift-extensions/**"),
-        "api_read": ("/api/v1/storeops/shifts", "/api/v1/storeops/schedule"),
+        # `/api/v1/storeops/schedule` was ALSO granted here, and `_matches` is a PREFIX match, so it
+        # handed every confined employee `GET /storeops/schedule/hours-trend` — the manager's
+        # week-over-week scheduled-hours REPORT across their whole span. No cross-person leak (that
+        # handler applies the §14w gate too, so a rep got an aggregate of their own hours), but a
+        # report is a manager's and nothing an employee opens calls it: the only route under
+        # `/schedule/` is hours-trend, and `/my/schedule`, `/storeops/timeoff` and `/storeops/swaps`
+        # call none of it. REMOVED rather than carved out, because this module's own rule is that
+        # carving something never granted is "a comment pretending to be a gate" — default deny is
+        # the real refusal. Found by the security pass on 2026-11-27 (§CORE-33.2).
+        "api_read": ("/api/v1/storeops/shifts",),
         "what": "their own shifts, and asking for time off, a swap or an extension",
     },
     {
@@ -182,11 +206,7 @@ SURFACES = (
                 "/api/v1/storeops/dropoff-label/read-batch",
                 "/api/v1/storeops/dropoff-label/barcode",
                 "/api/v1/storeops/dropoff-label/barcodes",
-                # The EXPORT GOVERNANCE log (Security Controls item 7). Saving the sheet as a PDF
-                # on a phone is an export, and an export this platform does not record is the gap
-                # that control exists to close. `governExport` fails OPEN, so without this the PDF
-                # would still save and simply go unlogged — which is the worst of both.
-                "/api/v1/core/export-event"),
+                ),
         # READ-ONLY: the tenant's declared label types, which the screen needs to match printed
         # text, and the renderer a print dialog reloads (it reads and writes nothing).
         "api_read": ("/api/v1/storeops/dropoff-label/profiles",
@@ -290,6 +310,19 @@ UNIVERSAL_API = (
     "/api/v1/core/disable-and-switch",
     "/api/v1/core/failures",                # the browser's own error report
     "/api/v1/health",
+    # THE EXPORT GOVERNANCE LOG (Security Controls item 7). Saving a sheet as a PDF is an export, and
+    # an export this platform does not record is the gap that control exists to close. `governExport`
+    # fails OPEN, so without this grant the file still saves and simply goes UNLOGGED — the worst of
+    # the two outcomes.
+    #
+    # DECLARED HERE, NOT ON A SURFACE, since 2026-11-27. It lived inside the `dropoff` surface's own
+    # `api` tuple, beside a comment in this file promising that removing a surface is "a one-line
+    # edit of this tuple and nothing else" — so retiring the barcode-rescue tile would have made
+    # every OTHER granted page's exports save unlogged, silently. Export governance is not one
+    # surface's business: it belongs to every granted page that carries an Export button, which is
+    # what UNIVERSAL_API means. Raised by the security pass on PR #755; no viewer gains or loses
+    # reach, because `api_allowed` already unions every surface for every caller.
+    "/api/v1/core/export-event",
 )
 UNIVERSAL_API_READ = (
     "/api/v1/commcalc/nav-config",           # the menu itself

@@ -290,6 +290,10 @@ DECLARED_PAGES = {
     "/helpdesk/dashboard",
     "/helpdesk/settings",
     "/my/**",
+    # The employee's own schedule (owner 2026-11-27, §CORE-33.2). Already inside `/my/**`, and
+    # declared on its OWN surface anyway because a tile's link is its surface's FIRST page — the
+    # tile labelled "My schedule" used to open `/storeops/timeoff`, the time-off request form.
+    "/my/schedule",
     "/portal/**",
     "/storeops/dropoff-barcode",
     "/storeops/swaps",

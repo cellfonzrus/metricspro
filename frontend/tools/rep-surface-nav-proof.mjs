@@ -126,12 +126,15 @@ ok('D5 …and still reaches the market-and-above pages', R.canAccessPath(market,
 // exception, the second page of the My schedule surface, which is reached by a LINK from the page
 // that tile lands on. If that link goes, the swaps screen becomes unreachable again, so it is
 // pinned here, where the page source lives.
-console.log('\nE. the one granted page reached by a link rather than a tile')
+console.log('\nE. the granted pages reached by a link rather than a tile')
+const SCHED = readFileSync(path.join(FRONTEND, 'src/app/(platform)/my/schedule/page.tsx'), 'utf8')
 const TIMEOFF = readFileSync(path.join(FRONTEND, 'src/app/(platform)/storeops/timeoff/page.tsx'), 'utf8')
-ok('E1 the My schedule destination links to Shift swaps',
+ok('E1 the My schedule destination links to BOTH request forms behind it',
+  /href="\/storeops\/timeoff"/.test(SCHED) && /href="\/storeops\/swaps"/.test(SCHED))
+ok('E2 …the Time Off page reaches the swaps screen too',
   /href="\/storeops\/swaps"/.test(TIMEOFF) && /Shift swaps/.test(TIMEOFF))
-ok('E2 …and the declaration still grants that page, so the link is not a dead end',
-  SRC.includes('"/storeops/swaps"'))
+ok('E3 …and the declaration still grants both, so no link is a dead end',
+  SRC.includes('"/storeops/swaps"') && SRC.includes('"/storeops/timeoff"'))
 
 console.log('\n' + '='.repeat(100))
 console.log(`${pass} passed, ${fail} failed`)

@@ -358,10 +358,11 @@ def test_nothing_is_granted_a_page_and_left_without_a_tile(api_client, gate, who
     surface = (r.json().get("permissions") or {}).get("rep_surface") or {}
     destinations = [t.get("page") or "" for t in surface.get("tiles") or []]
     landing = surface.get("landing") or "/my"
-    # DECLARED, not counted. A page reached by a LINK from a tile's destination rather than by a tile
-    # of its own: `/storeops/swaps` is the other half of the My schedule surface, and the Time Off
-    # page it lands on carries a "Shift swaps" button (pinned by rep-surface-nav-proof.mjs §E).
-    LINKED_FROM_A_TILE = {"/storeops/swaps"}
+    # DECLARED, not counted. Pages reached by a LINK from a tile's destination rather than by a tile
+    # of their own: the two REQUEST forms behind My schedule. `/my/schedule` (what the tile opens)
+    # links to both — "Ask for time off" and "Ask for a shift swap" — and the Time Off page carries a
+    # "Shift swaps" button as well. All three links are pinned by rep-surface-nav-proof.mjs §E.
+    LINKED_FROM_A_TILE = {"/storeops/timeoff", "/storeops/swaps"}
     for entry in surface.get("pages") or []:
         base = rep_surface.tile_page(entry)
         if base == landing or base in LINKED_FROM_A_TILE:

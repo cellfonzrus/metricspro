@@ -106,7 +106,7 @@ check("A16 the pattern → address conversion has ONE home that every tile deref
       hasattr(RS, "tile_page") and RS.tile_page("/employee" + RS.SUBTREE) == "/employee"
       and RS.tile_page("/storeops/timeoff") == "/storeops/timeoff")
 check("A17 …and the addresses it publishes are the real ones",
-      [t["page"] for t in RS.tiles()] == ["/portal", "/employee", "/storeops/timeoff",
+      [t["page"] for t in RS.tiles()] == ["/portal", "/employee", "/my/schedule",
                                           "/commcalc/targets/action-plan", "/commcalc/targets/my",
                                           "/helpdesk", "/storeops/dropoff-barcode",
                                           "/closing/submit", "/chat", "/training",
