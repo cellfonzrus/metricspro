@@ -83,7 +83,8 @@ check("A12 a trailing slash never changes the answer",
 check("A13 every one of the owner's five has a tile, in his order — and nothing else has one "
       "without saying so here",
       [t["key"] for t in RS.tiles()] == ["clock", "commissions", "schedule", "action_plan",
-                                         "helpdesk", "dropoff", "closing"],
+                                         "targets", "helpdesk", "dropoff", "closing",
+                                         "chat", "training", "password"],
       [t["key"] for t in RS.tiles()])
 check("A14 every tile's page is a page the gate admits",
       all(RS.page_allowed(t["page"]) for t in RS.tiles()), [t["page"] for t in RS.tiles()])
@@ -106,8 +107,10 @@ check("A16 the pattern → address conversion has ONE home that every tile deref
       and RS.tile_page("/storeops/timeoff") == "/storeops/timeoff")
 check("A17 …and the addresses it publishes are the real ones",
       [t["page"] for t in RS.tiles()] == ["/portal", "/employee", "/storeops/timeoff",
-                                          "/commcalc/targets/action-plan", "/helpdesk",
-                                          "/storeops/dropoff-barcode", "/closing/submit"],
+                                          "/commcalc/targets/action-plan", "/commcalc/targets/my",
+                                          "/helpdesk", "/storeops/dropoff-barcode",
+                                          "/closing/submit", "/chat", "/training",
+                                          "/account/password"],
       [t["page"] for t in RS.tiles()])
 check("A18 …and each one is still a page the gate admits, asked of the ADDRESS",
       all(RS.page_allowed(t["page"]) and "*" not in t["page"] for t in RS.tiles()))
@@ -131,6 +134,30 @@ check("A19d …and it needed no new API grant: every call the page makes was alr
       all(RS.api_allowed(r, "POST") for r in ("/api/v1/closing/row", "/api/v1/closing/metric-lines"))
       and RS.api_allowed("/api/v1/closing/days", "GET")
       and not RS.api_allowed("/api/v1/closing/tender-config", "PUT"))
+# ── A19e THE MY TARGETS TILE, AND THE THREE THAT WERE GRANTED AND UNREACHABLE ────────────────────
+# OWNER 2026-11-27: *"my targets are shown on the portal and not on the employee dashboad, a tile for
+# that shoudl be there too."* Target-vs-achieved lived only inside the kiosk's My Dashboard tab.
+check("A19e the My targets tile opens the rep's own targets screen",
+      next((t["page"] for t in RS.tiles() if t["key"] == "targets"), None) == "/commcalc/targets/my")
+check("A19f …granted EXACTLY: the rest of the targets subsystem stays refused",
+      RS.page_allowed("/commcalc/targets/my")
+      and not any(RS.page_allowed(p) for p in (
+          "/commcalc/targets", "/commcalc/targets/settings", "/commcalc/targets/report-cards",
+          "/commcalc/targets/rep-map", "/commcalc/targets/accessories", "/commcalc/targets/my/x")))
+check("A19g …and it needed no new API grant: the targets reads were already granted",
+      all(RS.api_allowed(p, "GET") for p in (
+          "/api/v1/commcalc/targets/November%202026/summary",
+          "/api/v1/commcalc/targets/November%202026/calendar",
+          "/api/v1/commcalc/targets/November%202026/action-plan"))
+      and not RS.api_allowed("/api/v1/commcalc/targets", "POST"))
+# The same class, found by asking the question once rather than per report: a surface GRANTED a page
+# and given no tile is reachable only by typing its address, because a confined employee has no menu.
+check("A19h every surface that HAS a page has a tile — nothing is granted and unreachable",
+      [s["key"] for s in RS.SURFACES if s["pages"] and not s.get("tile")] == [],
+      [s["key"] for s in RS.SURFACES if s["pages"] and not s.get("tile")])
+check("A19i …and the one surface with no page of its own is the paperwork inside the kiosk",
+      [s["key"] for s in RS.SURFACES if not s["pages"]] == ["own_paperwork"],
+      [s["key"] for s in RS.SURFACES if not s["pages"]])
 check("A20 a tile that declares no destination publishes none — there is no fallback to pages[0]",
       "pages\"][0]" not in open(RS.__file__).read().split("def tiles(")[1])
 

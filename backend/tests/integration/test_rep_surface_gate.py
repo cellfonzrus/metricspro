@@ -299,6 +299,9 @@ def test_the_two_reported_tiles_land_where_the_owner_expects(api_client, gate, w
     # OWNER 2026-11-27: *"daily closing tile is missing from their landing page but on teh portal is
     # seen"* — the form existed only as a panel inside the kiosk (§CORE-33.3).
     assert by_key.get("closing") == "/closing/submit"
+    # OWNER 2026-11-27: *"my targets are shown on the portal and not on the employee dashboad, a tile
+    # for that shoudl be there too"* — target-vs-achieved lived only in the kiosk's dashboard tab.
+    assert by_key.get("targets") == "/commcalc/targets/my"
 
 
 def test_both_tenants_are_given_the_same_tiles(api_client, gate):
@@ -327,6 +330,44 @@ def test_the_closing_tile_opened_one_page_and_widened_no_api(api_client, gate, w
     assert rep_surface.page_allowed("/closing/submit")
     assert not any(rep_surface.page_allowed(p) for p in
                    ("/closing", "/closing/recon", "/closing/verify", "/closing/management"))
+
+
+@pytest.mark.parametrize("who", ["repA", "repB"])
+def test_the_targets_tile_opened_one_page_and_widened_no_api(api_client, gate, who):
+    """The My targets grant is that ONE page. The reads behind it were ALREADY granted (the
+    action-plan surface grants read on `/commcalc/targets`), so nothing on the API moved — asserted
+    both ways: the read is allowed and the write that would change a target is not."""
+    r = api_client.get(f"/api/v1/commcalc/targets/November%202026/summary?org_id={ORG_A}",
+                       headers={"Authorization": HDR[who]})
+    assert r.status_code != 403, r.text
+    w = api_client.post(f"/api/v1/commcalc/targets?org_id={ORG_A}", json={},
+                        headers={"Authorization": HDR[who]})
+    assert w.status_code == 403 and w.json()["code"] == "not_your_access", w.text
+    assert rep_surface.page_allowed("/commcalc/targets/my")
+    assert not any(rep_surface.page_allowed(p) for p in
+                   ("/commcalc/targets", "/commcalc/targets/settings",
+                    "/commcalc/targets/report-cards", "/commcalc/targets/rep-map"))
+
+
+@pytest.mark.parametrize("who,org", [("repA", ORG_A), ("repB", ORG_B)])
+def test_nothing_is_granted_a_page_and_left_without_a_tile(api_client, gate, who, org):
+    """A confined employee has no menu, so a granted page with no tile can only be reached by typing
+    its address. Asked of the payload the browser actually gets: every page the gate admits is either
+    a tile's destination or below one."""
+    r = api_client.get(f"/api/v1/core/me?org_id={org}", headers={"Authorization": HDR[who]})
+    surface = (r.json().get("permissions") or {}).get("rep_surface") or {}
+    destinations = [t.get("page") or "" for t in surface.get("tiles") or []]
+    landing = surface.get("landing") or "/my"
+    # DECLARED, not counted. A page reached by a LINK from a tile's destination rather than by a tile
+    # of its own: `/storeops/swaps` is the other half of the My schedule surface, and the Time Off
+    # page it lands on carries a "Shift swaps" button (pinned by rep-surface-nav-proof.mjs §E).
+    LINKED_FROM_A_TILE = {"/storeops/swaps"}
+    for entry in surface.get("pages") or []:
+        base = rep_surface.tile_page(entry)
+        if base == landing or base in LINKED_FROM_A_TILE:
+            continue  # the landing is where the tiles ARE, not somewhere a tile leads
+        assert any(d == base or d.startswith(base + "/") or base.startswith(d) for d in destinations), \
+            f"{entry} is granted but no tile leads to it"
 
 
 def test_a_store_manager_is_not_confined_by_the_api_gate(api_client, gate):

@@ -130,6 +130,26 @@ SURFACES = (
                 "scope_keyset (§59.7)",
     },
     {
+        # OWNER 2026-11-27: *"my targets are shown on the portal and not on the employee dashboad, a
+        # tile for that shoudl be there too"*. Target-vs-achieved was visible only as part of the
+        # kiosk's My Dashboard tab (`<EmployeeWidgets repTargets=…>`), so the standalone screen that
+        # owns the question was unreachable without a menu. §CORE-33.3.
+        #
+        # NO API GRANT IS ADDED. The page reads `/commcalc/targets/{period}/summary|calendar|
+        # action-plan`, every one of which the action-plan surface above already grants read on —
+        # a rep can call them today. Only the PAGE was missing, and it is granted EXACTLY: the rest
+        # of `/commcalc/targets` (settings, report cards, the rep map, the accessory plan) stays
+        # refused. The screen is already in `rbac.SELF_OWN_STORE_SURFACES`, i.e. it resolves a
+        # scope-'self' viewer to their OWN store and filters per-rep rows to their own employee id,
+        # so this grants a view that was designed for exactly this viewer.
+        "key": "targets", "tile": True, "label": "My targets", "icon": "📈",
+        "tile_page": "/commcalc/targets/my",
+        "pages": ("/commcalc/targets/my",),
+        "api": (),
+        "api_read": (),
+        "what": "their own target against what they have achieved this month, for their own store",
+    },
+    {
         "key": "helpdesk", "tile": True, "label": "Help desk", "icon": "🎫",
         "tile_page": "/helpdesk",
         "pages": ("/helpdesk/**",),
@@ -226,7 +246,12 @@ SURFACES = (
                 "(ClosingSubmitForm is on the clock-in screen) — removing it would stop closings",
     },
     {
-        "key": "chat", "tile": False, "label": "Chat", "icon": "💬",
+        # Tiled 2026-11-27 with the targets report above, for the same reason: it was GRANTED and
+        # unreachable. A confined employee has no menu row, so a granted page with no tile can be
+        # opened only by typing its address. No permission changes — the page and its API were
+        # already granted; the tile is how a person finds them.
+        "key": "chat", "tile": True, "label": "Chat", "icon": "💬",
+        "tile_page": "/chat",
         "pages": ("/chat/**",),
         "api": ("/api/v1/chat",),
         "api_except": ("/api/v1/chat/admin/**",),
@@ -234,14 +259,16 @@ SURFACES = (
         "what": "in-app messaging, which is how an employee reaches their manager",
     },
     {
-        "key": "training", "tile": False, "label": "Training", "icon": "🎓",
+        "key": "training", "tile": True, "label": "Training", "icon": "🎓",
+        "tile_page": "/training",
         "pages": ("/training/**",),
         "api": ("/api/v1/core/training",),
         "api_read": (),
         "what": "the training assignments the platform gives them",
     },
     {
-        "key": "password", "tile": False, "label": "My password", "icon": "🔑",
+        "key": "password", "tile": True, "label": "My password", "icon": "🔑",
+        "tile_page": "/account/password",
         "pages": ("/account/password/**",),
         "api": ("/api/v1/core/me",),
         "api_read": (),

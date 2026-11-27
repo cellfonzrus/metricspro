@@ -47370,22 +47370,48 @@ off `/me` is used for that single purpose, exactly as on the barcode rescue. `Wo
 nothing: it already asks `useCanOpen`, the same predicate the sidebar asks, so it cannot advertise a
 screen the viewer would be bounced out of.
 
+**Then the same report again, one surface over** (owner, ten minutes later): *"my targets are shown on
+the portal and not on the employee dashboad, a tile for that shoudl be there too."* Target-vs-achieved
+was visible only inside the kiosk's My Dashboard tab (`<EmployeeWidgets repTargets=…>`), so the screen
+that OWNS the question — `/commcalc/targets/my`, already in `rbac.SELF_OWN_STORE_SURFACES`, i.e.
+already designed to resolve a scope-`self` viewer to their own store and filter per-rep rows to their
+own employee id — had no way in. Granted EXACTLY, like the closing page: the rest of
+`/commcalc/targets` (settings, report cards, the rep map, the accessory plan) stays refused, and **no
+API grant moved** — the action-plan surface already grants read on `/commcalc/targets`, so a rep could
+call `summary`, `calendar` and `action-plan` before this change and still cannot POST a target.
+
+**The third report is what turned this into a class.** Rather than wait for a fourth, the question was
+asked of the whole declaration: *which surfaces are GRANTED a page and have no tile?* Three more were —
+**Chat**, **Training** and **My password** — reachable only by typing their address. All three are now
+tiled, which changes **no permission at all**: the pages and their APIs were already granted; a tile is
+how a person without a menu finds them. The rule is now a build check
+(`harness_rep_surface_lock.py` §6c7, `harness_rep_surface.py` A19h): **a surface that declares a page
+has a tile, or CI fails.**
+
+**One page is deliberately reached by a link, not a tile**: `/storeops/swaps`, the second page of the
+My schedule surface. The Time Off page the tile lands on now carries a **🔁 Shift swaps** button, so
+the swaps screen is reachable without a twelfth tile — pinned in
+`frontend/tools/rep-surface-nav-proof.mjs` §E (the link) and named as the single declared exception in
+the integration gate, which otherwise asserts every granted page is a tile's destination or below one.
+`own_paperwork` remains the one surface with no page of its own: it is a tab inside the kiosk, and the
+test names it rather than letting it slide under a count.
+
 ### Proofs and the lock
 
-- `backend/harness_rep_surface.py` (128) — the grammar, default-deny on the API, the REAL middleware
+- `backend/harness_rep_surface.py` (133) — the grammar, default-deny on the API, the REAL middleware
   verdict over each role shape, the REAL four handlers over the in-memory double, two tenants, and
   ★ NO LOCKOUT ★.
-- `frontend/tools/rep-surface-nav-proof.mjs` (48) — the compiled `rbac.ts`; §A **reproduces the prefix
+- `frontend/tools/rep-surface-nav-proof.mjs` (50) — the compiled `rbac.ts`; §A **reproduces the prefix
   hole for real** on the legacy path before §B shows it closed. Reads the declared pages out of the
   backend source, so it cannot pass against a list it made up.
-- `backend/tests/integration/test_rep_surface_gate.py` (75) — the real FastAPI app, the real scope code
+- `backend/tests/integration/test_rep_surface_gate.py` (79) — the real FastAPI app, the real scope code
   deciding whose people are whose, two tenants with the same role NAMES and different configuration.
-- `backend/harness_rep_surface_lock.py` (101, CI job **The employee's reach**) — fails the build
+- `backend/harness_rep_surface_lock.py` (107, CI job **The employee's reach**) — fails the build
   if a second page list appears, if the prefix widening escapes the legacy branch, if the API gate is
   un-installed or becomes conditional, if any of the four writes stops dereferencing the gate, if the
   landing route drifts between the two sides, or (§6c, 2026-11-27) if a tile publishes a pattern as its
-  link, stops declaring its own destination, links to a page with no `page.tsx` on disk, or if the
-  pattern → address conversion gains a second copy — in the declaration or in the lock itself. Verified it goes red by un-wiring `create_time_off`.
+  link, stops declaring its own destination, links to a page with no `page.tsx` on disk, if a
+  surface declares a page and no tile (§6c7), or if the pattern → address conversion gains a second copy — in the declaration or in the lock itself. Verified it goes red by un-wiring `create_time_off`.
 
 ### Reported, not fixed
 

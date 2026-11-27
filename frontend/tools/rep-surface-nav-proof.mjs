@@ -120,6 +120,19 @@ const market = { modules: mods('storeops', 'targets'), scope: 'market', home: '/
 ok('D4 a market manager keeps theirs', R.homeFor(market) === '/commcalc/targets')
 ok('D5 …and still reaches the market-and-above pages', R.canAccessPath(market, '/storeops/payroll'))
 
+// ══ E. A GRANTED PAGE IS REACHABLE (owner 2026-11-27) ═══════════════════════════════════════════
+// A confined employee has no menu row, so the landing's tiles are the only way in. Every surface
+// that declares a page now has a tile (pinned in harness_rep_surface_lock.py §6c7) — with ONE
+// exception, the second page of the My schedule surface, which is reached by a LINK from the page
+// that tile lands on. If that link goes, the swaps screen becomes unreachable again, so it is
+// pinned here, where the page source lives.
+console.log('\nE. the one granted page reached by a link rather than a tile')
+const TIMEOFF = readFileSync(path.join(FRONTEND, 'src/app/(platform)/storeops/timeoff/page.tsx'), 'utf8')
+ok('E1 the My schedule destination links to Shift swaps',
+  /href="\/storeops\/swaps"/.test(TIMEOFF) && /Shift swaps/.test(TIMEOFF))
+ok('E2 …and the declaration still grants that page, so the link is not a dead end',
+  SRC.includes('"/storeops/swaps"'))
+
 console.log('\n' + '='.repeat(100))
 console.log(`${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

@@ -284,6 +284,7 @@ DECLARED_PAGES = {
     "/chat/**",
     "/closing/submit",
     "/commcalc/targets/action-plan",
+    "/commcalc/targets/my",
     "/employee/**",
     "/helpdesk/**",
     "/helpdesk/dashboard",
@@ -335,6 +336,12 @@ for t in TILES:
           f"no page.tsx for {t['page']}")
 check("6c3 …and every destination is one the gate admits",
       all(_rs.page_allowed(t["page"]) for t in TILES))
+# A GRANTED PAGE WITH NO TILE IS UNREACHABLE (owner 2026-11-27, three reports in ten minutes). A
+# confined employee has no menu row, so the tiles are the only way in: a surface that declares a page
+# and no tile can be opened only by typing its address.
+check("6c7 every surface that declares a page has a tile",
+      [s["key"] for s in _rs.SURFACES if s["pages"] and not s.get("tile")] == [],
+      [s["key"] for s in _rs.SURFACES if s["pages"] and not s.get("tile")])
 check("6c4 the destination is DECLARED, never guessed from the first grant — no pages[0] fallback "
       "survives in the tile builder",
       'pages"][0]' not in RS.split("def tiles(")[1].split("\ndef ")[0])
