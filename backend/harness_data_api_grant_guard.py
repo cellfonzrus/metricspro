@@ -39,6 +39,17 @@ WHAT THIS FAILS ON
      Data API serves it (index §CORE-10 — a guard that derives its own subjects cannot tell a clean
      set from a shrinking one).
   D  CUTOFF was raised. It is a RATCHET and may only go DOWN, as older migrations are given grants.
+  E  a migration writes a CHECK constraint that CONTAINS A SUBQUERY. Postgres refuses it outright
+     (`0A000 cannot use subquery in check constraint`), so the migration cannot run at all.
+
+WHY E LIVES IN THIS FILE. The same class as A-D: a migration that CANNOT DO ITS JOB, merged green,
+because nothing in CI ever asks Postgres to run the SQL in `database/migrations/`. The owner hit it
+on 2026-11-27 pasting migration 1132, whose weekday CHECK was written as
+`(SELECT bool_and(d BETWEEN 0 AND 6) FROM unnest(open_dows) AS d)` — correct-looking, legal-looking,
+and rejected by the server. A whole file rolls back, so the cost is the owner's time and a second
+round trip. The rule is narrow and exact rather than a SQL parser: a CHECK expression may never
+contain a SELECT, in any migration, old or new (there is nothing to grandfather — a file that cannot
+run was never applied). Written as a scalar expression instead: `col <@ ARRAY[...]`.
 
 GRANDFATHERED, DELIBERATELY. Everything numbered <= CUTOFF keeps its current reachability: those
 tables exist in the live project and the notice does not touch them. Backfilling 366 grants in one
@@ -94,6 +105,49 @@ def ok(cond, msg):
     else:
         FAIL += 1
         print(f"  ✗ {msg}")
+
+
+
+def check_expressions(sql: str):
+    """[(offset, expression)] for every `CHECK (...)` in this SQL, parens balanced.
+
+    Scanning for the matching paren rather than regexing to the next `)` is the whole point: a real
+    CHECK is full of nested calls, and a lazy match would read only `(open_dows IS NULL OR (`.
+    """
+    body = code(sql)
+    out = []
+    for m in re.finditer(r"\bcheck\s*\(", body, re.I):
+        i = m.end() - 1
+        depth = 0
+        for j in range(i, len(body)):
+            if body[j] == "(":
+                depth += 1
+            elif body[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    out.append((m.start(), body[i:j + 1]))
+                    break
+    return out
+
+
+def _unquoted(expr: str) -> str:
+    """The expression with single-quoted literals blanked. `field_type IN ('select','date')` is a
+    legal CHECK whose VALUE happens to be the word select — the literals have to go before the
+    keyword is looked for, or this gate fails a migration that has been applied since 2026."""
+    return re.sub(r"'(?:[^']|'')*'", "''", expr)
+
+
+def subquery_checks(files):
+    """E — every CHECK constraint holding a SELECT. Postgres refuses each one, so the file is dead."""
+    bad = []
+    for name in sorted(files):
+        for _off, expr in check_expressions(files[name]):
+            if re.search(r"\bselect\b", _unquoted(expr), re.I):
+                flat = " ".join(expr.split())
+                bad.append(f"{name}: a CHECK constraint contains a subquery, which Postgres refuses "
+                           f"(0A000) — the whole migration cannot run. Write it as a scalar "
+                           f"expression (e.g. `col <@ ARRAY[0,1,2]`): {flat[:160]}")
+    return bad
 
 
 def code(sql: str) -> str:
@@ -205,6 +259,28 @@ def controls():
                               "grant all on core.a to service_role;"})) == 1,
        "Z10: only the ungranted one of two tables is named")
 
+    # E's controls — the shape the owner actually hit, and the shape that replaced it.
+    ok(subquery_checks({"9999_x.sql": "alter table s.t add constraint c check (d is null or "
+                                      "(select bool_and(x between 0 and 6) from unnest(d) as x));"}),
+       "Z11: a CHECK holding a subquery is caught")
+    ok(not subquery_checks({"9999_x.sql": "alter table s.t add constraint c check "
+                                          "(d is null or d <@ array[0,1,2,3,4,5,6]);"}),
+       "Z12: the same rule as a scalar expression is fine")
+    ok(not subquery_checks({"9999_x.sql": "-- check (select 1) in a comment\n"
+                                          "create table s.t (id uuid);"}),
+       "Z13: a CHECK described in a comment is not a constraint")
+    ok(not subquery_checks({"9999_x.sql": "create table s.t (id uuid, "
+                                          "d int check (d between 0 and 6));\n"
+                                          "insert into s.t select 1;"}),
+       "Z14: a SELECT elsewhere in the file is not inside the CHECK")
+    ok(not subquery_checks({"9999_x.sql": "create table s.t (k text check "
+                                          "(k in ('text','select','date')));"}),
+       "Z16: the WORD select as a declared VALUE is not a subquery (migration 053's real shape)")
+    ok(len(check_expressions("alter table s.t add constraint c check (a is null or (b and c));")) == 1
+       and check_expressions("alter table s.t add constraint c check (a is null or (b and c));"
+                             )[0][1].endswith("))"),
+       "Z15: the expression is read to its MATCHING paren, not the first one")
+
 
 def main():
     files = read_migrations()
@@ -227,6 +303,13 @@ def main():
     ok(CUTOFF <= CUTOFF_CEILING,
        f"CUTOFF was raised to {CUTOFF}: it may only be LOWERED (ceiling {CUTOFF_CEILING}). "
        f"Grandfathering a migration you are writing is not what this is for.")
+
+    # E — a CHECK Postgres refuses. Every migration, nothing grandfathered: a file that cannot run
+    # was never applied, so there is no live state to protect by excusing it.
+    dead = subquery_checks(files)
+    for v in dead:
+        ok(False, v)
+    ok(not dead, f"{len(dead)} migration(s) write a CHECK constraint Postgres refuses")
 
     # A + B — the gate itself.
     bad = violations(files)

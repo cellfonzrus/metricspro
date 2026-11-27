@@ -127,6 +127,15 @@ COMMENT ON TABLE storeops.market_work_week IS
   'app/modules/storeops/work_week.py (index §STOREOPS-17).';
 
 -- Every weekday in a declared set is a weekday. Applied to both columns.
+--
+-- WRITTEN WITH `<@`, THE ARRAY CONTAINMENT OPERATOR, AND NOT WITH `unnest`. The first version of
+-- this file expressed the same rule as `(SELECT bool_and(d BETWEEN 0 AND 6) FROM unnest(...))`,
+-- which Postgres refuses outright: `0A000 cannot use subquery in check constraint`. The owner hit
+-- that on 2026-11-27 pasting this file, and because the editor runs the file as ONE transaction the
+-- whole thing rolled back — nothing was half-applied. `open_dows <@ ARRAY[0,1,2,3,4,5,6]` is an
+-- immutable scalar expression, so it is legal here, and it answers the three cases the same way:
+-- every day declared TRUE, a set holding an 8th day FALSE, an EMPTY declared set TRUE (an empty
+-- array is contained in anything), and NULL left to the `IS NULL` guard in front of it.
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -135,9 +144,7 @@ BEGIN
   ) THEN
     ALTER TABLE storeops.stores
       ADD CONSTRAINT stores_open_dows_chk
-      CHECK (open_dows IS NULL OR (
-        array_length(open_dows, 1) IS NULL OR
-        (SELECT bool_and(d BETWEEN 0 AND 6) FROM unnest(open_dows) AS d)));
+      CHECK (open_dows IS NULL OR open_dows <@ ARRAY[0,1,2,3,4,5,6]);
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
@@ -145,9 +152,7 @@ BEGIN
   ) THEN
     ALTER TABLE storeops.tenants
       ADD CONSTRAINT tenants_open_dows_chk
-      CHECK (open_dows IS NULL OR (
-        array_length(open_dows, 1) IS NULL OR
-        (SELECT bool_and(d BETWEEN 0 AND 6) FROM unnest(open_dows) AS d)));
+      CHECK (open_dows IS NULL OR open_dows <@ ARRAY[0,1,2,3,4,5,6]);
   END IF;
 END $$;
 
