@@ -329,6 +329,14 @@ def twins(monkeypatch, fake_supabase, wired):
          "home_store": "S1", "is_active": True},
         {"id": "8A", "org_id": ORG_A, "employee_id": "E501A", "name": BARE_SURNAME,
          "home_store": "S1", "is_active": True}])
+    # THE ORDINARY CONFIGURATION, not an exotic one: every epay-fed rep has a `name_map` row
+    # tying the POS's "SURNAME, FORENAME" spelling to the roster's. Hole 3 is that this row's FOLD
+    # is byte-identical to the roster name's fold, so an un-gated alias fold hands back the exact
+    # key the ambiguity gate just withheld.
+    fake_supabase.seed("commcalc.name_map", [
+        {"id": "nm-1", "org_id": ORG_A, "epay_salesperson": "KELLIE, MARK",
+         "storeops_name": TWIN_A},
+        {"id": "nm-2", "org_id": ORG_A, "epay_salesperson": "LOPEZ, ANA", "storeops_name": ANA}])
     UID["twin"], UID["ana"] = "uid-twin", "uid-ana"
     HDR["twin"], HDR["ana"] = "Bearer twin", "Bearer ana"
     _BY_TOKEN["Bearer twin"], _BY_TOKEN["Bearer ana"] = "uid-twin", "uid-ana"
@@ -387,6 +395,61 @@ def test_a_restricted_caller_always_reads_under_their_roster_name(api_client, tw
                  rep=sent.replace(" ", "%20").replace(",", "%2C"))
         assert r.status_code == 200, (sent, r.text[:200])
         assert r.json().get("rep") == ANA, (sent, r.json().get("rep"))
+
+
+# ── HOLE 3: THE GATE HAD AN UN-GATED TWIN BESIDE IT ───────────────────────────────────────────────
+# Found by the SECOND security pass over the fix for holes 1 and 2. The first gate asked its question
+# of the roster NAME and excused the alias folds, reasoning that a declared alias carries the human's
+# "same person" authority. It does — for itself. It carries no authority over a SECOND employee who
+# happens to fold the same way, and because folded_token_key('KELLIE, MARK') == 'kellie|mark' ==
+# folded_token_key('Mark Kellie'), the alias's fold IS the withheld key. The gate is now keyed on the
+# fold value, so two spellings of one fold cannot be judged differently.
+
+def test_a_declared_alias_cannot_re_admit_a_fold_the_gate_withheld(api_client, twins):
+    """HOLE 3. With the ordinary `name_map` row present, the twin must still be refused."""
+    r = _cal(api_client, "twin", ORG_A, "S1", scope="rep", rep=TWIN_B.replace(" ", "%20"))
+    assert r.status_code == 403, \
+        f"an alias row re-opened the colleague's figures: {r.status_code} {r.text[:200]}"
+
+
+def test_the_alias_row_does_not_put_the_twin_in_the_picker_either(api_client, twins):
+    reps = _cal(api_client, "twin", ORG_A, "S1", scope="store").json()["reps"]
+    assert TWIN_B not in reps, f"an alias row offered the colleague as the viewer: {reps}"
+
+
+def test_the_alias_itself_is_still_an_exact_key_for_its_own_person(api_client, twins):
+    """★ NO LOCKOUT ★ — gating the alias's FOLD must not cost the caller the alias itself. The
+    declaration still admits 'KELLIE, MARK' as an exact key; only its order-free fold is judged."""
+    from app.modules.commcalc import router as cr
+    name, keys = cr._caller_rep_identity(HDR["twin"], ORG_A)
+    assert name == TWIN_A and keys is not None
+    assert "KELLIE, MARK" in keys, f"the declared alias was dropped: {sorted(keys)}"
+    assert "fold:kellie|mark" not in keys, f"the ambiguous fold survived: {sorted(keys)}"
+
+
+def test_an_unambiguous_rep_still_gets_their_fold_and_their_alias(api_client, twins):
+    """★ NO LOCKOUT ★ — the whole point of the fold. Ana's fold names one identity (her own roster
+    name plus her own declared alias), so she keeps it and matches the feed's other spelling of her
+    without anybody having to merge a row."""
+    from app.modules.commcalc import router as cr
+    name, keys = cr._caller_rep_identity(HDR["ana"], ORG_A)
+    assert name == ANA and keys is not None
+    assert "fold:ana|lopez" in keys, f"an unambiguous rep lost their own fold: {sorted(keys)}"
+    assert "LOPEZ, ANA" in keys and ANA.upper() in keys, sorted(keys)
+
+
+def test_the_gate_judges_the_fold_not_the_spelling_that_produced_it(api_client, twins):
+    """The shape of the fix, pinned directly: one fold value, one verdict, whichever of its spellings
+    is asked about. This is what makes a second un-gated add impossible to write by accident."""
+    from app.modules.commcalc import router as cr
+    verdicts = {cr._fold_is_one_identity(ORG_A, "fold:kellie|mark",
+                                        cmap={"KELLIE, MARK": TWIN_A})
+                for _ in range(1)}
+    assert verdicts == {False}, "the ambiguous fold was admitted"
+    assert cr._fold_is_one_identity(ORG_A, "fold:ana|lopez",
+                                    cmap={"LOPEZ, ANA": ANA}) is True
+    # …and an unreadable universe is a REFUSAL, never a pass.
+    assert cr._fold_is_one_identity(ORG_A, "") is False
 
 
 def test_the_filter_options_do_not_enumerate_colleagues(api_client, twins):

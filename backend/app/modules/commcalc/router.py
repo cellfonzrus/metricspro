@@ -17681,66 +17681,141 @@ def _caller_rep_identity(authorization: str, org_id: str):
         keys = set()
         if name:
             keys.add(name.upper())
-            # …and the order-free, accent-folded form of the caller's OWN name, so the feed's
-            # spelling of them matches without an alias row (§CORE-33.5). BOTH sides of the
-            # comparison gain this key — `payout_audience.rep_row_keys` adds it for the row — and
-            # folding only one side would be worse than folding neither.
-            #
-            # 🔴 BUT ONLY WHEN IT NAMES ONE PERSON. The fold discards WORD ORDER, so "Mark Kellie"
-            # and "Kellie Mark" share it — a pair `person_identity.token_key` cites as live data.
-            # That merge is an accepted cost for a JOIN (a wrong figure); as an AUTHORIZATION
-            # equality it is one employee reading another's pay. Found by the security pass on this
-            # very change, before it shipped. So the fold is admitted only if exactly ONE roster
-            # identity in the org carries it; otherwise the caller matches on their exact name and
-            # declared aliases alone, and `unmatched_self` reports the ambiguity as a merge task.
-            if _fold_names_one_person(org_id, name):
-                keys.add(_pa.name_fold(name))
+            # The caller's declared aliases — a human's explicit "these are the same person" — are
+            # exact keys in their own right and need no proof beyond the declaration.
+            cmap = {}
+            mine = [name]
             try:
                 cmap = _rep_canon_map(sb(), org_id)
                 for alias, canon in cmap.items():
                     if str(canon).strip().upper() == name.upper():
                         keys.add(str(alias).strip().upper())
-                        # An ALIAS is a human's explicit "these are the same person" declaration, so
-                        # its fold carries that authority and needs no ambiguity check of its own.
-                        keys.add(_pa.name_fold(alias))
+                        mine.append(str(alias))
             except Exception:
-                pass
+                cmap = {}
+            # …and the ORDER-FREE, accent-folded form, so the feed's own spelling of the caller
+            # matches without an alias row (§CORE-33.5). BOTH sides of the comparison gain this key
+            # — `payout_audience.rep_row_keys` adds it for the row — and folding only one side
+            # would be worse than folding neither.
+            #
+            # 🔴 BUT ONLY WHEN THE FOLD NAMES ONE IDENTITY. The fold discards WORD ORDER, so "Mark
+            # Kellie" and "Kellie Mark" share it — a pair `person_identity.token_key` cites as live
+            # data. That merge is an accepted cost for a JOIN (a wrong figure); as an AUTHORIZATION
+            # equality it is one employee reading another's pay.
+            #
+            # EVERY fold goes through the one gate, and the gate is keyed on the FOLD VALUE, not on
+            # the name that produced it. The first version of this guard checked only the roster
+            # name and excused the alias folds as carrying the declaration's authority — and the
+            # second security pass on this very change showed that reasoning is simply false: an
+            # alias's fold is normally BYTE-IDENTICAL to the roster name's, so
+            # folded_token_key('KELLIE, MARK') == folded_token_key('Mark Kellie') == 'kellie|mark',
+            # and the ordinary name_map row every epay-fed rep has re-admitted the exact key the
+            # guard had just withheld. One un-gated add beside a gated one is not a guard.
+            keys |= _admissible_fold_keys(org_id, mine, cmap=cmap)
         keys.discard("")
         return name, keys   # empty set = self rep with no resolvable rep → sees nothing
     except Exception:
         return ("", None)
 
 
-def _fold_names_one_person(org_id: str, name: str) -> bool:
-    """Does this name's ORDER-FREE fold identify exactly one person on the org's roster?
+def _admissible_fold_keys(org_id: str, names, cmap=None) -> set:
+    """The order-free fold keys these spellings of ONE caller may hold as AUTHORIZATION keys.
 
-    The guard that makes the fold safe to use as an authorization key (§CORE-33.5). `False` when two
-    or more DISTINCT roster identities share the fold — then the fold must not be trusted for this
-    name, because admitting it would merge two real employees.
+    THE ONLY PRODUCER of a fold key for a caller's key set, so that no caller can add one without
+    the gate. `_caller_rep_identity` does not call `name_fold` at all — it asks here — and
+    `harness_my_surface_is_mine.py` FAILS THE BUILD if it ever does again.
 
-    Fails CLOSED in every uncertain case: an unreadable roster, or a roster that does not contain the
-    caller at all, returns False, so the caller matches on their exact spelling and declared aliases
-    only. That can cost them the feed's other spelling of their name — which the `unmatched_self`
-    channel REPORTS and a rep-merge row fixes — and never costs somebody else their privacy."""
+    That shape is the fix for hole 3 (the second security pass on §CORE-33.5). The previous version
+    gated the roster name's fold inline and added the ALIAS folds beside it un-gated, excused by a
+    comment saying a declared alias carries its own "same person" authority. It does — for itself.
+    It carries none over a SECOND employee who happens to fold the same way, and the fold of an
+    alias is normally BYTE-IDENTICAL to the fold of the roster name the gate just refused:
+    `folded_token_key('KELLIE, MARK') == folded_token_key('Mark Kellie') == 'kellie|mark'`. So the
+    ordinary `name_map` row every epay-fed rep has handed straight back the key the gate withheld.
+    One un-gated add beside a gated one is not a guard — it is the guard with a door next to it.
+
+    `names` are all spellings of the SAME person (their roster name and their declared aliases), so
+    they normally share one fold and this costs one gate call.
+    """
+    out = set()
+    for fold in {_pa_fold_key(v) for v in (names or [])}:
+        if fold and _fold_is_one_identity(org_id, fold, cmap=cmap):
+            out.add(fold)
+    out.discard("")
+    return out
+
+
+def _pa_fold_key(v) -> str:
+    """`payout_audience.name_fold`, reached by name so the one producer above stays the one place a
+    fold is computed for a key set. Deferred import: see `_fold_is_one_identity`'s note."""
+    from app.modules.commcalc import payout_audience as _pa_fold
+    return _pa_fold.name_fold(v)
+
+
+def _fold_is_one_identity(org_id: str, fold: str, cmap=None) -> bool:
+    """Does this order-free FOLD name exactly one identity the platform has declared?
+
+    The gate that makes the fold safe to use as an AUTHORIZATION key (§CORE-33.5), and the ONLY
+    place a fold is admitted. `False` when two or more DISTINCT declared identities share the fold —
+    then no caller may hold it, because holding it would merge two real people.
+
+    Keyed on the FOLD VALUE, never on the name that produced it. That is the whole correction: two
+    different spellings of the SAME fold are the same authorization key, so proving one of them and
+    excusing the other proves nothing. `folded_token_key('KELLIE, MARK')` and
+    `folded_token_key('Mark Kellie')` are both `'kellie|mark'`.
+
+    THE IDENTITY UNIVERSE is every name the platform has declared to be a person: the org's roster
+    (`storeops.employees`) plus both sides of the alias map (`commcalc.name_map` + `rep_aliases`,
+    via `_rep_canon_map`). Each such name is reduced to its CANONICAL spelling first, so a rep's
+    own three declared spellings count as one identity while two separate employees count as two.
+
+    Fails CLOSED in every uncertain case: an unreadable or incompletely-read roster, or a roster
+    that does not contain the fold at all, returns False, so the caller matches on their exact
+    spelling and declared aliases only. That can cost them the feed's other spelling of their name —
+    which the `unmatched_self` channel REPORTS and a rep-merge row fixes — and never costs somebody
+    else their privacy.
+
+    RESIDUAL, stated rather than hidden: the universe is what the platform has DECLARED. A rep name
+    that appears only in a feed and in no declaration (a contractor never onboarded, a terminated
+    employee whose roster row is gone) cannot make this gate refuse, so a fold colliding with such
+    a name is still admitted. Closing that needs a declared home for "every name the feeds have
+    ever called a person", which does not exist yet; §CORE-33.5 records it as open. Today 95/95 reps
+    and 17/17 store managers are linked to roster rows, so the universe is the roster.
+    """
     # `_pa` is imported INSIDE `_caller_rep_identity`, not at module scope, so referencing it here
     # raised NameError — and that function's enclosing `except` treats failure as UNRESTRICTED, so
     # the bug failed OPEN and handed every caller everybody's rows. Caught by the integration tests
     # on the first run. Same class as `name_fold`'s own never-raises note.
     from app.modules.commcalc import payout_audience as _pa_fold
-    want = _pa_fold.name_fold(name)
+    from app.modules.core import feed_read as _feed_read
+    want = str(fold or "").strip()
     if not want:
         return False
     try:
-        rows = (_relation_home.reader(sb(), "employees", "employee_id,name")
-                .eq("org_id", org_id).limit(20000).execute().data) or []
+        # Read through the shared paged home, which RAISES rather than returning a short list. A
+        # `.limit(20000)` here would have been a silent truncation, and a truncation that drops the
+        # second colliding identity turns two people into one and OPENS the gate — the one failure
+        # this function exists to prevent.
+        rows = _feed_read.read_all(
+            lambda: _relation_home.reader(sb(), "employees", "id,employee_id,name")
+                                  .eq("org_id", org_id))
     except Exception as e:                                      # pragma: no cover - I/O guard
-        print(f"WARN _fold_names_one_person roster read failed: {e}")
+        print(f"WARN _fold_is_one_identity roster read failed: {e}")
         return False
-    # Count DISTINCT PEOPLE, not rows: one person legitimately appears twice (two employee_id rows
-    # for the same human is what the rep-merge screen exists to tidy), and counting rows would
-    # refuse the fold for a duplicate of the caller themselves.
-    who = {str(r.get("employee_id") or "").strip().upper()
-           for r in rows if _pa_fold.name_fold(r.get("name")) == want}
+    cmap = cmap if isinstance(cmap, dict) else {}
+    universe = [r.get("name") for r in rows]
+    universe += list(cmap.keys()) + list(cmap.values())
+    # Count DISTINCT IDENTITIES, not names and not rows. A name is reduced to its canonical
+    # spelling, so one person's roster name plus their two declared aliases count once — while a
+    # duplicate roster row for the caller (two employee_id rows for one human is exactly what the
+    # rep-merge screen exists to tidy) also counts once, and does not refuse them their own fold.
+    who = set()
+    for n in universe:
+        if _pa_fold.name_fold(n) != want:
+            continue
+        canon = cmap.get(str(n or "").strip().upper()) or n
+        who.add(str(canon or "").strip().upper())
+    who.discard("")
     return len(who) == 1
 
 

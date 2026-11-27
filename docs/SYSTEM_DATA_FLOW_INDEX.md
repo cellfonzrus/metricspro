@@ -47793,7 +47793,7 @@ automatically once sign-in is live."* Sign-in went live (§CORE-33) and nobody c
 so the screen still asked every viewer to pick a name out of the whole store's roster.
 
 **THE COSMETIC REPORT SAT ON THREE REAL DEFECTS**, each proved end to end before being fixed
-(`tests/integration/test_my_targets_is_the_viewers_own.py`, 22 checks, two tenants):
+(`tests/integration/test_my_targets_is_the_viewers_own.py`, 33 checks, two tenants):
 
 1. **`/targets/{period}/calendar` had no person filter at all.** `rep` was a plain query parameter
    and the handler never asked whose it was, while `reps` published every name that worked or sold at
@@ -47862,8 +47862,61 @@ have no targets of their own, and the all-reps view belongs on the Targets overv
 | The picker's list | `payout_audience.mine_names` (+ `unmatched_self`) |
 | A row's narrowing | `payout_audience.mine_only` / `row_is_mine` |
 | A requested `rep=` | `payout_audience.requested_rep_is_mine` |
-| Proof / tests | `backend/harness_my_surface_is_mine.py` (63), `backend/tests/integration/test_my_targets_is_the_viewers_own.py` (22) |
+| Whether a fold may be an AUTH key | `commcalc.router._admissible_fold_keys` → `_fold_is_one_identity` |
+| Proof / tests | `backend/harness_my_surface_is_mine.py` (82), `backend/tests/integration/test_my_targets_is_the_viewers_own.py` (33) |
 | CI gate | carrier-vocab-guard.yml, "Run the \"My\" surface proof" |
+
+### CORE-33.5a The fix had three holes of its own, and the fold was all three (security pass)
+
+The 2026-10-30 rule requires a security pass before a tenant-scoped feature goes live. It ran twice
+on this change and found three defects **in the fix**, each reproduced before being closed. All three
+are one mistake: **reusing a name key built for a JOIN as an AUTHORIZATION equality.** For a join a
+false merge costs a wrong figure, and `person_identity.token_key` accepts that on purpose, in its own
+docstring. For a permission check it is one employee reading another's pay.
+
+1. **The fold discards WORD ORDER.** `folded_token_key("Mark Kellie") == folded_token_key("Kellie
+   Mark") == 'kellie|mark'` — a pair `person_identity` cites as live data. Either twin could read the
+   other's figures, on every surface that shares `_caller_rep_keys`, commission and payout included.
+2. **The guard's key was not the DATA layer's key.** The guard folds; `targets_engine.name_key` keeps
+   accents and DELETES non-ASCII letters. So `folded_token_key("áñá Lopez") == folded_token_key("Ana
+   Lopez")` (the guard says yes) while `name_key("áñá Lopez") == 'LOPEZ' == name_key("Lopez")` (the
+   engine then selects a DIFFERENT rep). A crafted spelling passed a check about one question and
+   selected rows under another. **Fixed by never letting the request's text select anything:** once
+   the check passes, a restricted caller's rows are looked up under their own ROSTER spelling
+   (`rep = _own_name`). That removes the class — a future divergence between the two key functions
+   cannot be reached from a request.
+3. **The gate had an un-gated twin beside it.** The fix for (1) proved the ROSTER name's fold against
+   the roster and added the caller's ALIAS folds beside it with no check, excused in a comment saying
+   a declared alias carries the human's own "same person" authority. **It does — for itself. It
+   carries none over a second employee who folds the same way**, and the fold of an alias is normally
+   BYTE-IDENTICAL to the fold of the roster name the gate just refused: `folded_token_key("KELLIE,
+   MARK")` is also `'kellie|mark'`. So the ordinary `commcalc.name_map` row that EVERY epay-fed rep
+   has handed straight back the exact key the gate had withheld, and the first gate proved nothing at
+   all. **One un-gated add beside a gated one is not a guard; it is the guard with a door next to
+   it.**
+
+**THE SHAPE THAT ENDS IT.** There is now ONE producer of a fold key for a caller's key set
+(`_admissible_fold_keys`) and the gate lives inside it, so `_caller_rep_identity` does not compute a
+fold at all. The lock is therefore an ABSENCE — `name_fold` must not appear in the identity builder —
+which needs no dataflow analysis and cannot be satisfied by accident. Restoring the un-gated add
+turns the harness red and fails three integration tests; both were verified.
+
+**THE GATE IS KEYED ON THE FOLD VALUE, never on the spelling that produced it.** Two spellings of one
+fold are the same authorization key, so proving one and excusing the other proves nothing. Its
+identity universe is every name the platform has DECLARED to be a person — the org's roster plus both
+sides of the alias map — each reduced to its canonical spelling, so a rep's three declared spellings
+count as one identity while two employees count as two. It reads through `core/feed_read.read_all`,
+which RAISES rather than returning a short list: the first version's `.limit(20000)` was a silent
+truncation, and a truncation that drops the second colliding identity turns two people into one and
+OPENS the gate.
+
+**RESIDUAL, NOT CLOSED, stated rather than left to be rediscovered.** The universe is what the
+platform has declared. A rep name appearing ONLY in a feed and in no declaration — a contractor never
+onboarded, a terminated employee whose roster row is gone — cannot make the gate refuse, so a fold
+colliding with such a name is still admitted. Closing it needs a declared home for *"every name the
+feeds have ever called a person"*, which does not exist. Today 95/95 reps and 17/17 store managers
+are linked to roster rows, so the universe IS the roster; the exposure is a feed-only name whose
+words are an anagram of a real employee's.
 
 **STILL OPEN, named rather than left to be rediscovered.** 31 endpoints in `commcalc/router.py` take
 a `rep` parameter. The three on this page are done; the rest are admin/manager reports where showing

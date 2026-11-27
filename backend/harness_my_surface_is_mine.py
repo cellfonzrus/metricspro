@@ -228,12 +228,45 @@ ok("_caller_rep_identity" in _cal_seg and "rep = _own_name" in _cal_seg,
    "the calendar selects a restricted caller's rows under the ROSTER's spelling, never under the "
    "text of the request — so nothing a caller can type changes whose rows come back")
 _ident = py_code_only(ast.get_source_segment(_src, _fns["_caller_rep_identity"]) or "")
-ok("_fold_names_one_person" in _ident,
-   "the caller's own key set admits the order-free fold only when the roster holds exactly one such "
-   "person — otherwise \"Mark Kellie\" and \"Kellie Mark\" are one identity")
-_amb = py_code_only(ast.get_source_segment(_src, _fns["_fold_names_one_person"]) or "")
-ok("return False" in _amb and "employee_id" in _amb,
-   "…and that guard fails CLOSED on an unreadable roster, counting DISTINCT PEOPLE rather than rows")
+ok("_admissible_fold_keys" in _ident and "_fold_is_one_identity" in _src,
+   "the caller's own key set admits the order-free fold only when exactly one declared identity "
+   "carries it — otherwise \"Mark Kellie\" and \"Kellie Mark\" are one identity")
+_amb = py_code_only(ast.get_source_segment(_src, _fns["_fold_is_one_identity"]) or "")
+ok("return False" in _amb and "read_all" in _amb,
+   "…and that gate fails CLOSED on an unreadable roster, reading through the shared paged home "
+   "(which RAISES) so a truncation can never turn two colliding people into one")
+ok("cmap" in _amb and "who.add" in _amb,
+   "…and its universe is the roster PLUS the declared alias map, reduced to canonical identities")
+
+# ★ THE LOCK THAT HOLE 3 NEEDED ★ — found by the SECOND security pass on this change. The first
+# gate asked its question of the roster NAME and added the ALIAS folds un-gated beside it, excused
+# in a comment saying a declaration carries its own authority. It does — for itself. It carries
+# none over a second employee who folds the same way, and because the fold of "KELLIE, MARK" IS the
+# fold of "Mark Kellie", the ordinary name_map row every epay-fed rep has handed back the exact key
+# the gate had withheld. One un-gated add beside a gated one is not a guard.
+#
+# The shape that makes a repeat impossible: ONE producer of a fold key for a caller's key set, and
+# the gate lives inside it. So the lock is an absence — the identity builder must not compute a
+# fold itself — which no dataflow analysis is needed to check and no future edit can satisfy by
+# accident.
+ok("_admissible_fold_keys" in _ident,
+   "the caller's key set gets its folds from the ONE producer that gates them")
+ok("name_fold" not in _ident,
+   "…and computes NO fold of its own, so there is nowhere to add an un-gated one — that was hole 3")
+_prod = py_code_only(ast.get_source_segment(_src, _fns["_admissible_fold_keys"]) or "")
+ok("_fold_is_one_identity" in _prod and "_pa_fold_key" in _prod,
+   "every fold the producer returns passed the gate")
+ok(len(re.findall(r"\badd\(", _prod)) == 1 and "out.discard" in _prod,
+   "…and it has exactly one add site, inside the gate's own branch")
+# ARMED: the producer really does refuse the ambiguous pair and keep the unambiguous one. Pure, so
+# the universe is injected rather than read.
+_seen = {}
+ok(pa.name_fold("KELLIE, MARK") == pa.name_fold(TWIN_A) == pa.name_fold(TWIN_B),
+   "ARMED: the POS alias, the roster name and the COLLEAGUE all share one fold — which is why "
+   "gating the roster name alone proved nothing")
+ok(not re.search(r"needs no ambiguity check", _src),
+   "…and the reasoning that excused the un-gated alias fold is gone from the source, so it cannot "
+   "be copied forward")
 
 ok("Those are not your figures to read." in _code,
    "the calendar REFUSES a foreign rep rather than silently serving the caller's own figures under "
