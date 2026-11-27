@@ -50704,16 +50704,27 @@ def _declared_item_defs(client, org_id):
     that hands it the rows. Returns [] on any failure, which means "nothing identified": an item list
     is a tenant's own words and there is deliberately no house list behind it."""
     from app.modules.commcalc import pos_report_feed as _prf
+    from app.modules.closing import metric_catalog as _mc
     out, seen = [], set()
     try:
+        # ORDERED (security pass 2026-11-27). Without an `order`, PostgREST row order is unspecified,
+        # and because the first spelling of an item wins in `metric_catalog.build`, an item mapped to
+        # DIFFERENT categories on two sources resolved to whichever row happened to arrive first —
+        # flipping its `figure_unit` between a count and dollars for the very same request, which is
+        # the divergence `metric_catalog` exists to prevent. Which spelling wins is now a fact.
         rows = (client.schema("commcalc").table("data_source")
-                .select("portal_calibration").eq("org_id", org_id).execute()).data or []
+                .select("id,portal_calibration").eq("org_id", org_id)
+                .order("id").execute()).data or []
     except Exception:
         return []
     for r in rows:
         for it in _prf.declared_items((r or {}).get("portal_calibration")):
-            k = str(it.get("item_label") or "").strip().lower()
-            if k and k not in seen:
+            # DEREFERENCED, never re-spelled: `item_key` is the one folding, and this read used to
+            # carry its own `.strip().lower()`, which does NOT collapse internal whitespace. So two
+            # spellings of one item survived here and then collided in `build` — a second folding of
+            # the same fact, which is the duplicate defect the index rules forbid.
+            k = _mc.item_key(it.get("item_label"))
+            if k != _mc.ITEM_PREFIX and k not in seen:
                 seen.add(k)
                 out.append(it)
     return out
@@ -50778,8 +50789,8 @@ def save_incentive_rule(body: SaveIncentiveRuleIn, org_id: str = ORG_ID,
     # tenant had already declared in their feed mapping was refused and the owner was told to retype
     # it by hand on Count Fields. One set, dereferenced by both sides, so what is offered is what is
     # accepted — a picker and a guard reading two lists is the duplicate defect.
-    known = set(_mc.keys(_metric_catalog(client, org_id,
-                                         item_defs=_declared_item_defs(client, org_id))))
+    _cat = _metric_catalog(client, org_id, item_defs=_declared_item_defs(client, org_id))
+    known = set(_mc.keys(_cat))
     named = [str(k).strip() for k in (list(qualifier.get("metric_keys") or [])
                                       + list(payout.get("metric_keys") or [])) if str(k).strip()]
     unknown = sorted({k for k in named if k not in known})
@@ -50793,6 +50804,28 @@ def save_incentive_rule(body: SaveIncentiveRuleIn, org_id: str = ORG_ID,
         raise HTTPException(400, "This rule names categories this business does not declare: "
                                  + ", ".join(unknown)
                                  + ". Add them on Daily Closing -> Count Fields first.")
+    # A RULE MAY NOT NAME AN ITEM AND ITS OWN PARENT (security pass 2026-11-27).
+    #
+    # How fine a report's line labels are is the tenant's export's business and is not always
+    # knowable from the label, so the catalog refuses only the duplicates it can SEE (an item spelled
+    # exactly like its category). The overlap itself is refused here, where it can always be seen:
+    # whatever the grain, `daily_incentive.measure` sums `amount_of`/`units_of` per NAMED key with no
+    # notion of parentage, so measuring a parent and its own descendant counts one row's money twice.
+    #
+    # Two SIBLING items stay legal — they are disjoint lines, and paying different rates for two
+    # items of one category is exactly what the owner asked for.
+    _cat_by_key = _mc.by_key(_cat)
+    _named = set(named)
+    _overlap = sorted({k for k in _named
+                       if (_cat_by_key.get(k) or {}).get("parent_key") in _named})
+    if _overlap:
+        _pairs = ", ".join("%s (inside %s)" % (_cat_by_key[k]["label"],
+                                               _cat_by_key[k].get("parent_label")
+                                               or _cat_by_key[k]["parent_key"])
+                           for k in _overlap)
+        raise HTTPException(400, "This rule also names the category an item belongs to, so the same "
+                                 "sale would be counted twice: " + _pairs
+                                 + ". Pay on the items, or on the category — not both.")
     scope = str(qualifier.get("scope") or "none").strip().lower()
     if scope not in _daily_incentive.QUALIFIER_SCOPES:
         raise HTTPException(400, "qualifier scope must be store, employee or none")
