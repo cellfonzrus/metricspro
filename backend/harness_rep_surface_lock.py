@@ -203,7 +203,13 @@ for fn, (src, needle) in WIRED.items():
 # manager-only — names itself here. (A bare count went blind to exactly that; same lesson as
 # harness_subject_set_lock.py.)
 MANAGER_ONLY = {"Adjusting hours", "Removing an hours adjustment",
-                "Answering a time-off request", "Answering a shift swap"}
+                "Answering a time-off request", "Answering a shift swap",
+                # Added by the 2026-11-27 security pass (§STOREOPS-07.8). Both are acts ABOUT a
+                # person that an individual contributor must not perform even on THEMSELVES:
+                # setting withholding changes what comes out of a paycheck, and a rep writing their
+                # own shift is the same shape as a rep adjusting their own hours — the thing the
+                # owner stopped. Neither is an ASK, so §4f is untouched.
+                "Changing payroll tax settings", "Creating a shift"}
 _mo = set(re.findall(r'"([^"]+)", manager_only=True', SO))
 check("4d the manager-only writes are exactly the declared set — the ask-for-yourself writes are "
       "NOT manager-only, or an employee could not ask",
