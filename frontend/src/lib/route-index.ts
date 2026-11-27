@@ -149,6 +149,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/asset/lending' },
   { path: '/commcalc/asset/marketplace-purchases' },
   { path: '/commcalc/asset/missing-phones' },
+  { path: '/commcalc/asset/my-shelf' },
   { path: '/commcalc/asset/on-inventory' },
   { path: '/commcalc/asset/oninv-3way-recon', label: 'Three-Way Invoice Match', aliases: ['3 way match', 'invoice reconciliation', 'oninv recon'] },
   { path: '/commcalc/asset/owed-weekly' },
