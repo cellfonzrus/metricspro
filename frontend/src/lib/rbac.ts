@@ -2211,7 +2211,20 @@ export function canAccessPath(perms: Permissions, path: string): boolean {
   // The landing shows a person their own things only, so it is never refusable — the same posture as
   // the password page. Without this a store manager, who is NOT confined and therefore gated on a
   // nav item's module like anyone else, could be bounced off the page they are being landed on.
-  if (path === (perms.rep_surface?.landing || REP_LANDING)) return true
+  //
+  // AND ITS SUBTREE, since 2026-11-27 (§CORE-33.2). This was an EXACT match, so `/my/schedule` — the
+  // employee's own schedule, linked from the landing itself — fell through to the module ladder and
+  // `moduleGranted(perms.modules, 'targets')`. A store manager on a tenant without that module
+  // landed on `/my`, saw the "See my whole schedule" link rendered, clicked it and was bounced: the
+  // precise "the tab is there but clicking it does nothing" class this function cites twice. Found
+  // by the security pass on PR #755.
+  //
+  // THE INVARIANT THAT MAKES IT SAFE, stated once: every page under the landing shows a person only
+  // their OWN things, so none of them is refusable to anyone. `harness_my_schedule.py` 1h fails the
+  // build if a page appears in that subtree without being declared there, so a future `/my/<x>` that
+  // broke the invariant cannot ride in on this line unnoticed.
+  const repLanding = perms.rep_surface?.landing || REP_LANDING
+  if (path === repLanding || path.startsWith(repLanding + '/')) return true
   if (payoutRefused(perms, path)) return false   // the server refuses it to this viewer (index §6j)
   // THE CONFINED EMPLOYEE (owner 2026-11-04, index §CORE-33). Asked BEFORE the super-admin bypass is
   // irrelevant — a confined viewer never carries the admin module — but it is asked before the scope

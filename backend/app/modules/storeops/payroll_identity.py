@@ -430,11 +430,23 @@ def own_id_forms(business_id, employees):
     `employees` is ONE org's roster, as the caller already read it; this function reads nothing, so it
     cannot reach across tenants and has no org to be given. Returns a frozenset — empty for a caller
     with no business id, which is DENY-ALL at every call site and never "everyone"."""
-    biz = str(business_id or "").strip()
-    if not biz:
+    given = str(business_id or "").strip()
+    if not given:
         return frozenset()
-    forms = {biz}
-    for numeric_s, canonical in business_id_alias_map(employees).items():
+    alias = business_id_alias_map(employees)
+    # SYMMETRIC, and it has to be. This resolved only one way at first — business id in, both forms
+    # out; NUMERIC id in, only itself out — so a login whose `app_users.employee_id` carries the
+    # numeric form read "Not scheduled" on every day while business-keyed shifts existed. That is the
+    # exact silent zero this helper was written to kill (§COMMCALC-49.10), re-created inside it, and
+    # it is not hypothetical: `_canonical_shift_employee_id` exists because numeric ids really do get
+    # typed into pickers and written into person-keyed rows. Found by the security pass 2026-11-27.
+    #
+    # Canonicalising the INPUT through the same one home is safe in the way this whole module argues:
+    # `business_id_alias_map` has already refused an AMBIGUOUS numeric id, so this can only ever
+    # resolve an UNAMBIGUOUS numeric form to the one person it belongs to.
+    biz = alias.get(given, given)
+    forms = {given, biz}
+    for numeric_s, canonical in alias.items():
         if canonical == biz:
             forms.add(numeric_s)
     return frozenset(forms)

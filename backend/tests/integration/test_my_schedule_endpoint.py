@@ -24,7 +24,7 @@ import pytest
 ORG_A = "11111111-1111-1111-1111-111111111111"
 ORG_B = "22222222-2222-2222-2222-222222222222"
 UID = {"repA": "uid-rep-a", "mgrA": "uid-mgr-a", "repB": "uid-rep-b", "mgrB": "uid-mgr-b",
-       "ghost": "uid-ghost"}
+       "ghost": "uid-ghost", "repAnum": "uid-rep-a-num"}
 HDR = {k: f"Bearer {k}" for k in UID}
 _BY_TOKEN = {v: UID[k] for k, v in HDR.items()}
 
@@ -39,7 +39,15 @@ def _people(org, sfx, store):
             {"id": f"au-mgr-{sfx}", "org_id": org, "auth_id": UID[f"mgr{sfx}"],
              "role": "store_manager", "employee_id": f"E200{sfx}", "store_code": store,
              "is_active": True},
-        ],
+        ] + ([
+            # THE THIRD ID SHAPE (added 2026-11-27 after the security pass): a login whose OWN
+            # `app_users.employee_id` carries the NUMERIC form ("1A") while the shift rows carry the
+            # business form ("E100A"). `own_id_forms` resolved only one way at first, so this login
+            # read "Not scheduled" every day while its shifts existed — the silent zero the helper
+            # exists to kill, re-created inside it.
+            {"id": "au-rep-a-num", "org_id": org, "auth_id": UID["repAnum"],
+             "role": "sales_rep", "employee_id": "1A", "is_active": True},
+        ] if sfx == "A" else []),
         "employees": [
             {"id": f"1{sfx}", "org_id": org, "employee_id": f"E100{sfx}", "name": "The Rep",
              "home_store": store, "is_active": True},
@@ -205,3 +213,17 @@ def test_the_plain_read_is_where_the_cross_tenant_hole_is(api_client, who, org, 
     rows = _get(api_client, who, org)
     assert any(str(r.get("id")).startswith(foreign) for r in rows), (
         "if this test FAILS the hole is closed — delete it and say so in the index")
+
+
+# ── THE THIRD ID SHAPE: A LOGIN CARRYING THE NUMERIC FORM ────────────────────────────────────────
+def test_a_login_whose_own_id_is_the_numeric_form_still_finds_its_shifts(api_client, wired):
+    """`app_users.employee_id` can itself hold the NUMERIC form ("1A") while the shift rows hold the
+    business form ("E100A") — the mirror of tenant B's shape. `own_id_forms` resolved only one way
+    at first (business in → both out; numeric in → only itself), so this login read an empty
+    schedule while its own shifts existed. Both directions now go through
+    `business_id_alias_map`, whose collision guard keeps the resolution honest."""
+    assert _ids(_get(api_client, "repAnum", ORG_A, mine=1)) == ["a1", "a2", "a5"]
+
+
+def test_that_login_still_cannot_see_a_teammate(api_client, wired):
+    assert "a3" not in _ids(_get(api_client, "repAnum", ORG_A, mine=1))

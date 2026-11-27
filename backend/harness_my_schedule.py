@@ -89,15 +89,56 @@ ctl("1b can go red — the form is still a declared page of that surface, just n
     "/storeops/timeoff" in rs.pages())
 check("1c a confined employee may OPEN it", rs.page_allowed(MY_SCHEDULE))
 check("1d no carve-out shadows it", MY_SCHEDULE not in rs.page_exceptions())
+# `not X is False` PARSES AS `not (X is False)` — `is` binds tighter than `not` — so the third
+# clause below asserted that hours-trend IS granted, which it was, so the check passed while
+# claiming the opposite. Found by the security pass 2026-11-27, and the clause written as intended
+# went red: the prefix grant on `/api/v1/storeops/schedule` really did hand every confined employee
+# the manager's report. Grant removed; clause fixed. Control 1e-ctl below proves it can go red now.
 check("1e the manager's builder stays refused — the fix is a READ for the employee, never a grant "
-      "of the shift writes",
+      "of the shift writes, and never of the manager's hours-trend REPORT",
       not rs.page_allowed("/storeops/schedule")
       and not rs.api_allowed("/api/v1/storeops/shifts", "POST")
-      and not rs.api_allowed("/api/v1/storeops/schedule/hours-trend", "GET") is False)
+      and not rs.api_allowed("/api/v1/storeops/schedule/hours-trend", "GET")
+      and not rs.api_allowed("/api/v1/storeops/schedule", "GET"))
+ctl("1e can go red — the grant it refuses is a PREFIX away from being back; the shift READ that "
+    "the employee page does need is still granted",
+    rs.api_allowed("/api/v1/storeops/shifts", "GET"))
+def _no_strings(src):
+    """Executable text with string literals emptied, so a rule cannot be satisfied — or broken — by
+    a message that merely NAMES the pattern it forbids (this check's own sentence does)."""
+    src = code_only(src)
+    src = re.sub(r'"""(?:.|\n)*?"""', '""', src)
+    return re.sub(r'"[^"\n]*"|\'[^\'\n]*\'', '""', src)
+
+
+check("1e-ctl no check in this file uses `not <expr> is False`, the operator-precedence slip that "
+      "silenced 1e until 2026-11-27 — `is` binds tighter than `not`, so it asserts the inverse and "
+      "can never fail",
+      not re.search(r"\bnot\b[^\n()]*\bis\s+(False|True)\b",
+                    _no_strings(read("backend", "harness_my_schedule.py"))))
 check("1f the read it needs is granted, and GET-only",
       rs.api_allowed("/api/v1/storeops/shifts", "GET")
       and not rs.api_allowed("/api/v1/storeops/shifts", "POST")
       and not rs.api_allowed("/api/v1/storeops/shifts", "DELETE"))
+# ── THE LANDING SUBTREE IS UNCONDITIONALLY REACHABLE, so what lives in it is a DECLARED set ──────
+# `canAccessPath` admits the landing AND everything below it for every viewer, because each of those
+# pages shows a person only their own things. That is an invariant, not a fact about today's files:
+# a page dropped into `app/(platform)/my/` would become reachable to everyone with no gate at all.
+# Declared, not counted — a page arriving in or leaving this subtree names itself here.
+MY_SUBTREE_PAGES = {"/my", "/my/schedule"}
+_my_dir = os.path.join(ROOT, "frontend", "src", "app", "(platform)", "my")
+_on_disk = {("/my" + root[len(_my_dir):]).replace(os.sep, "/")
+            for root, _d, files in os.walk(_my_dir) if "page.tsx" in files}
+check("1h every page under the unconditionally-reachable landing subtree is declared — a new one "
+      "must be shown to be self-only before it rides in on that branch",
+      _on_disk == MY_SUBTREE_PAGES,
+      "only on disk: %s / only declared: %s"
+      % (sorted(_on_disk - MY_SUBTREE_PAGES), sorted(MY_SUBTREE_PAGES - _on_disk)))
+check("1i and the browser admits that subtree, so the landing's own link cannot bounce a viewer "
+      "who is landed there but not confined (a store manager on a tenant without the module)",
+      "path.startsWith(repLanding + '/')" in RBAC)
+ctl("1i can go red", "export const REP_LANDING" in RBAC)
+
 check("1g it is a real page on disk, registered in NAV so it carries a page title",
       os.path.isfile(os.path.join(ROOT, "frontend", "src", "app", "(platform)",
                                   "my", "schedule", "page.tsx"))
@@ -112,6 +153,20 @@ check("2b it reads the SHARED shift read, never a sibling endpoint of its own",
 check("2c and it asks the SERVER whose shifts are mine", "mine=1" in SCHED)
 check("2d it never writes a shift — an employee's schedule is a read",
       not re.search(r"method:\s*'(POST|PATCH|PUT|DELETE)'", SCHED))
+# EXPORT GOVERNANCE IS UNIVERSAL, NOT BORROWED. The page carries an Export button, so it POSTs an
+# export event — and `governExport` fails OPEN, so a missing grant does not stop the file saving, it
+# makes it save UNLOGGED. That grant lived inside the barcode-rescue surface's own tuple beside a
+# promise that retiring a surface is "a one-line edit of this tuple and nothing else"; it is
+# UNIVERSAL_API's now, so no other page's exports depend on an unrelated tile staying alive.
+check("2e the export log is granted, and declared as UNIVERSAL rather than borrowed from another "
+      "surface whose removal would silently unlog every other page's exports",
+      rs.api_allowed("/api/v1/core/export-event", "POST")
+      and rs.surface_for_api("/api/v1/core/export-event", "POST") == "universal",
+      str(rs.surface_for_api("/api/v1/core/export-event", "POST")))
+check("2f and the page still carries no Send bar — that would need outbound mail granted to a "
+      "confined employee",
+      not rs.api_allowed("/api/v1/notify/send-file", "POST") and "send-report" not in SCHED
+      and "SendReportButton" not in SCHED)
 
 # ── 3. "WHOSE SHIFT IS THIS" IS THE SERVER'S ANSWER, NOT THE BROWSER'S ───────────────────────────
 print("\n3. the browser holds no private copy of 'mine'")
@@ -132,6 +187,19 @@ check("3e asking for `mine` with an unresolvable caller is DENY-ALL, never unres
       re.search(r"def own_emp_ids(?:.|\n)*?return set\(\)", SO))
 check("3f the narrowing is applied ON TOP of the existing gate, so it can only ever narrow",
       re.search(r"gate_person_rows\((?:.|\n)*?\n(?:.|\n){0,400}?if mine:", SO))
+# THE CONTRACT THAT MAKES 3e LOAD-BEARING. `keep_visible_people` treats None as UNRESTRICTED, and
+# `own_emp_ids`' result is handed straight to it. If anyone ever mirrors `schedule_emp_ids`' posture
+# here "for consistency", `mine=1` silently becomes a no-op and the page shows the manager's whole
+# team — a widening with no error and no empty screen to notice. So: that function may not contain
+# the word `None` on a return at all. Raised by the security pass 2026-11-27 as the one gap in the
+# narrowing proof: the posture was right and nothing pinned it.
+_own = SO.split("def own_emp_ids")[1].split("\ndef ")[0]
+check("3g `own_emp_ids` can never return None, which `keep_visible_people` would read as "
+      "UNRESTRICTED — every exit is a set",
+      not re.search(r"return\s+None\b", code_only(_own))
+      and not re.search(r"^\s*return\s*$", code_only(_own), re.M))
+ctl("3g can go red — the sibling it must NOT copy does return None",
+    re.search(r"def schedule_emp_ids(?:.|\n)*?return None", SO) is not None)
 
 # ── 4. ONE HOME FOR "THESE TWO IDS ARE THE SAME PERSON" ──────────────────────────────────────────
 print("\n4. the id forms are one fact, dereferenced")
@@ -141,6 +209,17 @@ check("4a a person's own rows are found under BOTH id forms",
       str(sorted(own_id_forms("E45", EMPS))))
 check("4b and never under anybody else's", "46" not in own_id_forms("E45", EMPS)
       and "E46" not in own_id_forms("E45", EMPS))
+# SYMMETRY. A login's `app_users.employee_id` can itself carry the NUMERIC form, and that login must
+# find its own business-keyed shifts — otherwise the page reads "Not scheduled" every day while the
+# shifts exist, which is the silent zero this helper exists to kill, re-created inside it.
+check("4a-sym the SAME two forms whichever one the login carries",
+      own_id_forms("45", EMPS) == own_id_forms("E45", EMPS) == frozenset({"E45", "45"}),
+      f'numeric in -> {sorted(own_id_forms("45", EMPS))}')
+ctl("4a-sym can go red — the two inputs are genuinely different strings",
+    "45" != "E45" and own_id_forms("45", EMPS) == frozenset({"E45", "45"}))
+check("4b-sym and a numeric-form login still reaches nobody else",
+      not (own_id_forms("45", EMPS) & own_id_forms("E46", EMPS)))
+
 check("4c a caller with no business id gets NOTHING, not everything",
       own_id_forms("", EMPS) == frozenset() and own_id_forms(None, EMPS) == frozenset())
 # THE COLLISION. Employee B's own business id is the literal "42"; employee A is numeric 42 / "E42".

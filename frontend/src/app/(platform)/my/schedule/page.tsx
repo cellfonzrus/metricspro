@@ -61,28 +61,32 @@ const card: React.CSSProperties = {
 
 export default function MySchedulePage() {
   const [days, setDays] = useState<number>(14)
-  const [shifts, setShifts] = useState<Shift[] | null>(null)
-  const [err, setErr] = useState('')
+  // ONE state object, written ONLY from the fetch's own callbacks, and it CARRIES THE WINDOW it
+  // answers for. "Loading" is then DERIVED (the answer in hand is for another window) rather than
+  // set — an effect body that calls setState synchronously to clear the old rows triggers the
+  // cascading render `react-hooks/set-state-in-effect` fails the build over.
+  const [loaded, setLoaded] = useState<{ days: number; rows: Shift[]; err: string } | null>(null)
 
   const today = useMemo(() => iso(new Date()), [])
   const until = useMemo(() => addDays(today, days - 1), [today, days])
 
   useEffect(() => {
     let cancelled = false
-    setShifts(null)
-    setErr('')
     api(`/api/v1/storeops/shifts?week_start=${today}&week_end=${until}&mine=1`)
       .then((rows: unknown) => {
         if (cancelled) return
-        setShifts(Array.isArray(rows) ? (rows as Shift[]) : [])
+        setLoaded({ days, rows: Array.isArray(rows) ? (rows as Shift[]) : [], err: '' })
       })
       .catch((e: unknown) => {
         if (cancelled) return
-        setErr(e instanceof Error ? e.message : String(e))
-        setShifts([])
+        setLoaded({ days, rows: [], err: e instanceof Error ? e.message : String(e) })
       })
     return () => { cancelled = true }
-  }, [today, until])
+  }, [today, until, days])
+
+  const settled = loaded && loaded.days === days
+  const shifts = settled ? loaded.rows : null
+  const err = settled ? loaded.err : ''
 
   // One entry per DAY in the window, so a day with nothing scheduled says so rather than being
   // absent — "am I off on Thursday" is the other half of the question this page answers.

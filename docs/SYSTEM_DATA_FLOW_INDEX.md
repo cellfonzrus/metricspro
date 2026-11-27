@@ -47345,8 +47345,36 @@ grid, the shift writes and the hours-trend report. The employee surface gained a
 rows; `GET /storeops/shifts` is granted GET-only, and `harness_my_schedule.py` 1e/1f fail the build if
 either of those stops being true. No Send bar: it would need `/api/v1/notify/send-file` granted to a
 confined employee — an outbound-mail capability riding in on a page, which is the collection rule of
-§CORE-33 all over again. Export renders in the browser and logs through `/core/export-event`, which
-this surface already has.
+§CORE-33 all over again. Export renders in the browser and logs through `/core/export-event`.
+
+**THE SECURITY PASS FOUND THAT CLAIM FALSE WHEN FIRST WRITTEN, which is why it reads differently
+now.** Three things it corrected, each inside this change's own assertions:
+
+- **The 1e lock asserted the inverse of its own sentence and could not fail.** `not X is False`
+  parses as `not (X is False)` — `is` binds tighter than `not` — so the clause meant *"hours-trend IS
+  granted"*, and it was: `api_read` carried `/api/v1/storeops/schedule`, and `_matches` is a PREFIX
+  match, so **every confined employee could call `GET /storeops/schedule/hours-trend`**, the
+  manager's week-over-week scheduled-hours report. No cross-person leak (that handler applies the
+  §14w gate too, so a rep got an aggregate of their own hours) — the defect is that a load-bearing
+  claim was false and the check written to pin it was inert. The grant is **removed**, not carved:
+  carving something never granted is "a comment pretending to be a gate", and the only route under
+  `/schedule/` is hours-trend, which no employee page calls. 1e-ctl now fails the build if that
+  precedence slip reappears anywhere in the file.
+- **The landing branch was an EXACT match, so this page could bounce a store manager.**
+  `canAccessPath` admits the landing unconditionally *because it shows a person only their own
+  things* — but `/my/schedule` is not that exact path, so for a viewer **landed but not confined** (a
+  store manager, by `LANDING_SCOPES`) it fell through to `moduleGranted(perms.modules, 'targets')`.
+  On a tenant without that module: lands on `/my`, sees the "See my whole schedule" link rendered,
+  clicks it, bounced — the "the tab is there but clicking it does nothing" class `rbac.ts` cites
+  twice in that same function. The branch now admits the landing's SUBTREE, and because that makes
+  everything under `/my/` unconditionally reachable, 1h declares the subtree's pages so a future one
+  cannot ride in on it ungated.
+- **The export grant was borrowed from another surface.** `/api/v1/core/export-event` was declared
+  inside the `dropoff` surface's own tuple, beside this module's promise that retiring a surface is
+  "a one-line edit of this tuple and nothing else" — and `governExport` **fails open**, so retiring
+  the barcode-rescue tile would not have broken any export, it would have made every other granted
+  page's exports **save unlogged**. It is `UNIVERSAL_API`'s now. No viewer gained or lost reach:
+  `api_allowed` already unions every surface for every caller.
 
 #### The class: a question the server has already answered, re-derived in the browser
 
@@ -47393,6 +47421,28 @@ person, built on `business_id_alias_map`, handed a roster rather than reading on
 cannot reach across tenants), returning an empty set for a caller with no business id, which is
 deny-all at every call site and never "everyone".
 
+**It shipped ONE-DIRECTIONAL, which re-created this very class inside the helper named after it.**
+Business id in → both forms out; **numeric id in → only itself out**. An `app_users.employee_id` can
+itself carry the numeric form (`_canonical_shift_employee_id` exists precisely because numeric ids get
+typed into pickers), and such a login read *"Not scheduled"* on every day of `/my/schedule` while its
+business-keyed shifts existed — the plausible-looking zero, one layer in. Caught by the security pass,
+not by the tests, because **both integration tenants provisioned their login on the business form**.
+Now symmetric: the input is canonicalised through the same one home first, which is safe in exactly
+the way this module argues — the alias map has already refused an ambiguous numeric, so resolving the
+input can only ever reach the one person an unambiguous form belongs to. A **third id shape** is in
+the tests (a tenant-A login carrying `"1A"` against business-keyed rows), and it was verified to go
+red against the one-directional version.
+
+**THE COLLISION IS HALF CLOSED, AND SAYING OTHERWISE WOULD BE THE PATCHWORK.** With A = numeric 42 /
+`"E42"` and B's business id the literal `"42"`, the guard costs A one form of their own rows and costs
+B nothing — the asymmetry argued above. But a shift written for A from the Schedule page stores
+`employee_id = "42"` (the same guard leaves an ambiguous value unchanged), and B's gate widens to
+`{"42","77"}`, so **B can be shown A's shift as their own** on a page headed "My schedule". That
+direction is NOT closed and is not closable downstream: the stored string `"42"` is both A's primary
+key and B's canonical identity. The only real fix is at WRITE time — refuse to store an ambiguous
+person key — which is a posture decision with the owner, recorded here rather than claimed shut. No
+tenant's data was queried, so whether such a roster exists anywhere is unknown.
+
 #### The cross-tenant read underneath, pinned rather than patched
 
 `test_the_plain_read_is_where_the_cross_tenant_hole_is` asserts TODAY'S behaviour: `GET /shifts`
@@ -47406,12 +47456,20 @@ handler underneath does **not** independently refuse — so that flag is load-be
 belt-and-braces. Changing `schedule_emp_ids`' posture here instead would blank every scheduled job
 that reads shifts.
 
+**`mine=1` does not inherit it, and in fact closes it on this path** — a foreign `org_id` yields no
+`app_users` row, so `own_emp_ids` is `set()` and the answer is zero rows where the plain read returns
+the other tenant's shifts. That makes `mine=1` the safer shape for the whole `/my` family, and is a
+better argument for it than "the browser should not re-derive this".
+
 #### Every tenant
 
-`harness_my_schedule.py` (33 checks, DB-free) pins the tile's target, both windows, that neither page
-compares an employee id, the deny-all posture, the one-home dereference on both sides of the pairing,
-and two tenants on different id shapes. `tests/integration/test_my_schedule_endpoint.py` (16, the real
-app) runs tenant A with shift rows on the **business** id and tenant B on the **numeric** id, asserts a
+`harness_my_schedule.py` (45 checks, DB-free) pins the tile's target, both windows, that neither page
+compares an employee id, the deny-all posture AND that `own_emp_ids` can never return `None` (which
+`keep_visible_people` reads as UNRESTRICTED — the posture was right and nothing pinned it, so a later
+"consistency" edit would have turned `mine=1` into a no-op showing the manager's whole team), the
+one-home dereference on both sides of the pairing in BOTH directions, the declared landing subtree,
+export governance being universal rather than borrowed, and three tenants on different id shapes.
+`tests/integration/test_my_schedule_endpoint.py` (18, the real app) runs tenant A with shift rows on the **business** id and tenant B on the **numeric** id, asserts a
 scheduled employee is never handed an empty schedule in either, that a teammate's shift is never
 "mine", that a manager asking for `mine` gets only their own while the plain read still shows the team,
 and that neither tenant's rows appear in the other's response. Both run in the **The employee's reach**
