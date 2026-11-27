@@ -35021,7 +35021,16 @@ the migration that creates it (Data API)**. Stdlib only, no DB, no network. It f
 | **B** | a migration newer than `CUTOFF` creates `<schema>.<rel>` in a Data API schema and does not grant it to `service_role` **below** the create. `GRANT … ON ALL TABLES IN SCHEMA` covers only the tables that exist when it runs, so a create underneath it is not covered — the check is position-aware, not a substring test |
 | **C** | `DATA_API_SCHEMAS` is not exactly the set of schemas the migrations create in, **both ways**. Declared, never derived (§CORE-10): a new schema has to be written down by a human, who then has to say whether the Data API serves it |
 | **D** | `CUTOFF` was raised. It is a shrink-only ratchet pinned at `1089`, the highest migration on `main` the day the gate shipped |
-| **Z** | ten negative controls, each check planted with its own defect — including a create inside a `--` comment, a grant that omits `service_role`, and a grant positioned above its own create |
+| **E** | a migration writes a **CHECK constraint containing a subquery** — Postgres refuses it outright (`0A000 cannot use subquery in check constraint`), so the whole file cannot run. Added 2026-11-27 after the owner hit it pasting mig `1132`, whose weekday rule was written `(SELECT bool_and(d BETWEEN 0 AND 6) FROM unnest(open_dows) AS d)`. Nothing is grandfathered here: a file that cannot run was never applied, so there is no live state an excusal would protect. The expression is read to its **matching** paren (a real CHECK nests), and single-quoted literals are blanked first — mig `053` has a legal `field_type IN ('text','select','date')` whose VALUE is the word select |
+| **Z** | sixteen negative controls, each check planted with its own defect — including a create inside a `--` comment, a grant that omits `service_role`, a grant positioned above its own create, the exact subquery CHECK the owner hit, the scalar expression that replaced it, and mig `053`'s legal `'select'` literal |
+
+**WHY E BELONGS IN THIS GATE AND NOT A NEW ONE** (the duplicate check, again). A–D and E are one
+class: **a migration that cannot do its job, merged green, because nothing in CI ever asks Postgres
+to run the SQL in `database/migrations/`.** A–D are about a statement that runs and leaves the
+relation unreachable; E is about a statement the server will not accept at all. Both are answered by
+reading the migration text, which this gate already parses once, so E extends it rather than
+standing up a sibling that would parse the same files a second time. The cost of the defect is not
+hypothetical: a whole file rolls back, and the owner finds out, not CI.
 
 **Grandfathered deliberately.** Everything at or below `CUTOFF` keeps the reachability it has:
 those tables exist in the live project, the notice does not touch them, and backfilling 366 grants
