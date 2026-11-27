@@ -47396,9 +47396,22 @@ the integration gate, which otherwise asserts every granted page is a tile's des
 `own_paperwork` remains the one surface with no page of its own: it is a tab inside the kiosk, and the
 test names it rather than letting it slide under a count.
 
+**And the same question answered the other way** (owner, same hour): *"device history look up is not
+rwequired ont eh portal but the bar code resue is."* The employee dashboard mounted
+`<DeviceHistoryLookup>` for EVERY employee — its comment reasoned that this was *"safe"* because the
+MONEY rows are gated server-side. **Safety is not the test.** `GET /commcalc/device-history` is not
+granted to a confined employee, so on the kiosk it was a search box that answers 403: the browser
+offering what the API refuses, which is §CORE-33's defect pointing the other way. The widget is gone
+from the dashboard and the `device_history` key is gone from `EMP_WIDGETS` with it — a toggle for a
+widget that cannot render is worse than no toggle — and the screen keeps its one home at
+`/commcalc/device-history` for the roles whose nav allows it. The barcode rescue is the contrast the
+owner drew in the same sentence: asked for, granted, tiled (§CORE-33.1). Pinned by
+`harness_rep_surface.py` §A21, which asserts the refusal, the absence from the dashboard, the absent
+toggle, and the rescue's presence.
+
 ### Proofs and the lock
 
-- `backend/harness_rep_surface.py` (133) — the grammar, default-deny on the API, the REAL middleware
+- `backend/harness_rep_surface.py` (137) — the grammar, default-deny on the API, the REAL middleware
   verdict over each role shape, the REAL four handlers over the in-memory double, two tenants, and
   ★ NO LOCKOUT ★.
 - `frontend/tools/rep-surface-nav-proof.mjs` (50) — the compiled `rbac.ts`; §A **reproduces the prefix

@@ -4,11 +4,13 @@ import {
   ResponsiveContainer, AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip,
   CartesianGrid, Cell 
 } from 'recharts'
-// Self-contained, self-fetching device lookup (commission-16). Renders its OWN card chrome + search box;
-// money rows are gated server-side (the 'device_commission' DATA_GRANT), so mounting it for every employee
-// is safe — non-granted reps still see history, the sell/upgrade prompt, and tenure. Reusable widget
-// intentionally shared out of the commcalc route tree (see its header comment).
-import DeviceHistoryLookup from '@/app/(platform)/commcalc/device-history/DeviceHistoryLookup'
+// NO DEVICE-HISTORY LOOKUP HERE. Owner 2026-11-27: *"device history look up is not rwequired ont eh
+// portal but the bar code resue is"*. It was mounted for every employee on the belief that mounting it
+// was "safe" because the MONEY rows are gated server-side — but safety is not the test. The lookup
+// asks `GET /commcalc/device-history`, which `core/rep_surface` does NOT grant a confined employee, so
+// on the kiosk it was a search box that answers 403: a surface the gate refuses, offered anyway. The
+// screen still exists for the roles that may run it, at `/commcalc/device-history`, which is its one
+// home. Pinned by `harness_rep_surface.py` §A21 (index §CORE-33.3).
 import { targetState } from '@/lib/target-state'
 import { useTargetAxis } from '@/lib/target-axis'
 import ScreenLink from '@/components/ScreenLink'
@@ -116,8 +118,6 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 16, alignItems: 'start' }}>
-
-      {on('device_history') && <DeviceHistoryLookup />}
 
       {on('phone_priority') && (data?.phone_priority?.length > 0) && (
         <Card title="Sell These Phones Today" icon="📱">

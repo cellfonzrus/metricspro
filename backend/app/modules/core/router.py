@@ -5086,9 +5086,14 @@ def purge_employee(body: PurgeEmployeeIn, org_id: str = ORG_ID, authorization: s
 
 
 # ── Employee Dashboard (role-gated widgets) ───────────────────────────────────
+# The dashboard's own widgets. `device_history` was REMOVED 2026-11-27 (owner: *"device history look
+# up is not rwequired ont eh portal but the bar code resue is"*): the lookup it switched on asks
+# `GET /commcalc/device-history`, a route `core/rep_surface` does not grant a confined employee, so on
+# the kiosk it was a search box that answers 403. A toggle for a widget that no longer renders would
+# be worse than no toggle, so the key goes with it; the screen keeps its one home at
+# `/commcalc/device-history` for the roles whose nav allows it. Index §CORE-33.3.
 EMP_WIDGETS = ["schedule", "timeoff", "hours", "commission", "targets",
-               "report_card", "commission_tracking", "flags", "chargebacks", "phone_priority",
-               "device_history"]
+               "report_card", "commission_tracking", "flags", "chargebacks", "phone_priority"]
 
 
 def _emp_period(period):

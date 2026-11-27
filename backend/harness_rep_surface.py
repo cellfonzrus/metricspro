@@ -158,6 +158,29 @@ check("A19h every surface that HAS a page has a tile — nothing is granted and 
 check("A19i …and the one surface with no page of its own is the paperwork inside the kiosk",
       [s["key"] for s in RS.SURFACES if not s["pages"]] == ["own_paperwork"],
       [s["key"] for s in RS.SURFACES if not s["pages"]])
+# ── A21 THE KIOSK OFFERS NO SURFACE THE GATE REFUSES ─────────────────────────────────────────────
+# OWNER 2026-11-27: *"device history look up is not rwequired ont eh portal but the bar code resue
+# is."* The employee dashboard mounted the device-history lookup for EVERY employee, on the reasoning
+# that doing so was "safe" because the money rows are gated server-side. Safety is not the test:
+# `GET /commcalc/device-history` is not granted to a confined employee, so the kiosk showed a search
+# box that answers 403 — the browser offering what the API refuses, which is the §CORE-33 defect
+# pointing the other way. The barcode rescue is the contrast: asked for, granted, and tiled.
+_CR = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "app/modules/core/router.py"), encoding="utf-8").read()
+_WIDGETS = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "../frontend/src/components/EmployeeWidgets.impl.tsx"),
+                encoding="utf-8").read()
+check("A21 the device-history lookup is not granted to a confined employee",
+      not RS.api_allowed("/api/v1/commcalc/device-history", "GET"))
+check("A21b …so the employee dashboard does not render it",
+      "DeviceHistoryLookup" not in _WIDGETS and "device_history" not in _WIDGETS)
+check("A21c …and the widget list no longer offers a toggle for a widget that cannot render",
+      '"device_history"' not in _CR.split("EMP_WIDGETS = [")[1].split("]")[0])
+check("A21d THE CONTRAST: the barcode rescue IS granted, and tiled",
+      RS.page_allowed("/storeops/dropoff-barcode")
+      and any(t["key"] == "dropoff" for t in RS.tiles())
+      and RS.api_allowed("/api/v1/storeops/dropoff-label/read", "POST"))
+
 check("A20 a tile that declares no destination publishes none — there is no fallback to pages[0]",
       "pages\"][0]" not in open(RS.__file__).read().split("def tiles(")[1])
 
