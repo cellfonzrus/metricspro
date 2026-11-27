@@ -248,6 +248,9 @@ def test_a_period_below_the_orgs_coverage_floor_publishes_no_figure(wired, api_c
     assert h["state"] == hwc.REFUSED, h
     assert h["actual_hours"] is None and h["paid_hours"] is None
     assert h["refusal"] and h["sentence"] == h["refusal"]
+    # The endpoint and the card AGREE about the schedule on a refused period — it is a plan, not a
+    # measurement, so it is published either way and the two cannot disagree about it.
+    assert h["scheduled_hours"] > 0
     # ★ AND NO MONEY IS PUBLISHED. $0.00 would say "this person earns nothing"; absence is the
     # signal the card already reads for a withheld pay key.
     assert "actual_pay" not in h

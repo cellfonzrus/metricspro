@@ -105,6 +105,9 @@ def test_a_refused_period_carries_the_refusal_and_no_total():
     assert c["actual_hours"] is None and c["paid_hours"] is None and c["unmeasured_hours"] is None
     assert c["sentence"] == refusal
     assert c["refusal"] == refusal
+    # ★ BUT THE SCHEDULE SURVIVES. The refusal is about clock evidence; what was ROSTERED is still
+    # a fact, and it is the half the reader can act on ("18h booked, nothing measured them").
+    assert c["scheduled_hours"] == 9.0
 
 
 def test_a_refusal_outranks_a_period_that_would_otherwise_look_finished():

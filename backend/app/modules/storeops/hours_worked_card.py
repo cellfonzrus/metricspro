@@ -151,8 +151,15 @@ def card(rows, *, refusal=None, coverage_note=None):
     # a reader can see is clocked while the ORG's coverage sits under its own floor, and publishing
     # the total would look like a finished figure rather than an unfinished measurement.
     if refusal:
+        # ★ `scheduled_hours` SURVIVES A REFUSAL, deliberately. The refusal is about CLOCK
+        # EVIDENCE: it says "we cannot state what was worked or what is owed". It does NOT say we do
+        # not know what was BOOKED — the schedule is a plan this business wrote down, not a
+        # measurement of anything, and nulling it would throw away the one figure that is still a
+        # fact. It is also what lets the reader see that 18h were rostered and nothing measured
+        # them, which is the actionable half. (This returned None until 2026-11-27, which disagreed
+        # with the endpoint's own published figure — two answers to one question.)
         out.update({"state": REFUSED, "sentence": refusal, "actual_hours": None,
-                    "unmeasured_hours": None, "paid_hours": None, "scheduled_hours": None})
+                    "unmeasured_hours": None, "paid_hours": None})
         return out
     if not rows:
         out.update({"state": NO_SHIFTS, "sentence": NO_SHIFTS_SENTENCE, "actual_hours": None,
