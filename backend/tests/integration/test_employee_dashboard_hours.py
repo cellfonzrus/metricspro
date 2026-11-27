@@ -286,3 +286,25 @@ def test_no_shifts_in_the_window_is_its_own_state(wired, api_client):
     h = _hours(api_client)
     assert h["state"] == hwc.NO_SHIFTS
     assert h["actual_hours"] is None and h["scheduled_hours"] == 0.0
+
+
+# ── the pay gate still finds the money among the new keys (mig 434) ─────────────────────────────
+def test_the_pay_gate_strips_money_from_the_new_shape_but_leaves_the_hours():
+    """★ A SECURITY ASSERTION, not a display one. The card grew five new keys, two of which
+    (`paid_hours`, `unmeasured_hours`) are HOURS that look money-adjacent. `strip_pay` works off
+    `PAY_FIELDS`, so it must still remove every dollar figure from the new dict and leave every hour
+    figure intact — the house rule is that a caller who may not see pay still sees hours, so a gate
+    that took the hours too would degrade into "less information" in the wrong direction.
+
+    Pure, so it needs no app: this is the exact dict the endpoint assembles.
+    """
+    from app.modules.storeops import pay_visibility as pv
+    h = {"scheduled_hours": 18.0, "actual_hours": 7.5, "unmeasured_hours": 9.0, "paid_hours": 16.5,
+         "pay_rate": 20.0, "scheduled_pay": 360.0, "actual_pay": 330.0,
+         "state": hwc.PARTLY_MEASURED, "sentence": "7.5h measured · 9h not clocked",
+         "hours_basis": hb.CLOCKED, "window_label": "Pay period"}
+    pv.strip_pay(h)
+    for money in ("pay_rate", "scheduled_pay", "actual_pay"):
+        assert money not in h, f"{money} survived the pay gate"
+    assert h["actual_hours"] == 7.5 and h["paid_hours"] == 16.5 and h["unmeasured_hours"] == 9.0
+    assert h["sentence"] and h["state"] == hwc.PARTLY_MEASURED
