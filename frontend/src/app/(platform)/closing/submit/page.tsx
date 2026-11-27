@@ -7,7 +7,7 @@ import { WorkflowNext } from '@/components/WorkflowNext'
 
 // Thin wrapper around the shared <ClosingSubmitForm> (also embedded in the /portal kiosk).
 //
-// A CONFINED EMPLOYEE LANDS HERE from the Daily closing tile (owner 2026-11-27, §CORE-33.3), and the
+// A CONFINED EMPLOYEE LANDS HERE from the Daily closing tile (owner 2026-11-27, §CORE-33.4), and the
 // grant for it is this page EXACTLY — `/closing` and the rest of the subsystem stay refused. So the
 // one hard-coded link out of here is hidden for them: `repConfined` off `/me` is used for that single
 // purpose, exactly as on the barcode rescue — not offering a door that is already known to be shut.

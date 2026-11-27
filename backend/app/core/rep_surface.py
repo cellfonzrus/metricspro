@@ -110,7 +110,7 @@ SURFACES = (
         # THE TILE OPENS `/my/schedule`, the employee's own read of the published schedule. It used
         # to open `/storeops/timeoff` — the time-off REQUEST FORM — because the tile's link was taken
         # from `pages[0]`, and guessing a destination from the first grant is exactly the defect
-        # §CORE-33.2 fixed in this same PR: the destination is DECLARED here now, so the order of
+        # §CORE-33.3 fixed in this same PR: the destination is DECLARED here now, so the order of
         # `pages` carries no meaning at all. The two REQUEST pages stay declared behind it, because
         # asking for time off and asking for a swap are the other half of this surface, and
         # `/my/schedule` links to both (pinned by rep-surface-nav-proof.mjs §E).
@@ -157,7 +157,7 @@ SURFACES = (
         # OWNER 2026-11-27: *"my targets are shown on the portal and not on the employee dashboad, a
         # tile for that shoudl be there too"*. Target-vs-achieved was visible only as part of the
         # kiosk's My Dashboard tab (`<EmployeeWidgets repTargets=…>`), so the standalone screen that
-        # owns the question was unreachable without a menu. §CORE-33.3.
+        # owns the question was unreachable without a menu. §CORE-33.4.
         #
         # NO API GRANT IS ADDED. The page reads `/commcalc/targets/{period}/summary|calendar|
         # action-plan`, every one of which the action-plan surface above already grants read on —

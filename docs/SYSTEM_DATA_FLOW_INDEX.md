@@ -47296,7 +47296,7 @@ never silently dropped from the sheet. `/api/v1/core/export-event` is granted to
 rep's save is audited like anyone else's — `governExport` fails open, so without the grant the PDF
 would still save and simply go unlogged, which is the worst of both.
 
-### CORE-33.2 A tile's link is an ADDRESS, not a permission pattern (owner 2026-11-27)
+### CORE-33.3 A tile's link is an ADDRESS, not a permission pattern (owner 2026-11-27)
 
 Owner, on NY Logistics: *"when the employee clicks on my commisison in Ny logistics it leads to this
 404"*, and minutes later: *"when you clock on clock in clock out from the app.metricspro.tech it shows
@@ -47339,7 +47339,7 @@ renders the server's list in the server's order.
 into a link — no other backend declaration publishes a `page` containing `**`, and `(platform)/my/page.tsx`
 and `lib/fix-it.tsx` are the only two surfaces that build an href from server-declared page data.
 
-### CORE-33.3 A seventh tile: the daily closing (owner 2026-11-27)
+### CORE-33.4 A seventh tile: the daily closing (owner 2026-11-27)
 
 Owner, minutes after the tile 404s above: *"daily closing tile is missing from their landing page but
 on teh portal is seen."*
@@ -47444,7 +47444,7 @@ made for teh next 2 weeks or one week"*.
 
 **THE INSTANCE, in one line: a tile's link WAS `pages[0]` of its surface, and the schedule surface's
 first page was `/storeops/timeoff`.** So the tile headed "My schedule" opened the time-off REQUEST
-FORM. (That guess is itself the defect §CORE-33.2 removed in the same hour: a tile's destination is
+FORM. (That guess is itself the defect §CORE-33.3 removed in the same hour: a tile's destination is
 now DECLARED as `tile_page`, so the order of `pages` carries no meaning and this tile names
 `/my/schedule` outright.) The only schedule an employee could see at all was the four-row "Your next shifts" list inlined
 on `/my` — which is why this read as "it does not show the employee their own schedule" rather than as
@@ -47596,7 +47596,7 @@ job of `org-scope-guard.yml`.
 | Thing | Where |
 |---|---|
 | The page | `frontend/src/app/(platform)/my/schedule/page.tsx` |
-| The declaration | `backend/app/core/rep_surface.py` — `SURFACES` key `schedule`, `tile_page` (§CORE-33.2) |
+| The declaration | `backend/app/core/rep_surface.py` — `SURFACES` key `schedule`, `tile_page` (§CORE-33.3) |
 | "Which are mine" | `storeops.router.own_emp_ids` → `payroll_identity.own_id_forms` |
 | The pairing (one home) | `payroll_identity.business_id_alias_map` |
 | Proof / tests | `backend/harness_my_schedule.py`, `backend/tests/integration/test_my_schedule_endpoint.py` |

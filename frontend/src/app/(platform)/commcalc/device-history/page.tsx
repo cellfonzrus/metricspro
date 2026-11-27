@@ -3,7 +3,7 @@
 // It is NOT an employee-portal widget: it was mounted on the employee dashboard until 2026-11-27,
 // when the owner said it is not needed there — and the reason it had to go rather than merely being
 // unwanted is that `core/rep_surface` does not grant a confined employee `GET /commcalc/device-history`,
-// so on the kiosk it was a search box that answers 403. Index §CORE-33.3.
+// so on the kiosk it was a search box that answers 403. Index §CORE-33.4.
 import { useAuth } from '@/lib/auth-context'
 import { hasDataGrant } from '@/lib/rbac'
 import DeviceHistoryLookup from './DeviceHistoryLookup'

@@ -6,7 +6,7 @@
 //
 // Self-fetching, and rendered by the commcalc page beside it — its ONLY caller. It is deliberately
 // NOT mounted on the employee dashboard any more (owner 2026-11-27): the route it reads is not granted
-// to a confined employee, so there it was a search box that answers 403. Index §CORE-33.3. The
+// to a confined employee, so there it was a search box that answers 403. Index §CORE-33.4. The
 // money section is gated by the 'device_commission' DATA_GRANT — the backend is the source of truth
 // (returns `commission_visible` + either `money` or `money_locked`); `hasDataGrant` is the frontend
 // mirror used to keep the pre-response UI honest.

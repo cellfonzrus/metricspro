@@ -10,7 +10,7 @@ import {
 // asks `GET /commcalc/device-history`, which `core/rep_surface` does NOT grant a confined employee, so
 // on the kiosk it was a search box that answers 403: a surface the gate refuses, offered anyway. The
 // screen still exists for the roles that may run it, at `/commcalc/device-history`, which is its one
-// home. Pinned by `harness_rep_surface.py` §A21 (index §CORE-33.3).
+// home. Pinned by `harness_rep_surface.py` §A21 (index §CORE-33.4).
 import { targetState } from '@/lib/target-state'
 import { useTargetAxis } from '@/lib/target-axis'
 import ScreenLink from '@/components/ScreenLink'

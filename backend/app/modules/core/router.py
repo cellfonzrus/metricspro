@@ -5091,7 +5091,7 @@ def purge_employee(body: PurgeEmployeeIn, org_id: str = ORG_ID, authorization: s
 # `GET /commcalc/device-history`, a route `core/rep_surface` does not grant a confined employee, so on
 # the kiosk it was a search box that answers 403. A toggle for a widget that no longer renders would
 # be worse than no toggle, so the key goes with it; the screen keeps its one home at
-# `/commcalc/device-history` for the roles whose nav allows it. Index §CORE-33.3.
+# `/commcalc/device-history` for the roles whose nav allows it. Index §CORE-33.4.
 EMP_WIDGETS = ["schedule", "timeoff", "hours", "commission", "targets",
                "report_card", "commission_tracking", "flags", "chargebacks", "phone_priority"]
 

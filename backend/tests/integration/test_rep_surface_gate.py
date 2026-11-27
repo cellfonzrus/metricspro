@@ -297,7 +297,7 @@ def test_the_two_reported_tiles_land_where_the_owner_expects(api_client, gate, w
     assert by_key.get("commissions") == "/employee"
     assert by_key.get("clock") == "/portal"
     # OWNER 2026-11-27: *"daily closing tile is missing from their landing page but on teh portal is
-    # seen"* — the form existed only as a panel inside the kiosk (§CORE-33.3).
+    # seen"* — the form existed only as a panel inside the kiosk (§CORE-33.4).
     assert by_key.get("closing") == "/closing/submit"
     # OWNER 2026-11-27: *"my targets are shown on the portal and not on the employee dashboad, a tile
     # for that shoudl be there too"* — target-vs-achieved lived only in the kiosk's dashboard tab.
