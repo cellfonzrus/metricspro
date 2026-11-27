@@ -1125,6 +1125,12 @@ on:
       # skips silently.
       - "backend/harness_daily_incentive.py"
       - "backend/harness_metric_catalog_lock.py"
+      # owner 2026-11-27 — a rule may be paid on an ITEM the tenant uploaded, not only on a
+      # hand-typed category. Names itself for the reason above, and names the feed modules it
+      # locks the wiring of.
+      - "backend/harness_payable_attributes.py"
+      - "backend/app/modules/commcalc/pos_report_feed.py"
+      - "backend/app/modules/commcalc/metric_authority.py"
       - "backend/app/modules/closing/metric_catalog.py"
       - "backend/app/modules/closing/count_config.py"
       - "backend/app/modules/commcalc/daily_incentive.py"
@@ -2232,6 +2238,9 @@ jobs:
       - name: Run the declared-metric catalog lock (ONE home for what a business declares daily; no second copy of the vocabulary, no caller reaching past it - index 72)
         working-directory: backend
         run: python3 harness_metric_catalog_lock.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the payable-attribute proof + lock (a rule may be paid on an ITEM the tenant uploaded; an item is never revenue; the picker, the save guard and both paying reads stay wired - index 76.5)
+        working-directory: backend
+        run: python3 harness_payable_attributes.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the annual-goal proof (an empty measure is UNMEASURED not zero, an absence is never a verdict, the horizon places on a leap day, and the per-month rate IS the per-day home with a different unit - index COMMCALC-79)
         working-directory: backend
         run: python3 harness_annual_goal.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

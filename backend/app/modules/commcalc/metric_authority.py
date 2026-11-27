@@ -33,6 +33,10 @@ rules on it) is evidence here. A `label_part` containment match is a text coinci
 by the feed and it does not pay. This is §66's rule in the place it decides money.
 """
 from app.modules.commcalc import pos_report_feed as _feed
+# The item-key folding is the catalog's own (`metric_catalog.item_key`), dereferenced rather than
+# re-spelled here — a second folding would let the picker and the paid line disagree about which
+# spellings are one item.
+from app.modules.closing import metric_catalog as _mc
 
 # ── Vocabulary. These constants ARE the vocabulary; nothing else may spell them. ─────────────────
 SOURCE_DECLARATION = "declaration"   # what the reps typed at closing
@@ -59,16 +63,31 @@ def is_feed(raw) -> bool:
     return resolve(raw) == SOURCE_FEED
 
 
-def lines_from_feed(portal_rows, *, business_date=None):
+def lines_from_feed(portal_rows, *, business_date=None, item_keys=None):
     """`portal_metric_day` rows → the `closing_metric_line` shape `metric_catalog` already reads.
 
     Only rows whose `metric_basis` the tenant DECLARED are carried: a containment match is a
     coincidence and a coincidence may not pay. A row with no metric key is not a line.
 
     `business_date` narrows to one day when the caller passed a wider window; omitted, every row
-    given is used (the caller has already scoped the read). PURE.
+    given is used (the caller has already scoped the read).
+
+    `item_keys` are the ITEM-level attribute keys this org's catalog carries
+    (`metric_catalog.item_keys`, owner 2026-11-27). A feed row already names the item it came from in
+    `line_label`, so when the tenant has declared that item each row yields a SECOND line keyed by
+    the item — which is what lets a rule pay "$2 for every NDA Early AM" with no change to the
+    payout engine, which measures whatever lines exist for keys on the catalog.
+
+    An item line is a second VIEW of the same row, never a second count: its units and amount are
+    that row's own, the item key is not in `revenue_keys` (so no money is counted twice), and nothing
+    is emitted for an item the tenant has not declared — a coincidence may not pay.
+
+    The argument is REQUIRED to get items: omit it and nothing is identified, because an item
+    vocabulary is a tenant's own words and a house list behind it would be the per-tenant default the
+    2026-10-30 directive bans. Every existing caller is therefore unmoved. PURE.
     """
     want = str(business_date) if business_date else None
+    known_items = {str(k).strip() for k in (item_keys or ()) if str(k or "").strip()}
     out = []
     for r in (portal_rows or []):
         key = str((r or {}).get("metric_key") or "").strip()
@@ -78,7 +97,7 @@ def lines_from_feed(portal_rows, *, business_date=None):
             continue
         if want and str(r.get("business_date") or "")[:10] != want[:10]:
             continue
-        out.append({
+        line = {
             "metric_key": key,
             "units": r.get("units") or 0,
             "amount": r.get("amount") or 0.0,
@@ -86,7 +105,12 @@ def lines_from_feed(portal_rows, *, business_date=None):
             "store_code": r.get("store_code"),
             "close_date": str(r.get("business_date") or "")[:10] or None,
             "metric_basis": r.get("metric_basis"),
-        })
+        }
+        out.append(line)
+        if known_items:
+            ik = _mc.item_key(r.get("line_label"))
+            if ik != _mc.ITEM_PREFIX and ik in known_items:
+                out.append(dict(line, metric_key=ik))
     return out
 
 
