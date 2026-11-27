@@ -13,7 +13,11 @@ TWO TENANTS throughout, each with its own roles rows, because the owner's rule i
 works for every tenant and never leaks between them (CLAUDE.md, 2026-10-30). Tenant B is deliberately
 the SAME role NAMES with DIFFERENT configuration, which is how a one-tenant answer would show.
 """
+import re
+
 import pytest
+
+from app.core import rep_surface
 
 ORG_A = "11111111-1111-1111-1111-111111111111"
 ORG_B = "22222222-2222-2222-2222-222222222222"
@@ -226,6 +230,9 @@ def gate(monkeypatch, wired):
     monkeypatch.delenv("MULTI_TENANT_ENFORCE", raising=False)   # the tenant middleware stays OFF
     monkeypatch.setattr("app.core.tenant_middleware._resolve_identity",
                         lambda tok: _IDENT.get(tok, (False, False, (), None, {}, None)))
+    # `/me` is part of this gate's surface — it is the payload the landing turns into links — so the
+    # core router reads the double here rather than a live client.
+    monkeypatch.setattr("app.modules.core.router.sb", lambda: wired, raising=False)
     monkeypatch.setattr("app.core.tenant_middleware._rep_cache",
                         type(__import__("app.core.tenant_middleware", fromlist=["x"])._rep_cache)(
                             ttl=0.001, cap=16))
@@ -249,6 +256,56 @@ def test_the_api_itself_refuses_a_rep_a_manager_path(api_client, gate, who, api)
                                  "/api/v1/commcalc/nav-config"])
 def test_a_declared_path_is_never_refused(api_client, gate, api):
     assert api_client.get(api, headers={"Authorization": HDR["repA"]}).status_code != 403
+
+
+# ── THE TILE A CONFINED EMPLOYEE TAPS MUST BE AN ADDRESS ─────────────────────────────────────────
+# OWNER, 2026-11-27: *"when the employee clicks on my commisison in Ny logistics it leads to this
+# 404"*, then *"when you clock on clock in clock out from the app.metricspro.tech it shows the same
+# 404 … if it broken platform wide fix that aswell"*.
+#
+# A confined employee has NO MENU: the landing's tiles are the only way they reach anything. The
+# tiles were built from the surface's permission PATTERN (`"/employee/**"`), which is not an address,
+# so the browser navigated to the literal `/employee/**` and the app answered 404 — for every
+# tenant. Proved here through the REAL `/me`, for BOTH tenants, because the payload is what the
+# browser turns into a link.
+_PATTERN = re.compile(r"[*?]")
+
+
+@pytest.mark.parametrize("who,org", [("repA", ORG_A), ("repB", ORG_B)])
+def test_every_tile_the_landing_is_given_is_a_navigable_address(api_client, gate, who, org):
+    r = api_client.get(f"/api/v1/core/me?org_id={org}", headers={"Authorization": HDR[who]})
+    assert r.status_code == 200, r.text
+    surface = (r.json().get("permissions") or {}).get("rep_surface") or {}
+    tiles = surface.get("tiles") or []
+    assert tiles, "a confined employee with no tiles has no way to reach anything"
+    for t in tiles:
+        page = t.get("page") or ""
+        assert page.startswith("/"), f"{t.get('key')} published no address: {page!r}"
+        # THE DEFECT: a permission pattern handed to the browser as a link.
+        assert not _PATTERN.search(page), f"{t.get('key')} published a pattern as its link: {page!r}"
+        # …and the address is one the same declaration admits, so the tile cannot be a dead end.
+        assert rep_surface.page_allowed(page), f"{t.get('key')} links somewhere it may not open"
+
+
+@pytest.mark.parametrize("who,org", [("repA", ORG_A), ("repB", ORG_B)])
+def test_the_two_reported_tiles_land_where_the_owner_expects(api_client, gate, who, org):
+    """My commissions opens the employee portal; Clock in / out opens the punch kiosk — not the
+    landing the tile sits on, which is what guessing the surface's FIRST grant produced."""
+    r = api_client.get(f"/api/v1/core/me?org_id={org}", headers={"Authorization": HDR[who]})
+    by_key = {t["key"]: t.get("page") for t in
+              ((r.json().get("permissions") or {}).get("rep_surface") or {}).get("tiles") or []}
+    assert by_key.get("commissions") == "/employee"
+    assert by_key.get("clock") == "/portal"
+
+
+def test_both_tenants_are_given_the_same_tiles(api_client, gate):
+    """House policy, not a tenant's vocabulary: the tiles are a declaration with no org in it, so
+    one tenant's landing can never differ from another's (CLAUDE.md, 2026-10-30)."""
+    def tiles(who, org):
+        r = api_client.get(f"/api/v1/core/me?org_id={org}", headers={"Authorization": HDR[who]})
+        return [(t["key"], t.get("page")) for t in
+                ((r.json().get("permissions") or {}).get("rep_surface") or {}).get("tiles") or []]
+    assert tiles("repA", ORG_A) == tiles("repB", ORG_B)
 
 
 def test_a_store_manager_is_not_confined_by_the_api_gate(api_client, gate):

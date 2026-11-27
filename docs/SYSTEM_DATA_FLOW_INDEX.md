@@ -47295,20 +47295,65 @@ never silently dropped from the sheet. `/api/v1/core/export-event` is granted to
 rep's save is audited like anyone else's — `governExport` fails open, so without the grant the PDF
 would still save and simply go unlogged, which is the worst of both.
 
+### CORE-33.2 A tile's link is an ADDRESS, not a permission pattern (owner 2026-11-27)
+
+Owner, on NY Logistics: *"when the employee clicks on my commisison in Ny logistics it leads to this
+404"*, and minutes later: *"when you clock on clock in clock out from the app.metricspro.tech it shows
+the same 404 … if it broken platform wide fix that aswell"*.
+
+**It was broken platform wide, and for every tenant.** A confined employee has no menu — the landing's
+tiles are their only way to reach anything (§CORE-33.1). `tiles()` published `SURFACES[…]["pages"][0]`
+verbatim as the tile's link, and a `pages` entry is written in the **page grammar**, not as an address:
+`"/employee/**"` means *that page and everything below it*. So "My commissions" linked to the literal
+`/employee/**` and "Clock in / out" to `/my/**` — three of the six tiles (clock, commissions, helpdesk)
+pointed at an address that cannot exist. Nothing tenant-specific was involved; NY Logistics is simply
+where an employee tapped it.
+
+**Why every gate said yes.** `page_allowed("/employee/**")` is **True** — the literal `/**` reads as a
+*child* of `/employee`, and a subtree grant admits its children. `harness_rep_surface.py` A14 asked
+exactly that question and passed. A default-deny declaration answers a wrong-**shaped** question with
+the same confident yes it uses for a real one, which is the sibling of the §CORE-52 trap (a wrongly
+shaped path answered with the same `False` default-deny uses for "no"). **The permission and the SHAPE
+are two questions, and only one of them was being asked.**
+
+**Two facts were being guessed from one, and both are now declared.**
+
+1. **The address of a pattern has one home.** `rep_surface.tile_page()` is the only conversion from a
+   grammar entry to a navigable address, dereferenced by `tiles()` **and by the lock**. The lock
+   already knew a pattern is not an address — it carried its own slice to check each declared page
+   exists on disk — and `tiles()` did not. That is why the 404 shipped green: every page existed, and
+   the tiles linked to patterns of them. One fact, one home, dereferenced — never copied.
+2. **Where a tile goes is declared, never guessed from the first grant.** Every tiled surface states
+   its own `tile_page`, and there is **no fallback to `pages[0]`**: a tile that has not said where it
+   goes publishes nothing rather than guessing. This is the half that fixes the clock, whose first
+   grant is `/my` — the landing the tile sits **on** — while the punch is at `/portal` (§14z). The
+   owner's second report was that same guess, one surface over.
+
+**The addresses the landing is now given**: clock → `/portal`, commissions → `/employee`, schedule →
+`/storeops/timeoff`, action plan → `/commcalc/targets/action-plan`, helpdesk → `/helpdesk`, dropoff →
+`/storeops/dropoff-barcode`. The browser is unchanged and still decides nothing: `(platform)/my/page.tsx`
+renders the server's list in the server's order.
+
+**Swept, not assumed.** `tiles()` is the only producer in the platform that turned a permission pattern
+into a link — no other backend declaration publishes a `page` containing `**`, and `(platform)/my/page.tsx`
+and `lib/fix-it.tsx` are the only two surfaces that build an href from server-declared page data.
+
 ### Proofs and the lock
 
-- `backend/harness_rep_surface.py` (92) — the grammar, default-deny on the API, the REAL middleware
+- `backend/harness_rep_surface.py` (125) — the grammar, default-deny on the API, the REAL middleware
   verdict over each role shape, the REAL four handlers over the in-memory double, two tenants, and
   ★ NO LOCKOUT ★.
 - `frontend/tools/rep-surface-nav-proof.mjs` (48) — the compiled `rbac.ts`; §A **reproduces the prefix
   hole for real** on the legacy path before §B shows it closed. Reads the declared pages out of the
   backend source, so it cannot pass against a list it made up.
-- `backend/tests/integration/test_rep_surface_gate.py` (40) — the real FastAPI app, the real scope code
+- `backend/tests/integration/test_rep_surface_gate.py` (73) — the real FastAPI app, the real scope code
   deciding whose people are whose, two tenants with the same role NAMES and different configuration.
-- `backend/harness_rep_surface_lock.py` (66, stdlib, CI job **The employee's reach**) — fails the build
+- `backend/harness_rep_surface_lock.py` (99, CI job **The employee's reach**) — fails the build
   if a second page list appears, if the prefix widening escapes the legacy branch, if the API gate is
-  un-installed or becomes conditional, if any of the four writes stops dereferencing the gate, or if the
-  landing route drifts between the two sides. Verified it goes red by un-wiring `create_time_off`.
+  un-installed or becomes conditional, if any of the four writes stops dereferencing the gate, if the
+  landing route drifts between the two sides, or (§6c, 2026-11-27) if a tile publishes a pattern as its
+  link, stops declaring its own destination, links to a page with no `page.tsx` on disk, or if the
+  pattern → address conversion gains a second copy — in the declaration or in the lock itself. Verified it goes red by un-wiring `create_time_off`.
 
 ### Reported, not fixed
 

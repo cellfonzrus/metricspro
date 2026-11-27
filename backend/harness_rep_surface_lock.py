@@ -21,6 +21,11 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+# This lock reads source TEXT for most of its checks. It also IMPORTS the declaration, for the one
+# fact a text search must never re-derive: the address of a page-grammar pattern (`tile_page`). A
+# private copy of that conversion in this very file is why the 2026-11-27 tile 404 shipped green.
+from app.core import rep_surface as _rs                     # noqa: E402
 P = F = 0
 
 
@@ -294,12 +299,53 @@ check("6a the declared pages are exactly the declared set",
       "only in the code: %s / only in this lock: %s"
       % (sorted(set(entries) - DECLARED_PAGES), sorted(DECLARED_PAGES - set(entries))))
 APP = os.path.join(ROOT, "frontend", "src", "app")
+
+
+def _on_disk(route):
+    rel = str(route or "").strip("/")
+    return any(os.path.isfile(os.path.join(APP, pre, rel, "page.tsx"))
+               for pre in ("(platform)", "", "(auth)"))
+
+
 for e in sorted(set(entries)):
-    route = e[:-3] if e.endswith("/**") else e
-    rel = route.strip("/")
-    found = any(os.path.isfile(os.path.join(APP, pre, rel, "page.tsx"))
-                for pre in ("(platform)", "", "(auth)"))
-    check(f"6- {e} has a page on disk", found, f"no page.tsx for {route}")
+    # THE ADDRESS OF A PATTERN HAS ONE HOME, and this lock dereferences it rather than carrying its
+    # own slice of the pattern. That private copy is why the 404 of 2026-11-27 shipped green:
+    # this lock knew a
+    # pattern is not an address and `tiles()` did not, so the pages all existed on disk while the
+    # tiles linked to patterns of them.
+    route = _rs.tile_page(e)
+    check(f"6- {e} has a page on disk", _on_disk(route), f"no page.tsx for {route}")
+
+# ── 6c. A TILE'S LINK IS AN ADDRESS, NOT A PATTERN ───────────────────────────────────────────────
+# The owner's report, 2026-11-27: a confined employee tapped "My commissions" and then "Clock in /
+# out" on the landing and got the app's 404 — on NY Logistics, and on every tenant, because the tile
+# published the permission pattern (`/employee/**`, `/my/**`) as its href. Three facts are pinned so
+# it cannot return: every tiled surface DECLARES where it goes, that destination is navigable, and
+# the browser is handed nothing it cannot open.
+print("\n6c a tile's link is an address")
+TILES = _rs.tiles()
+check("6c1 every tiled surface declares its own destination",
+      all(s.get("tile_page") for s in _rs.SURFACES if s.get("tile")),
+      [s["key"] for s in _rs.SURFACES if s.get("tile") and not s.get("tile_page")])
+check("6c2 THE 404: no tile publishes a pattern as its link",
+      all(t["page"] and "*" not in t["page"] for t in TILES), [t["page"] for t in TILES])
+for t in TILES:
+    check(f"6c- the {t['key']} tile opens a real page", _on_disk(t["page"]),
+          f"no page.tsx for {t['page']}")
+check("6c3 …and every destination is one the gate admits",
+      all(_rs.page_allowed(t["page"]) for t in TILES))
+check("6c4 the destination is DECLARED, never guessed from the first grant — no pages[0] fallback "
+      "survives in the tile builder",
+      'pages"][0]' not in RS.split("def tiles(")[1].split("\ndef ")[0])
+check("6c5 the pattern → address conversion is ONE function the builder dereferences",
+      RS.count("def tile_page(") == 1 and "tile_page(s[\"tile_page\"])" in RS)
+ctl("6c5 can go red", "def tiles(" in RS)
+MINE = open(os.path.abspath(__file__), encoding="utf-8").read()
+# The forbidden spelling is assembled, never written, so this check cannot trip on itself.
+_SLICE_COPY = "[" + ":-3" + "]"
+check("6c6 and this lock keeps no second copy of it",
+      MINE.count("_rs.tile_page(") >= 1 and _SLICE_COPY not in MINE)
+ctl("6c6 can go red", _SLICE_COPY in "route = e" + _SLICE_COPY)
 nav_hrefs = set(re.findall(r"href: '([^']+)'", RBAC))
 check("6b the landing is registered in NAV, so it carries a page title like every other page",
       LANDING in nav_hrefs)

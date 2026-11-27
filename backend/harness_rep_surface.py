@@ -87,6 +87,36 @@ check("A13 every one of the owner's five has a tile, in his order — and nothin
       [t["key"] for t in RS.tiles()])
 check("A14 every tile's page is a page the gate admits",
       all(RS.page_allowed(t["page"]) for t in RS.tiles()), [t["page"] for t in RS.tiles()])
+# ── A15–A18 THE TILE'S PAGE IS AN ADDRESS, NOT A PATTERN ─────────────────────────────────────────
+# THE DEFECT (reported 2026-11-27): a confined employee tapped "My commissions" on the landing and
+# got the app's 404. The tile carried `pages[0]` VERBATIM, and `pages[0]` is written in the page
+# GRAMMAR — `"/employee/**"` means "that page and everything below it". A browser cannot navigate to
+# a pattern, so three of the six tiles (clock, commissions, helpdesk) linked to an address that
+# cannot exist, for EVERY tenant.
+#
+# A14 above could not see it, and that is the lesson: `page_allowed("/employee/**")` is True, because
+# the literal `/**` reads as a child of `/employee` and the subtree grant admits its children. A
+# default-deny gate answers a wrong-SHAPED question with a confident yes. So the shape is pinned
+# here, separately from the permission.
+check("A15 THE 404: no tile publishes a grammar pattern as its link",
+      not any("*" in str(t["page"] or "") for t in RS.tiles()),
+      [t["page"] for t in RS.tiles()])
+check("A16 the pattern → address conversion has ONE home that every tile dereferences",
+      hasattr(RS, "tile_page") and RS.tile_page("/employee" + RS.SUBTREE) == "/employee"
+      and RS.tile_page("/storeops/timeoff") == "/storeops/timeoff")
+check("A17 …and the addresses it publishes are the real ones",
+      [t["page"] for t in RS.tiles()] == ["/portal", "/employee", "/storeops/timeoff",
+                                          "/commcalc/targets/action-plan", "/helpdesk",
+                                          "/storeops/dropoff-barcode"],
+      [t["page"] for t in RS.tiles()])
+check("A18 …and each one is still a page the gate admits, asked of the ADDRESS",
+      all(RS.page_allowed(t["page"]) and "*" not in t["page"] for t in RS.tiles()))
+# The clock's destination is the SECOND grant, and that is the second half of the defect: the tile's
+# page was being guessed from the first grant, which for the clock is the landing the tile sits on.
+check("A19 THE OWNER'S SECOND REPORT: Clock in / out opens the punch kiosk, not the landing",
+      next(t["page"] for t in RS.tiles() if t["key"] == "clock") == "/portal")
+check("A20 a tile that declares no destination publishes none — there is no fallback to pages[0]",
+      "pages\"][0]" not in open(RS.__file__).read().split("def tiles(")[1])
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 print("\nB. THE API — default deny")

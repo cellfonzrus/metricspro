@@ -72,6 +72,9 @@ construction, because no org_id reaches this module at all.
 SURFACES = (
     {
         "key": "clock", "tile": True, "label": "Clock in / out", "icon": "⏱",
+        # THE TILE'S DESTINATION, declared (see TILE DESTINATIONS below). The punch lives at the
+        # kiosk, NOT at this surface's first grant — `/my` is the landing the tile sits ON.
+        "tile_page": "/portal",
         "pages": ("/my/**", "/portal/**"),
         "api": ("/api/v1/storeops/timeclock",),
         "api_read": (),
@@ -90,6 +93,7 @@ SURFACES = (
     },
     {
         "key": "commissions", "tile": True, "label": "My commissions", "icon": "💵",
+        "tile_page": "/employee",
         "pages": ("/employee/**",),
         "api": (),
         "api_read": ("/api/v1/core/employee-dashboard", "/api/v1/core/portal-reports",
@@ -99,6 +103,7 @@ SURFACES = (
     },
     {
         "key": "schedule", "tile": True, "label": "My schedule", "icon": "📅",
+        "tile_page": "/storeops/timeoff",
         "pages": ("/storeops/timeoff", "/storeops/swaps"),
         # The shift WRITES are a manager surface and are not here; `/storeops/shifts` is read-only to
         # an individual contributor, and the rows it returns are already narrowed to the people they
@@ -117,6 +122,7 @@ SURFACES = (
     },
     {
         "key": "action_plan", "tile": True, "label": "My action plan", "icon": "🎯",
+        "tile_page": "/commcalc/targets/action-plan",
         "pages": ("/commcalc/targets/action-plan",),
         "api": (),
         "api_read": ("/api/v1/commcalc/targets",),
@@ -125,6 +131,7 @@ SURFACES = (
     },
     {
         "key": "helpdesk", "tile": True, "label": "Help desk", "icon": "🎫",
+        "tile_page": "/helpdesk",
         "pages": ("/helpdesk/**",),
         # The ticket list, a ticket and raising one are an employee's; the two manager screens
         # inside the same subtree are NOT, and the carve-out is stated where the grant is made.
@@ -140,6 +147,7 @@ SURFACES = (
     },
     {
         "key": "dropoff", "tile": True, "label": "Barcode rescue", "icon": "🏷",
+        "tile_page": "/storeops/dropoff-barcode",
         # OWNER 2026-11-20: *"Grant the sales rep this and also give step by step instructions on
         # the page when the sales rep is ready to take a picture of the items."* The person who
         # takes a return over the counter and finds the carrier barcode unscannable IS the rep; a
@@ -288,10 +296,37 @@ def _matches(path, prefixes):
     return False
 
 
+# ── TILE DESTINATIONS ─────────────────────────────────────────────────────────────────────────────
+# A `pages` entry is a PERMISSION PATTERN, not an address: `"/employee/**"` says "that page and
+# everything below it". A browser cannot navigate to a pattern.
+#
+# THE DEFECT THIS EXISTS TO KILL (reported 2026-11-27 by the owner, on NY Logistics and then on every
+# tenant): `tiles()` published `pages[0]` verbatim as the tile's link, so "My commissions" linked to
+# the literal `/employee/**` and "Clock in / out" to `/my/**`. Both are the app's 404. The gate could
+# not catch it — `page_allowed("/employee/**")` is TRUE, because the literal `/**` reads as a child
+# of `/employee` and the subtree grant admits its children. A default-deny gate answers a
+# wrong-SHAPED question with a confident yes.
+#
+# TWO facts were being guessed from one, and both are now declared:
+#   1. the ADDRESS of a pattern — `tile_page()` below is its one home, dereferenced by `tiles()` AND
+#      by the locks, so no caller carries its own `[:-3]`;
+#   2. WHICH page a tile opens — never "the first grant". The clock's first grant is `/my`, the
+#      landing the tile sits on; the punch is at `/portal`. Every tiled surface states its own
+#      `tile_page`, and there is NO fallback to `pages[0]`: a tile that has not said where it goes
+#      must not be able to answer.
+def tile_page(entry):
+    """The navigable address of a page-grammar entry. `"/helpdesk/**"` → `"/helpdesk"` (a page
+    subtree includes its base, see `page_allowed`), an exact entry is already its own address."""
+    e = str(entry or "")
+    return _norm(e[: -len(SUBTREE)]) if e.endswith(SUBTREE) else _norm(e)
+
+
 def tiles():
-    """The landing page's tiles, in declaration order. Label, icon, page and plain-words `what`."""
+    """The landing page's tiles, in declaration order. Label, icon, page and plain-words `what`.
+    `page` is an ADDRESS a browser can open, never a permission pattern."""
     return tuple({"key": s["key"], "label": s["label"], "icon": s["icon"],
-                  "page": (s["pages"][0] if s["pages"] else None), "what": s["what"]}
+                  "page": tile_page(s["tile_page"]) if s.get("tile_page") else None,
+                  "what": s["what"]}
                  for s in SURFACES if s.get("tile"))
 
 
