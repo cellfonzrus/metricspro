@@ -256,8 +256,11 @@ check("D9 1020 applied, 1024 not: registry read, closing_hidden from the mirror"
       ready4 and next(r for r in v4 if r["key"] == UPS)["closing_hidden"] == ["acc_sale", "bill_payments", "activation_counts", "tender:acima"])
 mp = V.me_payload(c, B)
 check("D7 me_payload", mp["key"] == UPS and mp["uses_carriers"] is False and "vip" in mp["hidden_modules"] and mp["registry_ready"])
-check("D8 me_payload existing tenant hides only new modules",
-      V.me_payload(c, A)["hidden_modules"] == ["franchise_ops", "royalty"] and V.me_payload(c, A)["nav_hidden"] == [])
+# The default vertical hides the UPS-store counter job and nothing else (mig 1136) — a wireless store
+# does not take carrier drop-offs, and that one entry is the whole wireless hide-list.
+check("D8 me_payload existing tenant hides only new modules and the UPS counter job",
+      V.me_payload(c, A)["hidden_modules"] == ["franchise_ops", "royalty"]
+      and V.me_payload(c, A)["nav_hidden"] == ["/storeops/dropoff-barcode"])
 
 # ── §E wiring lock ──────────────────────────────────────────────────────────────────────────────────────
 print("§E wiring lock")

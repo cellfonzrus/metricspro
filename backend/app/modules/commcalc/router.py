@@ -35026,7 +35026,7 @@ def my_shelf(as_of: str = "", authorization: str = Header(default=""), org_id: s
     from app.modules.commcalc import inventory_stock_age as _isa
     from app.modules.payables import unsold_inventory as _unsold
     from app.modules.asset.inventory_buckets import inv_bucket
-    from app.modules.storeops.router import scope_keyset, in_keyset
+    from app.modules.storeops.router import scope_keyset, in_keyset, clocked_in_store
     require_org(org_id)
     client = sb()
     today = str(as_of or "")[:10] or _date.today().isoformat()
@@ -35090,14 +35090,40 @@ def my_shelf(as_of: str = "", authorization: str = Header(default=""), org_id: s
     # this feed's free-text `store` holds, and the resolver collapses the spellings that differ.
     ks = scope_keyset(authorization, org_id)
     resolve_code = _store_code_resolver(client, org_id)
-    mine, out_of_span = [], 0
+
+    # THE STORE THEY ARE STANDING IN (owner 2026-11-27, §CORE-33.7): *"every sales rep should be show
+    # which phones ar sititng in thier store inventory hwere they are currenly clocked in so they an
+    # address those on a top priortiy."* A rep who works three stores was being shown all three
+    # shelves at once, which is not a priority list — it is a report. So while they are ON the clock,
+    # the shelf is the ONE store of their open punch; off the clock it stays the whole span they
+    # reach, because then there is no "here" to narrow to and a blank page would be worse.
+    #
+    # Dereferenced, not re-derived: `storeops.clocked_in_store` is the same open-punch read the kiosk's
+    # own status call makes. Narrowing is applied AFTER the span, never instead of it — a punch at a
+    # store this login does not reach cannot widen what they see, so the narrowing can only subtract.
+    here = clocked_in_store(authorization, org_id)
+    here_key = str(resolve_code(here) or here or "").strip().upper() if here else ""
+
+    mine, out_of_span, elsewhere_in_span = [], 0, 0
     for r in shelf_rows:
         raw = str(r.get("store") or "").strip()
         code = str(resolve_code(raw) or "").strip()
-        if in_keyset(ks, raw, code):
-            mine.append((r, code or raw or None))
-        else:
+        if not in_keyset(ks, raw, code):
             out_of_span += 1
+            continue
+        if here_key and (code or raw).strip().upper() != here_key and raw.strip().upper() != here_key:
+            elsewhere_in_span += 1
+            continue
+        mine.append((r, code or raw or None))
+    # A punch at a store with no stock of its own must not read as "your shelf is clear": the span is
+    # still what they reach, and the card says which store it is showing and why.
+    if here_key and not mine and elsewhere_in_span:
+        mine = [(r, str(resolve_code(str(r.get("store") or "").strip()) or "").strip()
+                 or str(r.get("store") or "").strip() or None)
+                for r in shelf_rows
+                if in_keyset(ks, str(r.get("store") or "").strip(),
+                             str(resolve_code(str(r.get("store") or "").strip()) or "").strip())]
+        elsewhere_in_span, here_key = 0, ""
 
     out = []
     for r, code in mine:
@@ -35130,6 +35156,9 @@ def my_shelf(as_of: str = "", authorization: str = Header(default=""), org_id: s
     elif not out:
         hints.append("The latest inventory snapshot has devices, but none at a store this login "
                      "reaches. Visibility follows where you were scheduled or clocked in.")
+    if here_key and out:
+        hints.append(f"You are clocked in at {here or here_key}, so this is that store's shelf. "
+                     "Clock out or open it off the clock to see every store you work at.")
     if not policies:
         hints.append("No carrier selling window is declared for this organization, so no device can "
                      "show days remaining. Declare it on the payables source map.")
@@ -35144,6 +35173,12 @@ def my_shelf(as_of: str = "", authorization: str = Header(default=""), org_id: s
         "excluded_models": sorted(excluded.items(), key=lambda kv: -kv[1])[:20],
         "span_restricted": ks is not None,
         "devices_out_of_span": out_of_span,
+        # WHERE THIS SHELF IS, so the card states it rather than letting a rep assume it is all of
+        # their stores (§CORE-33.7). `clocked_in_store` is "" off the clock, and then the shelf is the
+        # whole span exactly as before.
+        "clocked_in_at": here or "",
+        "scoped_to_store": here_key or "",
+        "devices_at_other_stores_in_span": elsewhere_in_span,
         "setup_hint": hints,
         # PROVENANCE, so the card can say where the receipt date came from rather than implying a
         # vendor receipt document exists. It does not: see §COMMCALC-35.

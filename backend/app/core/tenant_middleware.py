@@ -564,6 +564,25 @@ def _role_switches(org: str, role) -> dict:
     return out
 
 
+def _tenant_nav_hidden(org: str) -> list:
+    """The pages this tenant's BUSINESS TYPE hides (`core.tenant_vertical.nav_hidden`, index §35),
+    cached beside the role's switches. A business type that hides a page does not have that screen,
+    so a confined employee's grant for it is not theirs either (§CORE-33.7). Unreadable reads as
+    "hides nothing", never as a refusal (★ NO LOCKOUT ★)."""
+    key = ("__vertical__", str(org or ""))
+    hit = _rep_perms_cache.get(key)
+    if hit is not None:
+        return hit[0]
+    try:
+        from app.core.database import get_supabase
+        from app.modules.core import verticals as _vert
+        out = list(_vert.vertical_context(get_supabase(), org)["vertical"].get("nav_hidden") or [])
+    except Exception:
+        out = []
+    _rep_perms_cache.put(key, (out,))
+    return out
+
+
 def _rep_surface_refusal(org: str, role, path: str, method: str):
     """The refusal sentence for a confined caller reaching a path their surface does not carry, else
     None. TWO ways it can be refused, and the second one is the admin's:
@@ -579,9 +598,10 @@ def _rep_surface_refusal(org: str, role, path: str, method: str):
     if not _is_individual_contributor(org, role):
         return None
     switches = _role_switches(org, role)
-    if _rs.api_allowed(path, method, role_perms=switches):
+    hidden = _tenant_nav_hidden(org)
+    if _rs.api_allowed(path, method, role_perms=switches, nav_hidden=hidden):
         return None
-    return _rs.refusal(path, method, role_perms=switches)
+    return _rs.refusal(path, method, role_perms=switches, nav_hidden=hidden)
 
 
 def _tenant_needs_2fa(org: str, role, twofa_enabled) -> bool:

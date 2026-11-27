@@ -5516,6 +5516,36 @@ def _resolve_pending_clockin_approval(org_id, pending):
         pass
 
 
+# ── WHERE IS THIS PERSON RIGHT NOW — ONE HOME (owner 2026-11-27, index §CORE-33.7) ───────────────
+# *"every sales rep should be show which phones ar sititng in thier store inventory hwere they are
+# currenly clocked in"*. Two surfaces now ask it — the kiosk's own status read and the rep's phone
+# shelf — and a second copy of this query is how they would come to disagree about which store
+# someone is standing in. The query lives here; both callers dereference it.
+def open_punch(org_id, employee_id):
+    """The employee's OPEN punch (a clock_in with no clock_out), newest first, or None."""
+    rows = (sb().table("timelog").select("*").eq("org_id", org_id).eq("employee_id", employee_id)
+            .is_("clock_out", "null").order("clock_in", desc=True).limit(1).execute().data) or []
+    return rows[0] if rows else None
+
+
+def clocked_in_store(authorization, org_id=None):
+    """The store_code of the store the SIGNED-IN employee is clocked into right now, or "" when they
+    are not on the clock (and when there is no identity on the request at all, which is a sweep or an
+    in-process caller — never an error here, because the caller's job is to fall back to the span).
+    The token's own tenant decides; an org_id that disagrees with it is ignored rather than trusted."""
+    try:
+        oid, employee_id = _caller_identity(authorization)
+    except Exception:
+        return ""
+    if org_id and str(org_id).strip() and str(org_id) != str(oid):
+        return ""
+    try:
+        row = open_punch(oid, employee_id) or {}
+    except Exception:
+        return ""
+    return str(row.get("store_code") or "").strip()
+
+
 @router.get("/timeclock/status")
 def timeclock_status(authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Is the SIGNED-IN employee currently clocked in? Identity AND tenant come from the auth token.
@@ -5524,8 +5554,7 @@ def timeclock_status(authorization: str = Header(default=""), org_id: str = ORG_
     org_id, employee_id = _caller_identity(authorization)
     pending = _pending_permissions_for(org_id, employee_id)
     pending_schedule = _pending_schedule_requests_for(org_id, employee_id)
-    rows = (sb().table("timelog").select("*").eq("org_id", org_id).eq("employee_id", employee_id)
-            .is_("clock_out", "null").order("clock_in", desc=True).limit(1).execute().data) or []
+    rows = [r for r in [open_punch(org_id, employee_id)] if r]
     if rows:
         e = rows[0]; e["selfie_url"] = _signed_selfie(e.get("selfie_path"))
         return {"clockedIn": True, "entry": e, "pending_permissions": pending,

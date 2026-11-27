@@ -83,8 +83,8 @@ check("A12 a trailing slash never changes the answer",
 check("A13 every one of the owner's five has a tile, in his order — and nothing else has one "
       "without saying so here",
       [t["key"] for t in RS.tiles()] == ["clock", "commissions", "schedule", "action_plan",
-                                         "targets", "helpdesk", "dropoff", "closing",
-                                         "chat", "training", "password"],
+                                         "targets", "shelf", "device_history", "helpdesk",
+                                         "dropoff", "closing", "chat", "training", "password"],
       [t["key"] for t in RS.tiles()])
 check("A14 every tile's page is a page the gate admits",
       all(RS.page_allowed(t["page"]) for t in RS.tiles()), [t["page"] for t in RS.tiles()])
@@ -108,6 +108,7 @@ check("A16 the pattern → address conversion has ONE home that every tile deref
 check("A17 …and the addresses it publishes are the real ones",
       [t["page"] for t in RS.tiles()] == ["/portal", "/employee", "/my/schedule",
                                           "/commcalc/targets/action-plan", "/commcalc/targets/my",
+                                          "/commcalc/asset/my-shelf", "/commcalc/device-history",
                                           "/helpdesk", "/storeops/dropoff-barcode",
                                           "/closing/submit", "/chat", "/training",
                                           "/account/password"],
@@ -170,12 +171,28 @@ _CR = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
 _WIDGETS = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "../frontend/src/components/EmployeeWidgets.impl.tsx"),
                 encoding="utf-8").read()
-check("A21 the device-history lookup is not granted to a confined employee",
-      not RS.api_allowed("/api/v1/commcalc/device-history", "GET"))
-check("A21b …so the employee dashboard does not render it",
-      "DeviceHistoryLookup" not in _WIDGETS and "device_history" not in _WIDGETS)
-check("A21c …and the widget list no longer offers a toggle for a widget that cannot render",
-      '"device_history"' not in _CR.split("EMP_WIDGETS = [")[1].split("]")[0])
+check("A21 the device lookup IS a confined employee's surface now, with its own tile",
+      RS.api_allowed("/api/v1/commcalc/device-history", "GET")
+      and RS.page_allowed("/commcalc/device-history")
+      and any(t["key"] == "device_history" for t in RS.tiles()))
+check("A21b …read only: nothing about a device history is an employee's to write",
+      not RS.api_allowed("/api/v1/commcalc/device-history", "POST"))
+# THE PAIR OF REPORTS, ten minutes apart and both right, because they are about DIFFERENT KINDS OF
+# TENANT: *"device history look up is not rwequired ont eh portal"* (a UPS store) and *"the device
+# history is also missing from alis dashbpard"*. The subtraction is the tenant's own declared row,
+# never a vertical key here — asked with the UPS list the migration seeds.
+_UPS_HIDES = ["/commcalc/device-history", "/commcalc/asset/my-shelf"]
+check("A21c …and a business type that declares it hidden has neither the tile nor the read",
+      not any(t["key"] in ("device_history", "shelf") for t in RS.tiles(None, _UPS_HIDES))
+      and not RS.api_allowed("/api/v1/commcalc/device-history", "GET", nav_hidden=_UPS_HIDES)
+      and not RS.page_allowed("/commcalc/device-history", nav_hidden=_UPS_HIDES))
+check("A21e THE MIRROR IMAGE: the barcode rescue is the UPS store's counter job, so the wireless "
+      "business type hides it and the UPS one keeps it",
+      RS.page_allowed("/storeops/dropoff-barcode")
+      and any(t["key"] == "dropoff" for t in RS.tiles())
+      and not any(t["key"] == "dropoff" for t in RS.tiles(None, ["/storeops/dropoff-barcode"]))
+      and not RS.api_allowed("/api/v1/storeops/dropoff-label/read", "POST",
+                             nav_hidden=["/storeops/dropoff-barcode"]))
 check("A21d THE CONTRAST: the barcode rescue IS granted, and tiled",
       RS.page_allowed("/storeops/dropoff-barcode")
       and any(t["key"] == "dropoff" for t in RS.tiles())
@@ -193,8 +210,8 @@ check("A22b …read only — nothing about a shelf is an employee's to write",
       and not RS.api_allowed("/api/v1/commcalc/my-shelf", "DELETE"))
 check("A22c …and it did not widen the module: the other commcalc reads stay refused",
       not any(RS.api_allowed(p, "GET") for p in (
-          "/api/v1/commcalc/inventory-aging", "/api/v1/commcalc/device-history",
-          "/api/v1/commcalc/commission-ledger")))
+          "/api/v1/commcalc/inventory-aging", "/api/v1/commcalc/commission-ledger",
+          "/api/v1/commcalc/report-cards")))
 # A grant is a PREFIX, so it would carry a member route if one were ever added below it (§4g). There
 # is none, and this fails the build if one appears without the grant being narrowed to the leaf.
 _CC = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -245,8 +262,10 @@ check("A23 THE REPORTED DEFECT: the role's switch closes the tile",
       "targets" in [t["key"] for t in RS.tiles()]
       and "targets" not in [t["key"] for t in RS.tiles(_OFF)])
 check("A23b …the page", not RS.page_allowed("/commcalc/targets/my", _OFF))
-check("A23c …and the API that page calls",
-      not RS.api_allowed("/api/v1/commcalc/my-shelf", "GET", role_perms=_OFF))
+check("A23c …and the API that page calls, once every page that calls it is closed",
+      RS.api_allowed("/api/v1/commcalc/my-shelf", "GET", role_perms=_OFF)
+      and not RS.api_allowed("/api/v1/commcalc/my-shelf", "GET", role_perms={
+          "pages": {"/commcalc/targets/my": False, "/commcalc/asset/my-shelf": False}}))
 check("A23d the refusal sentence then stops offering the screen it just closed",
       "My targets" in RS.refusal("/api/v1/commcalc/my-shelf", "GET")
       and "My targets" not in RS.refusal("/api/v1/commcalc/my-shelf", "GET", role_perms=_OFF))
@@ -406,9 +425,17 @@ check("B24 every declared API prefix resolves to a surface (its own, or the univ
           for s in RS.SURFACES for a in s["api"]),
       [(s["key"], a, RS.surface_for_api(a, "POST")) for s in RS.SURFACES for a in s["api"]
        if RS.surface_for_api(a, "POST") not in (s["key"], "universal")])
-check("B25 every declared read-only prefix resolves too",
-      all(RS.surface_for_api(a, "GET") in (s["key"], "universal")
-          for s in RS.SURFACES for a in s["api_read"]))
+# A read may be declared by TWO surfaces on purpose — the shelf card is on My targets AND on the
+# shelf's own page (§CORE-33.7) — so the answer must be A surface that declares it, not one named
+# one. What matters is that every declared read resolves to something rather than to None.
+_declarers = {}
+for _s in RS.SURFACES:
+    for _a in _s["api_read"]:
+        _declarers.setdefault(_a, set()).add(_s["key"])
+check("B25 every declared read-only prefix resolves to a surface that declares it",
+      all(RS.surface_for_api(a, "GET") in (_declarers[a] | {"universal"}) for a in _declarers),
+      [(a, RS.surface_for_api(a, "GET"), sorted(_declarers[a])) for a in _declarers
+       if RS.surface_for_api(a, "GET") not in (_declarers[a] | {"universal"})])
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 print("\nC. THE MIDDLEWARE VERDICT — the real function, over the real role shapes")

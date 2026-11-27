@@ -16,8 +16,11 @@ import re
 
 # ── MIRROR of mig 1020's seed (byte-equal; parsed back by the harness) ─────────────────────────────────
 HOUSE_VERTICALS = [
+    # The drop-off barcode rescue is a UPS-store counter job (mig 1136): a wireless store does not take
+    # carrier packages over the counter, and it reached every tenant's menu because nothing said whose
+    # it was. Config, not code — this list is DATA parsed back from the migration by the harness.
     {"key": "wireless_retail", "label": "Wireless retail", "is_default": True, "uses_carriers": True,
-     "nav_hidden": [], "sort_order": 10, "closing_hidden": []},
+     "nav_hidden": ["/storeops/dropoff-barcode"], "sort_order": 10, "closing_hidden": []},
     {"key": "ups_store", "label": "The UPS Store (franchise)", "is_default": False, "uses_carriers": False,
      "nav_hidden": [
         "/pos/activations", "/pos/activation-report", "/hub/management-overview", "/commcalc/sales-report",
@@ -48,7 +51,9 @@ HOUSE_VERTICALS = [
          "/commcalc/asset/charges", "/commcalc/asset/inventory-recon", "/commcalc/asset/hotsheet-recon",
          "/hub/distributors", "/commcalc/distributors", "/commcalc/vip", "/closing/accessory-recon",
          "/closing/billpay-pickup", "/closing/epay-recon", "/onboarding/intake",
-         "/commcalc/carrier-comm-file", "/commcalc/epay", "/commcalc/dlar", "/commcalc/gp-category-map"
+         "/commcalc/carrier-comm-file", "/commcalc/epay", "/commcalc/dlar", "/commcalc/gp-category-map",
+         # mig 1136 — a UPS store sells no handsets, so the per-rep phone-aging page is not its page.
+         "/commcalc/asset/my-shelf"
      ], "sort_order": 20,
      # mig 1024 — closing-form inputs this vertical does not use (the form's own section keys).
      "closing_hidden": ["acc_sale", "bill_payments", "activation_counts", "tender:acima"]},

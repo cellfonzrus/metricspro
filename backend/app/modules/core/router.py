@@ -503,8 +503,13 @@ def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None,
         # own per-function switches reach the payload with no second read: a tile, a page and the
         # API gate all subtract the same screens (§CORE-33.6). A grant here is a maximum — a switch
         # can only close a surface, never open one the declaration refuses.
+        # AND THE TENANT'S BUSINESS TYPE (§CORE-33.7). `tenant["vertical"]` was resolved a few lines
+        # above for the nav gate; the tiles read the SAME `nav_hidden` off it, so the landing page and
+        # the sidebar hide exactly the same pages and neither needs a second read. A tenant with no
+        # vertical payload (older row, failed read) subtracts nothing, which is today's behaviour.
+        _nav_hidden = ((tenant or {}).get("vertical") or {}).get("nav_hidden") or []
         _rsv = _rs.viewer_payload(_is_self, _rscope(org_id, (u.get("role") or "").strip()),
-                                  role_perms=perms)
+                                  role_perms=perms, nav_hidden=_nav_hidden)
         if _rsv is not None:
             perms = {**perms, "rep_surface": _rsv}
     except Exception:

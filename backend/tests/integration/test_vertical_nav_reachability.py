@@ -47,6 +47,8 @@ def _vocab_rows():
 
 UPS_KEY = next(r["key"] for r in V.HOUSE_VERTICALS if not r["is_default"])
 WL_KEY = next(r["key"] for r in V.HOUSE_VERTICALS if r["is_default"])
+#: What the DEFAULT business type declares, read from the ONE mirror rather than retyped here.
+WL_HIDDEN = tuple(next(r["nav_hidden"] for r in V.HOUSE_VERTICALS if r["is_default"]))
 
 
 @pytest.fixture
@@ -86,11 +88,19 @@ def test_the_one_page_the_hide_list_means_to_hide_is_still_hidden(wired):
 
 
 @pytest.mark.parametrize("org", [HOUSE, ORG_UNSET, ORG_JUNK])
-def test_a_tenant_that_declares_nothing_or_nonsense_hides_nothing(wired, org):
-    """The default business type hides no page — and must never inherit the franchise list."""
+def test_a_tenant_that_declares_nothing_reads_the_default_and_inherits_no_other_list(wired, org):
+    """A tenant that declares nothing, or nonsense, gets the DEFAULT type's OWN list — never the franchise's.
+
+    This assertion used to read `== []`, because the default type declared no hidden page at all. That was a
+    fact about the seed, not an invariant: from mig 1136 (§CORE-33.7) wireless retail hides the UPS counter's
+    barcode rescue, which the owner reported as "barcode resue does not belong to the wireless stors". So the
+    expectation is pinned to the one mirror (`WL_HIDDEN`) rather than retyped here, and what is really being
+    asked — that the default is read as the default and inherits nothing from another business type — is
+    asserted page by page below and in the leak test.
+    """
     out = _payload(wired, org)
     assert out["key"] == WL_KEY
-    assert out["nav_hidden"] == []
+    assert out["nav_hidden"] == list(WL_HIDDEN)
     for href in REPORTED + DASHBOARDS + (STILL_HIDDEN,) + STAYS_HIDDEN:
         assert not V.href_hidden(href, out["nav_hidden"])
 

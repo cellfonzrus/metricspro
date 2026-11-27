@@ -186,6 +186,47 @@ SURFACES = (
         "what": "their own target against what they have achieved this month, for their own store",
     },
     {
+        # OWNER 2026-11-27: *"every sales rep should be show which phones ar sititng in thier store
+        # inventory hwere they are currenly clocked in so they an address those on a top priortiy."*
+        #
+        # ITS OWN TILE, not a card on another screen. The shelf was a card on My targets — so when a
+        # tenant switched My Targets off for its reps (NY LOGISTICS did, the same afternoon), the
+        # shelf went with it. A thing the owner wants every rep to see on sign-in cannot hang off a
+        # screen an admin may close for an unrelated reason. §CORE-33.7.
+        #
+        # The read is the same ONE endpoint the card used; what changed is WHERE it looks — the store
+        # of the punch the rep is inside right now (`storeops.timeclock`), falling back to the store
+        # their login/roster says is theirs. Hidden for a business type with no phone inventory
+        # through the tenant's own `nav_hidden`, never a vertical key here.
+        "key": "shelf", "tile": True, "label": "Phones on my shelf", "icon": "📦",
+        "tile_page": "/commcalc/asset/my-shelf",
+        "pages": ("/commcalc/asset/my-shelf",),
+        "api": (),
+        "api_read": ("/api/v1/commcalc/my-shelf",),
+        "what": "the phones in the store they are clocked into, oldest first, with days left to sell",
+    },
+    {
+        # OWNER 2026-11-27: *"the device history is also missing from alis dashbpard"*, two reports
+        # after *"device history look up is not rwequired ont eh portal"* — and both are right,
+        # because they are about DIFFERENT KINDS OF TENANT. The lookup is already declared as a page
+        # the UPS-store business type hides (mig 1020) and the wireless one does not, so this grant
+        # is subtracted for one and kept for the other by the tenant's own row. It was removed from
+        # the kiosk on 2026-11-27 (§CORE-33.3) because the API refused it to an employee; the fix for
+        # "the browser must not offer what the API refuses" is to grant the surface the rep is meant
+        # to have, not to leave a wireless rep without the one lookup they use at the counter.
+        #
+        # NO MONEY. The per-period commission/rebate table in that payload is gated by the
+        # `device_commission` data grant, which no confined employee holds — so a rep gets the
+        # device, when it was sold, how long it has been active and the upgrade prompt, and the money
+        # section is simply absent. Pinned by harness_rep_surface A24.
+        "key": "device_history", "tile": True, "label": "Device lookup", "icon": "🔍",
+        "tile_page": "/commcalc/device-history",
+        "pages": ("/commcalc/device-history",),
+        "api": (),
+        "api_read": ("/api/v1/commcalc/device-history",),
+        "what": "what a phone in front of them is — sold by us or not, and when it is due an upgrade",
+    },
+    {
         "key": "helpdesk", "tile": True, "label": "Help desk", "icon": "🎫",
         "tile_page": "/helpdesk",
         "pages": ("/helpdesk/**",),
@@ -416,7 +457,7 @@ def tile_page(entry):
     return _norm(e[: -len(SUBTREE)]) if e.endswith(SUBTREE) else _norm(e)
 
 
-def tiles(role_perms=None):
+def tiles(role_perms=None, nav_hidden=None):
     """The landing page's tiles, in declaration order. Label, icon, page and plain-words `what`.
     `page` is an ADDRESS a browser can open, never a permission pattern.
 
@@ -428,7 +469,8 @@ def tiles(role_perms=None):
                   "what": s["what"]}
                  for s in SURFACES
                  if s.get("tile") and (s.get("never_off")
-                                       or not switched_off(role_perms, tile_page(s.get("tile_page") or ""))))
+                                       or not page_off(tile_page(s.get("tile_page") or ""),
+                                                       role_perms, nav_hidden)))
 
 
 # ── THE ADMIN'S OWN SWITCH — A GRANT HERE IS A MAXIMUM, NEVER A MANDATE ──────────────────────────
@@ -464,17 +506,41 @@ def switched_off(role_perms, address):
     return sw.get(_norm(address)) is False
 
 
-def surface_switched_off(surface, role_perms):
+# ── AND THE TENANT'S BUSINESS TYPE ───────────────────────────────────────────────────────────────
+# OWNER 2026-11-27: *"barcode resue does not belong to the wireless stors it is only for the ups
+# store"*, checking a rep of the NY LOGISTICS tenant — which is registered as The UPS Store.
+#
+# THE CLASS, and it is the third subtraction this file has had to learn: WHAT A TENANT IS was already
+# declared (`core.tenant_vertical.nav_hidden`, index §35) and already obeyed by the sidebar through
+# `verticals.href_hidden` — the tiles simply never asked. A business type that hides a page cannot
+# have a tile that opens it, or the one viewer with no menu is the only one still offered it.
+#
+# Dereferenced, never re-derived: `nav_hidden` reaches `/me` on the SAME tenant payload the nav gate
+# reads, and the matching rule is `verticals.href_hidden` itself — this file spells no vertical key
+# and no page of one (RULE TWO), which is why the UPS/wireless split is a config row and not code.
+def page_off(address, role_perms=None, nav_hidden=None):
+    """THE one answer to "is this page subtracted for this viewer": the ROLE's own switch, or the
+    TENANT's business type. Both can only subtract — neither can open a page the declaration
+    refuses. Nothing else may ask either question."""
+    if switched_off(role_perms, address):
+        return True
+    if nav_hidden:
+        from app.modules.core import verticals as _vert    # pure matching rule, no I/O
+        return bool(_vert.href_hidden(_norm(address), nav_hidden))
+    return False
+
+
+def surface_switched_off(surface, role_perms, nav_hidden=None):
     """Is this whole surface off for this role? Only when EVERY page it declares is switched off —
     denying the time-off REQUEST FORM must not also take away the schedule it sits beside. A
     surface marked `never_off` is never off (★ NO LOCKOUT ★: a forced password change must not be
     switchable, or the role it is switched off for cannot sign in and fix anything)."""
-    if not role_perms or surface.get("never_off"):
+    if surface.get("never_off") or (not role_perms and not nav_hidden):
         return False
     addrs = [tile_page(p) for p in (surface.get("pages") or ())]
     if not addrs:
         return False
-    return all(switched_off(role_perms, a) for a in addrs)
+    return all(page_off(a, role_perms, nav_hidden) for a in addrs)
 
 
 # ── PAGE GRAMMAR ──────────────────────────────────────────────────────────────────────────────────
@@ -487,7 +553,7 @@ def surface_switched_off(surface, role_perms):
 SUBTREE = "/**"
 
 
-def pages(role_perms=None):
+def pages(role_perms=None, nav_hidden=None):
     """Every page entry a confined employee may open, deduped, in declaration order — in the grammar
     above. This is the list `/me` hands the browser; `lib/rbac.ts` holds no copy of it.
 
@@ -496,7 +562,7 @@ def pages(role_perms=None):
     out, seen = [], set()
     for s in SURFACES:
         for p in s["pages"]:
-            if s.get("never_off") or not switched_off(role_perms, tile_page(p)):
+            if s.get("never_off") or not page_off(tile_page(p), role_perms, nav_hidden):
                 if p not in seen:
                     seen.add(p)
                     out.append(p)
@@ -519,14 +585,14 @@ def _page_entry_matches(path, entry):
     return p == _norm(e)
 
 
-def page_allowed(path, role_perms=None):
+def page_allowed(path, role_perms=None, nav_hidden=None):
     """May a confined employee open this PAGE? One of the declared entries must match in the grammar
     above, and no carve-out may. `/my/**` admits `/my/anything`; `/helpdesk/**` does NOT admit
     `/helpdesk/settings`; `/storeops/timeoff` does NOT admit `/storeops/timeclock`. With
     `role_perms`, a page that role has switched off is not among the entries."""
     if any(_page_entry_matches(path, e) for e in page_exceptions()):
         return False
-    return any(_page_entry_matches(path, e) for e in pages(role_perms))
+    return any(_page_entry_matches(path, e) for e in pages(role_perms, nav_hidden))
 
 
 def _api_except_matches(path, entry):
@@ -549,7 +615,7 @@ def api_exceptions():
     return tuple(out)
 
 
-def api_allowed(path, method="GET", role_perms=None):
+def api_allowed(path, method="GET", role_perms=None, nav_hidden=None):
     """May a confined employee's browser call this API path with this method? DEFAULT DENY.
 
     A carve-out is asked FIRST and refuses outright, exactly as `page_allowed` does — a grant made
@@ -569,7 +635,7 @@ def api_allowed(path, method="GET", role_perms=None):
     if m in _READ_METHODS and _matches(path, UNIVERSAL_API_READ):
         return True
     for s in SURFACES:
-        if surface_switched_off(s, role_perms):
+        if surface_switched_off(s, role_perms, nav_hidden):
             continue
         if _matches(path, s["api"]):
             return True
@@ -578,7 +644,7 @@ def api_allowed(path, method="GET", role_perms=None):
     return False
 
 
-def surface_for_api(path, method="GET", role_perms=None):
+def surface_for_api(path, method="GET", role_perms=None, nav_hidden=None):
     """Which declared surface admits this API path (for a trace / an explanation). None when none
     does, which is exactly when the gate refuses."""
     m = (method or "GET").upper()
@@ -587,7 +653,7 @@ def surface_for_api(path, method="GET", role_perms=None):
     if _matches(path, UNIVERSAL_API) or (m in _READ_METHODS and _matches(path, UNIVERSAL_API_READ)):
         return "universal"
     for s in SURFACES:
-        if surface_switched_off(s, role_perms):
+        if surface_switched_off(s, role_perms, nav_hidden):
             continue
         if _matches(path, s["api"]) or (m in _READ_METHODS and _matches(path, s["api_read"])):
             return s["key"]
@@ -613,26 +679,26 @@ def api_switchable(path, method="GET"):
     return False
 
 
-def refusal(path, method="GET", role_perms=None):
+def refusal(path, method="GET", role_perms=None, nav_hidden=None):
     """The sentence a refused caller is told. It names what they CAN do rather than what they cannot,
     because the person reading it is an employee who has done nothing wrong."""
-    labels = ", ".join(t["label"] for t in tiles(role_perms))
+    labels = ", ".join(t["label"] for t in tiles(role_perms, nav_hidden))
     return (f"This is not part of your access. {method} {_norm(path)} belongs to a manager screen. "
             f"What you can use: {labels}.")
 
 
-def viewer_payload(is_individual_contributor, scope=None, role_perms=None):
+def viewer_payload(is_individual_contributor, scope=None, role_perms=None, nav_hidden=None):
     """What `/me` carries, or None for a viewer neither confined nor landed — so an older browser and
     a market/company role are byte-identical to today. The browser never re-derives either fact:
     `confined` says whether its reach is this list, `landing` says where it drops them."""
     confined = bool(is_individual_contributor)
     if not landing_applies(confined, scope):
         return None
-    out = {"confined": confined, "landing": LANDING_PAGE, "tiles": [dict(t) for t in tiles(role_perms)]}
+    out = {"confined": confined, "landing": LANDING_PAGE, "tiles": [dict(t) for t in tiles(role_perms, nav_hidden)]}
     if confined:
         out["page_except"] = list(page_exceptions())
     # A store manager lands here but is NOT confined, so handing them a page allowlist would be a
     # second, wrong answer about their reach. Only a confined viewer gets one.
     if confined:
-        out["pages"] = list(pages(role_perms))
+        out["pages"] = list(pages(role_perms, nav_hidden))
     return out

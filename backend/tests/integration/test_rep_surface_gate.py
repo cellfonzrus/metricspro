@@ -564,6 +564,14 @@ def test_the_roles_screen_switch_closes_a_tile_for_that_tenant(api_client, gate,
     assert "targets" not in [t["key"] for t in after["tiles"]], after["tiles"]
     assert "/commcalc/targets/my" not in after["pages"]
     assert len(after["tiles"]) == len(before["tiles"]) - 1
+    # The shelf card's read is declared by the shelf's OWN page too (§CORE-33.7), so closing the
+    # targets page alone must NOT close it — and closing both must.
+    r = api_client.get("/api/v1/commcalc/my-shelf", headers={"Authorization": HDR[who]})
+    assert not (r.status_code == 403 and r.json().get("code") == "not_your_access"), r.text
+    _switch_off(gate, org, "sales_rep", "/commcalc/asset/my-shelf")
+    me = api_client.get("/api/v1/core/me", headers={"Authorization": HDR[who]},
+                        params={"org_id": org})
+    assert "shelf" not in [t["key"] for t in me.json()["permissions"]["rep_surface"]["tiles"]]
     r = api_client.get("/api/v1/commcalc/my-shelf", headers={"Authorization": HDR[who]})
     assert r.status_code == 403 and r.json().get("code") == "not_your_access", r.text
 
@@ -610,3 +618,57 @@ def test_the_shell_survives_every_switch(api_client, gate):
     rs = me.json()["permissions"]["rep_surface"]
     assert "/account/password/**" in rs["pages"], rs["pages"]
     assert "password" in [t["key"] for t in rs["tiles"]]
+
+
+# ── A REP'S TILES FOLLOW THE TENANT'S BUSINESS TYPE (owner 2026-11-27, §CORE-33.7) ───────────────
+# *"barcode resue does not belong to the wireless stors it is only for the ups store, also the device
+# history is also missing from alis dashbpard"*. Tenant B is given a business type that hides two
+# pages; tenant A is left on the default. Nothing in this file names a vertical the platform ships —
+# the point is that the TENANT'S OWN ROW decides, so the test declares its own.
+HIDES = ["/commcalc/asset/my-shelf", "/commcalc/device-history"]
+
+
+@pytest.fixture
+def business_types(monkeypatch, gate):
+    gate.seed("core.tenant_vertical", [
+        {"key": "sells_phones", "label": "Sells phones", "is_default": True, "uses_carriers": True,
+         "nav_hidden": [], "sort_order": 10},
+        {"key": "sells_no_phones", "label": "Sells no phones", "is_default": False,
+         "uses_carriers": False, "nav_hidden": HIDES, "sort_order": 20}])
+    gate.seed("storeops.tenants", [{"org_id": ORG_A, "name": "A", "vertical": None},
+                                   {"org_id": ORG_B, "name": "B", "vertical": "sells_no_phones"}])
+    monkeypatch.setattr("app.core.database.get_supabase", lambda: gate, raising=False)
+    monkeypatch.setattr("app.modules.core.verticals.closing_sections", lambda: [], raising=False)
+    return gate
+
+
+def _tiles(api_client, who, org):
+    me = api_client.get("/api/v1/core/me", headers={"Authorization": HDR[who]}, params={"org_id": org})
+    assert me.status_code == 200, me.text
+    return [t["key"] for t in me.json()["permissions"]["rep_surface"]["tiles"]]
+
+
+def test_a_business_type_that_hides_a_page_has_no_tile_for_it(api_client, business_types):
+    assert "shelf" in _tiles(api_client, "repA", ORG_A)
+    assert "device_history" in _tiles(api_client, "repA", ORG_A)
+    assert "shelf" not in _tiles(api_client, "repB", ORG_B)
+    assert "device_history" not in _tiles(api_client, "repB", ORG_B)
+
+
+def test_and_the_api_follows_the_tile_for_each_tenant(api_client, business_types):
+    """The half that matters: hiding the screen must also refuse its read, or the browser and the
+    server disagree again — in the direction that leaves a page nobody can see still answering."""
+    r = api_client.get("/api/v1/commcalc/device-history?q=1", headers={"Authorization": HDR["repB"]})
+    assert r.status_code == 403 and r.json().get("code") == "not_your_access", r.text
+    r = api_client.get("/api/v1/commcalc/device-history?q=1", headers={"Authorization": HDR["repA"]})
+    assert not (r.status_code == 403 and r.json().get("code") == "not_your_access"), r.text
+
+
+def test_the_business_type_never_takes_the_shell_away(api_client, business_types):
+    """★ NO LOCKOUT ★ — whatever a business type hides, a rep of that tenant still signs in."""
+    me = api_client.get("/api/v1/core/me", headers={"Authorization": HDR["repB"]},
+                        params={"org_id": ORG_B})
+    assert me.status_code == 200, me.text
+    rs = me.json()["permissions"]["rep_surface"]
+    assert "password" in [t["key"] for t in rs["tiles"]]
+    assert "clock" in [t["key"] for t in rs["tiles"]]
