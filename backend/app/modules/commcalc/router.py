@@ -17626,6 +17626,7 @@ def _caller_rep_keys(authorization: str, org_id: str):
     try:
         from app.modules.storeops.router import _rbac_enabled, role_is_self_scoped
         from app.modules.core.router import _uid_from_token
+        from app.modules.commcalc import payout_audience as _pa
     except Exception:
         return None
     try:
@@ -17662,13 +17663,20 @@ def _caller_rep_keys(authorization: str, org_id: str):
         keys = set()
         if name:
             keys.add(name.upper())
+            # …and the order-free, accent-folded form of the caller's OWN name, so the feed's
+            # spelling of them matches without an alias row (§CORE-33.5). BOTH sides of the
+            # comparison gain this key — `payout_audience.rep_row_keys` adds it for the row — and
+            # folding only one side would be worse than folding neither.
+            keys.add(_pa.name_fold(name))
             try:
                 cmap = _rep_canon_map(sb(), org_id)
                 for alias, canon in cmap.items():
                     if str(canon).strip().upper() == name.upper():
                         keys.add(str(alias).strip().upper())
+                        keys.add(_pa.name_fold(alias))
             except Exception:
                 pass
+        keys.discard("")
         return keys   # empty set = self rep with no resolvable rep → sees nothing
     except Exception:
         return None
@@ -33537,12 +33545,39 @@ def get_target_calendar(
     client = sb()
     cperiod = _period_or_400(period)
     from app.modules.storeops.router import scope_keyset, in_keyset
-    # Only a manager WITH a span (non-empty keyset) is restricted here. None = admin/unrestricted;
-    # an empty set = a self-scope rep (no managed stores) viewing their OWN store from the portal —
-    # must NOT be blocked. The store list a manager can reach is already span-scoped upstream.
+    from app.modules.commcalc import payout_audience as _pa
+    # WHICH STORE — the SAME answer `/summary` gives, dereferenced rather than re-derived.
+    #
+    # It used to read: `ks = scope_keyset(...)` then `if ks and not in_keyset(ks, store_code)`. The
+    # comment defended letting an EMPTY keyset through, so that a self-scope rep could still see
+    # their own store — but an empty set is falsy, so the guard did not run for that viewer AT ALL
+    # and any `store_code` in the tenant was readable (proved in
+    # tests/integration/test_my_targets_is_the_viewers_own.py). Meanwhile `/summary`, the OTHER
+    # endpoint on the very same page, substituted the rep's own store(s) through
+    # `_caller_self_keyset`. Two paths answering one question, and they had drifted into opposite
+    # answers. The intent of the old comment is kept exactly — a rep is not blocked from their own
+    # store — and it is now the rep's OWN store that is resolved rather than every store.
     ks = scope_keyset(authorization, org_id)
-    if ks and not in_keyset(ks, store_code):
+    is_self, self_ks = _caller_self_keyset(authorization, org_id)
+    if is_self:
+        ks = self_ks if self_ks is not None else set()
+    if ks is not None and not in_keyset(ks, store_code):
         raise HTTPException(403, "That store is outside your assigned area.")
+    # WHOSE FIGURES — the SAME two helpers the action-plan sibling already uses, not a new mechanism.
+    # `_caller_rep_keys` is the one home for "which rep rows are the caller's own" (None =
+    # unrestricted) and `payout_audience` owns every comparison against it, so the two sides of the
+    # join cannot be folded differently — which is how a name filter becomes a lockout.
+    #
+    # WHY THIS ENDPOINT REFUSES WHERE THE ACTION PLAN DROPS THE PARAMETER. The action plan answers
+    # about a whole store, so ignoring a foreign `rep=` still returns a useful, honest page. This
+    # endpoint's `scope=rep` answer IS one person; silently serving the caller's own figures under
+    # somebody else's name would be a wrong answer rather than a narrower one, and the screen would
+    # label another person's numbers with the name in the URL.
+    rep_keys = _caller_rep_keys(authorization, org_id)
+    _cmap = _rep_canon_map(client, org_id) if rep_keys is not None else None
+    _canon_fn = (lambda v: _canon(v, _cmap)) if rep_keys is not None else None
+    if scope == 'rep' and rep and not _pa.requested_rep_is_mine(rep, rep_keys, canon=_canon_fn):
+        raise HTTPException(403, "Those are not your figures to read.")
     start, end, today = _period_bounds(cperiod, today)
     byod_def = _byod_pct_default(client, cperiod, org_id)
 
@@ -33607,9 +33642,27 @@ def get_target_calendar(
     result.update({
         'period': period, 'scope': scope, 'store_code': store_code,
         'rep': rep_arg, 'monthly_targets': monthly, 'rep_share': round(rep_share, 4),
-        'reps': targets_engine.reps_in_scope(shifts, actuals, store_code),
         'grains': list(targets_engine.GRAINS),
     })
+    # THE PICKER (owner 2026-11-27: *"it should only shpow the name of the person whoc is logged in
+    # not all reps"*). The names are narrowed through the ONE home, which also collapses a person's
+    # several feed spellings ("Diana Antunez" / "Antunez, Diana" / "Díana Antúnez") to one entry.
+    # `locked_rep` is the server's answer to "is there exactly one name here, and whose" — the page
+    # renders the name instead of a dropdown rather than deciding that from the list's length, so a
+    # future widening cannot silently turn the lock back into a picker.
+    _all_reps = targets_engine.reps_in_scope(shifts, actuals, store_code)
+    _reps, _unmatched = _pa.mine_names(_all_reps, rep_keys, canon=_canon_fn)
+    result['reps'] = _reps
+    result['locked_rep'] = _reps[0] if (rep_keys is not None and len(_reps) == 1) else None
+    # THE LOCKOUT CASE, reported rather than rendered as an empty page: this viewer is a real,
+    # identifiable person, somebody sold or worked at this store, and none of those spellings folds
+    # to them. The rep-merge screen is what fixes it, so the hint points there by name.
+    result['rep_unmatched'] = bool(_unmatched)
+    if _unmatched:
+        result['setup_hint'] = list(result.get('setup_hint') or []) + [
+            "We could not match your name to this store's sales or schedule rows, so your own "
+            "figures cannot be shown. Ask an admin to merge your name spellings in "
+            "**Merge duplicate reps**."]
     _g = str(grain or '').strip().lower()
     if _g:
         if _g not in targets_engine.GRAINS:
@@ -33929,6 +33982,14 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
         client, org_id, start, end - _timedelta(days=1), catalog) if catalog else {})
 
     out = []
+    # WHOSE ROWS — resolved ONCE for the whole store loop (§CORE-33.5). The store dimension is
+    # answered below by the keyset; this answers which PEOPLE within those stores, and a store-level
+    # surface carrying per-employee rows needs BOTH or it is the payroll leak that
+    # `rbac.SELF_OWN_STORE_SURFACES` names in its own comment.
+    from app.modules.commcalc import payout_audience as _pa
+    _sum_rep_keys = _caller_rep_keys(authorization, org_id)
+    _sum_cmap = _rep_canon_map(client, org_id) if _sum_rep_keys is not None else None
+    _sum_canon_fn = (lambda v: _canon(v, _sum_cmap)) if _sum_rep_keys is not None else None
     for s in roster:
         code = str(s.get('store_code', '') or '').strip()
         if not code:
@@ -33980,6 +34041,14 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
             reps_out = [r for r in reps_out if str(r['rep']).strip().upper() in rep_sel]
             if not reps_out:
                 continue
+        # WHOSE ROWS — the same one home, on the same page's OTHER payload (§CORE-33.5). This block
+        # breaks each store down "into the people driving it", one row per rep carrying their
+        # achieved activations, upgrades, accessories and conversion. The store list above is already
+        # the caller's own, and for a self-scoped rep that is their own store — so every colleague's
+        # achieved figures travelled in the payload behind My Targets, with no per-person filter.
+        # `mine_only` returns the SAME LIST OBJECT for a manager (`rep_keys is None`), so no existing
+        # response shifts by a byte.
+        reps_out = _pa.mine_only(reps_out, _sum_rep_keys, canon=_sum_canon_fn, fields=('rep',))
         reps_out.sort(key=lambda r: -r['activations'])
         trend = trend_by_code.get(code.upper(), {})
         out.append({

@@ -47782,6 +47782,98 @@ job of `org-scope-guard.yml`.
 
 ---
 
+### CORE-33.5 A screen named "My" showed everybody, and the server never checked (owner 2026-11-27)
+
+Owner: *"under my targets it should only shpow the name of the person whoc is logged in not all reps
+, that needs to chnage across teh paltform"*.
+
+**WHAT HE WAS LOOKING AT, and it had confessed for months.** `/commcalc/targets/my` carried its own
+note: *"Until logins are enabled, pick your store and name below. This view will be locked to you
+automatically once sign-in is live."* Sign-in went live (§CORE-33) and nobody came back to close it,
+so the screen still asked every viewer to pick a name out of the whole store's roster.
+
+**THE COSMETIC REPORT SAT ON THREE REAL DEFECTS**, each proved end to end before being fixed
+(`tests/integration/test_my_targets_is_the_viewers_own.py`, 22 checks, two tenants):
+
+1. **`/targets/{period}/calendar` had no person filter at all.** `rep` was a plain query parameter
+   and the handler never asked whose it was, while `reps` published every name that worked or sold at
+   the store. A confined employee is granted read on `/commcalc/targets` (the action-plan surface,
+   §CORE-33), so a rep could name a colleague and read their target, pace, achieved and shortfall.
+2. **`/targets/{period}/summary` — the OTHER call on the same page — carried every colleague's
+   achieved figures.** It breaks each store down "into the people driving it", one row per rep with
+   their activations, upgrades, accessories and conversion. The STORE list was narrowed to the
+   caller's own store; the rows inside it were not. A picker offering one name over a payload
+   carrying ten people's numbers closes nothing, which is why the sweep is part of the fix.
+3. **The calendar's store guard never ran for the viewer it had to bound.** It read `if ks and not
+   in_keyset(...)`, and a self-scoped rep resolves to an EMPTY keyset, which is falsy — so any
+   `store_code` in the tenant was readable. Meanwhile `/summary` substituted the rep's own store
+   through `_caller_self_keyset`. **Two paths, one question, opposite answers** — the duplicate
+   defect the index rules forbid, caught in the act.
+
+**THE CLASS: "may this door open" and "whose rows come out of it" are two questions, and a surface a
+rep is SUPPOSED to reach can only be judged by the second.** Named before in the live access probe
+(§CORE-42); this is the same shape one subsystem over. `rbac.SELF_OWN_STORE_SURFACES` had already
+DECLARED the answer for this exact page, in its own comment — *"If it also carries a per-employee pay
+/ commission / compensation / PII column, that column is filtered to the caller's own employee_id …
+Adding a surface to this list without that filter is a payroll leak between colleagues"* — and the
+wiring was never done. **§19.18 for the fourth time**, which is why the lock is an AST lock.
+
+**NO SECOND MECHANISM WAS BUILT, and the first draft of this change was wrong.** The duplicate check
+found `/targets/{period}/action-plan` had ALREADY been fixed with `_caller_rep_keys` +
+`payout_audience.requested_rep_is_mine`. A parallel name-keyed dimension had been added to
+`core/scope.py`; it was **deleted** and the existing home extended instead.
+
+**THE FOLD IS THE OTHER HALF, and without it this change would have been a lockout.**
+`payout_audience.rep_row_keys` folded a name with `.upper()` plus the alias map alone, so two
+spellings of ONE person did not match unless somebody had hand-entered an alias row:
+`"Antunez, Diana"` (POS) vs `"Diana Antunez"` (roster) — the 2026-09-02 finding that once zeroed a
+whole tenant's per-employee daily targets — and `"Díana Antúnez"` vs `"Diana Antunez"` (the Martínez
+finding; `str.isalnum()` is True for `'í'`). On a payout read that mismatch **refuses a rep their own
+rows and tells them they earned nothing**, which is the worse of the two failures. `name_fold`
+(dereferencing `person_identity.folded_token_key`) is now added to BOTH sides of every comparison.
+It is **purely additive** — every key the old rule produced is still produced, so nothing that
+matched stops matching — and it deliberately does NOT forgive a dropped middle initial
+(`"Caba, David, A"`), because merging those is a judgement a human makes. Being in the shared home,
+it reaches the commission surfaces too.
+
+**THE LOCKOUT IS A REPORTED STATE, never an empty page and never a widening.** `mine_names` returns
+`unmatched_self` when the viewer is a real identifiable person, names were on offer, and none folds
+to them; the payload carries `rep_unmatched` and a `setup_hint` pointing at **Merge duplicate reps**.
+
+**WHY THE CALENDAR REFUSES WHERE THE ACTION PLAN DROPS THE PARAMETER.** The action plan answers about
+a whole store, so ignoring a foreign `rep=` still returns an honest page. The calendar's `scope=rep`
+answer IS one person; serving the caller's own figures under somebody else's name would be a wrong
+answer rather than a narrower one, and the screen would label another person's numbers with the name
+in the URL. So it is a 403.
+
+**THE SCREEN.** `locked_rep` is the SERVER's answer to "is there exactly one name here, and whose" —
+non-null only when the viewer is restricted and one name is theirs. The page renders the name instead
+of a dropdown and never counts the list itself, because a second feed spelling of one person would
+otherwise turn the lock silently back into a picker. An unrestricted admin keeps the picker (they
+have no targets of their own, and the all-reps view belongs on the Targets overview). The admin-only
+**Merge duplicate reps** link is hidden from a locked viewer — for them it is a link straight into
+`not_your_access`, the same dead end §CORE-33.4 found on the closing page.
+
+| Question | One home |
+| --- | --- |
+| WHICH STORES may this caller see | `commcalc.router._caller_self_keyset` (self) over `storeops.scope_keyset` |
+| WHOSE ROWS, by name | `commcalc.router._caller_rep_keys` → `commcalc/payout_audience.py` |
+| The fold both sides use | `payout_audience.name_fold` → `core.person_identity.folded_token_key` |
+| The picker's list | `payout_audience.mine_names` (+ `unmatched_self`) |
+| A row's narrowing | `payout_audience.mine_only` / `row_is_mine` |
+| A requested `rep=` | `payout_audience.requested_rep_is_mine` |
+| Proof / tests | `backend/harness_my_surface_is_mine.py` (63), `backend/tests/integration/test_my_targets_is_the_viewers_own.py` (22) |
+| CI gate | carrier-vocab-guard.yml, "Run the \"My\" surface proof" |
+
+**STILL OPEN, named rather than left to be rediscovered.** 31 endpoints in `commcalc/router.py` take
+a `rep` parameter. The three on this page are done; the rest are admin/manager reports where showing
+every rep is the point, and they are bounded by `scope_keyset` rather than by person. They are not a
+leak today because a confined employee is not granted them — but that is the accidental guard
+pattern defect #1 was, so any surface newly granted to an employee must be checked against this
+section first.
+
+---
+
 ## §CORE-34. A PROOF THAT CANNOT START IS NOT A PASSING PROOF — one compiler and one source reader for the frontend proofs (2026-11-04)
 
 Four of the twelve `frontend/tools/*-proof.mjs` programs were red on the shrink-only register
