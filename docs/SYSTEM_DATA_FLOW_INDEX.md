@@ -6974,6 +6974,102 @@ the schedule while a punch measured the day), **O the owner ruling** (§14z), **
 Z an armed negative control. Lock: `backend/harness_payroll_hours_basis_lock.py`, EIGHT axes, CI job
 in `carrier-vocab-guard.yml`.
 
+#### 14y.2 THE LOCK WAS BLIND TO THE ONLY SPELLING THE DEFECT EVER USED (owner ruling 2026-11-27)
+
+Owner, verbatim: *"it shows hours worked as the same as the hours scheduled, it should show the atual
+hours worked"*, then *"fix the card now across the paltform"*.
+
+**THE INSTANCE.** `GET /core/employee-dashboard` — the rep's own *"Hours Worked"* card, on the web
+portal and the `/employee` page — still computed
+`ah = sum(actual_hours or scheduled_hours)` over `storeops.shifts` with **`storeops.timelog` never
+queried at all**. With `shifts.actual_hours` carrying a figure on 7 of 7,740 rows, `actual ==
+scheduled` on essentially every row for every tenant: the equality he reported was arithmetically
+guaranteed, not a coincidence of one month. It is the surface a REP reads about their own pay, and
+the only one that showed the figure with **no basis beside it**.
+
+**THE CLASS — and it is not "one more module with an `or`".** The §14y lock's axis A1 has asserted
+"no module under app/ falls back from one hours column to the other" since 2026-10-10, and it was
+GREEN throughout. A1 matches `strip_comments_and_strings(source)`, which deletes **string
+literals** — and in this codebase the two column names appear only *inside* literals
+(`s.get("actual_hours")`). Measured:
+
+```
+line      '    ah = sum((float(s.get("actual_hours") or 0) or float(s.get("scheduled_hours") ...'
+STRIPPED  '    ah = sum((float(s.get("") or 0) or float(s.get("") or 0)) for s in msh)'
+matches raw: True        matches stripped: False
+```
+
+Worse, the axis that existed to prevent exactly this — **A2, the non-vacuity check** — asserted the
+regex against a **RAW** string, i.e. it proved the pattern worked on input A1 never receives. *A
+non-vacuity check that feeds a different pipeline than the axis it vouches for is not one.* The
+class: **a guard can be green because of the shape of its own input, and the check that says
+otherwise can be testing a different thing entirely.**
+
+**THE THREE NEW AXES** (`harness_payroll_hours_basis_lock.py`): **A1b** matches the dict-get
+spelling on source that KEEPS its literals (`strip_comments_only`), with five named excuses (store
+attribution, a truthiness guard, and three prose mentions); **A1c** matches the MULTI-LINE spelling
+— a name bound from one column then rebound from the other, which no single-line regex can see — and
+**A2 now feeds the same stripper A1 does**, with **A2b** stating the blind spot out loud. Each axis
+ships an armed control; all three were verified red by reintroducing the defect.
+
+**ONE KNOWN-RED REGISTER ENTRY, NAMED RATHER THAN HIDDEN.** `commcalc/router._incentive_hours_for_day`
+carries the multi-line shape and **weights a real money split**
+(`daily_incentive.split_pool(basis="hours")`) — a rep scheduled 9h who punched 4h draws a 9/Σ share
+of the incentive pool. Approved for fix 2026-11-27 (*"daily incetive must be done from the tehy da
+they astrted clocking in"*) with a DERIVED per-org/per-store floor; it ships separately because it
+needs a migration and a per-rep before/after against live money. `A1c-register` asserts the entry is
+still EARNED, so the register may only shrink: delete it without fixing the code and the axis goes
+red.
+
+**THE CARD'S OWN FOLD** — `backend/app/modules/storeops/hours_worked_card.py`. PURE. It holds three
+questions apart that one number had been answering: `actual_hours` (what a clock MEASURED),
+`unmeasured_hours` (scheduled time nothing measured, at its SCHEDULED size), `paid_hours` (what the
+declared basis owes). They are never summed. Five states, each printing differently —
+`measured` / `partly_measured` / `nothing_measured` / `no_shifts` / `refused`:
+
+| state | what the reader sees |
+| --- | --- |
+| `nothing_measured` | **"no punch recorded"**, and `actual_hours` is **None** — never `0h`, because §14s forbids a measured zero and an unmeasured day printing the same |
+| `partly_measured` | *"31.5h measured · 18.0h not clocked"*; the chart draws the clocked bar to its measured height and the remainder in `--border` |
+| `refused` | the interlock's own sentence and **no figure at all** — the Cellfonz shape (49% measured against an 85% floor). `actual_pay` is ABSENT, never `$0.00` |
+
+**`fold_bases` IS NOW THE ONE HOME FOR THE WORD "MIXED"** (`payroll_hours_basis.fold_bases`),
+factored out of `storeops/router.py::get_payroll` where it was inline — the card needed the same
+answer, and a second copy is a future divergence about the one word whose job is to stop a surface
+picking a tidier winner. Axis **B6b** fails the build if any caller re-derives it.
+
+**THE WINDOW IS THE PAY PERIOD, NOT THE CALENDAR MONTH** (charter rule 2). The card said *"this
+month"* while payroll ran on the org's cycle, so a rep's own figure could not reconcile with their
+payroll row even with the hours right — a weekly tenant's card spanned four payslips.
+`hours_worked_card.window_for` dereferences `core/router.pay_period_for` over
+`payroll_approval._pay_settings`; a tenant with NO declared cycle gets the calendar month exactly as
+before, and `window_basis` SAYS which it is so a month is never shown as a period. No house cycle is
+ever borrowed (§COMMCALC-49.10).
+
+**A SEPARATE LIVE DEFECT FOUND AND FIXED IN THE SAME PASS.**
+`payroll_evidence.coverage_sentence` read `cov["pct"]`, a key `payroll_hours_basis.coverage()` has
+**never returned** (it returns `measured_pct`; `interlock` beside it reads that name correctly). So
+the one sentence whose whole job is to state the coverage printed **"is 0.00%"** for every real
+caller on every period — including the P&L wage line's note (`coa.py:801`). It passed its proof
+because `harness_labour_cost_one_home` fed a **hand-built** dict spelling `pct`: a check asserted
+against a shape the producer does not emit. The harness now builds its fixture from `coverage()`
+itself. Same class as A2 above, found by looking for it.
+
+**4d — THE REASON TRAVELS WITH THE FIGURE.** `/storeops/reports` and the mailed payroll export
+(`notify/workforce_reports.PAYROLL_HOURS_COLS`) showed "Actual Hrs" with no basis column, unlike
+`/storeops/payroll` since 2026-10-10. Both now carry it; the export's subtitle states the
+clock-measured share instead of calling the whole figure *"actual hrs"*. The label map moved to
+`frontend/src/app/(platform)/storeops/lib/pay-basis.ts` as `HOURS_BASIS_LABEL` / `hoursBasisLabel`,
+dereferenced by both screens rather than copied.
+
+Proof: `backend/tests/unit/test_hours_worked_card.py` (14 cases, all five states, the reproduced
+pre-fix expression as a control, the cross-tenant negative) and
+`backend/tests/integration/test_employee_dashboard_hours.py` (14 cases through the real app: the
+punch table actually reaching the endpoint, the `storeops` schema-scoping — an unscoped client reads
+a non-existent `public.timelog`, refuses every period and looks like "nobody clocked" — both tenant
+modes, the refusal, and each org's own cycle length). Every assertion in both files was verified able
+to fail by mutation.
+
 - **DRILL-DOWN (§CORE-17.3x, batch 24):** the basis is now a REPORT'S PROVENANCE as well as its
   reason. `storeops/payroll_hours_drilldown.py` keys a basis→relation map on THIS module's own basis
   constants (`BASIS_RELATIONS`, with `PAYING_BASES` / `MEASURED_BASES` dereferenced by identity), so
@@ -7274,6 +7370,16 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 - `storeops.timelog.geo_purge_after_date` / `storeops.store_visits.geo_purge_after_date` (mig `1113`) — the GPS retention COMMITMENT, stamped at write time from the tenant's own `punch_geo_retention_days` so the promise lives on the row rather than in a job somebody has to find. NULL means the row predates the stamp: REPORTED as `no_retention_stamp` and never purged on a guess. The sweep clears the COORDINATES and keeps the verdict and the distance, so honouring the promise never changes a flag, a report or an export. One home `core/geo_retention.py`, locked by `harness_geo_retention_lock.py` (§CORE-31).
 - `core.marketing_event_checkin.purge_after_date` (mig `986`, swept from `1113`) — the SAME commitment under its own older column spelling, kept because the column is already in production data. It carried the identical hole (declared `unmonitored` on the control box, "no purge job runs") until the §CORE-31 sweep covered it; it is one registry entry, not a second mechanism (§23.5, §CORE-31).
 - `storeops.raw_clock_punch` (mig `1073`) — the B2B clock in / clock out report **as a CLAIM about a store-day**. Written only by `POST /commcalc/upload-mapped` (`upload_type` `clock_punch`) / the email sweep, through `_ingest_mapped_df` → `storeops/clock_feed.landing_rows`. Keeps the raw store and employee spellings, the LOCAL stamps **and** their UTC conversion, the file's own declared decimal, and `excluded` naming why a row is not a payable punch. **NEVER writes `storeops.timelog` or `shifts.actual_hours`.** Unique on (org, store_raw, employee_raw, business_date, clock_in_local), so a re-pull restates a day instead of duplicating it. Data-date column `business_date`, freshness column `arrived_at` (§14z).
+- ⚠ **AN ASYMMETRY, ARMED BUT NOT FIRED (filed 2026-11-27, §14y.2's sweep).**
+  `payroll_evidence.read_pay_evidence` reads `storeops.timelog` + `storeops.manual_hours` only
+  (`PUNCH_TABLE = "timelog"`) and **never** `storeops.raw_clock_punch`. But
+  `clock_variance_api.py:218` passes `feed_punches=payable` into the resolver when the org sets
+  `clock_feed_is_pay_source` (`payroll_hours_basis.py:324,1093`). So for an org that turns that knob
+  ON, the clock-variance board and the four §14y.1 pay paths are handed **different evidence sets
+  for the same question** — the duplicate-answer defect the index rules forbid. It has not fired:
+  the knob defaults `False` and no tenant is known to have set it. It needs its own decision (either
+  `read_pay_evidence` learns the feed, or the knob refuses until it does) and must not be resolved
+  by whichever caller is edited next.
 - `storeops.clock_variance_correction` (mig `1073`) — what a HUMAN decided about one clock variance, so "all clear" is an assertion by a named person and not an absence of rows. `resolution` ∈ `corrected` / `accepted_ours` / `accepted_feed`, plus the DM's per-row `override_hours` / `override_reason` / `override_by` / `override_at`, which OUT-RANK the org's `clock_source_rule`. A CHECK constraint refuses an override without a reason and a name, so no endpoint or hand-written UPDATE can land a bare number on a pay row (§14z).
 - `storeops.clock_feed_login_link` (mig `1073`) — which B2B login is which employee. **Only `status = 'approved'` binds** (`storeops/payroll_identity.match_is_binding`); a name-token match is a `proposed` row for a human to approve and NEVER an attribution, and a `rejected` row is a human saying "not this person", which is never re-proposed (§14z).
 - `commcalc.raw_ma_commission.merchant_account_id` — the dealer's PROCESSOR ACCOUNT on the master-agent commission sheet, and the reason the leg trend's per-store axis needed no migration: `commcalc.commission_leg_ma_rollup` (mig `274`) drops this column because it is `GROUP BY period`, but the ROWS carry it, so the trend reads them (paged, §19.48) and groups per (period, store). The column NAME is `data_lineage_registry.store_account_column('raw_ma_commission')` and the account → store answer is `account/ma_store_pnl.canonical_store_index` (mig `314`) — neither is spelled in the trend. `commcalc.commission_leg_label_rollup` (mig `274`, superseded by mig `1066`) already returns the raw store ADDRESS and is store-grained as it stands; this is its second reader (§COMMCALC-12).
@@ -45624,7 +45730,7 @@ hours , check and fix for good platform wide"*.
 | how recently they are typed | LuxeLink filed **8 in the ten days to 2026-11-06**, reasoned *"didnt clock out"*, *"didnt clock in"*, *"Subtract"* |
 | how many reached any figure | **none**, on any pay or hours path |
 | tenants that had DECLARED `count_manual_hours = true` | **4 of 4** — and `resolve_config` forced it FALSE for the three on `schedule_fallback` |
-| writers of `shifts.actual_hours`, the one correction the figure honoured | **none in the product** — the frontend displays it in 7 places, writes it in 0; 7 of 7,740 live rows carry it |
+| writers of `shifts.actual_hours`, the one correction the figure honoured | **none in the product** — the frontend displays it in 7 places, writes it in 0; 7 of 7,740 live rows carry it. **Re-confirmed 2026-11-27** (§14y.2): still 7 of 7,740, still written only by `PATCH /storeops/shifts`. The last READER that treated it as a measurement — the employee dashboard's "Hours Worked" card — now reads the punches instead, so the dead column no longer decides what any surface calls "worked" |
 | NY LOGISTICS shift rows in its current pay period (10/26–11/08) | **zero**, so its hours come straight off the clock: 11.61 / 40.85 / 44.08 / 81.50 h |
 
 So the reported instance is exact and complete: on NY LOGISTICS there was no shift row to edit, the

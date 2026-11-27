@@ -5343,28 +5343,90 @@ def employee_dashboard(employee_id: str = "", period: str = "",
                        .gte("shift_date", today.isoformat())
                        .lte("shift_date", (today + _td(days=7)).isoformat())
                        .order("shift_date").execute().data or [])
-    # Hours are for the picked month (so a prior month shows the hours it closed with), not always today's.
-    import calendar as _cal2
+    # ── "HOURS WORKED" IS WHAT A CLOCK MEASURED (owner Sanjot 2026-11-27, index §14y) ───────────
+    #
+    # Owner, verbatim: *"it shows hours worked as the same as the hours scheduled, it should show the
+    # atual hours worked"*, then *"fix the card now across the paltform"*.
+    #
+    # WHAT WAS HERE: `ah = sum(actual_hours or scheduled_hours)` over `storeops.shifts` alone, with
+    # `storeops.timelog` never queried. `shifts.actual_hours` carries a figure on 7 of 7,740 live
+    # rows (§14y), so `actual == scheduled` on essentially every row for every tenant — the equality
+    # he reported was arithmetically guaranteed, not a coincidence of one month. It was the LAST live
+    # single-line spelling of the defect §14y fixed in six modules and §14y.1 in four more, and it
+    # survived because a DISPLAY surface was treated as exempt from the pay path's discipline. It is
+    # the one surface a REP reads about their own pay, so it was the worst place to be exempt.
+    #
+    # THE WIRING IS THE §14y.1 ONE, not a new one: `payroll_evidence.period_evidence` (THE one punch
+    # read) → `paid_hours_rows` (one row per shift row, each carrying its share of its DAY's paid
+    # hours, in the same order as `shifts`). This endpoint iterates SHIFTS ONLY, which is exactly the
+    # shape those two exist for — ★ a bare `cell` would NOT do, because `resolve_shift_row(…, cell)`
+    # returns 0.0 for every day a punch measured (the punch's hours are counted off the punch row at
+    # the store the person stood in), so a shifts-only caller handed a cell books zero. See §14y.1's
+    # ★ note; four pay paths shipped that bug and booked $374,733.02 as $0.00.
+    #
+    # THE FOLD IS `storeops/hours_worked_card`, shared with nothing yet but holding the three
+    # questions apart: `actual_hours` (what a clock measured), `unmeasured_hours` (scheduled hours
+    # nothing measured) and `paid_hours` (what payroll owes on its declared basis). They are never
+    # summed. A refused period publishes NO figure and carries the refusal.
+    from app.modules.storeops import hours_worked_card as _hwc
+    from app.modules.storeops import payroll_evidence as _payevid
+
+    # THE WINDOW IS THE ORG'S PAY PERIOD, not the calendar month (charter rule 2 — one period
+    # resolver for the schedule, hours approval, payroll, tax and expenses). The card used to say
+    # "this month" while payroll ran on the pay cycle, so a rep's own figure could not reconcile
+    # with their payroll row even with the hours right.
     try:
-        _names = {m.lower(): i for i, m in enumerate(_cal2.month_name) if m}
-        _p = str(period).strip()
-        if len(_p) >= 7 and _p[:4].isdigit() and _p[4] == "-" and _p[5:7].isdigit():
-            _yr, _mo = int(_p[:4]), int(_p[5:7])
-        else:
-            _parts = _p.split(); _mo = _names[_parts[0].lower()]; _yr = int(_parts[1])
+        from app.modules.storeops.payroll_approval import _pay_settings as _pay_cycle
+        _cycle = _pay_cycle(org_id)
     except Exception:
-        _yr, _mo = today.year, today.month
-    ym = f"{_yr}-{_mo:02d}"
-    nxt = f"{_yr + 1}-01-01" if _mo == 12 else f"{_yr}-{_mo + 1:02d}-01"
-    msh = (client.schema("storeops").table("shifts").select("scheduled_hours,actual_hours")
+        _cycle = None      # unreadable cycle ⇒ the calendar month, and the label says so
+    _win = _hwc.window_for(period, today, _cycle)
+    # ★ SCHEMA-SCOPED ONCE ★ — `payroll_evidence` and `payroll_hours_basis` reach their tables as
+    # `client.table(...)`, i.e. they expect a client ALREADY scoped to `storeops` (that is what
+    # `storeops.router.sb()` hands them). This endpoint's `client` is unscoped and schema-qualifies
+    # at each call site, so handing it over raw would have read `public.timelog` — a table that does
+    # not exist — and the one read would have REPORTED a blocker and refused every period. Scoped
+    # here, once, for the shifts read and the evidence read together.
+    _so = client.schema("storeops")
+    msh = (_so.table("shifts")
+           .select("id,employee_id,store_code,shift_date,scheduled_hours,actual_hours,"
+                   "start_time,end_time,is_deleted")
            .eq("org_id", org_id).eq("is_deleted", False).eq("employee_id", employee_id)
-           .gte("shift_date", f"{ym}-01").lt("shift_date", nxt).execute().data or [])
+           .gte("shift_date", _win["start"]).lte("shift_date", _win["end"]).execute().data or [])
     rate = float(emp.get("pay_rate") or 0)
     sh = sum(float(s.get("scheduled_hours") or 0) for s in msh)
-    ah = sum((float(s.get("actual_hours") or 0) or float(s.get("scheduled_hours") or 0)) for s in msh)
-    out["hours"] = {"scheduled_hours": round(sh, 1), "actual_hours": round(ah, 1),
-                    "pay_rate": rate, "scheduled_pay": round(sh * rate, 2),
-                    "actual_pay": round(ah * rate, 2), "shifts": len(msh)}
+    # `day_after` turns this INCLUSIVE end into the half-open boundary the one read uses, so the
+    # card and payroll cannot read the last day of a period differently.
+    #
+    # ★ THE EVIDENCE IS READ ORG-WIDE, NOT NARROWED TO THIS REP ★ — deliberately, though a narrowed
+    # read would be cheaper and `read_pay_evidence` offers `employee_ids`. `coverage`/`interlock` ask
+    # whether THE ORG's measured share clears the org's own `min_punch_coverage_pct`; narrowed to one
+    # person it would answer a different question, and a fully-clocked rep in a 49%-measured tenant
+    # would get a published card while payroll refused the same period. One question, one answer.
+    # The window is now a pay period rather than a month, so this read is smaller than the old one.
+    _res = _payevid.period_evidence(_so, org_id, _win["start"],
+                                    _payevid.day_after(_win["end"]), msh,
+                                    employee_rows=[emp])
+    _paid = _payevid.paid_hours_rows(_res, msh, emp_by_id={employee_id: emp})
+    _card = _hwc.card(
+        [{"hours": r.get("hours"), "basis": r.get("basis"),
+          "scheduled": float((r.get("shift") or {}).get("scheduled_hours") or 0)}
+         for r in _paid],
+        refusal=_payevid.refusal(_res), coverage_note=_payevid.coverage_sentence(_res))
+    out["hours"] = {
+        "scheduled_hours": round(sh, 1), "pay_rate": rate,
+        "scheduled_pay": round(sh * rate, 2),
+        "window_start": _win["start"], "window_end": _win["end"],
+        "window_label": _win["label"], "window_basis": _win["basis"],
+        **{k: v for k, v in _card.items() if k != "scheduled_hours"},
+    }
+    # `actual_pay` IS PUBLISHED FROM `paid_hours`, NEVER FROM `actual_hours` — the rep is owed what
+    # their org's declared basis pays, which on a `schedule_fallback` org legitimately includes
+    # scheduled hours. Deriving it from measured hours alone would under-state a real obligation.
+    # It is ABSENT (never 0.00) when the period is refused: absence is the signal the card already
+    # reads for a hidden pay key, and `$0.00` would say "this person earns nothing".
+    if _hwc.pay_is_publishable(_card):
+        out["hours"]["actual_pay"] = round(_card["paid_hours"] * rate, 2)
 
     # Report card = full performance summary.
     out["report_card"] = {

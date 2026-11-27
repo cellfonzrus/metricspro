@@ -310,28 +310,86 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
         </Card>
       )}
 
+      {/* ── HOURS WORKED — WHAT A CLOCK MEASURED, AND IT SAYS SO WHEN NOTHING DID ──────────────
+          Owner Sanjot, 2026-11-27: *"it shows hours worked as the same as the hours scheduled, it
+          should show the atual hours worked"*, then *"fix the card now across the paltform"*.
+
+          WHAT WAS HERE: `Actual` rendered `hours.actual_hours`, which the server computed as
+          `actual_hours or scheduled_hours` over `storeops.shifts` with the punch table never read.
+          `shifts.actual_hours` carries a figure on 7 of 7,740 live rows (index §14y), so the two
+          Stats and the two bars were EQUAL BY CONSTRUCTION for every tenant — which is exactly what
+          he was looking at. The server now answers from the punches (`payroll_evidence`), and this
+          card's job is to never again present an unmeasured figure as a worked one.
+
+          THREE NUMBERS, THREE MEANINGS, NEVER SUMMED: `actual_hours` is what was clocked,
+          `unmeasured_hours` is the scheduled time nothing measured, `paid_hours` is what the org's
+          declared basis owes. `state` and `sentence` are the server's words
+          (`storeops/hours_worked_card`), so this screen cannot state a reason the API contradicts. */}
       {on('hours') && (
-        <Card title="Hours Worked (this month)" icon="⏱️">
+        <Card title={`Hours Worked${data.hours.window_label ? ` (${data.hours.window_label})` : ''}`} icon="⏱️">
           <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginBottom: 10 }}>
-            <Stat label="Scheduled" value={`${data.hours.scheduled_hours}h`} />
-            <Stat label="Actual" value={`${data.hours.actual_hours}h`} />
+            {/* A REFUSED period publishes NO figure at all — not even the schedule. The coverage
+                interlock means "we could not measure this period", which must never render as a
+                number a reader could mistake for a finished one. */}
+            {data.hours.state === 'refused' ? (
+              <Stat label="Hours" value="not measured" />
+            ) : (
+              <>
+                <Stat label="Scheduled" value={`${data.hours.scheduled_hours}h`} />
+                {/* `actual_hours` is null when nothing was clocked. `${null}h` would print "nullh"
+                    and `|| 0` would print "0h" — a measured zero, which is the OTHER lie (§14s: a
+                    day that was measured at zero and a day nothing measured must not print the
+                    same). So the Stat says what happened instead of showing a number. */}
+                <Stat label="Actual (clocked)"
+                      value={data.hours.actual_hours == null ? 'no punch recorded'
+                                                             : `${data.hours.actual_hours}h`} />
+                {data.hours.unmeasured_hours != null && data.hours.unmeasured_hours > 0 && (
+                  <Stat label="Not clocked" value={`${data.hours.unmeasured_hours}h`} />
+                )}
+              </>
+            )}
             {/* Pay visibility (mig 434): the server DELETES the pay keys for a caller who may not
                 see pay (owner directive 2026-09-10). Absence of the key is the signal — rendering
                 fmt(undefined) would print $0.00, i.e. "this person earns nothing", which is the
-                exact lie strip-not-zero exists to prevent. */}
-            {data.hours.pay_rate != null && (
+                exact lie strip-not-zero exists to prevent. The SAME reading now covers a refused
+                period, where the server withholds `actual_pay` for the same reason. */}
+            {data.hours.pay_rate != null && data.hours.actual_pay != null && (
               <Stat label={`Pay (${fmt(data.hours.pay_rate)}/hr)`} value={fmt(data.hours.actual_pay)} />
             )}
           </div>
-          <ResponsiveContainer width="100%" height={90}>
-            <BarChart layout="vertical" data={[{ name: 'Scheduled', v: data.hours.scheduled_hours }, { name: 'Actual', v: data.hours.actual_hours }]} margin={{ top: 0, right: 10, left: 6, bottom: 0 }}>
-              <XAxis type="number" hide /><YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} stroke="var(--text3)" width={66} />
-              <Tooltip formatter={(v: any) => `${v}h`} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
-              <Bar dataKey="v" radius={[0, 4, 4, 0]} barSize={16}>
-                <Cell fill="var(--c-fg-94a3b8)" /><Cell fill="var(--c-fg-2e75b6)" />
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
+          {/* THE SERVER'S OWN SENTENCE, always shown. It is the one place the reader is told which
+              of the five states they are looking at, and it is never composed here. */}
+          {data.hours.sentence && (
+            <div style={{ fontSize: 12, color: data.hours.state === 'refused' ? 'var(--c-fg-dc2626)' : 'var(--text2)', marginBottom: 8 }}>
+              {data.hours.sentence}
+            </div>
+          )}
+          {/* WHY THESE HOURS — the reason beside the figure, the thing this card never had. */}
+          {data.hours.hours_basis_reason && data.hours.state !== 'refused' && (
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 8 }}>
+              {data.hours.hours_basis_reason}
+            </div>
+          )}
+          {/* THE BARS ARE DRAWN ONLY WHERE THERE IS A MEASUREMENT TO DRAW. The clocked bar stops at
+              the measured height and the unmeasured remainder is drawn in the neutral border colour
+              — the same device the targets card above uses for "no goal exists", rather than a
+              coloured bar implying work nobody recorded. A refused or shift-less period gets no
+              chart at all: an empty chart reads as zero. */}
+          {data.hours.state !== 'refused' && data.hours.state !== 'no_shifts' && (
+            <ResponsiveContainer width="100%" height={90}>
+              <BarChart layout="vertical" data={[
+                  { name: 'Scheduled', clocked: data.hours.scheduled_hours, gap: 0 },
+                  { name: 'Actual', clocked: data.hours.actual_hours ?? 0, gap: data.hours.unmeasured_hours ?? 0 },
+                ]} margin={{ top: 0, right: 10, left: 6, bottom: 0 }}>
+                <XAxis type="number" hide /><YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} stroke="var(--text3)" width={66} />
+                <Tooltip formatter={(v: unknown, n: unknown) => [`${v}h`, n === 'gap' ? 'not clocked' : 'clocked']} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                <Bar dataKey="clocked" stackId="h" radius={[0, 0, 0, 0]} barSize={16}>
+                  <Cell fill="var(--c-fg-94a3b8)" /><Cell fill="var(--c-fg-2e75b6)" />
+                </Bar>
+                <Bar dataKey="gap" stackId="h" radius={[0, 4, 4, 0]} barSize={16} fill="var(--border)" />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
         </Card>
       )}
 

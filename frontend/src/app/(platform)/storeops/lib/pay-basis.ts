@@ -39,3 +39,36 @@ export function periodPayPreviewLabel(basis: PayBasis, amount: number | null | u
   const periodWord = payPeriodType === 'biweekly' ? 'biweekly' : 'weekly'
   return `= $${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} per ${periodWord} period`
 }
+
+// ── HOURS BASIS — WHY an hours figure is the figure it is (index §14y) ──────────────────────────
+// Factored out of storeops/payroll/page.tsx on 2026-11-27 (owner: *"fix the card now across the
+// paltform"*), because `/storeops/reports` shows the same "Actual Hrs" column and had NO reason
+// beside it, so the same number read as measured on one screen and unexplained on the other. One
+// map, every surface that shows the figure.
+//
+// THESE ARE LABELS, NOT MEANINGS. The meaning is the server's — `payroll_hours_basis.basis_reason`
+// ships a full sentence on the row (`hours_basis_reason`) and that is what a reader is shown in a
+// drill-down or a tooltip. These short words are for a COLUMN, where the sentence will not fit. A
+// basis with no entry falls back to its own underscored name rather than rendering blank: an
+// unexplained basis is a defect to see, not to hide.
+export const HOURS_BASIS_LABEL: Record<string, string> = {
+  clocked: 'Clocked in',
+  clocked_corrected: 'Corrected by hand',
+  clocked_reconciled: 'Clock records reconciled',
+  clocked_override: 'Overridden, with a reason',
+  clocked_trimmed_to_schedule: 'Trimmed to the schedule',
+  measured_zero: 'Measured — nothing worked',
+  schedule_opt_in: 'From the schedule (ticked)',
+  not_measured_unpaid: 'Not measured — unpaid',
+  punch_unusable: 'Punch unusable — reported',
+}
+
+/** The column text for one row's hours basis. `mixed` is said OUT LOUD rather than resolved: a
+ *  period with punched days AND scheduled days has no single basis, and printing the dominant one
+ *  alone would be the tidier lie. Returns '' when the server sent no basis (an older backend),
+ *  so the column reads blank instead of inventing a reason. */
+export function hoursBasisLabel(basis?: string | null, mixed?: boolean | null): string {
+  if (!basis) return ''
+  const label = HOURS_BASIS_LABEL[basis] || String(basis).replace(/_/g, ' ')
+  return mixed ? `${label} · mixed` : label
+}

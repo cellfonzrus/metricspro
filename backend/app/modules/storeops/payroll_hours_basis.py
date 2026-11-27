@@ -620,6 +620,36 @@ def basis_reason(basis):
                                     f"payroll_hours_basis — it is treated as not payable.")
 
 
+def fold_bases(hours_by_basis):
+    """PURE: a per-basis hours tally → `{hours_basis, hours_basis_reason, hours_basis_mixed}`.
+
+    THE ONE HOME for *"which basis does a reader see next to this figure, and is it the only one"*.
+
+    FACTORED OUT, not written new (owner directive 2026-11-27, the duplicate-check gate). This
+    arithmetic was inline in `storeops/router.py::get_payroll` and the employee dashboard's "Hours
+    Worked" card needed the same answer. A second copy is a future divergence about the word
+    **mixed** — the one word whose whole job is to stop a surface picking a tidier winner — so both
+    callers dereference this instead.
+
+    The rules are the router's own, unchanged:
+      · a ZERO-hour entry does not count toward the tally (it names no hours, so it cannot be
+        dominant) — the same reading `row_pays_any_hours` above already takes;
+      · the basis shown is the one the MOST hours came from;
+      · `hours_basis_mixed` is True when more than one basis carries hours, so a period that mixes
+        punched and scheduled days SAYS SO rather than being collapsed to one word;
+      · the sentence is `basis_reason`'s, never composed by a caller, so screen and API cannot
+        disagree;
+      · an EMPTY tally returns all three as None/False — there is no basis to show, and inventing
+        one would be the confident-but-wrong label this function exists to prevent.
+    """
+    tally = {k: v for k, v in (hours_by_basis or {}).items() if v}
+    if not tally:
+        return {"hours_basis": None, "hours_basis_reason": None, "hours_basis_mixed": False}
+    dom = max(tally.items(), key=lambda kv: kv[1])[0]
+    return {"hours_basis": dom, "hours_basis_reason": basis_reason(dom),
+            "hours_basis_mixed": len(tally) > 1}
+
+
 # ── EVIDENCE ─────────────────────────────────────────────────────────────────────────────────────
 def _f(v):
     try:

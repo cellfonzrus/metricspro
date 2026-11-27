@@ -162,13 +162,130 @@ for p in ALL:
     for m in _OR_RE.finditer(code):
         _hits.append(f"{os.path.relpath(p, _HERE)}: {m.group(0)[:70]}")
 ok("A1 no module under app/ falls back from one hours column to the other", not _hits, _hits)
-# NOT VACUOUS. The pattern must still catch the defect if somebody writes it again.
-ok("A2 …and the search is not vacuous: it still catches the exact shipped expression",
-   bool(_OR_RE.search("hrs = s.get('actual_hours') or s.get('scheduled_hours')")))
+# ── A2 WAS A FALSE ASSURANCE, AND IT IS WHY THIS AXIS WAS GREEN FOR SEVEN WEEKS ─────────────────
+# Owner Sanjot, 2026-11-27: *"it shows hours worked as the same as the hours scheduled"*. The
+# employee dashboard was still computing
+#
+#     ah = sum((float(s.get("actual_hours") or 0) or float(s.get("scheduled_hours") or 0)) ...)
+#
+# and A1 could not see it, because A1 matches `strip_comments_and_strings(source)` — which deletes
+# STRING LITERALS, and in this codebase the two column names appear ONLY inside string literals
+# (`s.get("actual_hours")`). Measured:
+#
+#     line      '    ah = sum((float(s.get("actual_hours") or 0) or float(s.get("scheduled...'
+#     STRIPPED  '    ah = sum((float(s.get("") or 0) or float(s.get("") or 0)) for s in msh)'
+#     matches raw: True        matches stripped: False
+#
+# A2 asserted the regex against a RAW string, so it proved the pattern worked on input A1 never
+# receives. A non-vacuity check that feeds a different pipeline than the axis it vouches for is not
+# a non-vacuity check. It now feeds the SAME stripper the axis does, and therefore FAILS on the
+# dict-get spelling — which is exactly why A1b below exists to catch that spelling instead.
+_A2_SRC = "hrs = s.get('actual_hours') or s.get('scheduled_hours')"
+ok("A2 …and the search is not vacuous ON THE PIPELINE A1 ACTUALLY USES: the local-variable "
+   "spelling survives stripping and is still caught",
+   bool(_OR_RE.search(strip_comments_and_strings("hours = act or sched"))))
+ok("A2b …while the DICT-GET spelling does NOT survive it — stated out loud, because this is the "
+   "blind spot that let the shipped defect through A1",
+   not _OR_RE.search(strip_comments_and_strings(_A2_SRC)),
+   "if this ever passes, the stripper changed and A1b may be redundant")
 ok("A3 …including the local-variable spelling",
    bool(_OR_RE.search("hours = act or sched")))
 ok("A4 …and it does NOT fire on an unrelated `or` between two other fields",
    not _OR_RE.search("name = s.get('employee_name') or s.get('login')"))
+
+
+# ── A1b: THE DICT-GET SPELLING, matched on source that KEEPS its string literals ────────────────
+# The only spelling this codebase ever used for the defect, and the one A1 is structurally blind to.
+# `strip_comments_only` keeps single-line literals (that is its documented purpose), so the column
+# names are visible here.
+_OR_LIT_RE = re.compile(
+    r"""["']actual_hours["']\s*\)?[^\n]{0,80}?\bor\b[^\n]{0,80}?["']scheduled_hours["']""")
+#: NAMED EXCUSES, each one a reason and not a silence. A pattern that cannot be excused by name is a
+#: pattern people switch off; a register that may only shrink is the house's own answer
+#: (`harness_unrun_pending.txt`, `tools/proof_red_pending.txt`).
+_OR_LIT_EXCUSED = {
+    "storeops/router.py": "the store-ATTRIBUTION sum (`_store_hours`): it adds both columns to pick "
+                          "a dominant store and adds the timelog hours right below. Never hours, "
+                          "never pay.",
+    "commcalc/labour_coverage.py": "a truthiness GUARD (`if not (actual or scheduled): continue`), "
+                                   "not a fallback — it skips an empty cell.",
+    "storeops/payroll_hours_basis.py": "the one home itself, which must name the expression it "
+                                       "replaced.",
+    "storeops/payroll_hours_drilldown.py": "names the defect in a docstring-adjacent literal.",
+    "core/module_graph.py": "the module graph's own prose about the defect.",
+}
+_lit_hits = []
+for p in ALL:
+    rel = os.path.relpath(p, _MODULES).replace(os.sep, "/")
+    if p == _HOME or rel in _OR_LIT_EXCUSED:
+        continue
+    code = strip_comments_only(read(p))
+    for m in _OR_LIT_RE.finditer(code):
+        _lit_hits.append(f"{rel}: {m.group(0)[:70]}")
+ok("A1b no module falls back from one hours column to the other in the DICT-GET spelling either "
+   "— the spelling the shipped defect actually used", not _lit_hits, _lit_hits)
+ok("A1b-arm …and that search is not vacuous: it catches the exact expression that shipped",
+   bool(_OR_LIT_RE.search(
+       'ah = sum((float(s.get("actual_hours") or 0) or float(s.get("scheduled_hours") or 0)))')))
+ok("A1b-arm2 …and does not fire on two unrelated columns",
+   not _OR_LIT_RE.search('x = s.get("employee_name") or s.get("login")'))
+ok("A1b-excused every named excuse still exists, so a stale name cannot hide a new defect",
+   not [r for r in _OR_LIT_EXCUSED if not os.path.exists(os.path.join(_MODULES, r))],
+   [r for r in _OR_LIT_EXCUSED if not os.path.exists(os.path.join(_MODULES, r))])
+
+
+# ── A1c: THE MULTI-LINE SPELLING, which NO single-line regex can ever see ───────────────────────
+# `_incentive_hours_for_day` writes the same fallback across three lines:
+#
+#     h = sh.get("actual_hours")
+#     if h in (None, "", 0):
+#         h = sh.get("scheduled_hours")
+#
+# so both A1 and A1b are blind to it by construction. This axis reads the two column literals as a
+# WINDOW of consecutive lines rather than one line.
+#
+# ★ ONE KNOWN-RED ENTRY, DELIBERATELY NAMED ★ — `commcalc/router.py` still carries exactly this
+# shape, and it WEIGHTS A REAL MONEY SPLIT (`daily_incentive.split_pool(basis="hours")`), so a rep
+# scheduled 9h who punched 4h draws a 9/Σ share of the incentive pool. Owner Sanjot approved fixing
+# it on 2026-11-27 (*"daily incetive must be done from the tehy da they astrted clocking in"*) with
+# a DERIVED per-org/per-store floor; that needs a migration and a per-rep before/after against live
+# money, so it ships on its own branch rather than riding the honest card. The register NAMES it so
+# the lock is no longer blind to it, and may only SHRINK: deleting the entry without fixing the
+# code turns this axis red.
+# THE DISCRIMINATOR IS A REASSIGNMENT OF THE SAME NAME, not mere proximity. A window that only
+# required the two literals within N characters fired on `marketing/router.py` (two unrelated reads)
+# and on this lock's own card module (a dict listing both keys) — a guard with false positives is a
+# guard somebody switches off. The defect's actual shape is: bind a name from one column, then
+# rebind THAT SAME name from the other.
+_OR_MULTILINE_RE = re.compile(
+    r"""(\w+)\s*=\s*[^\n]{0,80}?["']actual_hours["'][\s\S]{0,160}?"""
+    r"""\b\1\s*=\s*[^\n]{0,80}?["']scheduled_hours["']""")
+_OR_MULTI_KNOWN_RED = {
+    "commcalc/router.py": "_incentive_hours_for_day weights a MONEY pool by `actual_hours else "
+                          "scheduled_hours`. Approved for fix 2026-11-27 with a derived floor; "
+                          "separate branch because it needs a migration + a live before/after.",
+}
+_multi_hits = []
+for p in ALL:
+    rel = os.path.relpath(p, _MODULES).replace(os.sep, "/")
+    if p == _HOME or rel in _OR_LIT_EXCUSED or rel in _OR_MULTI_KNOWN_RED:
+        continue
+    code = strip_comments_only(read(p))
+    for m in _OR_MULTILINE_RE.finditer(code):
+        _multi_hits.append(f"{rel}: {' '.join(m.group(0).split())[:70]}")
+ok("A1c no module spells the fallback ACROSS LINES either — the shape no single-line regex can see",
+   not _multi_hits, _multi_hits)
+ok("A1c-arm …and that search is not vacuous: it catches the three-line shape verbatim",
+   bool(_OR_MULTILINE_RE.search('h = sh.get("actual_hours")\n'
+                                '    if h in (None, "", 0):\n'
+                                '        h = sh.get("scheduled_hours")')))
+#: THE REGISTER MAY ONLY SHRINK. An entry whose file no longer carries the shape must be DELETED,
+#: so a fixed defect cannot leave a permanent excuse behind for the next one to hide under.
+for rel, why in sorted(_OR_MULTI_KNOWN_RED.items()):
+    p = os.path.join(_MODULES, rel)
+    _still = os.path.exists(p) and bool(_OR_MULTILINE_RE.search(strip_comments_only(read(p))))
+    ok(f"A1c-register {rel} is still genuinely red, so its entry is still earned", _still,
+       f"{why} — if this failed, the defect is FIXED: delete the register entry")
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -184,9 +301,20 @@ PAY_PATH = {
     "account/coa.py": "the P&L wage line",
     "commcalc/labour_coverage.py": "the labour-coverage report's paid-hours basis",
     "hr/router.py": "HR total comp",
+    # Added 2026-11-27. It is on this list because it is the surface a REP reads about their own
+    # pay — the last place that was still answering "hours worked" with the schedule, and the only
+    # one that showed the figure with no basis beside it. A display surface is not exempt from the
+    # pay path's discipline; being treated as exempt is precisely how it kept the defect.
+    "storeops/hours_worked_card.py": "the card's fold — which hours were MEASURED, which were only "
+                                     "scheduled, and what the declared basis pays",
 }
+# WAYS OF ASKING THE ONE HOME. `fold_bases` / `basis_is_measurement` / `basis_pays_hours` were
+# added 2026-11-27: a surface that asks "is this basis a measurement, and what does it pay" is
+# dereferencing the one home just as much as one that asks it to resolve a row, and the allowlist
+# is the whole reason it cannot answer either question for itself.
 _RESOLVERS = ("resolve_shift_row", "resolve_day", "punch_counts_for_pay", "measurement_state",
-              "hours_basis_by_code", "punch_usability", "load_config", "resolve_config")
+              "hours_basis_by_code", "punch_usability", "load_config", "resolve_config",
+              "fold_bases", "basis_is_measurement", "basis_pays_hours")
 for rel, why in sorted(PAY_PATH.items()):
     p = os.path.join(_MODULES, rel)
     if not os.path.exists(p):
@@ -226,9 +354,22 @@ for _fn in ("_shift_actual_contribution", "_shift_actual_contribution_with_basis
 # NOTE the different stripper: `strip_comments_and_strings` would eat the key name this check is
 # about, so B6 reads the comment-free source that KEEPS single-line literals.
 _ROUTER_LIT = strip_comments_only(read(os.path.join(_MODULES, "storeops/router.py")))
+# UPDATED 2026-11-27: the fold itself moved INTO the one home as `fold_bases`, because the employee
+# dashboard's card needed the same answer and a second copy would be a future divergence about the
+# word "mixed". So the router no longer writes `hours_basis_reason` at all — it applies the one
+# home's fold, which is strictly stronger than composing the sentence from `basis_reason` here.
+# Either spelling satisfies this axis; a LITERAL sentence on the row still fails it.
 ok("B6 /payroll's basis sentence is read from the one home, not spelled on the row",
-   re.search(r'hours_basis_reason"\]\s*=\s*_hours_basis\.basis_reason\(', _ROUTER_LIT) is not None,
-   "hours_basis_reason must be basis_reason(dom) — a literal sentence on the row drifts from the API")
+   re.search(r'hours_basis_reason"\]\s*=\s*_hours_basis\.basis_reason\(', _ROUTER_LIT) is not None
+   or re.search(r'_hours_basis\.fold_bases\(', _ROUTER_LIT) is not None,
+   "hours_basis_reason must come from basis_reason(dom) or fold_bases() — a literal sentence on "
+   "the row drifts from the API")
+ok("B6b …and the fold has exactly ONE home: no caller re-derives the dominant basis or the word "
+   "'mixed' for itself",
+   not [os.path.relpath(p, _MODULES) for p in ALL
+        if p != _HOME and re.search(r'hours_basis_mixed"\]\s*=\s*len\(', strip_comments_only(read(p)))],
+   [os.path.relpath(p, _MODULES) for p in ALL
+    if p != _HOME and re.search(r'hours_basis_mixed"\]\s*=\s*len\(', strip_comments_only(read(p)))])
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -331,8 +472,16 @@ for p in ALL:
             continue
         _new.append(f"{os.path.relpath(p, _HERE)}: {' '.join(frag.split())[:80]}")
 ok("E4 no module carries an alnum-only fold that skips the one accent fold", not _new, _new)
-ok("E4b …and the inventory below is not empty: there ARE folds, they are all classified",
-   len(FOLD_SIBLINGS) >= 5)
+# A SIZE IS NOT AN INVENTORY. A bare lower bound here lets a sibling leave without naming itself:
+# drop one from the dict and `>= 5` would have gone on reading green at 5 of 6. The declared set
+# below is the human-written answer to "which modules fold a store name", so a sibling that leaves
+# is reported BY NAME, and a new one must be classified before the build is green.
+FOLD_SIBLING_NAMES = {
+    "scope.py", "balance_sheet.py", "store_identity_audit.py", "device_payable.py", "coa.py",
+}
+ok("E4b …and the inventory is exactly the declared set: a sibling that leaves names itself",
+   {os.path.basename(p) for p in FOLD_SIBLINGS} == FOLD_SIBLING_NAMES,
+   sorted({os.path.basename(p) for p in FOLD_SIBLINGS} ^ FOLD_SIBLING_NAMES))
 ok("E5 …and the search is not vacuous: it sees a planted private fold",
    bool(_PRIVATE_FOLD.search('k = "".join(ch for ch in s.upper() if ch.isalnum())')))
 ok("E5b …and it does NOT fire on a filename slugifier, which substitutes rather than drops",
@@ -455,6 +604,13 @@ EVIDENCE_CALLERS = {
     "storeops/pto_accrual.py": "hours worked, which is what PTO accrues on",
     "hr/router.py": "HR total comp",
     "storeops/clock_variance_api.py": "the variance board — it HELD this read before it was shared",
+    # Added 2026-11-27 (owner: *"fix the card now across the paltform"*). The employee dashboard is
+    # the surface a REP reads about their own pay, and it was the last one answering "hours worked"
+    # with the schedule — `storeops.timelog` was never queried at all. It is an EVIDENCE caller
+    # rather than an axis-B one because it reaches the one home through `payroll_evidence` and
+    # `hours_worked_card`, which is the §14y.1 shape: a shifts-only caller must get `period_evidence`
+    # + `paid_hours_rows`, never a bare cell.
+    "core/router.py": "the employee dashboard's 'Hours Worked' card (§14y, §14y.1)",
 }
 #: Where the INTERLOCK may be consulted for a module whose own body is pure (it takes rows and
 #: returns numbers, so the I/O and the gate live at its one call site). Named, so "somewhere else"

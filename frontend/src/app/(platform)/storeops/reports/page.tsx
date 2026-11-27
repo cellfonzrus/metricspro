@@ -7,7 +7,7 @@ import ReportShell from '@/components/ReportShell'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { currentPeriodFromSettingsResponse, monthRange, rangeLabel, stepPeriod, type PayPeriodSettings } from '../lib/pay-period'
-import { PAY_BASIS_LABEL, type PayBasis } from '../lib/pay-basis'
+import { PAY_BASIS_LABEL, hoursBasisLabel, type PayBasis } from '../lib/pay-basis'
 import ActualHoursDrilldown from '../payroll/ActualHoursDrilldown'
 import DrillDownPanel, {
   DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
@@ -235,6 +235,11 @@ export default function StoreOpsReportsPage() {
     { header: 'Pay $/hr', get: (r: any) => r.pay_basis && r.pay_basis !== 'hourly' ? undefined : r.pay_rate, money: true },
     { header: 'Sched Hrs', get: r => Math.round((r.scheduled_hours || 0) * 10) / 10, align: 'right' },
     { header: 'Actual Hrs', get: r => Math.round((r.actual_hours || 0) * 10) / 10, align: 'right' },
+    // WHY THESE HOURS — the column the Payroll page has carried since 2026-10-10 and this report
+    // did NOT, so the identical figure read as measured here and explained there (owner 2026-11-27,
+    // index §14y). Both screens now call the same `hoursBasisLabel` over the same server-sent basis,
+    // so neither can state a reason the other contradicts. Blank on an older backend.
+    { header: 'Hours basis (why)', get: r => hoursBasisLabel(r.hours_basis, r.hours_basis_mixed) },
     // Lunch-break auto-deduction (owner directive 2026-07-27, Deliverable 3) — HONESTY: an explicit
     // line, never folded silently into Actual Hrs (which is already the NET/post-deduction figure —
     // see GET /payroll). 0 for the common case (feature off, or no day qualified this period).

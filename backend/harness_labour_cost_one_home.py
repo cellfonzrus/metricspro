@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from app.modules.storeops import labour_cost as lc            # noqa: E402
 from app.modules.storeops import payroll_salary as ps         # noqa: E402
 from app.modules.storeops import payroll_evidence as _pe      # noqa: E402
+from app.modules.storeops import payroll_hours_basis as _hb  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FAIL = 0
@@ -160,13 +161,43 @@ check("…the coverage sentence is carried back to the caller, from its ONE home
       "_payevid.coverage_sentence(" in wm and "verdict.update(" in wm)
 check("the statement PRINTS it rather than writing a sentence of its own",
       '_wage_verdict["note"]' in COA and "_wage_refusal" not in COA)
+# ── THE FIXTURE IS `coverage()`'S OWN OUTPUT, NOT A HAND-BUILT DICT (fixed 2026-11-27) ──────────
+# These three checks used to spell their own coverage dict with the key `pct`. `coverage()` returns
+# `measured_pct`, so `coverage_sentence` read a key that was never there and printed "is 0.00%" for
+# every real caller — while this proof passed, because it was the only caller spelling `pct`. A
+# check asserted against a shape the producer does not emit is not a check. The fixture is now built
+# by the producer, so the two cannot drift again.
+def _cov(scheduled, measured):
+    """A real `coverage()` result for `scheduled` employee-days of which `measured` carry a punch."""
+    from datetime import date, timedelta
+    ev, day0 = {}, date(2026, 10, 1)
+    for i in range(scheduled):
+        d = (day0 + timedelta(days=i % 28)).isoformat()
+        eid = f"E{i}"
+        cell = {"day": d, "scheduled": 8.0, "punches": [], "manual_rows": 0}
+        if i < measured:
+            cell["_raw_punches"] = [{"clock_out": d, "hours": 8.0}]
+        ev[(eid, d)] = _hb.build_evidence(shifts=[{"employee_id": eid, "shift_date": d,
+                                                   "scheduled_hours": 8.0}],
+                                          punches=([{"employee_id": eid, "work_date": d,
+                                                     "clock_in": f"{d}T09:00:00Z",
+                                                     "clock_out": f"{d}T17:00:00Z", "hours": 8.0}]
+                                                   if i < measured else []),
+                                          manual_rows=[])[(eid, d)]
+    return _hb.coverage(ev, _hb.resolve_config(None))
+
+
+_c6294 = _cov(510, 321)
+check("the coverage fixture is the PRODUCER's own shape, and carries a real percentage",
+      _c6294.get("measured_pct") and abs(_c6294["measured_pct"] - 62.94) < 0.01,
+      f"measured_pct={_c6294.get('measured_pct')!r} keys={sorted(_c6294)}")
 check("the coverage sentence is `payroll_evidence`'s, and states the gap as missing clock data",
-      "missing clock data" in _pe.coverage_sentence(
-          {"coverage": {"scheduled_days": 510, "measured_days": 321, "pct": 62.94}})
-      and "62.94%" in _pe.coverage_sentence(
-          {"coverage": {"scheduled_days": 510, "measured_days": 321, "pct": 62.94}}))
+      "missing clock data" in _pe.coverage_sentence({"coverage": _c6294}))
+check("…and it states the REAL percentage, not 0.00% — the key it reads is the key `coverage()` emits",
+      "62.94%" in _pe.coverage_sentence({"coverage": _c6294}),
+      _pe.coverage_sentence({"coverage": _c6294}))
 check("a fully measured period says nothing — a note nobody needs is noise",
-      _pe.coverage_sentence({"coverage": {"scheduled_days": 10, "measured_days": 10, "pct": 100.0}}) is None
+      _pe.coverage_sentence({"coverage": _cov(10, 10)}) is None
       and _pe.coverage_sentence({}) is None)
 check("`refusal` is UNCHANGED and still answers for a path that is about to PAY",
       _pe.refusal({"refused": True, "reason": "r"}) == "r" and _pe.refusal({"refused": False, "reason": "r"}) is None)

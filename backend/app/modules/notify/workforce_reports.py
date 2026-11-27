@@ -43,6 +43,7 @@ backend/harness_workforce_report_registry.py can prove this module with the stdl
 from datetime import date, timedelta
 
 from .report_filters import business_today as _business_today
+from app.modules.storeops import payroll_hours_basis as _hb
 
 # ── ONE shared pay-period resolver (charter rule 2) ───────────────────────────────────────────────
 _TOKENS_LAST = ("last", "previous", "prev")
@@ -98,6 +99,13 @@ PAYROLL_HOURS_COLS = [
     _num("Shifts", "shifts"),
     _num("Scheduled Hrs", "scheduled_hours"),
     _num("Actual Hrs", "actual_hours"),
+    # WHY THESE HOURS — the column the Payroll PAGE has carried since 2026-10-10 and this export
+    # did not, so the mailed copy showed the figure with no reason while the screen explained it
+    # (owner 2026-11-27, index §14y). The word and the "mixed" suffix are the SERVER's, read off
+    # the row `get_payroll` already returns; nothing is composed here.
+    {"header": "Hours basis (why)",
+     "fn": (lambda r: (f"{r.get('hours_basis')} · mixed" if r.get("hours_basis_mixed")
+                       else r.get("hours_basis")) if r.get("hours_basis") else "")},
     _num("Lunch (auto)", "lunch_deduction_hours"),
     {"header": "DM", "key": "dm_status"},
     {"header": "HR", "key": "hr_status"},
@@ -210,7 +218,18 @@ async def _payroll(org_id, f, authorization="", tz=""):
         rows, _ = _pv.strip_pay(rows)
     cols = PAYROLL_HOURS_COLS + (PAYROLL_PAY_COLS if allowed else [])
     total_hours = round(sum(float(r.get("actual_hours") or 0) for r in rows), 2)
-    sub = f"Pay period {lo} – {hi} · {len(rows)} employees · {total_hours} actual hrs"
+    # ── THE SUBTITLE NAMES WHAT MEASURED THE HOURS (owner 2026-11-27, index §14y) ───────────────
+    # It read "N actual hrs", which on a schedule-fallback org is mostly the SCHEDULE — the same
+    # conflation the owner reported on the employee card. The measured share is stated when it is
+    # not the whole figure, so a thin period is visible in the mail body rather than only in the
+    # sheet. `hours_basis` / `hours_basis_mixed` come from `get_payroll`'s own rows.
+    _measured = round(sum(float(r.get("actual_hours") or 0) for r in rows
+                          if _hb.basis_is_measurement(r.get("hours_basis"))), 2)
+    if _measured < total_hours:
+        sub = (f"Pay period {lo} – {hi} · {len(rows)} employees · {total_hours} payable hrs, "
+               f"of which {_measured} measured by a clock")
+    else:
+        sub = f"Pay period {lo} – {hi} · {len(rows)} employees · {total_hours} hrs, clock-measured"
     if not allowed:
         sub += " · hours only (pay hidden by org policy)"
     return {"title": "Payroll", "subtitle": sub, "filename": f"payroll-{lo}",
